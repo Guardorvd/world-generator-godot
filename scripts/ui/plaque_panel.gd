@@ -12,17 +12,13 @@ var _close: Button
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_CENTER)
+	# keep_offsets: без него смещения пересчитывались под прежнее место, и табличка висела в левом верхнем углу
+	set_anchors_preset(Control.PRESET_CENTER, true)
 	grow_horizontal = Control.GROW_DIRECTION_BOTH
 	grow_vertical = Control.GROW_DIRECTION_BOTH
 	custom_minimum_size = Vector2(WIDTH, 0)
-	var frame := StyleBoxFlat.new()
-	frame.bg_color = Color("#2a2a24")
-	frame.border_color = Color("#a08a5c")
-	frame.set_border_width_all(2)
-	frame.set_corner_radius_all(6)
-	frame.set_content_margin_all(22)
-	add_theme_stylebox_override("panel", frame)
+	theme = HudStyle.theme()
+	add_theme_stylebox_override("panel", HudStyle.sheet(Vector2(22, 22)))
 	_box = VBoxContainer.new()
 	_box.add_theme_constant_override("separation", 12)
 	add_child(_box)
@@ -32,12 +28,12 @@ func _ready() -> void:
 ## title — название обелиска, text — описание, hint — подпись под текстом (например, что делать дальше)
 func open(title: String, text: String, hint := "") -> void:
 	clear()
-	_label(title, 26, Color("#f5ead2"), 0.0)
+	_label(title, 26, HudStyle.CREAM, 0.0)
 	var line := ColorRect.new()
 	line.custom_minimum_size = Vector2(0, 2)
-	line.color = Color("#a08a5c")
+	line.color = HudStyle.BORDER
 	_box.add_child(line)
-	_label(text, 17, Color("#e8dfc8"), WIDTH - 44.0)
+	_label(text, 17, HudStyle.CREAM, WIDTH - 44.0)
 	if hint != "":
 		_label(hint, 13, HudStyle.MINT, WIDTH - 44.0)
 	_close = Button.new()

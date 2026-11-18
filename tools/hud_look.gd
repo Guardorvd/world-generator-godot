@@ -252,6 +252,17 @@ func _journal_checks() -> void:
 	hud.explore = Exploration.new()
 
 
+## 18.11.2026: доска поселения и табличка обелиска — та же палитра HudStyle, что у остального HUD
+func _panel_shots(world: WorldData) -> void:
+	hud.settlement_panel.open(world.settlements[0], world, [], false, hud.quests)
+	_check(hud.settlement_panel.visible, "доска поселения открывается")
+	await _shot("hud_board")
+	hud.settlement_panel.clear()
+	hud.plaque_panel.open("Обелиск у брода", "Здесь в старину переправлялись гурты: камень ставили, чтобы брод находили и в половодье.", "Снимите табличку — она попадёт в альбом")
+	await _shot("hud_plaque")
+	hud.plaque_panel.clear()
+
+
 func _run() -> void:
 	_build()
 	await process_frame
@@ -316,6 +327,7 @@ func _run() -> void:
 	await _shot("hud_big_map")
 	hud.set_map_visible(false)
 	await _journal_checks()
+	await _panel_shots(world)
 	hud.toast_now("Открыто место: перевал Седой")
 	hud.toast("Достигнута цель")
 	hud.toast_now("Открыто место: перевал Седой")

@@ -9,6 +9,61 @@ const MUTED := Color("#bed0c8")
 const MINT := Color("#ace5cd")
 const AMBER := Color("#ffd18c")
 const RED := Color("#ff9784")
+## 18.11.2026: бумага карт (мини-карта, доска) — единственный светлый тон HUD; рамки и экраны — те же SURFACE/BORDER
+const PAPER := Color("#e9e2cf")
+
+static var _theme: Theme
+
+
+## Тема экранов поверх игры («Путешествие», доска поселения, табличка): кнопки, вкладки, прокрутка и подписи
+## в палитре HUD вместо сланцевых кнопок меню (resources/ui_theme.tres). Одна на всех, создаётся при первом вызове
+static func theme() -> Theme:
+	if _theme != null:
+		return _theme
+	_theme = Theme.new()
+	var pad := Vector2(16, 8)
+	var normal := panel(RECESS, BORDER, 8, pad, false)
+	var hover := panel(RECESS.lerp(MINT, 0.1), Color(MINT, 0.7), 8, pad, false)
+	var pressed := panel(SURFACE.lerp(MINT, 0.24), MINT, 8, pad, false)
+	var disabled := panel(Color(RECESS, 0.45), Color(BORDER, 0.4), 8, pad, false)
+	var focus := panel(Color.TRANSPARENT, AMBER, 10, pad, false)
+	focus.draw_center = false
+	focus.set_border_width_all(2)
+	focus.set_expand_margin_all(2)
+	_button_type(&"Button", normal, hover, pressed, disabled, focus, CREAM, MINT)
+	var danger_bg := SURFACE.lerp(RED, 0.32)
+	_button_type(&"DangerButton", panel(danger_bg, RED, 8, pad, false), panel(danger_bg.lerp(RED, 0.18), RED, 8, pad, false),
+		panel(danger_bg.lerp(RED, 0.3), CREAM, 8, pad, false), panel(Color(danger_bg, 0.45), Color(RED, 0.4), 8, pad, false), focus, CREAM, CREAM)
+	_theme.set_type_variation(&"DangerButton", &"Button")
+	_theme.set_color("font_color", "Label", CREAM)
+	for bar: StringName in [&"VScrollBar", &"HScrollBar"]:
+		_theme.set_stylebox("scroll", bar, panel(Color(RECESS, 0.6), Color(RECESS, 0.6), 4, Vector2(3, 3), false))
+		_theme.set_stylebox("grabber", bar, panel(BORDER, BORDER, 4, Vector2(3, 3), false))
+		_theme.set_stylebox("grabber_highlight", bar, panel(MUTED, MUTED, 4, Vector2(3, 3), false))
+		_theme.set_stylebox("grabber_pressed", bar, panel(MINT, MINT, 4, Vector2(3, 3), false))
+	_theme.set_stylebox("panel", "TooltipPanel", panel(SURFACE, BORDER, 6, Vector2(10, 6), false))
+	_theme.set_color("font_color", "TooltipLabel", CREAM)
+	return _theme
+
+
+static func _button_type(type: StringName, normal: StyleBox, hover: StyleBox, pressed: StyleBox, disabled: StyleBox,
+		focus: StyleBox, text: Color, on: Color) -> void:
+	_theme.set_stylebox("normal", type, normal)
+	_theme.set_stylebox("hover", type, hover)
+	_theme.set_stylebox("pressed", type, pressed)
+	_theme.set_stylebox("hover_pressed", type, pressed)
+	_theme.set_stylebox("disabled", type, disabled)
+	_theme.set_stylebox("focus", type, focus)
+	for state: String in ["font_color", "font_focus_color", "font_hover_color"]:
+		_theme.set_color(state, type, text)
+	for state: String in ["font_pressed_color", "font_hover_pressed_color"]:
+		_theme.set_color(state, type, on)
+	_theme.set_color("font_disabled_color", type, Color(text, 0.38))
+
+
+## Рамка экрана поверх игры: тот же хвойный фон, что у плашек HUD; сплошной — сквозь полупрозрачный проступали плашки
+static func sheet(padding := Vector2(22, 18)) -> StyleBoxFlat:
+	return panel(SURFACE, BORDER, 12, padding)
 
 
 static func panel(background := SURFACE, border := BORDER, radius := 12, padding := Vector2(12, 8), shadow := true) -> StyleBoxFlat:

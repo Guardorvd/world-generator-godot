@@ -11,7 +11,8 @@ const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const Atlas = preload("res://scripts/ui/world_map_view.gd")
 const MapData = preload("res://scripts/ui/local_map_data.gd")
-const MUTED := Color(1, 1, 1, 0.62)
+const HudStyle = preload("res://scripts/ui/hud_style.gd")
+const MUTED := HudStyle.MUTED
 const CARD_W := 270.0
 
 var _box: VBoxContainer
@@ -26,12 +27,8 @@ func _ready() -> void:
 	offset_right = -48
 	offset_top = 24
 	offset_bottom = -24
-	var frame := StyleBoxFlat.new()
-	frame.bg_color = Color("#21332d")
-	frame.border_color = Color("#7d8c72")
-	frame.set_border_width_all(1)
-	frame.set_corner_radius_all(8)
-	add_theme_stylebox_override("panel", frame)
+	theme = HudStyle.theme()
+	add_theme_stylebox_override("panel", HudStyle.sheet(Vector2.ZERO))
 	var margin := MarginContainer.new()
 	for edge in ["left", "right", "top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + edge, 22 if edge in ["left", "right"] else 18)
@@ -88,7 +85,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 16)
 	_box.add_child(head)
-	var title := _label(settlement.name, 30, head, Color("#f5ead2"))
+	var title := _label(settlement.name, 30, head, HudStyle.CREAM)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var close := _button("Продолжить путь", func() -> void: closed.emit(), head)
 	var destinations := places
@@ -109,7 +106,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	actions.add_theme_constant_override("separation", 8)
 	_box.add_child(actions)
 	if destinations.size() > 1:
-		_label("Переместиться" if can_travel else "С грузом — своим ходом", 15, actions, Color("#eee2c9"))
+		_label("Переместиться" if can_travel else "С грузом — своим ходом", 15, actions, MUTED)
 	for place: Dictionary in destinations.slice(1):
 		var distance := Atlas.place_at(destinations[0]).distance_to(Atlas.place_at(place))
 		var transfer := _button("%s · %s" % [place.name, Util.distance_text(distance)],
@@ -263,7 +260,7 @@ func _titled(q: QuestData, size: int, parent: Container, wrap := 0.0) -> Label:
 func _card(parent: Container, color: Color, current: bool) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(color, 0.1) if current else Color(1, 1, 1, 0.05)
+	style.bg_color = HudStyle.RECESS.lerp(color, 0.1) if current else Color(HudStyle.RECESS, 0.55)
 	style.border_color = Color(color, 0.9 if current else 0.55)
 	style.border_width_left = 3
 	style.set_corner_radius_all(4)

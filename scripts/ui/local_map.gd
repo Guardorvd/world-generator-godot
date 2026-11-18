@@ -11,6 +11,7 @@ extends Control
 
 const MapData = preload("res://scripts/ui/local_map_data.gd")
 const Paint = preload("res://scripts/ui/map_paint.gd")
+const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const DIAMETER := 220.0
 const VIEW_SIZE := 208
 const MAP_SIZE := VIEW_SIZE * 2   # подложка с запасом: круг сдвигается по ней без перерисовки
@@ -207,9 +208,12 @@ static func _place_position(place: Dictionary) -> Vector2:
 
 func _draw() -> void:
 	var center := Vector2.ONE * (DIAMETER * 0.5)
-	draw_circle(center + Vector2(0.0, 2.0), CENTER.x + 5.0, Color(0.03, 0.08, 0.10, 0.32), true, -1.0, true)
-	draw_circle(center, CENTER.x + 4.0, Color("#f4f7f5"), true, -1.0, true)
-	draw_arc(center, CENTER.x + 4.5, 0.0, TAU, 128, Color(0.1, 0.17, 0.19, 0.62), 1.0, true)
+	# 18.11.2026: обод в палитре HUD (тёмная хвойная кайма + тонкое кольцо бумаги), а не яркий белый диск —
+	# мини-карта не перетягивает взгляд в угол
+	draw_circle(center + Vector2(0.0, 2.0), CENTER.x + 5.5, Color(0.03, 0.07, 0.06, 0.3), true, -1.0, true)
+	draw_circle(center, CENTER.x + 5.0, Color(HudStyle.SURFACE, 0.92), true, -1.0, true)
+	draw_arc(center, CENTER.x + 4.5, 0.0, TAU, 128, HudStyle.BORDER, 1.0, true)
+	draw_circle(center, CENTER.x + 1.5, HudStyle.PAPER, true, -1.0, true)
 
 
 func _draw_map() -> void:
