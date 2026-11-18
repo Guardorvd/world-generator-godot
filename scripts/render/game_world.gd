@@ -565,6 +565,10 @@ func _exit_tree() -> void:
 			connections.append_array([[panel.closed, _close_settlement],
 				[panel.travel_requested, _board_travel], [panel.bike_requested, _recall_bike],
 				[panel.quest_accepted, _accept_quest], [panel.quest_abandoned, _abandon_quest]])
+		if is_instance_valid(hud.journal_panel):
+			connections.append([hud.journal_panel.closed, close_journal])
+		if is_instance_valid(hud.plaque_panel):
+			connections.append([hud.plaque_panel.closed, close_plaque])
 		for connection: Array in connections:
 			var source: Signal = connection[0]
 			var handler: Callable = connection[1]
@@ -1034,7 +1038,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if _journal_open():
-		if event.is_action_pressed("pause") or event.is_action_pressed("back") or event.is_action_pressed("journal"):
+		if event.is_action_pressed("pause") or event.is_action_pressed("back"):
+			if not hud.journal_panel.close_lightbox():
+				close_journal()
+			get_viewport().set_input_as_handled()
+		elif event.is_action_pressed("journal"):
 			close_journal()
 			get_viewport().set_input_as_handled()
 		return
@@ -1893,9 +1901,16 @@ func _read_plaque(item: Dictionary) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var lore := ObeliskLore.describe(world, place)
 	var series := quests.series_note(item.id) if quests != null else ""
+	var ikey := services.controls.label(&"interact")
+	var meta := {
+		form = lore.form,
+		in_album = hud.explore.album.has("plaque:" + item.id),
+		series = quests.series_progress() if quests != null else Vector2i.ZERO,
+		key_hint = "%s / Esc" % ikey if not ikey.is_empty() else "E / Esc",
+	}
 	if not hud.plaque_panel.closed.is_connected(close_plaque):
 		hud.plaque_panel.closed.connect(close_plaque)
-	hud.plaque_panel.open(lore.title, lore.text, series)
+	hud.plaque_panel.open(lore.title, lore.text, series, meta)
 
 
 func close_plaque(capture := true) -> void:

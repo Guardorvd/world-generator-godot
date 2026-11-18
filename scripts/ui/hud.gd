@@ -588,15 +588,47 @@ func journey_data() -> Dictionary:
 	for page: Dictionary in Exploration.pages():
 		var entry := page.duplicate()
 		entry.shot = explore.album.get(page.key, {})
+		if not entry.shot.is_empty() and str(entry.shot.get("place", "")) != "" and world != null:
+			var shot_place := world.place(str(entry.shot.place))
+			if not shot_place.is_empty():
+				entry.place_name = str(shot_place.get("name", ""))
 		pages.append(entry)
 	# «Летопись обелисков»: страница на каждый обелиск мира, с названием и текстом таблички (ObeliskLore)
 	for place: Dictionary in places:
 		if place.kind == "site" and str(EntityCodec.value(place.src, "type", "")) == "obelisk":
 			var key: String = "plaque:" + place.key
-			pages.append({key = key, group = Exploration.GROUPS.size() - 1, title = place.name, hint = "Табличка обелиска: снимите вблизи",
-				text = ObeliskLore.describe(world, place).text, shot = explore.album.get(key, {})})
-	return {foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt, photos = explore.photos,
-		quests = quests.done if quests != null else 0, places = rows, pages = pages, groups = Exploration.GROUPS}
+			var lore := ObeliskLore.describe(world, place)
+			pages.append({key = key, group = Exploration.GROUPS.size() - 1, title = place.name,
+				hint = "Снимите табличку вблизи (< 4,5 м)", text = lore.text, form = lore.form,
+				place_name = place.name, shot = explore.album.get(key, {})})
+	var active_quest := {}
+	if quests != null and not quests.active.is_empty():
+		var q := quests.active
+		active_quest = {title = q.title, kind = q.kind, kind_title = Quests.KINDS[q.kind].title,
+			color = quest_color(), step_text = quests.step_text(quests.step()),
+			step_index = q.step + 1, step_count = q.steps.size(), cargo = quests.cargo}
+	var sp := quests.series_progress() if quests != null else Vector2i.ZERO
+	var series := {done = sp.x, total = sp.y, finished = quests.series_done if quests != null else false}
+	var thanks: Array = Array(quests.thanks_lines()) if quests != null else []
+	var helped: Array[String] = []
+	if quests != null:
+		for giver_id: String in quests.by_giver:
+			var count := int(quests.by_giver[giver_id])
+			if count <= 0:
+				continue
+			var vp := world.place(giver_id) if world != null else {}
+			var vname: String = str(vp.get("name", giver_id)) if not vp.is_empty() else giver_id
+			helped.append("%s (%d)" % [vname, count])
+	var jkey := controls.label(&"journal") if controls != null else ""
+	var close_hint := "%s / Esc" % jkey if not jkey.is_empty() else "J / Esc"
+	var world_size := Vector2(world.W, world.H) * TILE if world != null else Vector2.ZERO
+	var track := {legs = map_journal.legs, current = map_journal.current, player = Vector2(px, pz),
+		yaw = yaw, world_size = world_size}
+	return {seed = world.seed_text if world != null else "", close_hint = close_hint,
+		foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt,
+		photos = explore.photos, quests = quests.done if quests != null else 0, places = rows,
+		pages = pages, groups = Exploration.GROUPS, active_quest = active_quest,
+		series = series, thanks = thanks, helped = helped, track = track}
 
 
 ## Место текущего шага задания (метка на компасе и картах) или пусто

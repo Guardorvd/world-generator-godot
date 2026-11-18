@@ -35,6 +35,27 @@ static func theme() -> Theme:
 	_button_type(&"DangerButton", panel(danger_bg, RED, 8, pad, false), panel(danger_bg.lerp(RED, 0.18), RED, 8, pad, false),
 		panel(danger_bg.lerp(RED, 0.3), CREAM, 8, pad, false), panel(Color(danger_bg, 0.45), Color(RED, 0.4), 8, pad, false), focus, CREAM, CREAM)
 	_theme.set_type_variation(&"DangerButton", &"Button")
+	var seg_pad := Vector2(14, 6)
+	var seg_normal := panel(Color.TRANSPARENT, Color.TRANSPARENT, 7, seg_pad, false)
+	var seg_hover := panel(Color(MINT, 0.1), Color(MINT, 0.35), 7, seg_pad, false)
+	var seg_pressed := panel(SURFACE.lerp(MINT, 0.28), MINT, 7, seg_pad, false)
+	var seg_disabled := panel(Color.TRANSPARENT, Color.TRANSPARENT, 7, seg_pad, false)
+	_button_type(&"SegmentButton", seg_normal, seg_hover, seg_pressed, seg_disabled, focus, MUTED, MINT)
+	_theme.set_type_variation(&"SegmentButton", &"Button")
+	var pill_pad := Vector2(12, 5)
+	_button_type(&"PillButton", panel(RECESS, BORDER, 16, pill_pad, false), panel(RECESS.lerp(MINT, 0.12), Color(MINT, 0.65), 16, pill_pad, false),
+		panel(SURFACE.lerp(MINT, 0.25), MINT, 16, pill_pad, false), panel(Color(RECESS, 0.45), Color(BORDER, 0.4), 16, pill_pad, false), focus, CREAM, MINT)
+	_theme.set_type_variation(&"PillButton", &"Button")
+	var card_pad := Vector2(6, 6)
+	_button_type(&"CardButton", panel(RECESS, MINT, 8, card_pad, false), panel(RECESS.lerp(MINT, 0.12), MINT.lerp(CREAM, 0.25), 8, card_pad, false),
+		panel(SURFACE.lerp(MINT, 0.22), CREAM, 8, card_pad, false), disabled, focus, CREAM, CREAM)
+	_theme.set_type_variation(&"CardButton", &"Button")
+	_theme.set_constant("icon_max_width", &"Button", 18)
+	_theme.set_constant("h_separation", &"Button", 7)
+	_theme.set_constant("icon_max_width", &"SegmentButton", 16)
+	_theme.set_constant("h_separation", &"SegmentButton", 6)
+	_theme.set_constant("icon_max_width", &"PillButton", 14)
+	_theme.set_constant("h_separation", &"PillButton", 5)
 	_theme.set_color("font_color", "Label", CREAM)
 	for bar: StringName in [&"VScrollBar", &"HScrollBar"]:
 		_theme.set_stylebox("scroll", bar, panel(Color(RECESS, 0.6), Color(RECESS, 0.6), 4, Vector2(3, 3), false))
@@ -54,11 +75,12 @@ static func _button_type(type: StringName, normal: StyleBox, hover: StyleBox, pr
 	_theme.set_stylebox("hover_pressed", type, pressed)
 	_theme.set_stylebox("disabled", type, disabled)
 	_theme.set_stylebox("focus", type, focus)
-	for state: String in ["font_color", "font_focus_color", "font_hover_color"]:
+	for state: String in ["font_color", "font_focus_color", "font_hover_color", "icon_normal_color", "icon_focus_color", "icon_hover_color"]:
 		_theme.set_color(state, type, text)
-	for state: String in ["font_pressed_color", "font_hover_pressed_color"]:
+	for state: String in ["font_pressed_color", "font_hover_pressed_color", "icon_pressed_color", "icon_hover_pressed_color"]:
 		_theme.set_color(state, type, on)
 	_theme.set_color("font_disabled_color", type, Color(text, 0.38))
+	_theme.set_color("icon_disabled_color", type, Color(text, 0.38))
 
 
 ## Рамка экрана поверх игры: тот же хвойный фон, что у плашек HUD; сплошной — сквозь полупрозрачный проступали плашки
@@ -87,6 +109,39 @@ static func label(target: Label, font_size: int, color := CREAM) -> void:
 	target.add_theme_font_size_override("font_size", font_size)
 	target.add_theme_color_override("font_color", color)
 	target.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+static func bar(value: float, height := 6.0, fill_color := MINT, bg_color := Color(SURFACE, 0.85)) -> ProgressBar:
+	var progress := ProgressBar.new()
+	progress.show_percentage = false
+	progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	progress.min_value = 0.0
+	progress.max_value = 1.0
+	progress.value = clampf(value, 0.0, 1.0)
+	progress.custom_minimum_size.y = height
+	progress.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var radius := int(ceili(height * 0.5))
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = bg_color
+	bg.set_corner_radius_all(radius)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = fill_color
+	fill.set_corner_radius_all(radius)
+	progress.add_theme_stylebox_override("background", bg)
+	progress.add_theme_stylebox_override("fill", fill)
+	return progress
+
+
+static func chip(text: String, text_color := MUTED, bg := RECESS, border := BORDER) -> PanelContainer:
+	var box := PanelContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_theme_stylebox_override("panel", panel(bg, border, 6, Vector2(8, 3), false))
+	var lbl := Label.new()
+	lbl.text = text
+	label(lbl, 12, text_color)
+	box.add_child(lbl)
+	return box
 
 
 static func centered(canvas: CanvasItem, at: Vector2, text: String, font_size: int, color: Color) -> void:

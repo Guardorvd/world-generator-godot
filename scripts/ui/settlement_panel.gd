@@ -83,18 +83,28 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 		offers: Array = [], source: MapData = null) -> void:
 	clear()
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 16)
+	head.add_theme_constant_override("separation", 12)
 	_box.add_child(head)
-	var title := _label(settlement.name, 30, head, HudStyle.CREAM)
+	var badge := PanelContainer.new()
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(8, 8), false))
+	badge.add_child(UiIcons.rect(UiIcons.HOME, 20, HudStyle.MINT))
+	head.add_child(badge)
+	var title := _label(settlement.name, 26, head, HudStyle.CREAM)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(HudStyle.chip("E / Esc"))
 	var close := _button("Продолжить путь", func() -> void: closed.emit(), head)
+	close.custom_minimum_size = Vector2(164, 44)
+	close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var destinations := places
 	if destinations.is_empty():
 		destinations = [{key = WorldData.place_id("settlement", settlement.x, settlement.y),
 			x = settlement.x, y = settlement.y, name = settlement.name}]
 	board_map = Atlas.new()
 	board_map.park = true
-	board_map.custom_minimum_size.y = 260
+	board_map.custom_minimum_size.y = 248
 	board_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_box.add_child(board_map)
 	board_map.configure_board(source if source != null else MapData.new(world), destinations)

@@ -1,11 +1,19 @@
 extends PanelContainer
-## Табличка обелиска (ObeliskLore): название и описание. Открывается у таблички (E «Прочитать»), закрывается E, Esc или кнопкой.
-## Оформление — как у дорожной доски и «Путешествия»; хранит только показанный текст.
+## Табличка обелиска (ObeliskLore): вид памятника, статус в альбоме, текст и компактная кнопка закрытия.
+## Открывается у таблички (E «Прочитать»), закрывается E, Esc или кнопкой. Оформление — HudStyle.
 
 signal closed
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
-const WIDTH := 560.0
+const UiIcons = preload("res://scripts/ui/ui_icons.gd")
+const WIDTH := 580.0
+const FORM_NAMES := [
+	"Каменный обелиск",
+	"Расколотый обелиск",
+	"Старая статуя",
+	"Обломки колонны",
+	"Памятная стела",
+]
 
 var _box: VBoxContainer
 var _close: Button
@@ -18,29 +26,83 @@ func _ready() -> void:
 	grow_vertical = Control.GROW_DIRECTION_BOTH
 	custom_minimum_size = Vector2(WIDTH, 0)
 	theme = HudStyle.theme()
-	add_theme_stylebox_override("panel", HudStyle.sheet(Vector2(22, 22)))
+	add_theme_stylebox_override("panel", HudStyle.sheet(Vector2(22, 20)))
 	_box = VBoxContainer.new()
-	_box.add_theme_constant_override("separation", 12)
+	_box.add_theme_constant_override("separation", 14)
 	add_child(_box)
 	hide()
 
 
-## title — название обелиска, text — описание, hint — подпись под текстом (например, что делать дальше)
-func open(title: String, text: String, hint := "") -> void:
+## title — название обелиска, text — описание, hint — подпись под текстом,
+## meta — необязательные сведения: {form, in_album, series: Vector2i, key_hint}
+func open(title: String, text: String, hint := "", meta := {}) -> void:
 	clear()
-	_label(title, 26, HudStyle.CREAM, 0.0)
-	var line := ColorRect.new()
-	line.custom_minimum_size = Vector2(0, 2)
-	line.color = HudStyle.BORDER
-	_box.add_child(line)
-	_label(text, 17, HudStyle.CREAM, WIDTH - 44.0)
+	var form := clampi(int(meta.get("form", 0)), 0, FORM_NAMES.size() - 1)
+	var series: Vector2i = meta.get("series", Vector2i.ZERO)
+	var in_album := bool(meta.get("in_album", false))
+
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	_box.add_child(head)
+
+	var icon_badge := PanelContainer.new()
+	icon_badge.custom_minimum_size = Vector2(44, 44)
+	icon_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon_badge.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(10, 10), false))
+	icon_badge.add_child(UiIcons.rect(UiIcons.obelisk(form), 24, HudStyle.MINT))
+	head.add_child(icon_badge)
+
+	var titles := VBoxContainer.new()
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	titles.add_theme_constant_override("separation", 2)
+	head.add_child(titles)
+	var sub_text: String = FORM_NAMES[form]
+	if series.y > 0:
+		sub_text += " · %d из %d в летописи" % [series.x, series.y]
+	_label(sub_text, 12, HudStyle.MUTED, 0.0, titles)
+	var title_lbl := _label(title, 23, HudStyle.CREAM, 0.0, titles)
+	title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+	var status_color := HudStyle.MINT if in_album else HudStyle.AMBER
+	var status_box := PanelContainer.new()
+	status_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	status_box.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, Color(status_color, 0.6), 8, Vector2(9, 5), false))
+	head.add_child(status_box)
+	var status_row := HBoxContainer.new()
+	status_row.add_theme_constant_override("separation", 6)
+	status_box.add_child(status_row)
+	status_row.add_child(UiIcons.rect(UiIcons.QUESTS.photo, 14, status_color))
+	_label("В альбоме" if in_album else "Снимите вблизи", 12, status_color, 0.0, status_row)
+
+	var body_card := PanelContainer.new()
+	body_card.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(16, 14), false))
+	_box.add_child(body_card)
+	_label(text, 17, HudStyle.CREAM, WIDTH - 76.0, body_card)
+
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 10)
+	_box.add_child(footer)
 	if hint != "":
-		_label(hint, 13, HudStyle.MINT, WIDTH - 44.0)
+		var hlbl := _label(hint, 13, HudStyle.MINT, 0.0, footer)
+		hlbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hlbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hlbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	else:
+		var spacer := Control.new()
+		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		footer.add_child(spacer)
+
+	var key_hint := str(meta.get("key_hint", "E / Esc"))
+	if not key_hint.is_empty():
+		footer.add_child(HudStyle.chip(key_hint))
 	_close = Button.new()
 	_close.text = "Закрыть"
-	_close.custom_minimum_size.y = 38
+	_close.custom_minimum_size = Vector2(140, 44)
+	_close.size_flags_horizontal = Control.SIZE_SHRINK_END
 	_close.pressed.connect(func() -> void: closed.emit())
-	_box.add_child(_close)
+	footer.add_child(_close)
+
 	show()
 	_close.grab_focus()
 
@@ -52,7 +114,7 @@ func clear() -> void:
 	hide()
 
 
-func _label(text: String, size: int, color: Color, wrap: float) -> void:
+func _label(text: String, size: int, color: Color, wrap: float, parent: Container = null) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", size)
@@ -60,4 +122,5 @@ func _label(text: String, size: int, color: Color, wrap: float) -> void:
 	if wrap > 0.0:
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.custom_minimum_size.x = wrap
-	_box.add_child(label)
+	(parent if parent != null else _box).add_child(label)
+	return label

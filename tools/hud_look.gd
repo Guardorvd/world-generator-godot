@@ -247,6 +247,15 @@ func _journal_checks() -> void:
 	hud.journal_panel.open(hud.journey_data(), true)
 	_check(hud.journal_panel._album_page.visible and hud.journal_panel._album_page.get_child(0).get_child_count() >= 6, "вкладка «Альбом»: группы страниц")
 	await _shot("hud_journal_album")
+	var card_buttons: Array[Node] = hud.journal_panel._album_content.find_children("*", "Button", true, false)
+	_check(card_buttons.size() >= 2, "открытые страницы альбома интерактивны")
+	if not card_buttons.is_empty():
+		(card_buttons[0] as Button).pressed.emit()
+		await process_frame
+		_check(hud.journal_panel._lightbox != null and hud.journal_panel._lightbox.visible, "клик по карточке открывает лайтбокс")
+		_check(root.get_visible_rect().encloses(hud.journal_panel._lightbox.get_global_rect()), "лайтбокс помещается в 1280×720")
+		await _shot("hud_journal_lightbox")
+		_check(hud.journal_panel.close_lightbox() and hud.journal_panel._lightbox == null, "лайтбокс закрывается")
 	hud.journal_panel.clear()
 	_check(not hud.journal_panel.visible, "закрытие прячет экран")
 	hud.explore = Exploration.new()
@@ -257,9 +266,12 @@ func _panel_shots(world: WorldData) -> void:
 	hud.settlement_panel.open(world.settlements[0], world, [], false, hud.quests)
 	_check(hud.settlement_panel.visible, "доска поселения открывается")
 	await _shot("hud_board")
+	_check(root.get_visible_rect().encloses(hud.settlement_panel.get_global_rect()), "доска помещается в 1280×720")
 	hud.settlement_panel.clear()
-	hud.plaque_panel.open("Обелиск у брода", "Здесь в старину переправлялись гурты: камень ставили, чтобы брод находили и в половодье.", "Снимите табличку — она попадёт в альбом")
+	hud.plaque_panel.open("Обелиск у брода", "Здесь в старину переправлялись гурты: камень ставили, чтобы брод находили и в половодье.", "Снимите табличку — она попадёт в альбом", {form = 4, in_album = false, series = Vector2i(2, 5)})
 	await _shot("hud_plaque")
+	_check(root.get_visible_rect().encloses(hud.plaque_panel.get_global_rect()), "табличка помещается в 1280×720")
+	_check(hud.plaque_panel._close.size.x < 220.0 and hud.plaque_panel._close.size.y >= 44.0, "кнопка закрытия таблички компактная (≥44 px по высоте)")
 	hud.plaque_panel.clear()
 
 

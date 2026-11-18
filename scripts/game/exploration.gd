@@ -47,12 +47,12 @@ static func pages() -> Array[Dictionary]:
 		var biome: Dictionary = Biomes.LIST[i]
 		if biome.get("water", false):
 			continue
-		out.append({key = "biome:%d" % i, group = 0, title = biome.name, hint = "Снимок местности: «%s»" % biome.name})
-	out.append({key = "settlement", group = 1, title = "Поселение", hint = "Наведите рамку на поселение"})
+		out.append({key = "biome:%d" % i, group = 0, title = biome.name, hint = "Снимите местность: «%s»" % biome.name})
+	out.append({key = "settlement", group = 1, title = "Поселение", hint = "Снимите вблизи (< %d м)" % int(ALBUM_REACH.settlement)})
 	for type: String in StageSites.TYPES:
-		out.append({key = "site:" + type, group = 1, title = site_title(type), hint = "Найдите и снимите: %s" % StageSites.TYPES[type].title})
-	out.append({key = "peak", group = 2, title = "Вершина", hint = "Любая вершина в рамке"})
-	out.append({key = "lake", group = 2, title = "Озеро", hint = "Любое озеро в рамке"})
+		out.append({key = "site:" + type, group = 1, title = site_title(type), hint = "Снимите вблизи (< %d м): %s" % [int(ALBUM_REACH.site), StageSites.TYPES[type].title]})
+	out.append({key = "peak", group = 2, title = "Вершина", hint = "Снимите вершину (< %d м)" % int(ALBUM_REACH.peak)})
+	out.append({key = "lake", group = 2, title = "Озеро", hint = "Снимите у берега (< %d м)" % int(ALBUM_REACH.lake)})
 	out.append({key = "night:aurora", group = 3, title = "Полярное сияние", hint = "Ночью, камера выше горизонта"})
 	out.append({key = "night:comet", group = 3, title = "Комета", hint = "Ночью, камера выше горизонта"})
 	out.append({key = "night:meteor", group = 3, title = "Звездопад", hint = "Ночью, камера выше горизонта"})
