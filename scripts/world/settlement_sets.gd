@@ -21,7 +21,9 @@ const SIZE_CLASSES := {
 ## не держала вторую таблицу размеров.
 const SITE_SIZES := {
 	shelter = {half = Vector2(1.5, 1.5), flat = 1.8, height = 2.0},
-	tower = {half = Vector2(1.3, 1.3), flat = 1.4, height = 8.5},
+	# 18.11.2026: модель вышки теперь около 4,5 м в поперечнике (TowerLayout) и 16,5 м высотой; half и flat не тронуты —
+	# от них зависят расстановка мест, дороги и растительность вокруг. Твёрдого ящика вышки в физике больше нет.
+	tower = {half = Vector2(1.3, 1.3), flat = 1.4, height = 16.5},
 	obelisk = {half = Vector2(0.75, 0.75), flat = 1.2, height = 5.5},
 	ruin = {half = Vector2(1.7, 1.7), flat = 3.0, height = 2.4},
 	keep = {half = Vector2(1.6, 1.6), flat = 2.4, height = 5.0},

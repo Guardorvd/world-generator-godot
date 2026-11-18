@@ -54,7 +54,8 @@ static func build(body: StaticBody3D, heights: Heightfield, radius: float) -> vo
 			_hut(batch, heights, hut, PlayerState.hut_angle(settlement, hut))
 	for site: SiteData in heights.world.sites:
 		for hut: HutData in site.huts:
-			_hut(batch, heights, hut, hut.a)
+			if hut.t != "tower": # у вышки нет сплошного объёма: настилы лестницы — в heights.structures
+				_hut(batch, heights, hut, hut.a)
 
 
 static func _hut(batch: Contacts, heights: Heightfield, hut: HutData, angle: float) -> void:

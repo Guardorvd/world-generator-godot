@@ -235,6 +235,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
 	t = _mark("start_vegetation_setup_ms", t)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
+	heights.add_tower_stairs(world.sites) # 18.11.2026: на дозорные вышки можно подняться (настилы лестницы, TowerLayout)
 	place_names = PlaceNames.new()
 	place_names.setup($Settlements, heights)
 	photo = PhotoCamera.new()

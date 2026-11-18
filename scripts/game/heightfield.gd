@@ -49,6 +49,7 @@ var _cells := {}                    # клетка -> номера сооруж�
 var outer_structures: Array = []    # 13.9: мосты закреплённых соседних областей (в конце structures)
 var _outer_cells := {}              # Vector2i клетки за картой -> номера сооружений
 var _deck_keys := {}                # настилы Trail Lab, уже добавленные (add_decks)
+var towers: Array = []              # вышки с лестницей (add_tower_stairs): {id, x, z, yaw, base} — верх площадки TowerLayout.on_deck
 var road_refinement: RoadRefinement: # 4.4: метровая сетка только у дорог, общая для меша и опоры
 	set(value):
 		road_refinement = value
@@ -437,6 +438,8 @@ func _set_places(w: WorldData) -> bool:
 			centers.append(s.y)
 			hut_start.append(huts.size() / 6)
 			for u in s.huts:
+				if for_sites and EntityCodec.value(u, "t", "house") == "tower":
+					continue # как в is_passable: у вышки нет твёрдого ящика, по лестнице идут настилы
 				# угол и полуширина — теми же функциями, что is_passable; cos и sin — движка, а не .NET
 				var angle: float = u.a if for_sites else PlayerState.hut_angle(s, u)
 				var half: Vector2 = PlayerState.hut_half(u)
@@ -598,6 +601,47 @@ func add_decks(list: Array) -> void:
 					if not _cells.has(i):
 						_cells[i] = []
 					_cells[i].append(k)
+
+
+## Дозорные вышки мест (StageSites, вид "tower"): лестница и верхняя площадка — настилы с перилами (TowerLayout),
+## по ним идёт та же опора, что по мостам (deck_at / surface_at / wall_at; C# RideGround получает их через
+## ground_changed). Вызывать после build_structures и после рельефа мест; повторный вызов ничего не добавляет.
+## Настилы встают перед сооружениями закреплённых областей: те по-прежнему в конце structures.
+func add_tower_stairs(sites: Array) -> void:
+	var made: Array = []
+	for s in sites:
+		for u in s.huts:
+			if EntityCodec.value(u, "t", "house") != "tower":
+				continue
+			var key := "tower:%d:%d" % [roundi(u.x * 100.0), roundi(u.y * 100.0)]
+			if _deck_keys.has(key):
+				continue
+			_deck_keys[key] = true
+			var origin := Vector3(u.x * TILE, 0.0, u.y * TILE)
+			origin.y = TowerLayout.base_height(self, origin.x, origin.z, u.a)
+			towers.append({id = WorldData.place_id("site", s.x, s.y), x = origin.x, z = origin.z, yaw = u.a, base = origin.y})
+			made.append_array(TowerLayout.structures(origin, u.a, key))
+	if made.is_empty():
+		return
+	clear_rock_seats()
+	var outer := outer_structures
+	structures.resize(structures.size() - outer.size())
+	outer_structures = []
+	_outer_cells = {}
+	for d: Dictionary in made:
+		var piece := _axis_between(Vector2(d.ax, d.az), Vector2(d.bx, d.bz), false)
+		piece.half = d.half
+		piece.arch = 0.0
+		piece.ay = d.ay
+		piece.by = d.by
+		piece.style = "planks"
+		piece.rails = true
+		piece.deck = true # модель вышки рисует SettlementsBuilder, не StructuresBuilder
+		piece.tower = true
+		structures.append(piece)
+	_add_outer(outer)
+	index_structures()
+	ground_changed()
 
 
 ## Remove only this region's collision records, preserving the plan's structure indices.

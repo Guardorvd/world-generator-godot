@@ -863,6 +863,8 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 			var low := foot.x
 			var high := foot.y
 			at.origin.y = high if (SettlementSets.is_home(u.t) or u.t in ["barn", "barn_loft", "boat_shed", "shelter"]) else low
+			if u.t == "tower":
+				at.origin.y = TowerLayout.base_height(heights, at.origin.x, at.origin.z, u.a) # та же отметка, что у настилов лестницы
 			top = maxf(top, at.origin.y)
 			if use_catalog and cat.settlements.has(u.t):
 				var entry: Dictionary = cat.settlements[u.t]
@@ -930,7 +932,7 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 				"keep":
 					var h := 5.0 + v * 1.5
 					batch.add(keep, at * Transform3D(Basis.from_scale(Vector3(1, h, 1)), Vector3(0, h * 0.5 - 0.3, 0)), old_stone)
-		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (12.5 if s.type == "tower" else 7.0), s.y * TILE), WorldData.place_id("site", s.x, s.y))
+		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (TowerLayout.HEIGHT + 2.0 if s.type == "tower" else 7.0), s.y * TILE), WorldData.place_id("site", s.x, s.y))
 		parent.add_child(label)
 
 

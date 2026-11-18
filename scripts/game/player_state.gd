@@ -231,7 +231,10 @@ static func _is_passable_script(w: WorldData, heights: Heightfield, x: float, z:
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
 			continue
 		for u in s.huts:
-			if _box_hits(x - u.x * TILE, z - u.y * TILE, u.a, SettlementSets.half_of(EntityCodec.value(u, "t", "house")), r):
+			var kind: String = EntityCodec.value(u, "t", "house")
+			if kind == "tower":
+				continue # вышка — каркас с лестницей: на неё поднимаются (Heightfield.add_tower_stairs), ящика нет
+			if _box_hits(x - u.x * TILE, z - u.y * TILE, u.a, SettlementSets.half_of(kind), r):
 				return false
 	if heights.wall_at(x, z, feet, r):
 		return false

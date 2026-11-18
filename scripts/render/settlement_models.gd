@@ -435,29 +435,8 @@ static func _build_site_mesh(kind: String, level: int) -> ArrayMesh:
 				_box(st, Vector3(1.10, 0.12, 0.14), Vector3(0, 1.78, 1.53), Basis.IDENTITY, CELL_TIMBER)
 				_box(st, Vector3(0.45, 0.70, 0.45), Vector3(-0.75, 2.65, -0.75), Basis.IDENTITY, CELL_STONE)
 		"tower":
-			if level == 2:
-				_box(st, Vector3(1.45, 6.40, 1.45), Vector3(0, 3.10, 0), Basis.IDENTITY, CELL_TIMBER)
-				_box(st, Vector3(2.80, 0.25, 2.80), Vector3(0, 6.40, 0), Basis.IDENTITY, CELL_TIMBER)
-				_cyl(st, 0.0, 2.20, 1.65, 4, Vector3(0, 8.50, 0), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
-			else:
-				for cx: float in [-1.0, 1.0]:
-					for cz: float in [-1.0, 1.0]:
-						if level == 0:
-							_box(st, Vector3(0.46, 0.55, 0.46), Vector3(cx, -0.10, cz), Basis.IDENTITY, CELL_STONE)
-						_box(st, Vector3(0.25, 7.00, 0.25), Vector3(cx, 3.20, cz), Basis.IDENTITY, CELL_TIMBER)
-				_box(st, Vector3(2.80, 0.20, 2.80), Vector3(0, 6.40, 0), Basis.IDENTITY, CELL_TIMBER)
-				for k in 4:
-					var b := Basis(Vector3.UP, k * PI / 2.0)
-					_box(st, Vector3(2.80, 0.12, 0.10), b * Vector3(0, 7.20, 1.36), b, CELL_TIMBER)
-				_cyl(st, 0.0, 2.25, 1.65, 4, Vector3(0, 8.50, 0), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
-				_box(st, Vector3(0.10, 2.20, 0.10), Vector3(0, 9.95, 0), Basis.IDENTITY, CELL_DARK_WOOD)
-				_box(st, Vector3(1.00, 0.60, 0.06), Vector3(0.50, 10.60, 0), Basis.IDENTITY, CELL_FLOWER_A)
-				if level == 0:
-					for sx: float in [-0.95, 0.95]:
-						_box(st, Vector3(0.10, 0.90, 0.10), Vector3(sx, 6.85, 1.35), Basis.IDENTITY, CELL_DARK_WOOD)
-						_box(st, Vector3(0.10, 0.90, 0.10), Vector3(sx, 6.85, -1.35), Basis.IDENTITY, CELL_DARK_WOOD)
-					_box(st, Vector3(2.20, 0.12, 0.12), Vector3(0, 3.20, 1.0), Basis(Vector3.BACK, 0.55), CELL_TIMBER)
-					_box(st, Vector3(2.20, 0.12, 0.12), Vector3(0, 3.20, -1.0), Basis(Vector3.BACK, -0.55), CELL_TIMBER)
+			# 18.11.2026: настоящая вышка с лестницей - геометрия TowerLayout, модель TowerModels
+			TowerModels.build(st, level)
 		"obelisk":
 			if level == 2:
 				_box(st, Vector3(1.40, 1.00, 1.40), Vector3(0, 0.10, 0), Basis.IDENTITY, CELL_STONE)
