@@ -446,7 +446,6 @@ func _sync_settings_controls() -> void:
 	%TrailClutter.set_pressed_no_signal(GameContext.scope.settings.trail_clutter)
 	%VolumeSlider.set_value_no_signal(GameContext.scope.settings.volume)
 	%DaySlider.set_value_no_signal(GameContext.scope.settings.day_minutes)
-	%LongTwilight.set_pressed_no_signal(GameContext.scope.settings.long_twilight)
 	%StartHourSlider.set_value_no_signal(GameContext.scope.settings.start_hour)
 	%RandomHour.set_pressed_no_signal(not GameContext.scope.settings.start_hour_set)
 	if display_options != null:
@@ -507,11 +506,6 @@ func _on_day_changed(v: float) -> void:
 	GameContext.scope.settings.day_minutes = v
 	_settings_changed()
 	_show_values()
-
-
-func _on_long_twilight_toggled(on: bool) -> void:
-	GameContext.scope.settings.long_twilight = on
-	_settings_changed()
 
 
 func _on_start_hour_changed(v: float) -> void:

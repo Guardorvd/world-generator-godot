@@ -1,7 +1,6 @@
 extends SceneTree
 ## Проверка настроек на отдельном файле, без изменения профиля игрока.
 
-const DayTiming := preload("res://scripts/game/day_timing.gd")
 var fails := 0
 
 
@@ -27,13 +26,11 @@ func _run() -> void:
 	cfg.set_value("time", "start_hour_set", true)
 	GameContext.scope.settings._apply_config(cfg)
 	_check(GameContext.scope.settings.day_minutes == 12.0, "сохранённая длительность суток сохраняется")
-	_check(GameContext.scope.settings.long_twilight, "длинные рассветы и закаты включены для старых настроек")
-	cfg.set_value("time", "long_twilight", false)
+	cfg.set_value("time", "long_twilight", true) # ключ удалённого режима из старого файла
 	GameContext.scope.settings._apply_config(cfg)
-	_check(not GameContext.scope.settings.long_twilight, "из настроек читается равномерный ход часов")
+	_check(GameContext.scope.settings.day_minutes == 12.0, "старый ключ режима суток в файле настроек ничему не мешает")
 	_check_day_timing()
 	GameContext.scope.settings.reset_defaults()
-	_check(GameContext.scope.settings.long_twilight, "сброс возвращает длинные рассветы и закаты")
 	cfg.clear()
 	cfg.set_value("input", "mouse", "ошибка")
 	cfg.set_value("input", "invert_y", [])
@@ -112,47 +109,47 @@ func _run() -> void:
 
 
 func _check_day_timing() -> void:
-	_check(is_equal_approx(DayTiming.advance(4.0, 0.13, true), 6.5)
-		and is_equal_approx(DayTiming.advance(6.5, 0.39, true), 17.5)
-		and is_equal_approx(DayTiming.advance(17.5, 0.13, true), 20.0)
-		and is_equal_approx(DayTiming.advance(20.0, 0.35, true), 28.0), "доли фаз суток и переход через полночь")
-	_check(is_equal_approx(DayTiming.advance(21.0, 0.25, false), 27.0)
-		and is_equal_approx(DayTiming.advance(2.0, 3.0, true), 74.0)
-		and is_equal_approx(DayTiming.advance(2.0, -3.0, true), -70.0)
-		and DayTiming.advance(5.37, 0.0, true) == 5.37, "равномерный ход времени и остановка часов")
-	var hour := 23.625
-	for step in 25200: # Seven minutes at 60 physics ticks per second.
-		hour = DayTiming.advance(hour, 1.0 / 25200.0, true)
-	_check(absf(hour - 47.625) < 0.00001, "длительность суток не накапливает ошибку от шага физики")
+	var knots := DayCycle.SOLAR_AT
+	var ok := true
+	for i in knots.size():
+		ok = ok and is_equal_approx(fposmod(DayCycle.solar_hour(knots[i]), 24.0), fposmod(6.0 * i, 24.0))
+	_check(ok, "круг солнца проходит 0, 6, 12, 18 часов в заданные часы циферблата")
+	_check(is_equal_approx(DayCycle.sun_direction(4.8).y, 0.0) and is_equal_approx(DayCycle.sun_direction(22.5).y, 0.0)
+		and DayCycle.sun_direction(13.65).y > 0.8 and DayCycle.sun_direction(1.65).y < -0.8, "восход в 04:48, закат в 22:30, полдень и полночь на местах")
+	var monotone := true
 	var smooth := true
-	var step := 0.00001
-	for boundary in [4.0, 6.5, 17.5, 20.0]:
-		var before := DayTiming.advance(boundary, -step, true)
-		var after := DayTiming.advance(boundary, step, true)
-		smooth = smooth and before < boundary and after > boundary and absf((after - boundary) - (boundary - before)) < 0.000001
-	_check(smooth, "скорость часов непрерывна на границах фаз")
+	var previous := DayCycle.solar_hour(0.0)
+	var previous_rate := 0.0
+	for step in range(1, 2401):
+		var hour := step * 0.01
+		var value := DayCycle.solar_hour(hour)
+		var delta := fposmod(value - previous, 24.0)   # круг замкнут: в 01:39 «24» становится «0»
+		var rate := delta / 0.01
+		monotone = monotone and delta > 0.0 and delta < 12.0
+		smooth = smooth and (step == 1 or absf(rate - previous_rate) < 0.05)
+		previous = value
+		previous_rate = rate
+	_check(monotone and smooth and is_equal_approx(DayCycle.solar_hour(0.0), fposmod(previous, 24.0)), "солнце идёт вперёд без остановок и рывков скорости")
+	_check(DayCycle.state(4.0)[9] > 0.5 and DayCycle.state(22.0)[9] < 0.5 and DayCycle.state(23.8)[9] > 0.8 and DayCycle.state(12.0)[9] == 0.0,
+		"рассвет около 04:00, вечерние сумерки до полуночи, днём ночи нет")
 
 
 func _check_time_settings_ui() -> void:
 	var settings := GameContext.scope.settings
 	settings.reset_defaults()
 	var menu: Node = load("res://scenes/main.tscn").instantiate()
-	var toggle: CheckBox = menu.get_node("%LongTwilight")
 	var slider: HSlider = menu.get_node("%DaySlider")
-	_check(toggle.button_pressed, "в меню длинные рассветы и закаты включены при первом запуске")
+	_check(not menu.has_node("%LongTwilight"), "в меню нет переключателя режима суток")
 	# Emit the scene's signals without starting the animated menu in this fixture.
-	toggle.set_pressed_no_signal(false)
-	toggle.toggled.emit(false)
 	slider.set_value_no_signal(12.0)
 	slider.value_changed.emit(12.0)
-	_check(not settings.long_twilight and settings.day_minutes == 12.0, "переключатель и ползунок меняют настройки времени")
+	_check(settings.day_minutes == 12.0, "ползунок меняет длину суток")
 	settings.settings_path = "user://settings_time_test_%s.cfg" % OS.get_process_id()
 	var saved := settings.save_settings()
 	var restored := GameSettings.new()
 	restored.settings_path = settings.settings_path
 	restored.load_settings()
-	_check(saved == OK and not restored.long_twilight and restored.day_minutes == 12.0,
-		"режим времени и длина суток сохраняются и читаются с диска")
+	_check(saved == OK and restored.day_minutes == 12.0, "длина суток сохраняется и читается с диска")
 	DirAccess.remove_absolute(settings.settings_path)
 	settings.settings_path = GameSettings.PATH
 	menu.free()
@@ -191,19 +188,18 @@ func _check_world_clock() -> void:
 	game.hour = 5.9
 	game._hour_skip = 1.0
 	var manual_total := 0.0
+	var natural := dt / (settings.day_minutes * 60.0) * 24.0
 	for tick in 60:
-		var expected := DayTiming.advance(game.hour, dt / (settings.day_minutes * 60.0), true)
+		var expected := game.hour + natural
 		game._advance_clock(dt)
 		manual_total += wrapf(game.hour - expected, -12.0, 12.0)
-	_check(is_equal_approx(manual_total, 1.0), "ход часов во время рассвета не искажает ручной сдвиг")
+	_check(is_equal_approx(manual_total, 1.0), "ручной сдвиг часов добавляется к ровному ходу времени")
 	var hour := game.hour
 	var time := game.time
-	settings.long_twilight = false
 	game._advance_clock(dt)
-	_check(is_equal_approx(game.hour, hour + dt * 24.0 / 420.0) and is_equal_approx(game.time, time + dt),
-		"переключение темпа в мире сохраняет текущий час и время симуляции")
-	settings.long_twilight = true
-	for crossing in [6.0, 18.0]:
+	_check(is_equal_approx(game.hour, hour + natural) and is_equal_approx(game.time, time + dt),
+		"часы идут ровно: каждый час равен 1/24 суток")
+	for crossing in [DayCycle.SOLAR_AT[1], DayCycle.SOLAR_AT[3]]:
 		game.hour = crossing - 0.1
 		var smooth := true
 		game._apply_render_clock(1.0)

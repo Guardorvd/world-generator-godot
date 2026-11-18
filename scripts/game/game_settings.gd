@@ -35,7 +35,6 @@ const CLOUD_QUALITY_LEVELS := ["Низкие", "Средние", "Высокие
 const DEFAULT_CLOUD_QUALITY := 1
 const DEFAULT_VOLUME := 0.8
 const DEFAULT_DAY_MINUTES := 7.0   # с 12.9 сутки за 7 минут; 0 — время стоит
-const DEFAULT_LONG_TWILIGHT := true
 const OLD_DAY_MINUTES := 24.0      # прежнее значение по умолчанию: в файлах до 10.1 заменяется новым
 const DEFAULT_START_HOUR := 9.0
 const MAX_DAY_MINUTES := 120.0
@@ -138,7 +137,6 @@ var style_on: Dictionary = VisualStyle.DEFAULT_ON.duplicate()
 var style_amount: Dictionary = VisualStyle.DEFAULT_AMOUNT.duplicate()
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
-var long_twilight := DEFAULT_LONG_TWILIGHT
 var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
 var start_hour_set := false  # час начала выбран игроком; иначе каждый мир начинается в случайный час
 var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
@@ -193,7 +191,6 @@ func _apply_config(cfg: ConfigFile) -> void:
 		style_amount[id] = _number(cfg, "style", id + "_amount", style_amount[id], 0.0, 1.0)
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
-	long_twilight = _flag(cfg, "time", "long_twilight", DEFAULT_LONG_TWILIGHT)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
 	# в файлах до 10.1 флага нет: час, отличный от прежнего значения по умолчанию, игрок выбирал сам;
 	# длина суток, равная прежней по умолчанию, становится новой по умолчанию
@@ -294,7 +291,6 @@ func reset_defaults() -> void:
 	style_amount = VisualStyle.DEFAULT_AMOUNT.duplicate()
 	volume = DEFAULT_VOLUME
 	day_minutes = DEFAULT_DAY_MINUTES
-	long_twilight = DEFAULT_LONG_TWILIGHT
 	start_hour = DEFAULT_START_HOUR
 	start_hour_set = false
 
@@ -329,7 +325,6 @@ func save_settings() -> Error:
 		cfg.set_value("style", id + "_amount", style_amount[id])
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
-	cfg.set_value("time", "long_twilight", long_twilight)
 	cfg.set_value("time", "start_hour", start_hour)
 	cfg.set_value("time", "start_hour_set", start_hour_set)
 	cfg.set_value("world", "seed", last_seed)

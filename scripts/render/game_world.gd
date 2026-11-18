@@ -36,7 +36,6 @@ const BeaconLayer = preload("res://scripts/render/beacon_layer.gd")
 const PaintLayer = preload("res://scripts/render/paint_layer.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BikePlacement = preload("res://scripts/render/bike_placement.gd")
-const DayTiming := preload("res://scripts/game/day_timing.gd")
 const HudStyle := preload("res://scripts/ui/hud_style.gd")
 var bike_placement: BikePlacement
 var place_names: PlaceNames
@@ -1164,7 +1163,7 @@ func _advance_clock(dt: float) -> void:
 	time += dt
 	var settings := services.settings
 	if settings.day_minutes > 0.0:
-		_clock_hour = DayTiming.advance(_clock_hour, dt / (settings.day_minutes * 60.0), settings.long_twilight)
+		_clock_hour += dt / (settings.day_minutes * 60.0) * 24.0
 	if _hour_skip != 0.0:
 		# The remaining offset depends only on manual input. Its size and direction
 		# carry across midnight and changes in the natural rate of the clock.

@@ -2,7 +2,8 @@ class_name DayCycle
 extends RefCounted
 ## Смена суток (с 7.8). Одна таблица ключевых состояний KEYS (ночь, сумерки, утро, день, вечер):
 ## цвета неба, света, окружения и выдержка; между ключами всё плавно смешивается по часу.
-## Солнце ходит по кругу (восход в 6:00, закат в 18:00, в полдень 55° над югом), луна — напротив.
+## Солнце ходит по кругу (в полдень 55° над югом), луна — напротив. Часы идут ровно, а круг растянут под них (с 18.11):
+## первый свет около 4:00, восход в 4:48, закат в 22:30, ночь настаёт к 23:40 (SOLAR_AT; таблица KEYS записана в «часах солнца»).
 ## Свет в сцене один (узел Sun): днём он светит от солнца, ночью от луны, переключается у горизонта,
 ## где сила обоих ноль, поэтому скачка не видно. Небо рисует resources/sky.gdshader, туман берёт цвет горизонта.
 ## С 7.9 сутки задают и атмосферу земли: густоту тумана и рассеяние света в нём, насыщенность, плотность теней,
@@ -30,6 +31,13 @@ const COMET_CHANCE := 0.07
 const SHOWER_CHANCE := 0.15
 const METEOR_SPORADIC := 0.05    # доля слотов по 2,5 с с метеором в обычную ночь (около одного в минуту)
 const METEOR_SHOWER := 0.35
+## Часы на циферблате, в которые солнце проходит «солнечные» 0, 6 (восход), 12, 18 (закат) и 24 часа круга. Между ними гладкая
+## кубическая кривая: скорость солнца непрерывна, на стыках касательная — среднее гармоническое соседних отрезков.
+const SOLAR_AT := [1.65, 4.8, 13.65, 22.5, 25.65]
+const NIGHT_RATE := 6.0 / 3.15   # солнечных часов за час циферблата ночью
+const DAY_RATE := 6.0 / 8.85     # и днём
+const EDGE_RATE := 2.0 * NIGHT_RATE * DAY_RATE / (NIGHT_RATE + DAY_RATE)
+const SOLAR_RATES := [NIGHT_RATE, EDGE_RATE, DAY_RATE, EDGE_RATE, NIGHT_RATE]
 
 ## час, зенит, горизонт (= туман), цвет и сила солнца, цвет и сила окружения, выдержка, гало солнца, ночь (звёзды),
 ## цвет облаков; с 7.9 ещё покрытие неба кучевыми облаками, множитель тумана (утренняя дымка), насыщенность
@@ -86,9 +94,23 @@ func make_cloud_dome() -> Node:
 	return preload("res://scripts/render/sky_cloud_dome.gd").new(sky_mat)
 
 
-## Направление на солнце в час hour (0..24)
+## Час круга солнца (0..24; 6 — восход, 18 — закат) для часа циферблата hour
+static func solar_hour(hour: float) -> float:
+	var h := fposmod(hour - SOLAR_AT[0], 24.0) + SOLAR_AT[0]
+	var i := 0
+	while i < 3 and SOLAR_AT[i + 1] <= h:
+		i += 1
+	var w: float = SOLAR_AT[i + 1] - SOLAR_AT[i]
+	var u: float = (h - SOLAR_AT[i]) / w
+	var u2: float = u * u
+	var u3: float = u2 * u
+	return 6.0 * i * (2.0 * u3 - 3.0 * u2 + 1.0) + SOLAR_RATES[i] * w * (u3 - 2.0 * u2 + u) \
+		+ 6.0 * (i + 1) * (-2.0 * u3 + 3.0 * u2) + SOLAR_RATES[i + 1] * w * (u3 - u2)
+
+
+## Направление на солнце в час циферблата hour (0..24)
 static func sun_direction(hour: float) -> Vector3:
-	var a := (hour - 6.0) / 24.0 * TAU
+	var a := (solar_hour(hour) - 6.0) / 24.0 * TAU
 	var east := Vector3(1.0, 0.0, 0.0)
 	var arc := Vector3(0.0, cos(TILT), sin(TILT))   # вверх и к югу (юг — +z)
 	return (east * cos(a) + arc * sin(a)).normalized()
@@ -105,12 +127,13 @@ static func clock_minute(hour: float) -> int:
 	return posmod(floori(fposmod(hour, 24.0) * 60.0 + 1.0e-8), 1440)
 
 
-## Ключевое состояние в час hour: гладкая кубическая интерполяция (C¹) между ключами без остановок на узлах
+## Ключевое состояние в час циферблата hour: гладкая кубическая интерполяция (C¹) между ключами без остановок на узлах
 static func state(hour: float) -> Array:
 	hour = fposmod(hour, 24.0)
+	var sun_hour := solar_hour(hour)   # ключи KEYS записаны по кругу солнца
 	var n := KEYS.size()
 	var i := 0
-	while i < n - 2 and KEYS[i + 1][0] <= hour:
+	while i < n - 2 and KEYS[i + 1][0] <= sun_hour:
 		i += 1
 	var a: Array = KEYS[i]
 	var b: Array = KEYS[i + 1]
@@ -119,7 +142,7 @@ static func state(hour: float) -> Array:
 	var dt := float(b[0] - a[0])
 	var dt_prev := float(a[0] - prev[0]) if i > 0 else float(24.0 - prev[0])
 	var dt_next := float(next[0] - b[0]) if i + 2 < n else float(next[0])
-	var u := clampf((hour - float(a[0])) / dt, 0.0, 1.0)
+	var u := clampf((sun_hour - float(a[0])) / dt, 0.0, 1.0)
 	var u2 := u * u
 	var u3 := u2 * u
 	var h00 := 2.0 * u3 - 3.0 * u2 + 1.0
