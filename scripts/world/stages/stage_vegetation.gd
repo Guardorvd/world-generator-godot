@@ -71,22 +71,28 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.
 	var CS := w.CS
 	var CW := w.CW
+	var CH := w.CH
 	var seed_num := w.seed_num
+	var huts := ObjStore.collect_huts(w)
+	var massifs := RockMassif.by_chunk(f.massifs, W, H, CS)
 	var job := func(c0: int, c1: int) -> ObjStore:
-		var st := ObjStore.new(w)
+		var first := c0 * CW
+		var st := ObjStore.new(w, first, (c1 - c0) * CW, huts)
 		for cy in range(c0, c1):
 			for cx in CW:
 				var x0 := cx * CS
 				var y0 := cy * CS
-				place_chunk(seed_num, x0, y0, mini(W, x0 + CS), mini(H, y0 + CS), f, 0, 0, W, w, st)
+				place_chunk(seed_num, x0, y0, mini(W, x0 + CS), mini(H, y0 + CS),
+					f, 0, 0, W, w, st, massifs[cy * CW + cx])
 		# Объекты в чанке — с севера на юг (при равных y — в порядке добавления, как стабильная сортировка JS)
 		var oy := st.y
-		for c in range(c0 * CW, c1 * CW):
-			st.chunk_lists[c].sort_custom(func(a: int, b: int) -> bool: return oy[a] < oy[b] if oy[a] != oy[b] else a < b)
+		var by_y := func(a: int, b: int) -> bool: return oy[a] < oy[b] if oy[a] != oy[b] else a < b
+		for list: Array in st.chunk_lists:
+			list.sort_custom(by_y)
 		return st
-	var rows := Parallel.bands(w.CH, job, 1)
+	var rows := Parallel.bands(CH, job, 1)
 	var chunks: Array[PackedInt32Array] = []
-	chunks.resize(CW * w.CH)
+	chunks.resize(CW * CH)
 	var ox := PackedFloat64Array()
 	var oy := PackedFloat64Array()
 	var ok := PackedInt32Array()
@@ -95,11 +101,11 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	for cy in rows.size():
 		var st: ObjStore = rows[cy]
 		var base := ox.size()
-		for c in range(cy * CW, (cy + 1) * CW):
+		for c in CW:
 			var list := PackedInt32Array(st.chunk_lists[c])
 			for j in list.size():
 				list[j] += base
-			chunks[c] = list
+			chunks[cy * CW + c] = list
 		ox.append_array(st.x)
 		oy.append_array(st.y)
 		ok.append_array(st.k)
@@ -256,7 +262,7 @@ static func world_cover(seed_num: int) -> float:
 ## ставится, если просвета хватает его радиусу; у дороги запас шире, у тропы лес подходит к самой кромке.
 ## w — стартовая область (тропы и дома) или null за её краем.
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictionary, ox: int, oy: int, stride: int,
-		w: WorldData, store: ObjStore) -> void:
+		w: WorldData, store: ObjStore, chunk_massifs: Variant = null) -> void:
 	var biome: PackedByteArray = f.biome
 	var forest: PackedFloat64Array = f.forest
 	var stony: PackedFloat64Array = f.stony
@@ -284,26 +290,30 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var rock_f: PackedByteArray=f.get("rock",PackedByteArray())
 	var b_water: PackedByteArray = _TABLES.water
 	var b_trees: PackedFloat64Array = _TABLES.trees
-	# Своя копия на задачу хранится в ObjStore и используется всеми её чанками.
-	var b_kinds: Array = store.kinds
+	var b_kinds: Array = _TABLES.kinds
 	var b_tree: PackedByteArray = _TABLES.tree
 	var rng := WGRandom.new(0)
 	var mask := WGRandom.MASK
 	store.begin_chunk(x0, y0, x1, y1)
 	# 09.11.2026: скальные массивы решаются до деревьев: в их теле деревьев и камыша нет (RockMassif.covers).
-	var massifs: PackedFloat32Array = RockMassif.near(f.massifs, x0, y0, x1, y1) if f.has("massifs") \
-		else RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, RockScatter.path_mask_of(f, store))
+	var massifs: PackedFloat32Array
+	if chunk_massifs != null:
+		massifs = chunk_massifs
+	elif f.has("massifs"):
+		massifs = RockMassif.near(f.massifs, x0, y0, x1, y1)
+	else:
+		massifs = RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, RockScatter.path_mask_of(f, store))
+	var cores := RockMassif.cores(massifs)
+	var has_cores := not cores.is_empty()
 	for y in range(y0, y1):
 		for x in range(x0, x1):
 			var i := (y - oy) * stride + x - ox
 			var bi := biome[i]
 			if b_water[bi] != 0 or (has_river and river[i] != 0):
 				continue
-			# = WGRandom.hash_cell(seed_num, x, y, LAYER), развёрнут: вызов на каждую клетку заметен по времени
-			var hc := ((x * 73856093 + y * 19349663 + LAYER * 83492791) ^ seed_num) & mask
-			hc = (((hc >> 16) ^ hc) * 0x45d9f3b) & mask
-			hc = (((hc >> 16) ^ hc) * 0x45d9f3b) & mask
-			rng.reset((hc >> 16) ^ hc)
+			# Клетка целиком под полотном широкой дороги (полудиагональ клетки 2,83 м).
+			if has_path and dist_path[i] < -3.0:
+				continue
 			var dens := b_trees[bi]
 			var fv := forest[i]
 			var e := elev[i]
@@ -357,24 +367,25 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			if sl > STEEP:
 				dens /= 1.0 + (sl - STEEP) * 1.5
 			# Горная сосна (стланик): естественные куртины по горным склонам, предгорьям и переходной зоне к вершинам (не на скальных стенах и снегу).
-			var mugo_belt := _ss(0.18, 0.28, e) * (1.0 - _ss(0.38, 0.46, e)) * (1.0 - _ss(0.58, 0.78, sl)) * _ss(-0.25, 0.25, fv)
 			# 17.11.2026: стланик дополняет древостой, а не вытесняет его: прежняя густота остаётся прежним видам,
 			# а прибавка до густоты пояса — только стланик (доля проверки rng выше mugo_from).
 			var mugo_from := INF
-			if mugo_belt > 0.0 and mugo_belt * 0.42 > dens and (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.ROCK or bi == Biomes.TUNDRA):
-				mugo_from = dens * 0.6
-				dens = mugo_belt * 0.42
-			# клетка целиком под полотном широкой дороги (полудиагональ клетки 2,83 м)
-			if has_path and dist_path[i] < -3.0:
-				continue
+			if e > 0.18 and e < 0.46 and (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.ROCK or bi == Biomes.TUNDRA):
+				var mugo_belt := _ss(0.18, 0.28, e) * (1.0 - _ss(0.38, 0.46, e)) * (1.0 - _ss(0.58, 0.78, sl)) * _ss(-0.25, 0.25, fv)
+				if mugo_belt > 0.0 and mugo_belt * 0.42 > dens:
+					mugo_from = dens * 0.6
+					dens = mugo_belt * 0.42
 			if has_village and village[i] != 0:
 				dens *= 0.08
 				mugo_from *= 0.08
-			if bi == Biomes.GRASS:
-				# Рощи на лугах продолжают поле древостоя соседнего леса.
-				var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
-				stand = _ss(-0.4, 0.4, sv)
-			var kinds: Array = b_kinds[bi]
+			var reeds := dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48
+			if dens <= 0.0 and not reeds:
+				continue
+			# = WGRandom.hash_cell(seed_num, x, y, LAYER), развёрнут: вызов на каждую клетку заметен по времени
+			var hc := ((x * 73856093 + y * 19349663 + LAYER * 83492791) ^ seed_num) & mask
+			hc = (((hc >> 16) ^ hc) * 0x45d9f3b) & mask
+			hc = (((hc >> 16) ^ hc) * 0x45d9f3b) & mask
+			rng.reset((hc >> 16) ^ hc)
 			# Берём соседей из всего плана или из полосы снимка OuterLand. Ложбины
 			# поддерживают влаголюбивые виды, на выпуклостях больше сухолюбивых.
 			var community_moist := -1.0
@@ -385,10 +396,14 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
 					if community_moist < 0.0:
+						if bi == Biomes.GRASS:
+							# Рощи на лугах продолжают поле древостоя соседнего леса.
+							var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
+							stand = _ss(-0.4, 0.4, sv)
 						var dry_shoulder := clampf(RockScatter.local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
 						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
 					var r_kind := rng.next_float()
-					var kind := Biomes.T_MUGO if roll >= mugo_from else _kind(bi, kinds, r_kind, e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
+					var kind := Biomes.T_MUGO if roll >= mugo_from else _kind(bi, b_kinds[bi], r_kind, e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
 					var tree_age := ForestModels.ADULT_AGE
@@ -414,9 +429,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
 					# клетка дальше 5 м от кромки (с запасом) — проверять нечего: самому большому стволу с ветвями ели хватает
 					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc, tree_age)) \
-							and (massifs.is_empty() or not RockMassif.covers(massifs, px, py, 0.2)):
+							and (not has_cores or not RockMassif.covers(cores, px, py, 0.2)):
 						store.add(px, py, kind, v, sc)
-			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48:
+			if reeds:
 				# Старый RNG нужен только камышу. Вдали от воды и на кручах пустую
 				# проверку прежнего слоя камней больше не считаем. При sl < 0.5
 				# прежняя ветка sl > 0.7 недостижима; оставшийся расход чисел тот же.
@@ -430,11 +445,11 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var v := floori(rng.next_float() * 3)
 					var sc := 0.8 + rng.next_float() * 0.3
 					if (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, Biomes.T_REED, sc)) \
-							and (massifs.is_empty() or not RockMassif.covers(massifs, px, py, 0.0)):
+							and (not has_cores or not RockMassif.covers(cores, px, py, 0.0)):
 						store.add(px, py, Biomes.T_REED, v, sc)
 
 
-	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store, massifs)
+	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store, massifs, cores)
 
 
 ## Свойства биомов в плоских таблицах: в цикле по всем клеткам словари читать дорого
@@ -635,50 +650,58 @@ class ObjStore:
 	var k := PackedInt32Array()
 	var v := PackedInt32Array()
 	var s := PackedFloat64Array()
-	var kinds: Array = StageVegetation._TABLES.kinds.duplicate(true)
 	var chunk_lists: Array = []
 	var w: WorldData
-	# Поля мира копируются в хранилище: с 12.2 хранилищ несколько, по одному на поток, а частое чтение
-	# свойств общего объекта из многих потоков упирается в общие счётчики ссылок
-	var _huts := PackedFloat64Array() # x, y поселения или места и x, y дома — по четыре числа на дом
+	# Хранилища полос читают один снимок домов: x, y поселения или места и x, y дома.
+	var _huts := PackedFloat64Array()
 	var _chunk_huts := PackedInt32Array() # индексы домов, чей отступ может пересечь текущий чанк
 	var _crown := PackedFloat64Array(Biomes.CROWN_RADIUS)
 	var _path_mask := PackedByteArray()
-	var _W := 0
-	var _H := 0
+	var _first_chunk := 0
 	# Временный индекс соседей чанка: головы списков по клеткам и ссылки по объектам.
 	# В готовом WorldData остаются только прежние obj_* и chunks.
-	var heads := PackedInt32Array()
-	var next := PackedInt32Array()
+	var _heads := PackedInt32Array()
+	var _next := PackedInt32Array()
+	var _radii := PackedFloat64Array()
+	var _max_radius := 0.0
+	var _chunk_base := 0
 	var _list: Array = []
 	var _x0 := 0
 	var _y0 := 0
 	var _x1 := 0
 	var _y1 := 0
 
-	func _init(world: WorldData) -> void:
+	func _init(world: WorldData, first_chunk := 0, chunk_count := -1, huts: Variant = null) -> void:
 		w = world
 		if w != null:
-			for list: Array in [w.settlements, w.sites]:
-				for st: EntityRecord in list:
-					for u: HutData in st.huts:
-						_huts.append_array([st.x, st.y, u.x, u.y])
+			_huts = collect_huts(w) if huts == null else huts
 			_path_mask = w.path_mask
-			_W = w.W
-			_H = w.H
-			chunk_lists.resize(w.CW * w.CH)
+			_first_chunk = first_chunk
+			chunk_lists.resize(w.CW * w.CH if chunk_count < 0 else chunk_count)
 		else:
 			chunk_lists.append(_list)
+
+	static func collect_huts(world: WorldData) -> PackedFloat64Array:
+		var huts := PackedFloat64Array()
+		for list: Array in [world.settlements, world.sites]:
+			for st: EntityRecord in list:
+				for u: HutData in st.huts:
+					huts.append_array([st.x, st.y, u.x, u.y])
+		return huts
 
 	func begin_chunk(x0: int, y0: int, x1: int, y1: int) -> void:
 		_x0 = x0
 		_y0 = y0
 		_x1 = x1
 		_y1 = y1
-		heads.resize((x1 - x0) * (y1 - y0))
-		heads.fill(-1)
+		_heads.resize((x1 - x0) * (y1 - y0))
+		_heads.fill(-1)
+		_next.resize(0)
+		_radii.resize(0)
+		_max_radius = 0.0
+		_chunk_base = x.size()
 		if w != null:
-			var c := floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS)
+			var c := floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS) - _first_chunk
 			chunk_lists[c] = []
 			_list = chunk_lists[c]
 			_chunk_huts.clear()
@@ -702,23 +725,32 @@ class ObjStore:
 			for n in range(0, _huts.size(), 4):
 				if _near_hut(n, ox, oy, radius):
 					return
-		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
-		# Наибольший зазор (два старых дуба, масштаб до 1.5) около 2,6 клетки; поиск ±3 клетки покрывает любую пару (GAP_K).
 		var cw := _x1 - _x0
 		# Массив уже принят по опоре и полному просвету. Его тело исключило деревья до этого прохода.
-		if not massif:
-			for yy in range(maxi(_y0, cy - 3), mini(_y1, cy + 4)):
-				for xx in range(maxi(_x0, cx - 3), mini(_x1, cx + 4)):
-					var o := heads[(yy - _y0) * cw + xx - _x0]
-					while o != -1:
+		if not massif and not _radii.is_empty():
+			var is_rock := kind == Biomes.T_ROCK
+			var max_gap := 0.18 + (0.55 if is_rock else GAP_K) * (radius + _max_radius)
+			# Для разницы номеров клеток d точки разнесены минимум на d - 1.
+			# Запас перед округлением учитывает float32 в Vector2, верхняя граница — прежние ±3.
+			var reach := mini(3, floori(max_gap + 0.000001) + 1)
+			var left := maxi(_x0, cx - reach)
+			var right := mini(_x1, cx + reach + 1)
+			for yy in range(maxi(_y0, cy - reach), mini(_y1, cy + reach + 1)):
+				var row := (yy - _y0) * cw - _x0
+				for xx in range(left, right):
+					var local := _heads[row + xx]
+					while local != -1:
+						var o := _chunk_base + local
 						# камни раскладываются с прежним отступом: их россыпи не меняются
-						var gap: float = 0.18 + (0.55 if kind == Biomes.T_ROCK or k[o] == Biomes.T_ROCK else GAP_K) * (radius + _crown[k[o]] * s[o])
+						var gap := 0.18 + (0.55 if is_rock or k[o] == Biomes.T_ROCK else GAP_K) * (radius + _radii[local])
 						if Vector2(ox - x[o], oy - y[o]).length_squared() < gap * gap:
 							return
-						o = next[o]
+						local = _next[local]
 		var cell := (cy - _y0) * cw + cx - _x0
-		next.append(heads[cell])
-		heads[cell] = x.size()
+		_next.append(_heads[cell])
+		_heads[cell] = _radii.size()
+		_radii.append(radius)
+		_max_radius = maxf(_max_radius, radius)
 		_list.append(x.size())
 		x.append(ox)
 		y.append(oy)

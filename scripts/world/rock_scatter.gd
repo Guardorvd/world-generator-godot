@@ -6,6 +6,8 @@ extends RefCounted
 ## мелкий острый обломок, у подножия осыпи крупные глыбы (они укатываются дальше).
 const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
+const CONVEXITY_GAIN := 0.45
+const MAX_CONVEXITY_FACTOR := 1.0 + CONVEXITY_GAIN
 const OUTCROP_CHANCE := 0.12
 const HILL_OUTCROP_CHANCE := 0.065
 const HILL_OUTCROP_SLOPE := 0.28
@@ -22,9 +24,10 @@ static func path_mask_of(f: Dictionary, store: StageVegetation.ObjStore) -> Pack
 	return mask
 
 
-## massifs — RockMassif.sites этого чанка (StageVegetation считает их до деревьев); без них считаются здесь.
+## StageVegetation передаёт массивы чанка и геометрию их тел. Самостоятельный проход считает их здесь.
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
-		f: Dictionary, ox: int, oy: int, stride: int, store: StageVegetation.ObjStore, massifs: Variant = null) -> void:
+		f: Dictionary, ox: int, oy: int, stride: int, store: StageVegetation.ObjStore,
+		massifs: Variant = null, cores: Variant = null) -> void:
 	var rng := WGRandom.new(1)
 	var biome: PackedByteArray = f.biome
 	var slope: PackedFloat32Array = f.slope
@@ -40,6 +43,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var rivers: PackedByteArray = f.get("river", PackedByteArray())
 	var water: PackedByteArray = StageVegetation._TABLES.water
 	var moist: PackedFloat32Array = f.get("moist", PackedFloat32Array())
+	var has_moist := not moist.is_empty()
 	var rock: PackedByteArray = f.get("rock", PackedByteArray())
 	if rock.is_empty(): rock = Surface.field(elev, slope, moist)
 	var rows := elev.size()/stride
@@ -54,6 +58,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 		for xx in pw: patches[yy * pw + xx] = WGRandom.hash2(px0 + xx, py0 + yy, seed_num ^ 0x524f434b)
 	# Скальные массивы этого чанка: владелец — чанк, в котором лежит точка массива.
 	var big: PackedFloat32Array = massifs if massifs != null else RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, outcrop_path)
+	var bodies: PackedVector3Array = RockMassif.cores(big) if cores == null else cores
+	var has_bodies := not bodies.is_empty()
 	for at in range(0, big.size(), RockMassif.STRIDE):
 		if big[at] >= x0 and big[at] < x1 and big[at + 1] >= y0 and big[at + 1] < y1:
 			store.add(big[at], big[at + 1], Biomes.T_ROCK, int(big[at + 2]), big[at + 3])
@@ -72,13 +78,11 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var dp: float = paths[i] if not paths.is_empty() else 100.0
 			if dp < 0.0: continue
 			var outcrop_site := dp > 10.0 and dw[i] >= 1.5 and (sl > HILL_OUTCROP_SLOPE or (bi == Biomes.ROCK and sl > 0.12))
-			# Отбрасываем пустые клетки до выборки месторождения и проверки массива.
+			# Грубый порог валунов до выборки месторождения.
 			var hc := WGRandom.hash_cell(seed_num, x, y, 37)
 			var roll := float(hc) / 4294967296.0
 			var boulder_candidate := sl <= 0.85 and roll < MAX_CHANCE
 			if not boulder_candidate and not outcrop_site: continue
-			# В теле массива ни выходов, ни валунов.
-			if not big.is_empty() and RockMassif.covers(big, x + 0.5, y + 0.5, 0.0): continue
 			var e := elev[i]
 			var mountain := smoothstep(0.12, 0.36, e)
 			var exposed := float(rock[i]) / 255.0
@@ -94,7 +98,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				if mountain > 0.0 and exposed > 0.3:
 					var tor := smoothstep(0.12, 0.4, sl) * 0.03 if bi == Biomes.ROCK else 0.0
 					oc = OUTCROP_CHANCE * smoothstep(0.3, 0.75, exposed) * mountain * maxf(steep, tor) * lerpf(0.04, 1.8, smoothstep(0.3, 0.85, deposit))
-				if e > 0.035 and e < 0.15 and sl > HILL_OUTCROP_SLOPE and deposit > 0.55 and not moist.is_empty() and moist[i] < 0.62:
+				if e > 0.035 and e < 0.15 and sl > HILL_OUTCROP_SLOPE and deposit > 0.55 and has_moist and moist[i] < 0.62:
 					var convex := local_convexity(elev, i, stride)
 					var hill := smoothstep(0.035, 0.07, e) * (1.0 - smoothstep(0.11, 0.15, e))
 					var dry := 1.0 - smoothstep(0.42, 0.62, moist[i])
@@ -103,6 +107,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 					oc = maxf(oc, shoulder_chance)
 				var ho := WGRandom.hash_cell(seed_num, x, y, 38) if oc > 0.0 else 0
 				if oc > 0.0 and float(ho) / 4294967296.0 < oc:
+					# В теле массива ни выходов, ни валунов.
+					if has_bodies and RockMassif.covers(bodies, x + 0.5, y + 0.5, 0.0): continue
 					rng.reset(ho ^ 0x0c7c0e5)
 					var ocx := x + 0.3 + rng.next_float() * 0.4
 					var ocy := y + 0.3 + rng.next_float() * 0.4
@@ -117,10 +123,24 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 						continue
 			if not boulder_candidate: continue
 			var patch := smoothstep(-0.15, 0.5, stony[i])
-			# Камни у обочины — там, где им есть откуда взяться (порода, горы); у равнинной дороги их мало
-			# The road is a clearance boundary, never a source of geology.
-			# Size selection below may use proximity; abundance comes from rock/talus.
-			var shoulder := (1.0 - smoothstep(1.0, 8.0, dp)) * maxf(exposed, mountain)
+			var edge := 1.0 - absf(clampf(forest[i] + 0.5, 0.0, 1.0) * 2.0 - 1.0)
+			var deposit_weight := lerpf(0.15, 1.65, smoothstep(0.2, 0.8, deposit))
+			var ground_weight := deposit_weight * (1.0 - smoothstep(0.6, 0.85, sl))
+			# Влажность уже несёт положение в рельефе. На сухих гребнях россыпи гуще.
+			var moisture_weight := lerpf(1.6, 0.6, smoothstep(0.42, 0.82, moist[i])) if has_moist else 1.0
+			var biome_weight := 1.0
+			if bi == Biomes.SWAMP or bi == Biomes.SNOW:
+				biome_weight = 0.35
+			elif bi == Biomes.DESERT or bi == Biomes.BEACH:
+				biome_weight = 0.5
+			var base_chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.12))
+			var talus_slope := 1.0 - smoothstep(0.45, 0.85, sl)
+			var talus_gain := 0.12 + 0.14 * patch
+			# Любой источник осыпи умножает talus_slope на число от 0 до 1.
+			# Для раннего отказа берём предельный вклад осыпи и выпуклости.
+			var upper_chance := (base_chance + mountain * talus_slope * talus_gain) * ground_weight * moisture_weight * biome_weight
+			if roll >= upper_chance * MAX_CONVEXITY_FACTOR: continue
+			if has_bodies and RockMassif.covers(bodies, x + 0.5, y + 0.5, 0.0): continue
 			# Осыпь питает скала выше по линии падения, а не любой соседний склон: на 8, 16 и 24 м вверх.
 			var source := 0.0
 			var reach_cells := 0
@@ -158,23 +178,15 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 						source = fed
 						reach_cells = clampi(roundi(along), 2, 6)
 						if down == Vector2.ZERO: down = md
-			var talus := smoothstep(0.15, 0.55, source) * (1.0 - smoothstep(0.45, 0.85, sl))
-			var toe := float(reach_cells) / 6.0
-			var edge := 1.0 - absf(clampf(forest[i] + 0.5, 0.0, 1.0) * 2.0 - 1.0)
-			var deposit_weight := lerpf(0.15, 1.65, smoothstep(0.2, 0.8, deposit))
-			var chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.12))
-			chance += mountain * talus * (0.12 + 0.14 * patch)
-			chance *= deposit_weight * (1.0 - smoothstep(0.6, 0.85, sl))
-			if not moist.is_empty():
-				# 14.11.2026: сухие склоны и гребни каменистее (тонкая почва), во влажных низинах камней мало.
-				# Влажность уже несёт положение в рельефе (StageHydrology): так возникают каменистые лесные холмы
-				chance *= lerpf(1.6, 0.6, smoothstep(0.42, 0.82, moist[i]))
-			if bi == Biomes.SWAMP or bi == Biomes.SNOW: chance *= 0.35
-			if bi == Biomes.DESERT or bi == Biomes.BEACH: chance *= 0.5
+			var talus := smoothstep(0.15, 0.55, source) * talus_slope
+			var chance := (base_chance + mountain * talus * talus_gain) * ground_weight * moisture_weight * biome_weight
 			# До множителя формы допускаем только кандидатов, которые ещё могут пройти порог.
-			if roll >= chance * 1.45: continue
-			chance *= 1.0 + 0.45 * clampf(local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
+			if roll >= chance * MAX_CONVEXITY_FACTOR: continue
+			chance *= 1.0 + CONVEXITY_GAIN * clampf(local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
 			if roll >= minf(MAX_CHANCE, chance): continue
+			# Близость пути влияет на размер камней, густоту задают порода и осыпь.
+			var shoulder := (1.0 - smoothstep(1.0, 8.0, dp)) * maxf(exposed, mountain)
+			var toe := float(reach_cells) / 6.0
 			rng.reset(hc ^ 0x51ed270b)
 			var cx := x + 0.12 + rng.next_float() * 0.76
 			var cy := y + 0.12 + rng.next_float() * 0.76

@@ -215,23 +215,55 @@ static func seated_snapshot(candidates: PackedFloat32Array, snapshot: Dictionary
 
 ## Соседние массивы могут влиять на осыпь за пределами собственного пятна.
 const TALUS_RANGE := 6.5
+const CHUNK_REACH := TALUS_RANGE + 1.0 # включая поперечную ширину веера
 
 
 static func near(all: PackedFloat32Array, x0: int, y0: int, x1: int, y1: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
-	var reach := TALUS_RANGE + 1.0 # включая поперечную ширину веера
 	for at in range(0, all.size(), STRIDE):
 		var sx := all[at]
 		var sy := all[at + 1]
-		if sx < x0 - reach or sy < y0 - reach or sx >= x1 + reach or sy >= y1 + reach: continue
+		if sx < x0 - CHUNK_REACH or sy < y0 - CHUNK_REACH or sx >= x1 + CHUNK_REACH or sy >= y1 + CHUNK_REACH: continue
 		out.append_array(all.slice(at, at + STRIDE))
 	return out
 
 
-## Лежит ли точка (px, py) в плотном теле одного из массивов list (с запасом pad, клеток).
-static func covers(list: PackedFloat32Array, px: float, py: float, pad: float) -> bool:
+## Те же соседи и тот же порядок, что у near: один проход по массивам всего плана.
+static func by_chunk(all: PackedFloat32Array, width: int, height: int, side: int) -> Array[PackedFloat32Array]:
+	var columns := ceili(float(width) / side)
+	var rows := ceili(float(height) / side)
+	var chunks: Array[PackedFloat32Array] = []
+	chunks.resize(columns * rows)
+	for at in range(0, all.size(), STRIDE):
+		var sx := all[at]
+		var sy := all[at + 1]
+		if sx >= width + CHUNK_REACH or sy >= height + CHUNK_REACH:
+			continue
+		var left := maxi(0, floori((sx - CHUNK_REACH) / side))
+		var right := mini(columns, floori((sx + CHUNK_REACH) / side) + 1)
+		var top := maxi(0, floori((sy - CHUNK_REACH) / side))
+		var bottom := mini(rows, floori((sy + CHUNK_REACH) / side) + 1)
+		var item := all.slice(at, at + STRIDE)
+		for cy in range(top, bottom):
+			for cx in range(left, right):
+				var i := cy * columns + cx
+				var chunk := chunks[i]
+				chunk.append_array(item)
+				chunks[i] = chunk
+	return chunks
+
+
+## Геометрия плотных тел (центр и радиус в клетках) для обеих проходок чанка.
+static func cores(list: PackedFloat32Array) -> PackedVector3Array:
+	var out := PackedVector3Array()
 	for at in range(0, list.size(), STRIDE):
-		var c := core(list, at)
+		out.append(core(list, at))
+	return out
+
+
+## Лежит ли точка (px, py) в одном из плотных тел (с запасом pad, клеток).
+static func covers(bodies: PackedVector3Array, px: float, py: float, pad: float) -> bool:
+	for c: Vector3 in bodies:
 		var r: float = c.z + pad
 		if (px - c.x) * (px - c.x) + (py - c.y) * (py - c.y) < r * r: return true
 	return false

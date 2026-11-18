@@ -1310,8 +1310,15 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 	return _depth_script(x, z, feet)
 
 
+## Совместная проба грунта и глубины без поправки на настил моста.
+func ground_depth_at(x: float, z: float) -> Vector2:
+	var ground := ground_at(x, z)
+	var depth := depth_at(x, z) if native_ride else _depth_script(x, z, -INF, ground)
+	return Vector2(ground, depth)
+
+
 ## depth_at на GDScript (эталон RideGround.Depth)
-func _depth_script(x: float, z: float, feet: float = -INF) -> float:
+func _depth_script(x: float, z: float, feet: float = -INF, ground: float = NAN) -> float:
 	if feet > -INF and deck_at(x, z, feet) > -INF:
 		return 0.0
 	var tx := floori(x / TILE)
@@ -1324,14 +1331,14 @@ func _depth_script(x: float, z: float, feet: float = -INF) -> float:
 		# 13.9: реки и озёра закреплённых областей; в остальном за краем только море
 		var level := outer.water_at(x, z)
 		if level > -INF:
-			return maxf(0.0, level * HS - ground_at(x, z))
+			return maxf(0.0, level * HS - (ground_at(x, z) if is_nan(ground) else ground))
 		if outer.height(tx, tz) >= 0.0:
 			return 0.0
-		return maxf(0.0, -ground_at(x, z))
+		return maxf(0.0, -(ground_at(x, z) if is_nan(ground) else ground))
 	# Плоскость моря рисуется во всём мире; в углублениях ниже нуля она
 	# также видима, даже если центр клетки относится к речному берегу.
 	var l := maxf(0.0, maxf(river_level(x, z), lake_level(x, z)))
-	return maxf(0.0, l - ground_at(x, z))
+	return maxf(0.0, l - (ground_at(x, z) if is_nan(ground) else ground))
 
 
 ## Погружение ног/низа колеса, в отличие от полной глубины под ними.

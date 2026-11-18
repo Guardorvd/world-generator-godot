@@ -561,13 +561,16 @@ static func _massif_seat(sample: Callable, x: float, z: float, scale: float, ori
 	for lobe: Array in lobes:
 		var vertices: PackedVector3Array = lobe[5]
 		# Учитываем настоящую подошву, включая середины длинных граней.
+		var a := xf * vertices[0]
 		for i in PROFILE_SIDES:
-			var a: Vector3 = xf * vertices[i]
 			var next: Vector3 = xf * vertices[(i + 1) % PROFILE_SIDES]
-			for bottom: Vector3 in [a, a.lerp(next, 0.5)]:
+			var middle := a.lerp(next, 0.5)
+			for probe in 2:
+				var bottom := a if probe == 0 else middle
 				var g: Vector2 = sample.call(bottom.x, bottom.z)
 				if g.x == INF or g.y > 0.05: return _reject("bottom_path_water")
 				clearance = maxf(clearance, bottom.y - g.x)
+			a = next
 	if clearance > 1.4 * scale: return _reject("floating")
 	xf.origin.y -= clearance
 	# На резком выпуклом склоне валидная подошва может скрыть всю кровлю.
@@ -680,13 +683,18 @@ static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int)
 
 
 static func _outcrop_seat_live(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
+	var world := heights.world
+	var width := world.W
+	var height := world.H
 	return outcrop_seat(func(px: float, pz: float) -> Vector2:
 		var cell := Vector2i(floori(px / GameConfig.TILE), floori(pz / GameConfig.TILE))
-		if cell.x >= 0 and cell.y >= 0 and cell.x < heights.world.W and cell.y < heights.world.H:
-			var index := cell.y * heights.world.W + cell.x
-			if index < heights.world.path_mask.size() and heights.world.path_mask[index] > 0: return Vector2(INF, INF)
-		if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, heights.world.W) > 0.08: return Vector2(INF, INF)
-		return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale, Vector2(heights.world.world_origin) * GameConfig.TILE, v)
+		if cell.x >= 0 and cell.y >= 0 and cell.x < width and cell.y < height:
+			var index := cell.y * width + cell.x
+			var path := world.path_mask
+			if index < path.size() and path[index] > 0: return Vector2(INF, INF)
+		var refinement := heights.road_refinement
+		if refinement != null and refinement.weight_at(px, pz, width) > 0.08: return Vector2(INF, INF)
+		return heights.ground_depth_at(px, pz), x, z, scale, Vector2(world.world_origin) * GameConfig.TILE, v)
 
 
 ## То же по снимку области за краем (фоновый поток, без живого мира).
