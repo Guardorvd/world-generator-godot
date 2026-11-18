@@ -19,7 +19,7 @@ const UP_MIN := 0.12          # взгляд камеры выше горизо�
 const MAX_ALBUM := 128
 
 static var _pages: Array[Dictionary] = []
-const GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночные явления"]
+const GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночные явления", "Летопись обелисков"]
 
 var revealed := {}   # id места -> true: открыто сверху
 var scanned := {}    # id вышки или вершины -> true: с неё уже смотрели
@@ -99,7 +99,7 @@ func reveal_from(places: Array, eye: Vector3, radius: float, tile: float, is_kno
 
 ## Страницы, которые закрывает снимок. place — запись Hud.all_places() места в рамке или пусто; biome — номер биома
 ## под камерой (или -1); sky — {dark: 1 - sunlight, up: y взгляда, aurora, comet, meteor: сила явлений ночи}
-static func classify(place: Dictionary, biome: int, sky: Dictionary) -> PackedStringArray:
+static func classify(place: Dictionary, biome: int, sky: Dictionary, plaque := "") -> PackedStringArray:
 	var keys := PackedStringArray()
 	if biome >= 0 and biome < Biomes.LIST.size() and not Biomes.LIST[biome].get("water", false):
 		keys.append("biome:%d" % biome)
@@ -113,6 +113,8 @@ static func classify(place: Dictionary, biome: int, sky: Dictionary) -> PackedSt
 				var src: Variant = place.get("src")
 				if src != null and StageSites.TYPES.has(src.type):
 					keys.append("site:" + src.type)
+	if plaque != "":
+		keys.append("plaque:" + plaque) # страница обелиска: табличка снята вблизи; страницы собирает Hud.journey_data по обелискам мира
 	if float(sky.get("dark", 0.0)) >= NIGHT_MIN and float(sky.get("up", -1.0)) >= UP_MIN:
 		for event: String in ["aurora", "comet", "meteor"]:
 			if float(sky.get(event, 0.0)) >= EVENT_MIN:
@@ -128,7 +130,7 @@ func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> Packe
 		if album.has(key) or album.size() >= MAX_ALBUM:
 			continue
 		album[key] = {path = str(shot.get("path", "")), date = date, place = str(shot.get("place", ""))}
-		titles.append(page_title(key))
+		titles.append(str(shot.get("name", "Табличка")) if key.begins_with("plaque:") else page_title(key))
 	return titles
 
 

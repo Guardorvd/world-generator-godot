@@ -150,10 +150,12 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield, regional_p
 
 	var site_lods: Dictionary = catalog.site_lods
 	var legacy_m := {} if not site_lods.is_empty() else _legacy_site_materials(mat(Color8(0x3a, 0x2a, 0x1c)), opaque_mat)
+	var plaques: Array = []     # таблички обелисков: чтение, зона съёмки, задание «Летопись обелисков»
 	var repairables: Array = [] # лавки, туры и причалы: RepairLayer рисует сломанные и причалы, по лавкам садятся
 	_build_peaks(parent, w, heights, batch, legacy_m, site_lods, opaque_mat, repairables)
 	_build_sites(parent, w, heights, batch, legacy_m, {
 		repairables = repairables,
+		plaques = plaques,
 		settlements = settlements_lib,
 		details = details_lib,
 		site_lods = site_lods,
@@ -170,7 +172,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield, regional_p
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
-	return {fires = fires, windows = opaque_mat, boards = boards, repairables = repairables}
+	return {fires = fires, windows = opaque_mat, boards = boards, repairables = repairables, plaques = plaques}
 
 
 static func _add_settlement_label(parent: Node3D, s: SettlementData, heights: Heightfield, yard: Dictionary) -> void:
@@ -899,13 +901,24 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 				_add_flower_details(batch, at, u.t, half, v, cat.details, cat.cutout)
 				continue
 			if not site_lods.is_empty() and site_lods.has(u.t):
+				var model_key: String = u.t
+				if u.t == "obelisk":
+					# форма памятника — по сиду и id места, повёрнут табличкой к ближайшей тропе (кратно 90°: ящик столкновения квадратный)
+					var oid := WorldData.place_id("site", s.x, s.y)
+					var form := ObeliskLore.form_of(w.seed_num, oid)
+					if site_lods.has(ObeliskModels.KEYS[form]):
+						model_key = ObeliskModels.KEYS[form]
+					at.basis = Basis(Vector3.UP, _obelisk_yaw(w, u))
+					var plate: Dictionary = ObeliskModels.plaque(form)
+					cat.plaques.append({id = oid, name = s.name, form = form, size = plate.size,
+						at = Transform3D(at.basis, at.origin) * Transform3D(Basis.IDENTITY, plate.pos)})
 				var xf := at
 				if u.t == "keep":
 					xf.basis = xf.basis.scaled(Vector3(1.0, (5.0 + float(v) * 1.5) / 6.4, 1.0))
 				elif u.t == "stone":
 					xf.basis = Basis(Vector3.UP, u.a).rotated(Vector3.RIGHT, (v - 1.5) * 0.06).scaled(Vector3(1.0, (1.7 + float(v) * 0.3) / 2.2, 1.0))
 				var stints := SettlementModels.site_tints(u.t, v)
-				var slods: Array = site_lods[u.t]
+				var slods: Array = site_lods[model_key]
 				for level in slods.size():
 					batch.add_lod(slods[level], xf, [cat.opaque], level, stints, level <= 1)
 				if u.t == "shelter":
@@ -974,6 +987,30 @@ static func _site_repairable(list: Array, w: WorldData, heights: Heightfield, s:
 	list.append({id = id, kind = "pier", at = foot, dynamic = true, ok = RepairModels.pier_lods(m, false), broken = RepairModels.pier_lods(m, true), tints = tints,
 		box = {at = foot.translated_local(Vector3(0, m.dy + 0.5, FishingLayout.START + 1.5)), half = Vector3(1.1, 0.6, 1.6)}})
 	return true
+
+
+## Поворот обелиска: лицом (+z, табличка) к ближайшей тропе в 14 клетках, кратно 90° от поворота места; без тропы — как есть
+static func _obelisk_yaw(w: WorldData, u: HutData) -> float:
+	var mask := w.path_mask
+	if mask.size() != w.N:
+		return u.a
+	var best := 15.0
+	var toward := Vector2.ZERO
+	var cx := floori(u.x)
+	var cy := floori(u.y)
+	for dy in range(-14, 15):
+		for dx in range(-14, 15):
+			var x := cx + dx
+			var y := cy + dy
+			if x < 0 or y < 0 or x >= w.W or y >= w.H or mask[y * w.W + x] < 2:
+				continue
+			var d := Vector2(dx, dy).length()
+			if d < best:
+				best = d
+				toward = Vector2(dx, dy)
+	if toward == Vector2.ZERO:
+		return u.a
+	return u.a + roundf((atan2(toward.x, toward.y) - u.a) / (PI * 0.5)) * PI * 0.5
 
 
 ## Каменный цоколь под постройкой size (м по x и z): от пола at на drop м вниз до нижнего угла

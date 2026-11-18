@@ -411,7 +411,7 @@ static func site_tints(kind: String, v: int) -> Dictionary:
 ## Три уровня детализации [LOD0, LOD1, LOD2] на общем атласе для вершин и сооружений StageSites.
 static func build_site_lods() -> Dictionary:
 	var out := {}
-	for key: String in ["shelter", "tower", "obelisk", "ruin", "keep", "stone", "peak_cairn", "bench", "bench_broken", "peak_cairn_broken"]:
+	for key: String in ["shelter", "tower", "obelisk", "ruin", "keep", "stone", "peak_cairn", "bench", "bench_broken", "peak_cairn_broken", "obelisk_ruined", "obelisk_statue", "obelisk_fragments", "obelisk_stele"]:
 		var lods: Array[ArrayMesh] = []
 		for level in 3:
 			lods.append(_build_site_mesh(key, level))
@@ -441,17 +441,9 @@ static func _build_site_mesh(kind: String, level: int) -> ArrayMesh:
 			RepairModels.bench(st, level, kind == "bench_broken")
 		"peak_cairn_broken":
 			RepairModels.cairn_broken(st, level)
-		"obelisk":
-			if level == 2:
-				_box(st, Vector3(1.40, 1.00, 1.40), Vector3(0, 0.10, 0), Basis.IDENTITY, CELL_STONE)
-				_box(st, Vector3(0.75, 4.70, 0.75), Vector3(0, 2.95, 0), Basis.IDENTITY, CELL_STONE)
-				_cyl(st, 0.0, 0.54, 0.72, 4, Vector3(0, 5.65, 0), Basis(Vector3.UP, PI / 4.0), CELL_STONE)
-			else:
-				_box(st, Vector3(1.60, 1.15, 1.60), Vector3(0, 0.05, 0), Basis.IDENTITY, CELL_STONE)
-				_box(st, Vector3(0.72, 4.60, 0.72), Vector3(0, 2.90, 0), Basis.IDENTITY, CELL_STONE)
-				_cyl(st, 0.0, 0.52, 0.75, 4, Vector3(0, 5.56, 0), Basis(Vector3.UP, PI / 4.0), CELL_STONE)
-				if level == 0:
-					_box(st, Vector3(1.15, 0.35, 1.15), Vector3(0, 0.72, 0), Basis.IDENTITY, CELL_STONE)
+		"obelisk", "obelisk_ruined", "obelisk_statue", "obelisk_fragments", "obelisk_stele":
+			# 18.11.2026: пять форм памятника с табличкой (ObeliskModels); целый обелиск — прежняя форма и ключ "obelisk"
+			ObeliskModels.build(st, ObeliskModels.KEYS.find(kind), level)
 		"ruin":
 			if level == 2:
 				_box(st, Vector3(3.40, 2.10, 3.40), Vector3(0, 0.65, 0), Basis.IDENTITY, CELL_STONE)

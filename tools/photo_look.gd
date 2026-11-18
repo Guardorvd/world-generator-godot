@@ -132,6 +132,74 @@ func _shot(name: String) -> void:
 	root.get_texture().get_image().save_png(out.path_join(name + ".png"))
 
 
+## 18.11.2026: табличка обелиска (PhotoCamera.plaques): зона съёмки янтарная вдали, косо и с краю, зелёная вблизи лицом;
+## снимок засчитывает табличку (shot.plaque) только в зелёной зоне; с обратной стороны зоны нет
+func _plaque_checks() -> void:
+	var at := Vector3(14.0, 1.4, -6.0)
+	var back := Vector3(0.0, 1.6, 0.0)
+	var facing := Basis.looking_at(at - back, Vector3.UP)   # +z таблички смотрит на игрока
+	var plate := {id = "site:7:7", name = "Серый обелиск", at = Transform3D(facing, at), size = Vector2(0.62, 0.36)}
+	photo.plaques = [plate]
+	photo.plaque_near = 4.5
+	photo.enter()
+	camera.fov = FOV
+	camera.position = back
+	camera.look_at(at, Vector3.UP)
+	_hold(0.2)
+	_check(photo.plaque_view.get("id") == "site:7:7" and photo.plaque_view.state == "far", "табличка далеко (%.1f м): рамка есть, подсказка «подойдите ближе»" % photo.plaque_view.get("dist", 0.0))
+	await _shot("plaque_far")
+	camera.position = at + (back - at).normalized() * 3.0
+	camera.look_at(at, Vector3.UP)
+	_hold(0.2)
+	_check(photo.plaque_view.get("state") == "ok" and photo.plaque_view.corners.size() == 4, "вблизи и лицом — «табличка в кадре», зона засчитывается")
+	await _shot("plaque_ok")
+	photo.shoot()
+	for i in 4:
+		await process_frame
+		photo.update(camera, DT)
+	_check(photo.shots.size() > 0 and photo.shots[-1].plaque == "site:7:7", "снимок в зелёной зоне запомнил табличку")
+	for shot: Dictionary in photo.shots:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(shot.path))
+	photo.shots.clear()
+	for i in 12:
+		await process_frame
+		photo.update(camera, DT)
+	# у края кадра: смотрим мимо таблички — зона не зелёная
+	camera.rotate_y(1.0)
+	_hold(0.2)
+	_check(photo.plaque_view.is_empty() or photo.plaque_view.state != "ok", "табличка у края кадра зелёной не бывает (%s)" % photo.plaque_view.get("state", "вне кадра"))
+	camera.look_at(at, Vector3.UP)
+	# косо: табличка повёрнута почти боком к игроку
+	var side := Basis(Vector3.UP, deg_to_rad(72.0)) * facing
+	photo.plaques = [{id = "site:7:7", name = "Серый обелиск", at = Transform3D(side, at), size = Vector2(0.62, 0.36)}]
+	_hold(0.2)
+	_check(photo.plaque_view.get("state") == "oblique", "табличка боком: «встаньте напротив»")
+	await _shot("plaque_oblique")
+	photo.plaques = [{id = "site:7:7", name = "Серый обелиск", at = Transform3D(facing.rotated(Vector3.UP, PI), at), size = Vector2(0.62, 0.36)}]
+	_hold(0.2)
+	_check(photo.plaque_view.is_empty(), "с обратной стороны зоны нет")
+	# издалека: зона янтарная, снимок табличку не засчитывает
+	photo.plaques = [plate]
+	camera.position = back
+	camera.look_at(at, Vector3.UP)
+	_hold(0.2)
+	await create_timer(0.6).timeout # затвор после прошлого снимка
+	photo.shoot()
+	for i in 4:
+		await process_frame
+		photo.update(camera, DT)
+	_check(photo.shots.size() == 1 and photo.shots[-1].plaque == "", "снимок издалека табличку не засчитывает")
+	for shot: Dictionary in photo.shots:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(shot.path))
+	photo.shots.clear()
+	photo.plaques = []
+	photo.exit()
+	for i in 12:
+		await process_frame
+		photo.update(camera, DT)
+	photo.named = {}
+	photo.target = {}
+
 func _run() -> void:
 	await process_frame
 	photo.enter()
@@ -194,6 +262,7 @@ func _run() -> void:
 	photo.exit()
 	_hold(0.3)
 	_check(photo._show == 0.0, "рамка уходит после выхода")
+	await _plaque_checks()
 	# 14.3: подпись места с пиктограммой и чертой до земли (PlaceNames)
 	var names_root := Node3D.new()
 	root.add_child(names_root)

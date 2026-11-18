@@ -8,7 +8,7 @@ var controls: Controls = GameContext.scope.controls
 ## над ним всплывает название. Посещённые, цель и уже узнанные в видоискателе узнаются сразу (QUICK).
 ## Без мира: anchors, occluded и familiar задаёт GameWorld или изолированная сцена tools/photo_look.gd.
 
-signal photo_taken(shot: Dictionary)  # {path, place — id места в прицеле или "", name, dist — м до места}
+signal photo_taken(shot: Dictionary)  # {path, place — id места в прицеле или "", name, dist — м до места, plaque — id обелиска, чья табличка в кадре вблизи, или ""}
 signal capturing(on: bool)            # кадр снимается: интерфейс игры на этот кадр прячут
 
 const DWELL := 1.5        # с: столько держать незнакомое место в прицеле, чтобы всплыло название
@@ -24,6 +24,8 @@ const SHUTTER_COOLDOWN := 0.35
 const FOLDER := "user://photos"
 const AMBER := Color(1.0, 0.78, 0.30)
 const GREEN := Color(0.66, 0.92, 0.58)
+const PLAQUE_SEE := 28.0      # м: дальше табличка в видоискателе не отмечается
+const PLAQUE_OBLIQUE := 0.57  # cos 55°: под большим углом табличку не прочесть, снимок не засчитывается
 
 var active := false
 var anchors: Array[Dictionary] = []  # {id, name, kind — подпись вида, pos — точка над местом, radius, reach} (м)
@@ -32,6 +34,10 @@ var familiar := Callable()           # (id: String) -> bool: посещено и
 var known := {}                      # id -> true: узнанные в видоискателе
 var wanted := ""                     # 11.9: id места, снимок которого нужен для задания (Quests, шаг shoot)
 var wanted_reach := INF              # м: снимок для задания — не дальше этого от места
+var plaques: Array = []              # 18.11.2026: таблички обелисков {id, name, at: Transform3D (центр, +z наружу), size: Vector2 (м)}
+var plaque_near := 4.5               # м: ближе этого табличка в кадре засчитывается (GameWorld берёт Quests.PLAQUE_REACH_M)
+var plaque_view := {}                # ближайшая к центру кадра табличка: {id, name, state: ok | far | oblique | edge, dist, corners}
+var _pending_plaque := ""
 var shots: Array[Dictionary] = []
 var bike_at := Vector3.INF           # 14.3: где оставлен велосипед (середина рамы); INF — на нём или его нет
 var _bike_pos := Vector2.ZERO        # метка велосипеда на экране и расстояние до него
@@ -148,6 +154,7 @@ func update(camera: Camera3D, dt: float) -> void:
 	_preview = maxf(0.0, _preview - dt)
 	if active:
 		_aim(camera, dt)
+	_track_plaques(camera)
 	_focus = lerpf(_focus, 30.0 if not target.is_empty() else 44.0, Util.damp(12.0, dt))
 	_name_a = move_toward(_name_a, 1.0 if not named.is_empty() else 0.0, dt / (0.25 if not named.is_empty() else 0.2))
 	if not named.is_empty():
@@ -159,6 +166,49 @@ func update(camera: Camera3D, dt: float) -> void:
 	_view.visible = _show > 0.0 or _flash > 0.0 or _preview > 0.0
 	if _view.visible:
 		_view.queue_redraw()
+
+
+## Таблички обелисков в кадре: зона съёмки (рамка по углам таблички) и её состояние. ok — вблизи, лицом, целиком в кадре:
+## такой снимок засчитывается (shot.plaque). Иначе рамка янтарная с подсказкой: far — подойти ближе, oblique — встать напротив,
+## edge — навести ближе к центру. Табличку с обратной стороны и закрытую склоном не отмечаем.
+func _track_plaques(camera: Camera3D) -> void:
+	plaque_view = {}
+	if not active or plaques.is_empty():
+		return
+	var eye := camera.global_position
+	var s := _view.size
+	var frame := Rect2(Vector2(s.x * 0.05, s.y * 0.07), s * Vector2(0.9, 0.86)).grow(-28.0)
+	var best := INF
+	for p: Dictionary in plaques:
+		var at: Transform3D = p.at
+		var d := eye.distance_to(at.origin)
+		if d > PLAQUE_SEE or d < 0.3 or camera.is_position_behind(at.origin):
+			continue
+		var cos_a: float = at.basis.z.dot((eye - at.origin) / d)
+		if cos_a <= 0.05 or (occluded.is_valid() and occluded.call(eye, at.origin)):
+			continue
+		var half: Vector2 = p.size * 0.5
+		var corners := PackedVector2Array()
+		var inside := true
+		for corner: Vector2 in [Vector2(-1, 1), Vector2(1, 1), Vector2(1, -1), Vector2(-1, -1)]:
+			var world := at * Vector3(corner.x * half.x, corner.y * half.y, 0.0)
+			inside = inside and not camera.is_position_behind(world)
+			var screen := camera.unproject_position(world)
+			inside = inside and frame.has_point(screen)
+			corners.append(screen)
+		var center := camera.unproject_position(at.origin)
+		var off := center.distance_to(s * 0.5)
+		if off >= best:
+			continue
+		best = off
+		var state := "ok"
+		if d > plaque_near:
+			state = "far"
+		elif cos_a < PLAQUE_OBLIQUE:
+			state = "oblique"
+		elif not inside:
+			state = "edge"
+		plaque_view = {id = p.id, name = p.name, state = state, dist = d, corners = corners}
 
 
 ## 14.3: метка оставленного велосипеда в видоискателе — видна сквозь склоны и лес, ближе 8 м не нужна.
@@ -241,6 +291,7 @@ func shoot() -> void:
 		return
 	_busy = true
 	_pending_place = named.duplicate(true)
+	_pending_plaque = plaque_view.id if plaque_view.get("state") == "ok" else ""
 	_capturing = true
 	visible = false
 	# Одноразовую подписку можно отменить при exit/_exit_tree; подвешенных корутин нет.
@@ -253,7 +304,9 @@ func _capture_frame() -> void:
 		_cancel_capture()
 		return
 	var place := _pending_place
+	var plaque := _pending_plaque
 	_pending_place = {}
+	_pending_plaque = ""
 	var image := _capture_image()
 	visible = true
 	_capturing = false
@@ -282,7 +335,12 @@ func _capture_frame() -> void:
 	if path.is_empty():
 		_thumb_text = "Не удалось сохранить снимок"
 	# снимок для задания засчитывается и без файла: на диске могло не хватить места
-	var shot := {path = path, place = place.get("id", ""), name = EntityCodec.value(place, "name", ""), dist = dist}
+	var shot := {path = path, place = place.get("id", ""), name = EntityCodec.value(place, "name", ""), dist = dist, plaque = plaque}
+	if plaque != "" and path != "":
+		for p: Dictionary in plaques:
+			if p.id == plaque:
+				shot.name = p.name
+				_thumb_text = "Табличка · «%s»" % p.name
 	shots.append(shot)
 	photo_taken.emit(shot)
 
@@ -330,6 +388,8 @@ func _draw_view(c: Control) -> void:
 		c.draw_circle(center, 1.8, col)
 		if not target.is_empty() and named.is_empty() and progress > 0.0:
 			c.draw_arc(center, _focus + 9.0, -PI / 2.0, -PI / 2.0 + TAU * progress, 48, Color(AMBER, 0.9 * e), 3.0)
+		if not plaque_view.is_empty():
+			_draw_plaque(c, font, e)
 		# счётчик снимков, приближение со шкалой, подсказка
 		var top := frame.position.y + 34.0
 		c.draw_circle(Vector2(frame.position.x + 26.0, top - 7.0), 6.0, Color(1, 1, 1, 0.85 * e))
@@ -374,6 +434,28 @@ func _draw_view(c: Control) -> void:
 		c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if _flash > 0.0:
 		c.draw_rect(Rect2(Vector2.ZERO, s), Color(1, 1, 1, _flash * _flash))
+
+
+## Зона съёмки таблички: рамка по её углам и подсказка под ней; зелёная — снимок засчитается
+func _draw_plaque(c: Control, font: Font, e: float) -> void:
+	var ok: bool = plaque_view.state == "ok"
+	var tone := Color(GREEN if ok else AMBER, 0.95 * e)
+	var corners: PackedVector2Array = plaque_view.corners
+	var quad := corners.duplicate()
+	quad.append(corners[0])
+	c.draw_polyline(quad, tone, 2.5, true)
+	var mid := Vector2.ZERO
+	var low := -INF
+	for point: Vector2 in corners:
+		mid += point * 0.25
+		low = maxf(low, point.y)
+	var hints := {
+		ok = "Табличка в кадре · ЛКМ",
+		far = "Табличка · подойдите ближе, чем %s" % Util.distance_text(plaque_near),
+		oblique = "Табличка · встаньте напротив",
+		edge = "Табличка · наведите её ближе к центру",
+	}
+	_text(c, font, hints[plaque_view.state], Vector2(mid.x, low + 24.0), 15, tone, 0.5)
 
 
 ## Метка велосипеда: голубой круг как на картах; у края кадра — стрелка наружу

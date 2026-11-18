@@ -45,6 +45,7 @@ var map_data: MapData
 var map_journal := Journal.new()
 var explore := Exploration.new()  # открытое сверху, счётчики пути и альбом (с 18.11.2026); сохранение — поле "explore"
 var journal_panel  # «Путешествие»: путь и альбом
+var plaque_panel   # табличка обелиска: название и описание
 var minimap: LocalMap
 var controls: Controls = GameContext.scope.controls
 var big_map: Atlas
@@ -61,6 +62,8 @@ var _tracker_count: Label
 var _tracker_step: Label
 var _tracker_note: Label
 var _tracker_progress: Control
+var _tracker_head: HBoxContainer
+var _tracker_series: Label  # вторая строка счётчика: «Летопись обелисков: 2 из 5» (серия идёт параллельно заданию)
 var _step_count := 0
 var _step_index := 0
 var _photo_mode := false
@@ -162,6 +165,8 @@ func _ready() -> void:
 	add_child(settlement_panel)
 	journal_panel = preload("res://scripts/ui/journal_panel.gd").new()
 	add_child(journal_panel)
+	plaque_panel = preload("res://scripts/ui/plaque_panel.gd").new()
+	add_child(plaque_panel)
 	_vignette = ColorRect.new()
 	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -265,6 +270,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	explore = Exploration.new()
 	if journal_panel != null:
 		journal_panel.clear()
+		plaque_panel.clear()
 	minimap.set_world(w, knows, map_data)
 	big_map.journal = map_journal
 	big_map.set_source(map_data)
@@ -293,6 +299,7 @@ func clear_world() -> void:
 	explore = Exploration.new()
 	if journal_panel != null:
 		journal_panel.clear()
+		plaque_panel.clear()
 	big_map.journal = map_journal
 	big_map.set_source(null)
 	minimap.set_world(null)
@@ -558,6 +565,12 @@ func journey_data() -> Dictionary:
 		var entry := page.duplicate()
 		entry.shot = explore.album.get(page.key, {})
 		pages.append(entry)
+	# «Летопись обелисков»: страница на каждый обелиск мира, с названием и текстом таблички (ObeliskLore)
+	for place: Dictionary in places:
+		if place.kind == "site" and str(EntityCodec.value(place.src, "type", "")) == "obelisk":
+			var key: String = "plaque:" + place.key
+			pages.append({key = key, group = Exploration.GROUPS.size() - 1, title = place.name, hint = "Табличка обелиска: снимите вблизи",
+				text = ObeliskLore.describe(world, place).text, shot = explore.album.get(key, {})})
 	return {foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt, photos = explore.photos,
 		quests = quests.done if quests != null else 0, places = rows, pages = pages, groups = Exploration.GROUPS}
 
@@ -588,6 +601,7 @@ func _build_tracker() -> PanelContainer:
 	box.add_theme_constant_override("separation", 6)
 	panel.add_child(box)
 	var head := HBoxContainer.new()
+	_tracker_head = head
 	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	head.add_theme_constant_override("separation", 7)
 	box.add_child(head)
@@ -610,6 +624,7 @@ func _build_tracker() -> PanelContainer:
 	box.add_child(_tracker_progress)
 	_tracker_progress.draw.connect(_draw_tracker_progress)
 	_tracker_progress.resized.connect(_tracker_progress.queue_redraw)
+	_tracker_series = _tracker_label(box, 12, Quests.KINDS.obelisks.color)
 	panel.visible = false
 	return panel
 
@@ -674,6 +689,10 @@ func update_tracker() -> void:
 		if quests.cargo:
 			note = "сумка за спиной"
 		_tracker_kind.add_theme_color_override("font_color", quest_color())
+	var series := quests.series_progress() if quests != null else Vector2i.ZERO
+	_set_optional_text(_tracker_series, "Летопись обелисков: %d из %d" % [series.x, series.y] if series.y > 0 else "")
+	_tracker_head.visible = not title.is_empty()
+	_tracker_progress.visible = not title.is_empty()
 	_tracker_kind.text = kind
 	_tracker_count.text = "%d / %d" % [_step_index + 1, _step_count] if _step_count > 0 else ""
 	_tracker_title.text = title
@@ -721,7 +740,7 @@ func _apply_reveal() -> void:
 	_info_panel.visible = alpha > 0.0 and not info.text.is_empty()
 	_info_panel.modulate.a = alpha
 	_place_toast()
-	tracker.visible = alpha > 0.0 and not _tracker_title.text.is_empty()
+	tracker.visible = alpha > 0.0 and not (_tracker_title.text.is_empty() and _tracker_series.text.is_empty())
 	# modulate оставлен вспышке задания. Для затухания используем родительский цвет панели и её строк.
 	tracker.self_modulate.a = alpha
 	_tracker_content.modulate.a = alpha

@@ -115,6 +115,7 @@ var _boards: Array = []  # доски маршрутов: {at (середина 
 var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board" | "bench" | "repair", place, id}
 var repairs: Repairables       # что в мире починено (лавки, туры на вершинах, причалы); сохранение — поле "repairs"
 var repair_layer: RepairLayer  # модели починяемого: сломанное и причалы; отдаёт коробки наведения
+var _plaques: Array = []         # таблички обелисков: {id, name, form, size, at} (SettlementsBuilder); чтение, зона съёмки
 var _seat_id := ""             # лавка, на которой сидит игрок (камера ниже, ходьба заперта)
 var _fix_progress := 0.0       # 0..1: удержание «взаимодействия» у сломанного объекта задания
 var paused := false
@@ -253,6 +254,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	photo.controls = services.controls
 	add_child(photo)
 	photo.anchors = _photo_anchors()
+	_plaques = built.plaques
+	photo.plaques = _plaques
+	photo.plaque_near = Quests.PLAQUE_REACH_M
 	photo.occluded = _occluded
 	photo.familiar = func(id: String) -> bool: return hud.knows(id)
 	photo.capturing.connect(_photo_capturing)
@@ -1005,6 +1009,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				look(event.screen_relative.x, event.screen_relative.y)
 		get_viewport().set_input_as_handled()
 		return
+	if _plaque_open():
+		if event.is_action_pressed("pause") or event.is_action_pressed("back") or event.is_action_pressed("interact"):
+			close_plaque()
+			get_viewport().set_input_as_handled()
+		return
 	if _journal_open():
 		if event.is_action_pressed("pause") or event.is_action_pressed("back") or event.is_action_pressed("journal"):
 			close_journal()
@@ -1194,7 +1203,7 @@ func _physics_process(dt: float) -> void:
 		st = clampf(-wrapf(wanted - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
 		jump = false
 	# при открытой карте руль, газ и прыжок не работают (велосипед катится по инерции)
-	var map_lock := show_map or _journal_open()
+	var map_lock := show_map or _journal_open() or _plaque_open()
 	if time < _rescue_input_until or map_lock:
 		fw = 0.0
 		st = 0.0
@@ -1340,7 +1349,7 @@ func _process(delta: float) -> void:
 	var summary := hud.summary_visible()
 	if not summary:
 		info_timer = 0.0
-	if not show_map and not _settlement_open() and not _journal_open():
+	if not show_map and not _settlement_open() and not _journal_open() and not _plaque_open():
 		var stick := services.controls.look_delta(delta)
 		if stick != Vector2.ZERO:
 			look(stick.x, stick.y)
@@ -1532,6 +1541,7 @@ func _update_hints() -> void:
 		"bike": near = [[k.call("interact"), "Сесть"]]
 		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
 		"bench": near = [[k.call("interact"), "Присесть"]]
+		"plaque": near = [[k.call("interact"), "Прочитать табличку"]]
 		"repair": near = [[k.call("interact"), ("Удерживайте: починить %s" if _fix_wanted(_target) else "Сломано: %s") % Repairables.KINDS[_target.repair_kind].title]]
 	if _seat_id != "":
 		near = [[k.call("interact"), "Встать"]]
@@ -1581,6 +1591,10 @@ func _aim() -> Dictionary:
 			items.append({kind = "board", at = b.at, half = Vector3(0.9, 0.48, 0.08), place = b.place})
 	if not bike.riding and repair_layer != null:
 		items.append_array(repair_layer.items(eye, REACH))
+	if not bike.riding:
+		for plate: Dictionary in _plaques:
+			if eye.distance_squared_to(plate.at.origin) < REACH * REACH:
+				items.append({kind = "plaque", id = plate.id, at = plate.at, half = Vector3(plate.size.x * 0.5 + 0.1, plate.size.y * 0.5 + 0.1, 0.25)})
 	if _bag != null and _bag.visible and not bike.riding and eye.distance_squared_to(_bag.position) < REACH * REACH:
 		var at := _bag.transform
 		at.origin += at.basis * Vector3(0.0, 0.0, CargoBag.SIZE.z * 0.5)
@@ -1600,6 +1614,7 @@ func interact() -> void:
 		"bike": toggle_bike()
 		"cargo": _quest_progress(quests.pick_up())
 		"bench": _sit(_target)
+		"plaque": _read_plaque(_target)
 		"repair":
 			if not _fix_wanted(_target):
 				hud.toast("Сломано: %s. Починить можно по заданию «Ремонт» с доски поселения" % Repairables.KINDS[_target.repair_kind].title)
@@ -1706,6 +1721,11 @@ func _quest_arrived(place: Dictionary) -> bool:
 
 func _quest_photo(shot: Dictionary) -> void:
 	interaction_service.photographed(shot)
+	# табличка обелиска в кадре вблизи (PhotoCamera.plaque_view ok): шаг серии «Летопись обелисков» (идёт рядом с активным)
+	if shot.get("plaque", "") != "":
+		var text := quests.plaque_photographed(shot.plaque)
+		if text != "":
+			hud.toast(text)
 
 
 ## Задание изменилось: цель на компасе, сумка у доски и за спиной, нужный снимок в видоискателе, счётчик
@@ -1772,6 +1792,35 @@ func _close_settlement(capture := true) -> void:
 		capture_mouse()
 
 
+## Табличка обелиска: E у неё — текст (ObeliskLore) в окне, игра идёт, управление заперто; E, Esc или «Закрыть» — закрыть
+func _plaque_open() -> bool:
+	return hud != null and hud.plaque_panel != null and hud.plaque_panel.visible
+
+
+func _read_plaque(item: Dictionary) -> void:
+	var place := world.place(item.id)
+	if place.is_empty() or _opening or crash.active() or _plaque_open():
+		return
+	_set_photo(false)
+	services.controls.release_motion()
+	services.controls.read_bike_body(bike, false)
+	_dragging = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var lore := ObeliskLore.describe(world, place)
+	var series := quests.series_note(item.id) if quests != null else ""
+	if not hud.plaque_panel.closed.is_connected(close_plaque):
+		hud.plaque_panel.closed.connect(close_plaque)
+	hud.plaque_panel.open(lore.title, lore.text, series)
+
+
+func close_plaque(capture := true) -> void:
+	if not _plaque_open():
+		return
+	hud.plaque_panel.clear()
+	if capture and not paused and not show_map:
+		capture_mouse()
+
+
 ## «Путешествие» (J, с большой карты и из паузы): путь и альбом. Игра идёт, но управление заперто, как на карте.
 func _journal_open() -> bool:
 	return hud != null and hud.journal_panel != null and hud.journal_panel.visible
@@ -1823,7 +1872,7 @@ func _album_photo(shot: Dictionary) -> void:
 	var shower: float = events.get("meteor", 0.0)
 	var sky := {dark = _night, up = -camera.global_basis.z.y, aurora = events.get("aurora", 0.0), comet = events.get("comet", 0.0),
 		meteor = shower if shower >= DayCycle.METEOR_SHOWER else 0.0}
-	var keys := Exploration.classify(place, int(info.biome) if not info.is_empty() else -1, sky)
+	var keys := Exploration.classify(place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
 	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true))
 	if not titles.is_empty():
 		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles))

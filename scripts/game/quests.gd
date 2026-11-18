@@ -23,11 +23,12 @@ const KINDS := {
 	chronicle = {title = "Летопись", color = Color(0.6, 0.9, 0.75)},
 	supplies = {title = "Припасы", color = Color(0.92, 0.8, 0.38)},
 	repair = {title = "Ремонт", color = Color(0.6, 0.78, 1.0)},
+	obelisks = {title = "Летопись обелисков", color = Color(0.6, 0.9, 0.75)},
 }
 ## Что предлагает доска (18.11.2026). Остальные виды (посещение, обход, снимок, летопись и прежняя доставка в поселение)
 ## отключены, но их сборка и шаги остаются: взятое в старом сохранении задание грузится, выполняется и бросается как раньше.
 ## Вернуть вид на доску — добавить его сюда (снимок, летопись, посещение и обход включаются вместе).
-const OFFERED := ["supplies", "fragile", "repair"]
+const OFFERED := ["supplies", "fragile", "repair", "obelisks"]
 const SIGHT_KINDS := ["photo", "chronicle", "visit", "tour"]
 ## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
 const CARGO_KINDS := ["delivery", "fragile", "supplies"]
@@ -41,6 +42,7 @@ const STEPS := {
 	climb = {text = "Поднимитесь с сумкой на верхнюю площадку %s «%s»: велосипед оставьте внизу", case = "gen", goal = true},
 	shoot = {text = "Сфотографируйте %s «%s»", case = "acc", goal = true},
 	bring = {text = "Отвезите снимок в %s «%s»", case = "acc", goal = true},
+	plaque = {text = "Сфотографируйте вблизи табличку: %s «%s»", case = "acc", goal = true},
 	fix = {text = "Почините %s «%s»: подойдите и удерживайте клавишу взаимодействия", case = "acc", goal = true},
 }
 ## Вид места в нужном падеже: название в кавычках остаётся как есть
@@ -53,6 +55,7 @@ const SITE_WORDS := {
 	tower = {gen = "вышки", acc = "вышку"},
 	house = {gen = "дома", acc = "дом"},
 	farm = {gen = "хутора", acc = "хутор"},
+	obelisk = {gen = "обелиска", acc = "обелиск"},
 }
 const SUPPLY_GROUPS := [["tower"], ["house", "farm"]]  # одно задание на группу: вышка и одинокий дом или хутор
 const SUPPLY_TITLES := {
@@ -85,6 +88,7 @@ const REPAIR_TEXTS := {
 }
 const SPOT_MIN_CELLS := 60.0  # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
 const FAR_CELLS := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
+const PLAQUE_REACH_M := 4.5   # м: табличку обелиска снимают не дальше этого (PhotoCamera.plaque_near); 18.11.2026
 const SHOT_REACH_M := 400.0 # м: снимок для задания — не дальше этого от места
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
 const FRAGILE_CHANCE := 0.35   # доля досок, где вместо доставки — хрупкий груз
@@ -136,6 +140,10 @@ var last := ""         # название последнего выполнен�
 var by_giver := {}     # id поселения -> выполнено его заданий
 var known := {}        # id мест взятых заданий: как посещённые, их названия видны в мире, на карте и в видоискателе
 var _done := {}        # id выполненных: доска их больше не предлагает
+## «Летопись обелисков» — серия, а не обычное задание: идёт параллельно с активным (доставка, ремонт), снимки табличек всех
+## обелисков в любом порядке. steps — по одному шагу plaque на обелиск, снятые стоят первыми (step — сколько снято)
+var series := QuestData.new()
+var series_done := false   # серия выполнена: доска её больше не предлагает
 
 
 ## Задания доски поселения here (место с key). places — все места мира, neighbors — поселения по дорогам,
@@ -181,6 +189,12 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 		var fix := _pick(wrecks.slice(0, 3), rng)
 		if not fix.is_empty():
 			out.append(_make("repair", here, [fix]))
+	# летопись обелисков: одна на мир, пока не взята и не выполнена; все обелиски мира, ближние к доске первыми
+	if "obelisks" in OFFERED and not series_done and series.is_empty():
+		var obelisks := places.filter(func(p: Dictionary) -> bool: return p.kind == "site" and _site_type(p) == "obelisk")
+		obelisks.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return center.distance_squared_to(Vector2(a.x, a.y)) < center.distance_squared_to(Vector2(b.x, b.y)))
+		if not obelisks.is_empty():
+			out.append(_make("obelisks", here, obelisks))
 	if not SIGHT_KINDS.any(func(k: String) -> bool: return k in OFFERED):
 		return out
 	# снимок: одно из ближних мест, отвезти в соседнее поселение или обратно сюда;
@@ -272,6 +286,13 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 			q.text = _variant(SUPPLY_TEXTS[type], id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
 			# на вышку сумку заносят наверх (шаг climb: игрок на верхней площадке), к дому и хутору — довозят (carry: у места)
 			q.steps = [{do = "pickup", place = here}, {do = "climb" if type == "tower" else "carry", place = target}]
+		"obelisks":
+			q.id = "obelisks:series"
+			q.title = "Летопись обелисков"
+			q.text = "Летописцу нужны таблички всех обелисков в округе: %d. Снимайте каждую вблизи, лицом к ней, в любом порядке — задание идёт параллельно с другими.%s" % [at.size(), known_text]
+			q.steps = []
+			for p: Dictionary in at:
+				q.steps.append({do = "plaque", place = p})
 		"repair":
 			var object := Repairables.kind_of(target)
 			q.title = _variant(REPAIR_TITLES[object], id) % target.name
@@ -307,6 +328,14 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 
 ## Взять задание q (из offers). Прошлое активное бросается
 func accept(q: QuestData) -> void:
+	if q.kind == "obelisks":
+		# серия не вытесняет активное задание и не берёт сумку
+		series = q.duplicate(true)
+		series.step = 0
+		for s: Dictionary in series.steps:
+			known[s.place.key] = true
+		changed.emit()
+		return
 	active = q.duplicate(true)
 	active.step = 0
 	cargo = false
@@ -354,6 +383,46 @@ func goal() -> Dictionary:
 ## Место текущего шага (метка задания на компасе и картах) или пусто
 func marker() -> Dictionary:
 	return step().get("place", {})
+
+
+## Снимок сделан, табличка обелиска place_id в кадре вблизи (PhotoCamera.shot.plaque), distance — м до неё. Возвращает сообщение или пусто
+func plaque_photographed(place_id: String, distance := 0.0) -> String:
+	if series.is_empty() or distance > PLAQUE_REACH_M:
+		return ""
+	var i := series.step
+	while i < series.steps.size() and series.steps[i].place.key != place_id:
+		i += 1
+	if i >= series.steps.size():
+		return ""
+	var taken: Dictionary = series.steps[i]
+	series.steps.remove_at(i)
+	series.steps.insert(series.step, taken)
+	series.step += 1
+	if series.step >= series.steps.size():
+		last = series.title
+		_done[series.id] = true
+		series_done = true
+		done += 1
+		series = QuestData.new()
+		changed.emit()
+		return "Летопись обелисков завершена: все таблички сняты"
+	changed.emit()
+	return "Табличка снята: «%s» · %d из %d" % [taken.place.name, series.step, series.steps.size()]
+
+
+## Сколько табличек снято и сколько всего: Vector2i(0, 0), если серия не идёт
+func series_progress() -> Vector2i:
+	return Vector2i(series.step, series.steps.size()) if not series.is_empty() else Vector2i.ZERO
+
+
+## Подсказка у таблички place_id в окне чтения: нужна ли она летописи и снята ли уже
+func series_note(place_id: String) -> String:
+	if series.is_empty():
+		return ""
+	for i in series.steps.size():
+		if series.steps[i].place.key == place_id:
+			return "Эта табличка уже снята для летописи." if i < series.step else "Для летописи: сфотографируйте эту табличку вблизи."
+	return ""
 
 
 ## Объект place_id починен (удержание у сломанного, GameWorld). Возвращает сообщение или пусто
@@ -411,13 +480,33 @@ func _advance() -> String:
 
 ## Только адреса мест: src и данные мира берутся из текущего мира.
 func save_state() -> Dictionary:
-	var q := active.to_dict()
+	return {active = _addresses(active), cargo = cargo, done = done, last = last,
+		by_giver = by_giver.duplicate(), known = known.duplicate(), completed = _done.duplicate(),
+		series = _addresses(series), series_done = series_done}
+
+
+static func _addresses(quest: QuestData) -> Dictionary:
+	var q := quest.to_dict()
 	if not q.is_empty():
 		q.target = q.target.key
 		for s: Dictionary in q.steps:
 			s.place = s.place.key
-	return {active = q, cargo = cargo, done = done, last = last,
-		by_giver = by_giver.duplicate(), known = known.duplicate(), completed = _done.duplicate()}
+	return q
+
+
+## Запись задания (active или series) в сохранении: строки, шаги из STEPS, адреса мест
+static func _valid_quest(q: Dictionary) -> bool:
+	for key: String in ["id", "kind", "giver", "target", "title", "text"]:
+		if not q.get(key) is String:
+			return false
+	if not KINDS.has(q.kind) or not q.get("steps") is Array or not q.get("step") is int:
+		return false
+	if q.steps.is_empty() or q.step < 0 or q.step >= q.steps.size():
+		return false
+	for s: Variant in q.steps:
+		if not s is Dictionary or not STEPS.has(s.get("do", "")) or not s.get("place") is String:
+			return false
+	return true
 
 
 static func valid_save(d: Dictionary) -> bool:
@@ -433,39 +522,51 @@ static func valid_save(d: Dictionary) -> bool:
 		for key: Variant in dict:
 			if not key is String or dict[key] != true:
 				return false
+	# серия летописи — необязательное поле: старые сохранения без неё читаются
+	if d.has("series") and (not d.series is Dictionary or (not d.series.is_empty() and not _valid_quest(d.series))):
+		return false
+	if d.has("series_done") and not d.series_done is bool:
+		return false
 	var q: Dictionary = d.active
 	if q.is_empty():
 		return not d.cargo
-	for key: String in ["id", "kind", "giver", "target", "title", "text"]:
-		if not q.get(key) is String:
-			return false
-	if not KINDS.has(q.kind) or not q.get("steps") is Array or not q.get("step") is int:
+	if not _valid_quest(q):
 		return false
-	if q.steps.is_empty() or q.step < 0 or q.step >= q.steps.size():
-		return false
-	for s: Variant in q.steps:
-		if not s is Dictionary or not STEPS.has(s.get("do", "")) or not s.get("place") is String:
-			return false
 	return d.cargo == (q.kind in CARGO_KINDS and q.steps[q.step].do in ["carry", "climb"])
 
 
 func restore_state(d: Dictionary, places: Dictionary) -> bool:
 	if not valid_save(d):
 		return false
-	var q: Dictionary = d.active.duplicate(true)
-	if not q.is_empty():
-		if not places.has(q.giver) or not places.has(q.target):
-			return false
-		q.target = places[q.target]
-		for s: Dictionary in q.steps:
-			if not places.has(s.place):
-				return false
-			s.place = places[s.place]
-	active = QuestData.from_dict(q)
+	var q := _resolve(d.active, places)
+	if q == null:
+		return false
+	active = q
 	cargo = d.cargo
 	done = d.done
 	last = d.last
 	by_giver = d.by_giver.duplicate()
 	known = d.known.duplicate()
 	_done = d.completed.duplicate()
+	series = QuestData.new()
+	series_done = d.get("series_done", false)
+	if not d.get("series", {}).is_empty():
+		# серия, у которой пропало место, не грузится (мир изменился), остальное сохранение остаётся
+		var resumed := _resolve(d.series, places)
+		if resumed != null:
+			series = resumed
 	return true
+
+
+## Задание из записи сохранения с местами из places (ключ → место); null, если какого-то места нет
+static func _resolve(saved: Dictionary, places: Dictionary) -> QuestData:
+	var q := saved.duplicate(true)
+	if not q.is_empty():
+		if not places.has(q.giver) or not places.has(q.target):
+			return null
+		q.target = places[q.target]
+		for s: Dictionary in q.steps:
+			if not places.has(s.place):
+				return null
+			s.place = places[s.place]
+	return QuestData.from_dict(q)

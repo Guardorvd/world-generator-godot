@@ -136,10 +136,45 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	close.grab_focus()
 
 
+## Задания доски: текущее и предложения, ниже — «Летопись обелисков» (серия идёт параллельно и не занимает «одно задание за раз»)
 func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offers: Array) -> void:
 	if quests == null:
 		_label("Заданий нет.", 15, page, MUTED)
 		return
+	var series_offers := offers.filter(func(q: QuestData) -> bool: return q.kind == "obelisks")
+	var has_series := not series_offers.is_empty() or not quests.series.is_empty()
+	_quests_main(page, settlement, quests, offers.filter(func(q: QuestData) -> bool: return q.kind != "obelisks"), has_series)
+	if not quests.series.is_empty():
+		_series_card(page, quests)
+	elif not series_offers.is_empty():
+		var q: QuestData = series_offers[0]
+		var card := _card(page, Quests.KINDS[q.kind].color, false)
+		var head := HBoxContainer.new()
+		card.add_child(head)
+		var title := _titled(q, 16, head)
+		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
+		take.custom_minimum_size = Vector2(96, 40)
+		take.tooltip_text = "Взять задание: %s" % Quests.KINDS[q.kind].title.to_lower()
+		_label("Серия · обелисков: %d · идёт параллельно с другими заданиями" % q.steps.size(), 13, card, Quests.KINDS[q.kind].color)
+		_label(q.text, 13, card, MUTED, CARD_W * 2.0)
+
+
+## Серия идёт: сколько табличек снято и какие остались
+func _series_card(page: VBoxContainer, quests: Quests) -> void:
+	var series := quests.series
+	var color: Color = Quests.KINDS[series.kind].color
+	var card := _card(page, color, true)
+	var progress := quests.series_progress()
+	_label("Серия · %s · снято %d из %d" % [Quests.KINDS[series.kind].title, progress.x, progress.y], 13, card, color)
+	for i in series.steps.size():
+		var row := HBoxContainer.new()
+		card.add_child(row)
+		row.add_child(UiIcons.rect(UiIcons.CHECK if i < series.step else null, 14, MUTED if i < series.step else color))
+		_label(series.steps[i].place.name, 14, row, MUTED if i < series.step else Color.WHITE)
+
+
+func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offers: Array, has_series: bool) -> void:
 	var busy := not quests.active.is_empty()
 	if busy:
 		var q := quests.active
@@ -166,7 +201,8 @@ func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 				_drop_generation += 1
 				_reset_drop_later(drop, _drop_generation))
 	if offers.is_empty():
-		_label("Сейчас доске нечего предложить.", 15, page, MUTED)
+		if not has_series:
+			_label("Сейчас доске нечего предложить.", 15, page, MUTED)
 		return
 	var center := Vector2(settlement.x, settlement.y)
 	if busy:

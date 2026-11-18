@@ -32,7 +32,10 @@ func _initialize() -> void:
 	world.lakes = [{x = 60, y = 150, i = 3, name = "Тихое", cells = 900, sx = 70, sy = 140}]
 	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2},
 		{x = 40, y = 60, i = 6, name = "Заречный", type = "farm", rank = 1},
-		{x = 150, y = 150, i = 7, name = "Лавка у обрыва", type = "bench", rank = 1}]
+		{x = 150, y = 150, i = 7, name = "Лавка у обрыва", type = "bench", rank = 1},
+		{x = 60, y = 40, i = 8, name = "Серый обелиск", type = "obelisk", rank = 2},
+		{x = 140, y = 20, i = 9, name = "Межевой обелиск", type = "obelisk", rank = 2},
+		{x = 190, y = 70, i = 10, name = "Лунный обелиск", type = "obelisk", rank = 2}]
 	_map_terrain()
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Variant in world.get(kind + "s"):
@@ -104,8 +107,8 @@ func _logic() -> void:
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
 	# 18.11.2026: на доске только груз — припасы на вышку и на хутор или в дом, хрупкий груз в поселение
-	_check(kinds.size() == 4 and kinds.all(func(k: String) -> bool: return k in Quests.OFFERED) and kinds.count("supplies") == 2 and kinds.count("fragile") == 1 and kinds.count("repair") == 1,
-		"доска предлагает только груз и ремонт: два «Припасы», «Хрупкий груз», «Ремонт» (%s)" % ", ".join(PackedStringArray(kinds)))
+	_check(kinds.size() == 5 and kinds.all(func(k: String) -> bool: return k in Quests.OFFERED) and kinds.count("supplies") == 2 and kinds.count("fragile") == 1 and kinds.count("repair") == 1 and kinds.count("obelisks") == 1,
+		"доска предлагает груз, ремонт и серию: два «Припасы», «Хрупкий груз», «Ремонт», «Летопись обелисков» (%s)" % ", ".join(PackedStringArray(kinds)))
 	var supply_targets := offers.filter(func(q: QuestData) -> bool: return q.kind == "supplies").map(func(q: QuestData) -> String: return q.target.name)
 	supply_targets.sort()
 	_check(supply_targets == ["Заречный", "Сторожевая"], "припасы — на вышку и на хутор, не в поселение и не к месту у порога (%s)" % ", ".join(PackedStringArray(supply_targets)))
@@ -173,6 +176,7 @@ func _logic() -> void:
 	_check(quests.tick(_arrived).begins_with("Задание выполнено"), "летопись выполнена")
 	_supplies_and_old_saves()
 	_repair_quest()
+	_series_quest()
 	var texts := {}
 	for kind: String in ["delivery", "fragile", "visit"]:
 		for p: Dictionary in places:
@@ -181,6 +185,48 @@ func _logic() -> void:
 	_check(texts.size() >= 6, "формулировки разные (%d): %s" % [texts.size(), ", ".join(PackedStringArray(texts.keys()))])
 	var saved := quests.save_state()
 	_check(Quests.valid_save(saved), "сохранение после новых видов проходит проверку")
+
+
+## «Летопись обелисков»: серия параллельно активному заданию; снимки табличек всех обелисков в любом порядке, только вблизи
+func _series_quest() -> void:
+	var quests := Quests.new()
+	var series: QuestData = _by_kind(_offers(quests), "obelisks")
+	_check(not series.is_empty() and series.steps.size() == 3 and series.steps.all(func(s: Dictionary) -> bool: return s.do == "plaque"), "серия предлагает все три обелиска")
+	_check(series.steps[0].place.name == "Серый обелиск" and series.steps[2].place.name == "Лунный обелиск", "ближайшие к доске — первыми")
+	quests.accept(series)
+	_check(quests.active.is_empty() and not quests.cargo and quests.series_progress() == Vector2i(0, 3), "серия не занимает активное задание: 0 из 3")
+	_check(quests.known.has(series.steps[1].place.key) and quests.known.has(series.steps[2].place.key), "места обелисков известны (видны на карте сквозь туман)")
+	_check(_by_kind(_offers(quests), "obelisks").is_empty(), "взятая серия больше не предлагается")
+	quests.accept(Quests._make("fragile", _place("Ольховка"), [_place("Каменка")]))
+	_check(not quests.active.is_empty() and not quests.series.is_empty(), "обычное задание берётся рядом с серией")
+	_check(quests.plaque_photographed("") == "" and quests.plaque_photographed("site:1:1", 1.0) == "" and quests.series_progress().x == 0, "чужая и пустая табличка не засчитаны")
+	var far: String = series.steps[0].place.key
+	_check(quests.plaque_photographed(far, Quests.PLAQUE_REACH_M + 1.0) == "" and quests.series_progress().x == 0, "табличка издалека не засчитана")
+	var third: String = series.steps[2].place.key
+	var message := quests.plaque_photographed(third, 2.0)
+	_check(message.contains("1 из 3") and quests.series_progress() == Vector2i(1, 3) and quests.series.steps[0].place.key == third, "любой порядок: третья снята первой, она встала первой (%s)" % message)
+	_check(quests.plaque_photographed(third, 2.0) == "" and quests.series_progress().x == 1, "повторная табличка не считается")
+	_check(quests.series_note(third).begins_with("Эта табличка уже снята") and quests.series_note(far).begins_with("Для летописи"), "подсказка у таблички: снята или нужна")
+	_check(not quests.active.is_empty(), "активное задание серия не трогает")
+	var by_key := {}
+	for p: Dictionary in places:
+		by_key[p.key] = p
+	var saved := quests.save_state()
+	var again := Quests.new()
+	_check(Quests.valid_save(saved) and again.restore_state(saved, by_key) and again.series_progress() == Vector2i(1, 3) and again.series.steps[0].place.key == third and not again.active.is_empty(), "серия и порядок переживают сохранение")
+	var old_format := saved.duplicate(true)
+	old_format.erase("series")
+	old_format.erase("series_done")
+	var legacy := Quests.new()
+	_check(Quests.valid_save(old_format) and legacy.restore_state(old_format, by_key) and legacy.series.is_empty() and not legacy.series_done, "сохранение без серии читается")
+	var rest: Array = quests.series.steps.slice(quests.series.step).map(func(s: Dictionary) -> String: return s.place.key)
+	for k in rest.size() - 1:
+		quests.plaque_photographed(rest[k], 3.0)
+	var last := quests.plaque_photographed(rest[-1], 3.0)
+	_check(last.begins_with("Летопись обелисков завершена") and quests.series.is_empty() and quests.series_done and quests.done == 1, "все таблички — серия выполнена, засчитана (%s)" % last)
+	_check(_by_kind(_offers(quests), "obelisks").is_empty() and quests.series_progress() == Vector2i.ZERO, "выполненная серия не предлагается снова")
+	var finished := Quests.new()
+	_check(finished.restore_state(quests.save_state(), by_key) and finished.series_done and finished.series.is_empty(), "выполненность серии сохраняется")
 
 
 ## Ремонт: берётся у доски, цель — сломанный объект; засчитывается только удержанием у нужного объекта (GameWorld вызывает repaired)
@@ -325,7 +371,7 @@ func _run() -> void:
 	var pins := hud.board_places(home)
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	var buttons: Array[Node] = hud.settlement_panel.find_children("*", "Button", true, false)
-	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 4, "на доске четыре кнопки «Взять»")
+	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 5, "на доске пять кнопок «Взять» (четыре задания и серия)")
 	_check(pins.size() == 3 and pins[1].name == "Колодец" and pins[2].name == "Тихое", "на доске два ближайших места")
 	var travels := []
 	hud.settlement_panel.travel_requested.connect(hud.ask_travel)
@@ -348,8 +394,8 @@ func _run() -> void:
 	quests.accept(accepted[0])
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	buttons = hud.settlement_panel.find_children("*", "Button", true, false)
-	_check(buttons.any(func(b: Button) -> bool: return b.text == "Отказаться от задания") and not buttons.any(func(b: Button) -> bool: return b.text.begins_with("Взять")),
-		"с текущим заданием — «Отказаться», новых не взять")
+	_check(buttons.any(func(b: Button) -> bool: return b.text == "Отказаться от задания") and buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 1,
+		"с текущим заданием — «Отказаться»; взять можно только серию летописи, она идёт параллельно")
 	await _shot("quest_board_active")
 	var dropped := [0]
 	hud.settlement_panel.quest_abandoned.connect(func() -> void: dropped[0] += 1)

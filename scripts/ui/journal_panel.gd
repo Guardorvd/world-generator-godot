@@ -197,6 +197,14 @@ func _card(page: Dictionary) -> Control:
 		mark.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		plate.add_child(mark)
 	_label(page.title, 14, column, HudStyle.CREAM if done else MUTED).clip_text = true
+	if done and page.get("text", "") != "":
+		# страница обелиска: текст таблички, снятой вблизи (полностью — во всплывающей подсказке)
+		card.tooltip_text = page.text
+		var text := _label(page.text, 10, column, Color(1, 1, 1, 0.7))
+		text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		text.custom_minimum_size.x = CARD.x - 20
+		text.max_lines_visible = 4
+		text.clip_text = true
 	var note := _label(page.shot.get("date", "") if done else page.hint, 11, column, HudStyle.MINT if done else Color(1, 1, 1, 0.42))
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size.x = CARD.x - 20
