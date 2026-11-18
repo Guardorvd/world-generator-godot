@@ -1,7 +1,7 @@
 extends RefCounted
 ## Capture on the main thread. Workers only read this private view, never live streaming dictionaries.
-## include_places = false — без поселений и мест мира: их глубокая копия — почти вся цена снимка (около 4 мс на
-## мире 768), а сборке узлов области (RegionStream.build_decor) они не нужны: она берёт поселения своей области.
+## Published place records are read-only in play. Snapshot the lists while retaining
+## the records. Mutable heights and obstacle data still belong to the snapshot.
 static func capture(source: Heightfield, include_graph := true, include_places := true) -> Heightfield:
 	var original := source.world
 	var w := WorldData.new()
@@ -14,11 +14,11 @@ static func capture(source: Heightfield, include_graph := true, include_places :
 	# Route records are immutable after generation; only the list is mutable.
 	if include_graph:
 		w.trails = original.trails.duplicate()
-		w.bridges = EntityCodec.copy(original.bridges)
-		w.tunnels = EntityCodec.copy(original.tunnels)
+		w.bridges = original.bridges.duplicate()
+		w.tunnels = original.tunnels.duplicate()
 	if include_places:
-		w.settlements = EntityCodec.copy(original.settlements)
-		w.sites = EntityCodec.copy(original.sites)
+		w.settlements = original.settlements.duplicate()
+		w.sites = original.sites.duplicate()
 	w.lake = original.lake.duplicate()
 	w.filled = original.filled.duplicate()
 	if original.outer != null:
@@ -29,7 +29,8 @@ static func capture(source: Heightfield, include_graph := true, include_places :
 		outer._ring = original.outer._ring.duplicate()
 		outer.chunks = original.outer.chunks.duplicate()
 		outer._ledger = original.outer.get_ledger()
-		outer.settlements = EntityCodec.copy(original.outer.settlements)
+		if include_places:
+			outer.share_collision_places(original.outer)
 		w.outer = outer
 	var h := source.copy()
 	h.world = w

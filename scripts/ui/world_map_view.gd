@@ -19,6 +19,7 @@ const TILE := GameConfig.TILE
 const PICK := 17.0
 const MIN_SCALE := 0.06
 const MAX_SCALE := 2.2
+const STROKE_SETTLE_USEC := 120000
 const FOG_CELL := 16.0     # м на пиксель маски исследованного
 const FOG_TRACK := 260.0   # м открыто вокруг пройденного пути
 const FOG_PLACE := 160.0   # м открыто вокруг открытого места
@@ -37,11 +38,20 @@ var quest_color := Color.WHITE
 var move_hint := ""
 var _data: Data
 var _base: Control
+var _tiles: Control
+var _lines: Control
+var _track: Control
+var _track_window := Rect2()
+var _player_arrow: Node2D
+var _legend: Control
 var _overlay: Control
 var _center := Vector2.ZERO
 var _scale := 0.2
 var _min_scale := MIN_SCALE
 var _drawn_scale := -1.0
+var _stroke_scale := 0.2
+var _stroke_redraw_at := 0
+var _line_window := Rect2()
 var _bounds := Rect2()
 var _fit := Rect2()
 var _pressed := Vector2.INF
@@ -54,7 +64,12 @@ var _fog: Image
 var _fog_texture: ImageTexture
 var _fog_node: Control      # слой бумаги в _base: свой шейдер размывает край маски
 var _fog_legs := 0          # сколько отрезков трека уже открыто в маске
+var _fog_current_points := 0
+var _fog_current_leg := -1
 var _fog_last := Vector2.INF
+var _fog_player_cell := Vector2.INF
+var _fog_pending := false
+var _fog_dirty := false
 var _fog_places := {}
 
 
@@ -63,8 +78,15 @@ func _ready() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_ARROW if park else Control.CURSOR_DRAG
 	_base = Control.new()
 	_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_base.draw.connect(_draw_base)
 	add_child(_base)
+	_tiles = Control.new()
+	_tiles.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tiles.draw.connect(_draw_tiles)
+	_base.add_child(_tiles)
+	_lines = Control.new()
+	_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lines.draw.connect(_draw_base)
+	_base.add_child(_lines)
 	_fog_node = Control.new()
 	_fog_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var fog_material := ShaderMaterial.new()
@@ -72,11 +94,23 @@ func _ready() -> void:
 	_fog_node.material = fog_material
 	_fog_node.draw.connect(_draw_fog)
 	_base.add_child(_fog_node)
+	_track = Control.new()
+	_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_track.draw.connect(_draw_track)
+	_base.add_child(_track)
 	_overlay = Control.new()
 	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_overlay)
 	_overlay.draw.connect(_draw_overlay)
+	_player_arrow = Node2D.new()
+	_player_arrow.hide()
+	_player_arrow.draw.connect(func() -> void: Paint.player(_player_arrow, Vector2.ZERO, 0.0))
+	add_child(_player_arrow)
+	_legend = Control.new()
+	_legend.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_legend.draw.connect(_draw_legend)
+	add_child(_legend)
 	mouse_exited.connect(func() -> void: _set_hover({}))
 	resized.connect(_reframe)
 	visibility_changed.connect(_visibility_changed)
@@ -105,7 +139,21 @@ func set_source(source: Data) -> void:
 	_fog_texture = null
 	_fog_legs = 0
 	_fog_last = Vector2.INF
+	_fog_player_cell = Vector2.INF
+	_fog_current_leg = -1
+	_fog_current_points = 0
+	_fog_pending = paper
+	_fog_dirty = false
 	_fog_places = {}
+	if _base != null:
+		_tiles.queue_redraw()
+		_lines.queue_redraw()
+		_fog_node.queue_redraw()
+		_track.queue_redraw()
+		_update_player_arrow()
+	_drawn_scale = -1.0
+	_stroke_redraw_at = 0
+	_line_window = Rect2()
 	reset_view()
 
 
@@ -139,35 +187,43 @@ func prepare_player_view() -> void:
 	var w := _data.world
 	_bounds = Rect2(Vector2.ZERO, Vector2(w.W, w.H) * TILE)
 	_fit = _bounds.grow(50.0)
-	_update_fog()
+	_fog_pending = paper
 	_reframe()
-	refresh_overlay()
 
 
 func set_places(pins: Array) -> void:
+	if places == pins:
+		return
 	places = pins
-	if paper and _fog != null:
-		for place: Dictionary in places:
-			if not _fog_places.has(place.key):
-				_fog_places[place.key] = true
-				_open_fog(place_at(place), FOG_PLACE)
-		_publish_fog()
+	if paper:
+		_fog_pending = true
 	_set_hover({})
 	refresh_overlay()
 
 
 func set_player(at: Vector2, yaw: float) -> void:
-	var new_point := not player.is_finite() or player.distance_squared_to(at) * _scale * _scale >= 0.8
-	var turned := absf(angle_difference(heading, yaw)) >= 0.045
-	if new_point or turned:
-		player = at
-		heading = yaw
-		refresh_overlay()
+	if player == at and heading == yaw:
+		return
+	player = at
+	heading = yaw
+	_update_player_arrow()
+	if paper and (at / FOG_CELL).round() != _fog_player_cell:
+		_fog_pending = true
+
+
+func _update_player_arrow() -> void:
+	if _player_arrow == null:
+		return
+	_player_arrow.visible = not park and player.is_finite()
+	if _player_arrow.visible:
+		_player_arrow.position = world_to_screen(player)
+		_player_arrow.rotation = -heading
 
 
 func refresh_overlay() -> void:
 	if _overlay != null and is_visible_in_tree():
 		_overlay.queue_redraw()
+		_legend.queue_redraw()
 
 
 func _visibility_changed() -> void:
@@ -177,6 +233,8 @@ func _visibility_changed() -> void:
 		refresh_overlay()
 	elif _data != null:
 		_data.release_view()
+		_line_window = Rect2()
+		_stroke_redraw_at = 0
 		_drawn_scale = -1.0
 		_pressed = Vector2.INF
 		_button = MOUSE_BUTTON_NONE
@@ -186,11 +244,18 @@ func _visibility_changed() -> void:
 func _process(_delta: float) -> void:
 	if _data != null and (_base_dirty or _data.pending):
 		_refresh_base()
+	if _stroke_redraw_at != 0 and Time.get_ticks_usec() >= _stroke_redraw_at:
+		_stroke_redraw_at = 0
+		_stroke_scale = _scale
+		_lines.queue_redraw()
+		_track.queue_redraw()
 	if journal != null and journal.revision != _last_revision:
 		_last_revision = journal.revision
-		if paper and _fog != null:
-			_update_fog()
+		_track.queue_redraw()
+		_fog_pending = paper
 		refresh_overlay()
+	if _fog_pending:
+		_update_fog()
 
 
 func _reframe() -> void:
@@ -213,13 +278,37 @@ func _refresh_base() -> void:
 	var frame := _world_rect()
 	if _bounds.has_area():
 		frame = frame.intersection(_bounds.grow(-0.01) if paper else _bounds.grow(160.0))
-	# не больше 4 новых участков за кадр: при перетаскивании и масштабе карта не замирает на сборке картинок
-	var changed := _data.update(frame, 4)
+	var lines_changed := false
+	var baked_atlas := paper and _data.atlas_texture != null
+	if baked_atlas:
+		if not _line_window.has_area() or not _line_window.encloses(frame):
+			_line_window = frame.grow(Data.SPAN * 0.5)
+			lines_changed = _data.update_atlas_lines(_line_window.intersection(_bounds))
+		if _drawn_scale < 0.0:
+			_tiles.queue_redraw()
+	else:
+		var tile_revision := _data.tile_revision
+		var feature_revision := _data.feature_revision
+		_data.update(frame, 1, not paper)
+		if _data.tile_revision != tile_revision or _drawn_scale < 0.0:
+			_tiles.queue_redraw()
+		lines_changed = _data.feature_revision != feature_revision
 	_base.position = world_to_screen(Vector2.ZERO)
 	_base.scale = Vector2.ONE * _scale
-	if changed or _drawn_scale != _scale:
-		_drawn_scale = _scale
-		_base.queue_redraw()
+	if _drawn_scale < 0.0 or (park and _drawn_scale != _scale):
+		_stroke_scale = _scale
+		_lines.queue_redraw()
+	elif _drawn_scale != _scale:
+		# Keep the drawn strokes while the wheel is active and update widths when it settles.
+		_stroke_redraw_at = Time.get_ticks_usec() + STROKE_SETTLE_USEC
+	if lines_changed:
+		_lines.queue_redraw()
+	var track_frame := _world_rect().grow(12.0 / _scale)
+	if journal != null and (_drawn_scale < 0.0 or not _track_window.encloses(track_frame)):
+		_track_window = track_frame.grow(Data.SPAN * 0.5)
+		_track.queue_redraw()
+	_drawn_scale = _scale
+	_update_player_arrow()
 	_base_dirty = false
 
 
@@ -306,7 +395,10 @@ func _map_button(event: InputEventMouseButton) -> void:
 
 func _zoom_at(at: Vector2, factor: float) -> void:
 	var anchor := screen_to_world(at)
-	_scale = clampf(_scale * factor, _min_scale, MAX_SCALE)
+	var next_scale := clampf(_scale * factor, _min_scale, MAX_SCALE)
+	if is_equal_approx(_scale, next_scale):
+		return
+	_scale = next_scale
 	_center = (_center + anchor - screen_to_world(at)).clamp(_bounds.position, _bounds.end)
 	_update_base()
 	refresh_overlay()
@@ -318,10 +410,19 @@ func _draw() -> void:
 
 
 ## Подложка в мировых метрах: положение и масштаб слоя задаёт _refresh_base
+func _draw_tiles() -> void:
+	if _data == null:
+		return
+	if paper and _data.atlas_texture != null:
+		_tiles.draw_texture_rect(_data.atlas_texture, _bounds, false, Color("#f3e5c5"))
+	else:
+		Paint.tiles(_tiles, _data, _styled())
+
+
 func _draw_base() -> void:
 	if _data == null:
 		return
-	Paint.surface(_base, _data, Vector2.ZERO, 1.0, _styled(), _scale)
+	Paint.lines(_lines, _data, _stroke_scale, _styled())
 	if paper:
 		# за краем стартовой области — чистая бумага: соседние земли на личной карте не показываются
 		var plan := Rect2(Vector2.ZERO, Vector2(_data.world.W, _data.world.H) * TILE)
@@ -329,7 +430,7 @@ func _draw_base() -> void:
 		for side: Rect2 in [Rect2(plan.position.x - far, plan.position.y - far, plan.size.x + far * 2.0, far),
 				Rect2(plan.position.x - far, plan.end.y, plan.size.x + far * 2.0, far),
 				Rect2(plan.position.x - far, plan.position.y, far, plan.size.y), Rect2(plan.end.x, plan.position.y, far, plan.size.y)]:
-			_base.draw_rect(side, Paint.PARK_PAPER)
+			_lines.draw_rect(side, Paint.PARK_PAPER)
 
 
 func _draw_fog() -> void:
@@ -348,31 +449,56 @@ func _park_grid() -> void:
 ## Маска исследованного (только личная карта): бумага поверх неоткрытого. Новые отрезки трека и места дописываются
 ## в маску по мере поступления, а не пересчитываются целиком
 func _update_fog() -> void:
+	_fog_pending = false
 	if not paper or _data == null or journal == null:
 		return
-	var w := _data.world
 	if _fog == null:
+		var w := _data.world
 		var px := Vector2i(ceili(w.W * TILE / FOG_CELL), ceili(w.H * TILE / FOG_CELL))
 		_fog = Image.create(px.x, px.y, false, Image.FORMAT_RGBA8)
 		_fog.fill(Paint.PARK_PAPER)
-		_fog_legs = 0
-		_fog_last = Vector2.INF
-	while _fog_legs < journal.legs.size():
-		_open_track(journal.legs[_fog_legs].points)
+		_fog_dirty = true
+	var completed := journal.completed_legs
+	var first := completed - journal.legs.size()
+	_fog_legs = maxi(_fog_legs, first)
+	# A restored journal may contain thousands of points. Reveal it over several frames.
+	var finish := mini(completed, _fog_legs + 4)
+	while _fog_legs < finish:
+		var points: PackedVector2Array = journal.legs[_fog_legs - first].points
+		_open_track(points, 0, points.size(), Vector2.INF)
 		_fog_legs += 1
+	_fog_pending = _fog_legs < completed
+
+	if completed != _fog_current_leg or _fog_current_points >= journal.current.size():
+		_fog_current_leg = completed
+		_fog_current_points = 0
 		_fog_last = Vector2.INF
-	_open_track(journal.current)
+	# The final point of the live leg can still be moved by track simplification.
+	var stable := maxi(0, journal.current.size() - 1)
+	_fog_last = _open_track(journal.current, _fog_current_points, stable, _fog_last)
+	_fog_current_points = stable
 	if player.is_finite():
-		_open_fog(player, FOG_TRACK)
-	_publish_fog()
+		var cell := (player / FOG_CELL).round()
+		if cell != _fog_player_cell:
+			_fog_player_cell = cell
+			_open_fog(player, FOG_TRACK)
+	for place: Dictionary in places:
+		if not _fog_places.has(place.key):
+			_fog_places[place.key] = true
+			_open_fog(place_at(place), FOG_PLACE)
+	if _fog_dirty:
+		_publish_fog()
+		_fog_dirty = false
 
 
-func _open_track(points: PackedVector2Array) -> void:
-	for point: Vector2 in points:
-		if _fog_last.is_finite() and _fog_last.distance_squared_to(point) < FOG_STEP * FOG_STEP:
+func _open_track(points: PackedVector2Array, from: int, to: int, previous: Vector2) -> Vector2:
+	for i in range(from, to):
+		var point := points[i]
+		if previous.is_finite() and previous.distance_squared_to(point) < FOG_STEP * FOG_STEP:
 			continue
-		_fog_last = point
+		previous = point
 		_open_fog(point, FOG_TRACK)
+	return previous
 
 
 ## Открыть круг radius м вокруг at (метры): три пересекающихся прямоугольника — почти круг, мягкий край даёт фильтрация
@@ -383,6 +509,9 @@ func _open_fog(at: Vector2, radius: float) -> void:
 	var r := int(radius / FOG_CELL)
 	var clear := Color(Paint.PARK_PAPER, 0.0)
 	var bounds := Rect2i(Vector2i.ZERO, _fog.get_size())
+	if not bounds.grow(r).has_point(c):
+		return
+	_fog_dirty = true
 	_fog.fill_rect(Rect2i(c - Vector2i(r, r * 7 / 10), Vector2i(r * 2 + 1, r * 14 / 10 + 1)).intersection(bounds), clear)
 	_fog.fill_rect(Rect2i(c - Vector2i(r * 7 / 10, r), Vector2i(r * 14 / 10 + 1, r * 2 + 1)).intersection(bounds), clear)
 	_fog.fill_rect(Rect2i(c - Vector2i(r * 9 / 10, r * 9 / 10), Vector2i(r * 18 / 10 + 1, r * 18 / 10 + 1)).intersection(bounds), clear)
@@ -394,9 +523,9 @@ func _publish_fog() -> void:
 	if _fog_texture == null or Vector2i(_fog_texture.get_size()) != _fog.get_size():
 		_fog_texture = ImageTexture.create_from_image(_fog)
 		(_fog_node.material as ShaderMaterial).set_shader_parameter("texel", Vector2.ONE / Vector2(_fog.get_size()))
+		_fog_node.queue_redraw()
 	else:
 		_fog_texture.update(_fog)
-	_fog_node.queue_redraw()
 
 
 func _draw_overlay() -> void:
@@ -404,8 +533,6 @@ func _draw_overlay() -> void:
 		return
 	if _styled():
 		_park_grid() # засечки поверх бумаги и подложки, как сетка на печатной карте
-	if journal != null:
-		_draw_track()
 	_draw_pins()
 	if not park:
 		if goal.is_finite():
@@ -414,25 +541,21 @@ func _draw_overlay() -> void:
 			var at := world_to_screen(quest)
 			_overlay.draw_rect(Rect2(at - Vector2.ONE * 6.0, Vector2.ONE * 12.0), Color("#244648"))
 			_overlay.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), quest_color)
-		if player.is_finite():
-			Paint.player(_overlay, world_to_screen(player), heading)
-	_draw_legend()
 
 
 func _draw_track() -> void:
-	var bounds := _world_rect().grow(12.0 / _scale)
-	_overlay.draw_set_transform(world_to_screen(Vector2.ZERO), 0.0, Vector2.ONE * _scale)
+	if _data == null or journal == null:
+		return
 	for leg: Dictionary in journal.legs:
-		if bounds.intersects(leg.bounds.grow(1.0)):
+		if _track_window.intersects(leg.bounds.grow(1.0)):
 			_draw_leg(leg.points)
-	if journal.current.size() > 1 and bounds.intersects(journal.current_bounds.grow(1.0)):
+	if journal.current.size() > 1 and _track_window.intersects(journal.current_bounds.grow(1.0)):
 		_draw_leg(journal.current)
-	_overlay.draw_set_transform(Vector2.ZERO)
 
 
 func _draw_leg(points: PackedVector2Array) -> void:
-	_overlay.draw_polyline(points, Color("#fffaff"), 5.5 / _scale, true)
-	_overlay.draw_polyline(points, Paint.TRACE, 3.1 / _scale, true)
+	_track.draw_polyline(points, Color("#fffaff"), 5.5 / _stroke_scale, true)
+	_track.draw_polyline(points, Paint.TRACE, 3.1 / _stroke_scale, true)
 
 
 func _draw_pins() -> void:
@@ -465,25 +588,27 @@ func _draw_pins() -> void:
 
 
 func _draw_legend() -> void:
+	if _data == null:
+		return
 	var color := Paint.PARK_INK if _styled() else Paint.INK
 	var north := Vector2(size.x - (26.0 if park else 87.0), 28.0)
-	_overlay.draw_colored_polygon(PackedVector2Array([north + Vector2(0, -8), north + Vector2(5, 7),
+	_legend.draw_colored_polygon(PackedVector2Array([north + Vector2(0, -8), north + Vector2(5, 7),
 		north + Vector2(0, 4), north + Vector2(-5, 7)]), color)
-	Paint.text(_overlay, north + Vector2(0, 23), "С", color, 12)
+	Paint.text(_legend, north + Vector2(0, 23), "С", color, 12)
 	var metres := 50.0 if _scale > 0.9 else (100.0 if _scale > 0.4 else (250.0 if _scale > 0.18 else 500.0))
 	var start := Vector2(18, size.y - 16)
 	var end := start + Vector2(metres * _scale, 0)
-	_overlay.draw_polyline(PackedVector2Array([start - Vector2(0, 5), start, end, end - Vector2(0, 5)]), color, 1.7, true)
-	Paint.text(_overlay, (start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, 12)
+	_legend.draw_polyline(PackedVector2Array([start - Vector2(0, 5), start, end, end - Vector2(0, 5)]), color, 1.7, true)
+	Paint.text(_legend, (start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, 12)
 	if _styled():
-		_overlay.draw_rect(Rect2(Vector2.ONE, size - Vector2.ONE * 2), Color("#aca17e"), false, 2.0)
+		_legend.draw_rect(Rect2(Vector2.ONE, size - Vector2.ONE * 2), Color("#aca17e"), false, 2.0)
 	if not park and journal != null:
 		var panel := Color("#f2e7cd") if paper else Color("#f5f8f3")
-		_overlay.draw_rect(Rect2(16, 12, 210, 92), panel)
+		_legend.draw_rect(Rect2(16, 12, 210, 92), panel)
 		if paper:
-			_overlay.draw_rect(Rect2(16, 12, 210, 92), Color("#aca17e"), false, 1.5)
+			_legend.draw_rect(Rect2(16, 12, 210, 92), Color("#aca17e"), false, 1.5)
 		var font: Font = _park_font if paper else null
-		Paint.text(_overlay, Vector2(121, 39), "Карта поездок", color, 22, font)
-		Paint.text(_overlay, Vector2(121, 63), "Трек · %s" % Util.distance_text(journal.distance), Paint.TRACE, 15, font)
-		Paint.text(_overlay, Vector2(121, 85), "Открыто мест · %d" % places.size(), color, 14, font)
-		Paint.text(_overlay, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 13)
+		Paint.text(_legend, Vector2(121, 39), "Карта поездок", color, 22, font)
+		Paint.text(_legend, Vector2(121, 63), "Трек · %s" % Util.distance_text(journal.distance), Paint.TRACE, 15, font)
+		Paint.text(_legend, Vector2(121, 85), "Открыто мест · %d" % places.size(), color, 14, font)
+		Paint.text(_legend, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 13)

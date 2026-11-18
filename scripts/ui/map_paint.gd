@@ -9,16 +9,16 @@ const PARK_PAPER := Color("#f2e7cd")
 const TRACE := Color("#765be1")
 
 
-## line_scale — масштаб экрана для толщины линий, когда canvas уже масштабирован снаружи (WorldMapView._base: scale 1)
-static func surface(canvas: CanvasItem, data: Data, origin: Vector2, scale: float, park := false, line_scale := 0.0) -> void:
-	canvas.draw_set_transform(origin, 0.0, Vector2.ONE * scale)
+static func tiles(canvas: CanvasItem, data: Data, park: bool) -> void:
 	var span := Vector2.ONE * Data.SPAN
 	var tint := Color("#f3e5c5") if park else Color.WHITE
 	for key: Vector2i in data.tiles:
 		canvas.draw_texture_rect(data.tiles[key].texture, Rect2(Vector2(key) * span, span), false, tint)
+
+
+static func lines(canvas: CanvasItem, data: Data, screen_scale: float, park: bool) -> void:
 	var layers := data.strokes
-	var seen := line_scale if line_scale > 0.0 else scale
-	var width := clampf(sqrt(seen / 0.58), 0.34, 1.0) / seen
+	var width := clampf(sqrt(screen_scale / 0.58), 0.34, 1.0) / screen_scale
 	_stroke(canvas, layers[Data.Line.RIVER], Color("#799999") if park else Color("#85bfdc"),
 		Color("#91afac") if park else Data.WATER, 3.5 * width, 2.3 * width)
 	_stroke(canvas, layers[Data.Line.TRAIL], Color("#938259") if park else Color("#b5a582"),
@@ -27,7 +27,6 @@ static func surface(canvas: CanvasItem, data: Data, origin: Vector2, scale: floa
 		Color("#fff1ca") if park else Color("#fffdf7"), 5.6 * width, 3.8 * width)
 	_stroke(canvas, layers[Data.Line.BIKE_TRAIL], Color("#f6edd0") if park else Color("#f2fbf3"),
 		Color("#536c48") if park else Color("#458775"), 3.5 * width, 1.8 * width)
-	canvas.draw_set_transform(Vector2.ZERO)
 
 
 static func _stroke(canvas: CanvasItem, lines: PackedVector2Array, edge: Color, fill: Color, outer: float, inner: float) -> void:

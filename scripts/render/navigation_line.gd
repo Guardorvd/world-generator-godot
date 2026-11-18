@@ -4,6 +4,8 @@ extends MeshInstance3D
 ## не рисуется. Фаза штрихов привязана к дуге маршрута; красный цвет — движение против него.
 const Roads = preload("res://scripts/game/road_navigation.gd")
 const REACH := 70.0
+const SEARCH_BLOCK := 32
+const REDRAW_STEP := 0.4
 const PIECE := 0.75     # длина кусочка штриха, м; штрих — DASH кусочков, пауза — столько же
 const DASH := 2
 const HALF := 0.14      # полуширина штриха, м
@@ -24,7 +26,7 @@ var background_search := false # GameWorld enables this; isolated synchronous ca
 var _search_task := -1
 var _search_roads: Roads
 var _search_path := PackedVector2Array()
-var _search_revision := ""
+var _search_revision := Vector4i.ZERO
 var _search_serial := 0
 var _serial := 0
 var _request := {}
@@ -44,24 +46,33 @@ var _timer := 0.0
 var _reroute_timer := 0.0
 var status := ""
 var route_revision := 0   # 18.11.2026: растёт при каждом новом пути или сбросе — мини-карта перерисовывает маршрут
-var _revision := ""
+var _revision := Vector4i.ZERO
 var _progress := 0.0
+var _blocks: Array[Rect2] = []
+var _painted_at := Vector3.INF
+var _painted_wrong := 0.0
+var _painted_obstacles := -1
 ## 18.11.2026, цена кадра: перерисовка 4 раза/с больше не проверяет весь видимый путь заново и не ищет высоту каждого
 ## кусочка штриха. _checked — до какой дуги участок пути i уже проверен (_levels — высота там), _lifts — готовые
 ## вершины кусочков и стрелок. Сбрасываются с новым путём.
 var _checked := {}
 var _levels := {}
 var _lifts := {}
-## Снимок мира для пересчёта при отклонении: тот же, пока игрок рядом с местом снимка и сеть та же (копия мира на
-## главном потоке — заметный рывок, а при съезде с пути пересчёт идёт каждые 2 с)
-var _snapshot: Heightfield
-var _snapshot_at := Vector2.INF
-var _snapshot_revision := ""
-const SNAPSHOT_REUSE := 120.0
+var _ledger_version := -1
+var _region_key_hash := 0
+var _outer_trails := 0
 
-func _network_revision() -> String:
-	var outer := _world.outer.get_ledger() if _world.outer != null else {}
-	return str([_world.territory_revision, _world.trails.size(), outer.get("trails", []).size(), outer.get("regions", {}).keys().hash()])
+func _network_revision() -> Vector4i:
+	var outer_trails := 0
+	if _world.outer != null:
+		var outer := _world.outer
+		if outer.ledger_version != _ledger_version:
+			var ledger := outer.get_ledger()
+			_region_key_hash = ledger.get("regions", {}).keys().hash()
+			_ledger_version = outer.ledger_version
+			_outer_trails = ledger.get("trails", []).size()
+		outer_trails = _outer_trails
+	return Vector4i(_world.territory_revision, _world.trails.size(), outer_trails, _region_key_hash)
 
 
 func setup(w: WorldData, h: Heightfield) -> void:
@@ -69,12 +80,13 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	_world = w
 	_heights = h
 	roads = null
-	_snapshot = null
-	_revision = ""
+	_revision = Vector4i(-1, -1, -1, 0)
+	_ledger_version = -1
+	_region_key_hash = 0
 	_goal = {}
 	path.clear()
 	status = ""
-	mesh = ImmediateMesh.new()
+	mesh = null
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -91,7 +103,7 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_goal = goal
 	path.clear()
 	route_revision += 1
-	(mesh as ImmediateMesh).clear_surfaces()
+	mesh = null
 	_wrong = 0.0
 	_flow = 0.0
 	_last_here = at
@@ -115,9 +127,9 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_rebuild(at, feet)
 
 
-func _rebuild(at: Vector2, feet := INF, recheck_graph := false, fresh := false) -> void:
+func _rebuild(at: Vector2, feet := INF, recheck_graph := false) -> void:
 	if background_search:
-		_request_search(at, feet, recheck_graph, fresh)
+		_request_search(at, feet, recheck_graph)
 		return
 	if recheck_graph: roads.build(_world, _heights)
 	path = roads.route_to(at, _target, feet)
@@ -127,7 +139,7 @@ func _rebuild(at: Vector2, feet := INF, recheck_graph := false, fresh := false) 
 func _accept_path() -> void:
 	route_revision += 1
 	status = roads.status
-	(mesh as ImmediateMesh).clear_surfaces()
+	mesh = null
 	_progress = 0.0
 	_wrong = 0.0
 	_flow = 0.0
@@ -137,11 +149,17 @@ func _accept_path() -> void:
 	_levels.clear()
 	_lifts.clear()
 	_cum.resize(path.size())
+	_blocks.clear()
+	_painted_at = Vector3.INF
 	var total := 0.0
-	for i in path.size():
-		if i > 0:
-			total += path[i - 1].distance_to(path[i])
+	for i in range(1, path.size()):
+		total += path[i - 1].distance_to(path[i])
 		_cum[i] = total
+		if (i - 1) % SEARCH_BLOCK == 0:
+			_blocks.append(Rect2(path[i - 1], Vector2.ZERO))
+		_blocks[-1] = _blocks[-1].expand(path[i])
+	if not _cum.is_empty():
+		_cum[0] = 0.0
 	_reroute_timer = 8.0 if path.is_empty() else 2.0
 	_timer = 0.0
 
@@ -151,6 +169,7 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 	var draw_line := active and shown and not _goal.is_empty()
 	if draw_line and not visible:
 		_timer = 0.0
+		_painted_at = Vector3.INF
 	visible = draw_line
 	if not active or _goal.is_empty():
 		_last_here = Vector2(at.x, at.z)
@@ -180,32 +199,49 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 	var segment := -1
 	var nearest := Vector2.ZERO
 	var distance := INF
-	for i in range(1, path.size()):
-		var p := Geometry2D.get_closest_point_to_segment(here, path[i - 1], path[i])
-		var d := here.distance_to(p)
-		var arc: float = _cum[i - 1] + path[i - 1].distance_to(p)
-		# На самопересечении предпочитаем прежнюю ветвь, но телепорт/уход с пути может выбрать другую.
-		var score := d + minf(absf(arc - _progress) * 0.025, 3.0)
-		if score < distance:
-			distance = score
-			segment = i
-			nearest = p
-	if distance > 24.0 and _reroute_timer <= 0.0:
+	for block in maxi(1, _blocks.size()):
+		if not _blocks.is_empty():
+			var box := _blocks[block]
+			if here.distance_squared_to(here.clamp(box.position, box.end)) > distance * distance:
+				continue
+		var first := block * SEARCH_BLOCK + 1
+		var end := mini(path.size(), first + SEARCH_BLOCK) if not _blocks.is_empty() else path.size()
+		for i in range(first, end):
+			var a := path[i - 1]
+			var p := Geometry2D.get_closest_point_to_segment(here, a, path[i])
+			var arc: float = _cum[i - 1] + a.distance_to(p)
+			# At intersections prefer the current branch, unless another is clearly closer.
+			var score := here.distance_to(p) + minf(absf(arc - _progress) * 0.025, 3.0)
+			if score < distance:
+				distance = score
+				segment = i
+				nearest = p
+	if distance > 24.0 and _reroute_timer <= 0.0 and _search_task == -1:
 		_rebuild(here, at.y)
 		return
-	var line := mesh as ImmediateMesh
-	line.clear_surfaces()
 	if segment == -1 or distance > REACH:
+		mesh = null
+		_painted_at = Vector3.INF
 		return
 	var start: float = _cum[segment - 1] + path[segment - 1].distance_to(nearest)
 	_progress = start
 	# После перехода на последний участок ближайшая старая дорожная точка уже не должна тянуть назад.
-	if _road_last >= 0 and segment > _road_last and _reroute_timer <= 0 and distance > 6.0:
+	if _road_last >= 0 and segment > _road_last and _reroute_timer <= 0 and distance > 6.0 and _search_task == -1:
 		_rebuild(here, at.y)
 		return
 	_check_direction(here, nearest, start)
 	if not draw_line:
 		return
+	var obstacle_revision := _heights.obstacles.revision if _heights.obstacles != null else -1
+	if obstacle_revision != _painted_obstacles:
+		_checked.clear()
+		_levels.clear()
+		_painted_at = Vector3.INF
+		_painted_obstacles = obstacle_revision
+	if _painted_at.is_finite() and _painted_at.distance_squared_to(at) < REDRAW_STEP * REDRAW_STEP and _painted_wrong == 0.0 and _wrong == 0.0:
+		return
+	_painted_at = at
+	_painted_wrong = _wrong
 	var vertices := PackedVector3Array()
 	var colors := PackedColorArray()
 	var ground := at.y + 0.25
@@ -237,9 +273,11 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 				_checked[i] = c1
 				_levels[i] = next_ground
 		if next_ground == INF:
+			mesh = null
+			_painted_at = Vector3.INF
 			if _reroute_timer <= 0.0:
 				# препятствие на дороге — пересобрать граф; на подходе вне дороги хватит нового подхода по свежему снимку
-				_rebuild(here, at.y, i > _road_first and i <= _road_last, true)
+				_rebuild(here, at.y, i > _road_first and i <= _road_last)
 			return # не продолжаем рисовать сквозь обновившееся препятствие
 		var reference := maxf(ground, next_ground)
 		if on_road:
@@ -250,12 +288,15 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 		if c1 - start >= REACH:
 			break
 	if vertices.is_empty():
+		mesh = null
 		return
-	line.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in vertices.size():
-		line.surface_set_color(colors[i])
-		line.surface_add_vertex(vertices[i])
-	line.surface_end()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var line := ArrayMesh.new()
+	line.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh = line
 
 func can_arrive(at: Vector3) -> bool:
 	if _goal.get("kind") != "marker": return true
@@ -367,18 +408,18 @@ func _check_direction(here: Vector2, nearest: Vector2, start: float) -> void:
 ## Точка маршрута через dist метров вперёд от дуги s
 func _ahead(s: float, dist: float) -> Vector2:
 	var target := s + dist
-	for i in range(1, path.size()):
-		if _cum[i] >= target:
-			var span: float = _cum[i] - _cum[i - 1]
-			var t := 0.0 if span <= 0.0 else (target - _cum[i - 1]) / span
-			return path[i - 1].lerp(path[i], t)
-	return path[path.size() - 1]
+	var i := maxi(1, _cum.bsearch(target))
+	if i >= path.size():
+		return path[-1]
+	var span: float = _cum[i] - _cum[i - 1]
+	var t := 0.0 if span <= 0.0 else (target - _cum[i - 1]) / span
+	return path[i - 1].lerp(path[i], t)
 
 ## Only one worker exists. A newer goal/revision supersedes its result without blocking a frame.
-func _request_search(at: Vector2, feet: float, recheck_graph := false, fresh := false) -> void:
+func _request_search(at: Vector2, feet: float, recheck_graph := false) -> void:
 	var revision := _network_revision()
 	if _search_task != -1 and _search_serial == _serial and _search_revision == revision: return
-	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial, recheck_graph=recheck_graph, fresh=fresh}
+	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial, recheck_graph=recheck_graph}
 	if _search_task != -1:
 		_search_roads.cancelled = true
 		return
@@ -388,14 +429,7 @@ func _start_search() -> void:
 	var request := _request
 	_request = {}
 	var reuse: bool = roads != null and _revision == request.revision and not request.recheck_graph
-	var h: Heightfield
-	if reuse and not request.get("fresh", false) and _snapshot != null and _snapshot_revision == request.revision 			and _snapshot_at.distance_to(request.at) < SNAPSHOT_REUSE:
-		h = _snapshot # снимок только читается, рабочий поток один
-	else:
-		h = Snapshot.capture(_heights, not reuse)
-		_snapshot = h
-		_snapshot_at = request.at
-		_snapshot_revision = request.revision
+	var h := Snapshot.capture(_heights, not reuse)
 	var search := Roads.new()
 	_search_roads = search
 	_search_revision = request.revision
@@ -405,6 +439,7 @@ func _start_search() -> void:
 		search.points = roads.points
 		search.links = roads.links
 		search.levels = roads.levels
+		search._cells = roads._cells
 		search._node_keys = roads._node_keys
 		search._edges = roads._edges
 		search._components = roads._components

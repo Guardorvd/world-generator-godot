@@ -29,8 +29,8 @@ var _queue: Array[Vector2i] = []   # нужные куски, которых е�
 var _checked_at := Vector2.INF
 var _redo: Array[Vector2i] = []   # 13.9: загруженные куски закреплённой области, пересчитать поверх старых
 var _stale := {}                  # куски, чей расчёт начат до закрепления: после него пересчитать снова
-## по куску на два ядра: главному потоку и растительности остаются свои
-var _task_limit := clampi(OS.get_processor_count() / 2, 1, TASKS)
+## Runtime jobs compete with physics and the vegetation workers; preload uses its own group.
+var _task_limit := clampi(OS.get_processor_count() / 6, 1, TASKS)
 var _cpu := preload("res://scripts/core/byte_lru.gd").new()
 var _cpu_lock := Mutex.new()
 var _cpu_epoch := 0

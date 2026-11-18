@@ -133,6 +133,7 @@ var _grass_low := Vector3.INF   # 14.4: границы раскладки тра
 var _grass_high := -Vector3.INF
 var grass_buf: PackedFloat32Array
 var carpet: GroundCarpet           # 14.11.2026: дернина у игрока (null — выключена)
+var _carpet_uploaded_last := false
 var carpet_enabled := true         # до setup: false — прежний вид без дернины (A/B в meadow_look)
 var last_fill := Vector2.INF
 var last_trees := Vector2.INF
@@ -688,7 +689,12 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		return true
 	var uploaded := false
 	if carpet != null:
-		uploaded = carpet.update(p, dt, _road_revision, allow_upload and (frame_budget == null or frame_budget.allows_work()))
+		var may_work: bool = frame_budget == null or frame_budget.allows_work()
+		var details_ready := not _present.is_empty() or (_task != -1 and WorkerThreadPool.is_task_completed(_task))
+		var yield_to_vegetation := _carpet_uploaded_last and (details_ready or not _pending.is_empty())
+		uploaded = carpet.update(p, dt, _road_revision, may_work, allow_upload and not yield_to_vegetation)
+		if allow_upload and may_work:
+			_carpet_uploaded_last = uploaded
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
 		WorkerThreadPool.wait_for_task_completion(_tree_task)
 		_tree_task = -1
@@ -959,7 +965,7 @@ func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float
 	_fill_lead = lead
 	_detail_epoch = epoch
 	_reserve_details(lead)
-	_fill_grass(px, pz, _detail_snapshot() if snapshot.is_empty() else snapshot)
+	_fill_grass(px, pz, _detail_snapshot() if snapshot.is_empty() else snapshot, immediate)
 	var frames := {-1: snapshots.prepare(-1, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, clock, immediate)}
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
@@ -1768,7 +1774,7 @@ static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: f
 	buf[o + 11] = z
 
 
-func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
+func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}, loading := true) -> void:
 	if snapshot.is_empty(): snapshot = _detail_snapshot()
 	placement.regions = snapshot.regions
 	var w := world
@@ -1815,7 +1821,9 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	_prepare_open_cache()
 	var j0 := maxi(0, floori(scan_low.y))
 	var j1 := mini(w.H - 1, ceili(scan_high.y))
-	var bands := clampi(OS.get_processor_count() / 3, 1, SCAN_BANDS_MAX) if j1 >= j0 else 0
+	# During play physics shares the CPU with terrain, trees and carpet jobs.
+	var band_limit := SCAN_BANDS_MAX if loading else maxi(1, OS.get_processor_count() / 6)
+	var bands := clampi(OS.get_processor_count() / 3, 1, mini(SCAN_BANDS_MAX, band_limit)) if j1 >= j0 else 0
 	if scan_bands > 0 and bands > 0:
 		bands = scan_bands
 	while _scan_ctx.size() < bands:

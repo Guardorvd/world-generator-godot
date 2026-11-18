@@ -19,10 +19,13 @@ const PALETTE := [
 enum Line { RIVER, TRAIL, ROAD, BIKE_TRAIL }
 
 var world: WorldData
+var atlas_texture: ImageTexture
 var tiles := {}
 var strokes: Array[PackedVector2Array] = [PackedVector2Array(), PackedVector2Array(), PackedVector2Array(), PackedVector2Array()]
 var settlements: Array[Dictionary] = []
 var pending := false
+var feature_revision := 0
+var tile_revision := 0
 var park := false
 var _plan_rect: Rect2i
 var _base_biomes: PackedByteArray
@@ -36,7 +39,10 @@ var _outer_trails: Array
 var _outer_settlements: Array
 var _region_count := -1
 var _visible_bins := Rect2i()
+var _keys: Array[Vector2i] = []
 var _was_using_outer := false
+var _outer_version := -1
+var _outer_chunks := -1
 var _line_id := 0
 
 
@@ -47,6 +53,7 @@ func _init(w: WorldData, source = null) -> void:
 	_base_lakes = w.lake
 	_base_heights = w.h
 	if source != null:
+		atlas_texture = source.atlas_texture
 		_base_bins = source._base_bins
 		_base_textures = source._base_textures
 		_region_images = source._region_images
@@ -61,14 +68,44 @@ func _init(w: WorldData, source = null) -> void:
 		_index_settlement(_base_bins, place.x, place.y, place.name)
 
 
+func prepare_atlas() -> void:
+	var painter := Grid.fast_grid()
+	if painter == null or world.W <= 0 or world.H <= 0:
+		return
+	var rgb: PackedByteArray = painter.PaintAtlas(world.W * world.H, _base_biomes, _base_lakes, _palette_bytes())
+	atlas_texture = ImageTexture.create_from_image(Image.create_from_data(world.W, world.H, false, Image.FORMAT_RGB8, rgb))
+
+
+func update_atlas_lines(view: Rect2) -> bool:
+	var bins := _bin_rect(view.grow(8.0))
+	if bins == _visible_bins:
+		return false
+	_visible_bins = bins
+	_collect_features(bins)
+	return true
+
+
+func outer_changed() -> bool:
+	return _was_using_outer and world.outer != null and (_outer_version != world.outer.ledger_version or _outer_chunks != world.outer.chunks.size())
+
+
+func uses_outer() -> bool:
+	return _was_using_outer
+
+
 ## Вызывать и на месте: соседние области могут приехать из потока после остановки.
-func update(view: Rect2, tile_budget := 0) -> bool:
+func update(view: Rect2, tile_budget := 0, allow_outer := true) -> bool:
 	var padded_view := view.grow(8.0)
 	var visible_bins := _bin_rect(padded_view)
-	var features_changed := visible_bins != _visible_bins
-	var uses_outer := world.outer != null and not Rect2(Vector2.ZERO, Vector2(_plan_rect.size) * TILE).encloses(padded_view)
+	var bins_changed := visible_bins != _visible_bins
+	var features_changed := bins_changed
+	var uses_outer := allow_outer and world.outer != null and not Rect2(Vector2.ZERO, Vector2(_plan_rect.size) * TILE).encloses(padded_view)
 	if not uses_outer and not _was_using_outer and not pending and not features_changed:
 		return false
+	if not uses_outer and _was_using_outer and not _outer_bins.is_empty():
+		_outer_bins.clear()
+		_region_count = -1
+		features_changed = true
 	_was_using_outer = uses_outer
 	var tiles_changed := false
 	var work := 0
@@ -76,6 +113,8 @@ func update(view: Rect2, tile_budget := 0) -> bool:
 	var regions: Dictionary = {}
 	var chunks: Dictionary = {}
 	if uses_outer:
+		_outer_version = world.outer.ledger_version
+		_outer_chunks = world.outer.chunks.size()
 		var ledger := world.outer.get_ledger()
 		regions = ledger.get("regions", {})
 		chunks = world.outer.chunks
@@ -86,14 +125,14 @@ func update(view: Rect2, tile_budget := 0) -> bool:
 			tiles_changed = true
 	# 18.11.2026: ближние к середине окна участки первыми, в бюджет идут только собранные картинки (готовая текстура
 	# плана из _base_textures почти ничего не стоит) — при бюджете середина карты не ждёт края
-	var keys: Array[Vector2i] = []
-	for y in range(visible_bins.position.y, visible_bins.end.y):
-		for x in range(visible_bins.position.x, visible_bins.end.x):
-			keys.append(Vector2i(x, y))
-	if tile_budget > 0:
+	if bins_changed:
+		_keys.clear()
+		for y in range(visible_bins.position.y, visible_bins.end.y):
+			for x in range(visible_bins.position.x, visible_bins.end.x):
+				_keys.append(Vector2i(x, y))
 		var mid := view.get_center() / SPAN - Vector2.ONE * 0.5
-		keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return Vector2(a).distance_squared_to(mid) < Vector2(b).distance_squared_to(mid))
-	for key: Vector2i in keys:
+		_keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return Vector2(a).distance_squared_to(mid) < Vector2(b).distance_squared_to(mid))
+	for key: Vector2i in _keys:
 		if tile_budget > 0 and work >= tile_budget:
 			pending = pending or uses_outer or not tiles.has(key)
 			continue
@@ -105,11 +144,15 @@ func update(view: Rect2, tile_budget := 0) -> bool:
 	if features_changed:
 		_visible_bins = visible_bins
 		_collect_features(visible_bins)
+		feature_revision += 1
+	if tiles_changed:
+		tile_revision += 1
 	return tiles_changed or features_changed
 
 
 func release_view() -> void:
 	tiles.clear()
+	_keys.clear()
 	_visible_bins = Rect2i()
 	pending = false
 

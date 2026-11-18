@@ -97,6 +97,7 @@ var _published_forward := Vector2.INF
 var _started_clock := 0.0
 var _out: Array = []         # результат задачи: на слой — квадраты отсечения {buf, n, low, high}
 var _out_n := PackedInt32Array()
+var _present_layer := 0
 var _reset := false
 var _cuts: Array[Rect2] = []
 var _road_revision := -1
@@ -212,6 +213,7 @@ func finish() -> void:
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
+	_out.clear()
 
 
 func release() -> void:
@@ -240,7 +242,7 @@ func clear() -> void:
 
 ## Каждый кадр из VegetationLayer.update. Не блокирует: считает фоновая задача, главный поток только
 ## передаёт готовые буферы.
-func update(p: Vector2, dt: float, road_revision: int, may_work := true) -> bool:
+func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upload := true) -> bool:
 	stream.sample(p, maxf(dt, 0.000001), false)
 	if not _enabled:
 		return false
@@ -255,8 +257,16 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true) -> bool
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
-		_present()
-		return true
+		_present_layer = 0
+	if not _out.is_empty():
+		if _last == Vector2.INF or road_revision != _road_revision:
+			_out.clear()
+		elif may_upload:
+			# Near and far for one species are a pair. Spread different species over grants.
+			_present_next()
+			return true
+		else:
+			return false
 	var lead := stream.lead()
 	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
 			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision:
@@ -278,7 +288,9 @@ func build_now(p: Vector2, road_revision: int) -> void:
 		_publish_forward(_last_forward, true)
 	_begin(p, Vector2.ZERO, road_revision)
 	_job(p, Vector2.ZERO, _last_forward)
-	_present()
+	_present_layer = 0
+	while not _out.is_empty():
+		_present_next()
 
 
 func _publish_forward(forward: Vector2, force := false) -> void:
@@ -460,32 +472,37 @@ static func _thin_rear(part: PackedFloat32Array) -> PackedFloat32Array:
 	return kept
 
 
-func _present() -> void:
-	count = 0
-	for n in layers.size():
-		var entry: Dictionary = layers[n]
-		var buckets: Dictionary = _out[n]
-		# Квадраты, которых больше нет, — в запас; оставшиеся держат свой узел (та же ёмкость, буфер не пересоздаётся)
-		for sector: Vector2i in entry.nodes.keys():
-			if not buckets.has(sector):
-				_stash(entry, entry.nodes[sector])
-				entry.nodes.erase(sector)
-		for sector: Vector2i in buckets:
-			var bucket: Dictionary = buckets[sector]
-			if not entry.nodes.has(sector):
-				entry.nodes[sector] = _sector_node(entry)
-			var mm: MultiMesh = entry.nodes[sector].mm
-			var capacity: int = bucket.buf.size() / STRIDE
-			if mm.instance_count != capacity:
-				mm.visible_instance_count = 0
-				mm.instance_count = capacity
-			mm.buffer = bucket.buf
-			mm.visible_instance_count = bucket.n
-			# Травинки и ветер выходят за точки основания куртинок
-			mm.custom_aabb = AABB(bucket.low, bucket.high - bucket.low).grow(0.9)
-		entry.n = _out_n[n]
-		count += entry.n
-	_out = []
+func _present_next() -> void:
+	_present_one(_present_layer)
+	_present_one(_present_layer + 1)
+	_present_layer += 2
+	if _present_layer >= layers.size():
+		_out.clear()
+
+
+func _present_one(n: int) -> void:
+	var entry: Dictionary = layers[n]
+	var buckets: Dictionary = _out[n]
+	# Квадраты, которых больше нет, — в запас; оставшиеся держат свой узел (та же ёмкость, буфер не пересоздаётся)
+	for sector: Vector2i in entry.nodes.keys():
+		if not buckets.has(sector):
+			_stash(entry, entry.nodes[sector])
+			entry.nodes.erase(sector)
+	for sector: Vector2i in buckets:
+		var bucket: Dictionary = buckets[sector]
+		if not entry.nodes.has(sector):
+			entry.nodes[sector] = _sector_node(entry)
+		var mm: MultiMesh = entry.nodes[sector].mm
+		var capacity: int = bucket.buf.size() / STRIDE
+		if mm.instance_count != capacity:
+			mm.visible_instance_count = 0
+			mm.instance_count = capacity
+		mm.buffer = bucket.buf
+		mm.visible_instance_count = bucket.n
+		# Травинки и ветер выходят за точки основания куртинок
+		mm.custom_aabb = AABB(bucket.low, bucket.high - bucket.low).grow(0.9)
+	count += _out_n[n] - entry.n
+	entry.n = _out_n[n]
 
 
 ## Плитка (i, j): куртинки на сетке SUB × SUB с дрожанием, по видам. Пустой массив — травы здесь нет.

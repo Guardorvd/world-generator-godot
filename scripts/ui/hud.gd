@@ -39,6 +39,7 @@ void fragment() {
 """
 
 var world: WorldData
+var _compass_quest := {}
 var map_preview: Image
 var map_data: MapData
 var map_journal := Journal.new()
@@ -273,6 +274,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	_nearby.hide()
 	map_preview = map_image
 	map_data = MapData.new(w)
+	map_data.prepare_atlas()
 	map_journal = Journal.new()
 	explore = Exploration.new()
 	if journal_panel != null:
@@ -284,6 +286,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
+	_compass_quest = {}
 	bike_shown = false
 	view_mode = View.LIGHT
 	_revealed = false
@@ -314,6 +317,7 @@ func clear_world() -> void:
 	minimap.set_world(null)
 	visited = {}
 	goal = {}
+	_compass_quest = {}
 	quests = null
 	_summary_blocked = false
 	update_tracker()
@@ -482,10 +486,17 @@ func sync_minimap_places() -> void:
 	if world == null:
 		return
 	var list: Array[Dictionary] = []
-	for place: Dictionary in all_places():
-		if place.kind in ["peak", "site"] and is_open(place.key):
+	for id: String in _map_place_ids():
+		if not (id.begins_with("peak:") or id.begins_with("site:")):
+			continue
+		var place := world.place(id)
+		if not place.is_empty():
 			list.append({at = Vector2(place.x, place.y) * TILE, kind = place.kind})
 	minimap.set_places(list)
+
+
+func _map_place_ids() -> Dictionary:
+	return map_journal.read.merged(visited).merged(explore.revealed).merged(quests.known if quests != null else {})
 
 
 func _select_map_goal(place: Dictionary) -> void:
@@ -1012,18 +1023,20 @@ func set_player(x: float, z: float, y: float) -> void:
 	# стоит на месте и не крутит головой — карты и компас не перерисовываются каждый кадр
 	if x == px and z == pz and y == yaw:
 		return
+	var compass_changed := y != yaw or (not goal.is_empty() or not _compass_quest.is_empty())
 	px = x
 	pz = z
 	yaw = y
 	minimap.set_view(Vector2(x, z), y)
-	if compass.is_visible_in_tree():
+	if compass_changed and compass.is_visible_in_tree():
 		compass.queue_redraw()
 	if big_map.visible:
 		big_map.set_player(Vector2(x, z), y)
 
 
 func _sync_minimap_destinations() -> void:
-	minimap.set_destinations(goal, quest_place(), quest_color())
+	_compass_quest = quest_place()
+	minimap.set_destinations(goal, _compass_quest, quest_color())
 
 
 func set_clock(hour: float) -> void:
@@ -1121,7 +1134,7 @@ class Compass extends Control:
 		draw_colored_polygon(PackedVector2Array([Vector2(mid - 4, RULER - 5), Vector2(mid + 4, RULER - 5), Vector2(mid, RULER + 1)]), HudStyle.MINT)
 		# занято: градусы посередине; расстояния не налезают на них и друг на друга
 		var taken: Array[Rect2] = [Rect2(mid - 25.0, ROW - 9.0, 50.0, 18.0)]
-		var quest := hud.quest_place()
+		var quest := hud._compass_quest
 		if not quest.is_empty():
 			_destination(quest, hud.quest_color(), true, taken)
 		if not hud.goal.is_empty():

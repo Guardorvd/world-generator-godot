@@ -320,12 +320,16 @@ func _run() -> void:
 				road_pts.append(Vector2(p.x, p.y) * GameConfig.TILE)
 			break
 	road_pts.append(Vector2(1040, 240))
+	var mini_draws := {terrain = 0, route = 0}
+	hud.minimap._lines_canvas.draw.connect(func() -> void: mini_draws.terrain += 1)
+	hud.minimap._route_canvas.draw.connect(func() -> void: mini_draws.route += 1)
 	hud.minimap.set_route(road_pts, 1, road_pts.size() - 2)
 	var icons: Array[Dictionary] = [{at = Vector2(470, 470), kind = "peak"}, {at = Vector2(474, 472), kind = "site"},
 		{at = Vector2(600, 560), kind = "site"}]
 	hud.minimap.set_places(icons)
 	await process_frame
 	_check(hud.minimap._route.size() > 3 and not hud.minimap._fits(hud.minimap.world_to_map(Vector2(1040, 240)), 8.0), "маршрут на мини-карте, цель за краем круга")
+	_check(mini_draws.terrain == 0 and mini_draws.route > 0, "a new minimap route retains the road and river geometry")
 	await _shot("hud_minimap_route")
 	hud.minimap.set_route(PackedVector2Array())
 	hud.set_goal(Hud.marker_goal(Vector2(139, 122)))
@@ -337,6 +341,13 @@ func _run() -> void:
 	_check(hud.big_map._fog != null and hud.big_map._fog.get_pixelv(Vector2i(Vector2(512, 512) / hud.big_map.FOG_CELL)).a < 0.1
 		and hud.big_map._fog.get_pixel(0, 0).a > 0.9, "личная карта: у пути открыто, вдали бумага")
 	await _shot("hud_big_map")
+	var atlas_draws := {track = 0}
+	hud.big_map._track.draw.connect(func() -> void: atlas_draws.track += 1)
+	hud.set_player(515, 512, 0.6)
+	await process_frame
+	await process_frame
+	_check(atlas_draws.track == 0 and is_equal_approx(hud.big_map._player_arrow.rotation, -0.6),
+		"moving or turning the atlas player arrow retains the trip geometry")
 	hud.set_map_visible(false)
 	await _journal_checks()
 	await _panel_shots(world)

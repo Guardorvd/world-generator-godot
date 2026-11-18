@@ -36,12 +36,16 @@ var _ring: Array[Dictionary] = []   # над картой, под ней, сле
 ## Замок защищает публикацию ссылки; _load_fields/_evict копируют словари перед записью.
 const SETTLEMENT_REACH := 32.0 # м: радиус отбора поселений для проверки стен
 var _settlement_cells := {}
-var settlements: Array = []:
+var _settlements: Array = []
+var settlements: Array:
+	get:
+		return _settlements
 	set(value):
-		if is_same(settlements, value):
+		if is_same(_settlements, value):
 			return
-		settlements = value
+		_settlements = value
 		_settlement_cells = index_collision_places(value)
+var ledger_version := 0
 var _ledger := {}
 var _lock := Mutex.new()
 
@@ -164,8 +168,15 @@ static func _water_sources(halo: Rect2i, rect: Rect2i, ocean: PackedByteArray, l
 func set_ledger(ledger: Dictionary) -> void:
 	_lock.lock()
 	_ledger = ledger
+	ledger_version += 1
 	_lock.unlock()
 	settlements = ledger.get("settlements", [])
+
+
+## The ledger replaces both objects together; published place records are read-only.
+func share_collision_places(source: OuterLand) -> void:
+	_settlements = source._settlements
+	_settlement_cells = source._settlement_cells
 
 
 func collision_settlements(x: float, z: float) -> Array:

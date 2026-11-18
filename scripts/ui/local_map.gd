@@ -1,13 +1,6 @@
 extends Control
-## Локальная карта с севером сверху. Все слои внутри одного круглого окна:
-## новые линии (трек, маршрут) используют ту же проекцию и обрезку, что дороги.
-##
-## 18.11.2026, цена кадра: подложка (участки, дороги, реки, точки поселений) рисуется в SubViewport вдвое больше
-## круга вокруг опорной точки _anchor и перерисовывается, только когда игрок отошёл от неё дальше SHIFT_M или пришли
-## новые участки. Каждый кадр меняется лишь сдвиг выборки в шейдере маски (view_offset) и верхний слой _marks
-## (стрелка игрока, велосипед, цели, подпись, легенда) — несколько кругов и строк. Раньше всё окно со всеми линиями
-## и сглаживанием перерисовывалось и заново рендерилось каждый кадр, пока игрок двигался или поворачивался.
-## Новые участки строятся не больше TILE_BUDGET за кадр: на скорости рывок от разом собранных картинок пропал.
+## North-up map. The viewport has room to slide the circular window over cached
+## terrain, linework and route layers; the player arrow only updates its transform.
 
 const MapData = preload("res://scripts/ui/local_map_data.gd")
 const Paint = preload("res://scripts/ui/map_paint.gd")
@@ -20,6 +13,8 @@ const MAP_CENTER := Vector2.ONE * (MAP_SIZE * 0.5)
 const RADIUS_M := 180.0
 const PIXELS_PER_METER := CENTER.x / RADIUS_M
 const SHIFT_M := 80.0     # дальше от опорной точки — подложка перерисовывается вокруг игрока (запас окна 180 м)
+const OUTER_POLL := 0.125
+const MARK_STEP := 0.5 / PIXELS_PER_METER
 const TILE_BUDGET := 1    # новых участков подложки за кадр
 const SCALE_M := 50.0
 const INK := Color("#344d56")
@@ -31,7 +26,13 @@ const BIKE := Color("#276582")
 const RIM_INSET := 17.0
 
 var _viewport: SubViewport
-var _canvas: Node2D
+var _surface: Node2D
+var _tiles_canvas: Node2D
+var _lines_canvas: Node2D
+var _route_canvas: Node2D
+var _places_canvas: Node2D
+var _arrow: Node2D
+var _legend: Control
 var _face: TextureRect
 var _mask: ShaderMaterial
 var _marks: Control
@@ -39,6 +40,8 @@ var _data: MapData
 var _position := Vector2.INF
 var _anchor := Vector2.INF
 var _heading := 0.0
+var _marks_at := Vector2.INF
+var _outer_poll := 0.0
 var _bike := Vector2.INF
 var _goal := Vector2.INF
 var _quest := Vector2.INF
@@ -48,7 +51,7 @@ var _route := PackedVector2Array()  # путь навигации, мировы�
 var _route_road := Vector2i(0, -1)
 var _places: Array[Dictionary] = []  # известные места для значков: {at — м, kind: peak | site}
 const PLACE_GAP := 20.0   # px: ближе друг к другу и к поселениям значки не ставятся — без мешанины
-const PLACE_MAX := 14     # значков на подложке (в круге видно примерно четверть)  # отрезки пути по дорогам (NavigationLine._road_first.._road_last), остальное — подходы
+const PLACE_MAX := 14
 
 
 func _ready() -> void:
@@ -58,9 +61,24 @@ func _ready() -> void:
 	_viewport.disable_3d = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(_viewport)
-	_canvas = Node2D.new()
-	_viewport.add_child(_canvas)
-	_canvas.draw.connect(_draw_map)
+	var background := Node2D.new()
+	background.draw.connect(func() -> void: background.draw_rect(Rect2(Vector2.ZERO, MAP_CENTER * 2.0), MapData.EMPTY))
+	_viewport.add_child(background)
+	_surface = Node2D.new()
+	_surface.scale = Vector2.ONE * PIXELS_PER_METER
+	_viewport.add_child(_surface)
+	_tiles_canvas = Node2D.new()
+	_tiles_canvas.draw.connect(_draw_tiles)
+	_surface.add_child(_tiles_canvas)
+	_lines_canvas = Node2D.new()
+	_lines_canvas.draw.connect(_draw_lines)
+	_surface.add_child(_lines_canvas)
+	_route_canvas = Node2D.new()
+	_viewport.add_child(_route_canvas)
+	_route_canvas.draw.connect(_draw_route)
+	_places_canvas = Node2D.new()
+	_viewport.add_child(_places_canvas)
+	_places_canvas.draw.connect(_draw_map_places)
 
 	var inset := Vector2.ONE * ((DIAMETER - VIEW_SIZE) * 0.5)
 	_face = TextureRect.new()
@@ -81,6 +99,16 @@ func _ready() -> void:
 	_marks.size = Vector2.ONE * VIEW_SIZE
 	_marks.draw.connect(_draw_marks)
 	add_child(_marks)
+	_arrow = Node2D.new()
+	_arrow.position = inset + CENTER
+	_arrow.rotation = -_heading
+	_arrow.draw.connect(func() -> void: Paint.player(_arrow, Vector2.ZERO, 0.0))
+	add_child(_arrow)
+	_legend = Control.new()
+	_legend.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_legend.position = inset
+	_legend.draw.connect(_draw_legend)
+	add_child(_legend)
 	visibility_changed.connect(_on_visibility_changed)
 
 
@@ -88,6 +116,7 @@ func set_world(world: WorldData, knows := Callable(), source: MapData = null) ->
 	_data = MapData.new(world, source) if world != null else null
 	_knows = knows
 	_position = Vector2.INF
+	_marks_at = Vector2.INF
 	_anchor = Vector2.INF
 	_bike = Vector2.INF
 	_goal = Vector2.INF
@@ -99,13 +128,19 @@ func set_world(world: WorldData, knows := Callable(), source: MapData = null) ->
 
 
 func set_view(at: Vector2, heading: float) -> void:
-	if at != _position or heading != _heading:
-		_position = at
+	if heading != _heading:
 		_heading = heading
-		if _anchor.is_finite() and _position.distance_to(_anchor) > SHIFT_M:
-			refresh()
-		else:
-			_slide()
+		if _arrow != null:
+			_arrow.rotation = -heading
+	if at == _position:
+		return
+	_position = at
+	if not is_visible_in_tree():
+		return
+	if _anchor.is_finite() and _position.distance_squared_to(_anchor) <= SHIFT_M * SHIFT_M:
+		_slide()
+	if not _marks_at.is_finite() or _marks_at.distance_squared_to(at) >= MARK_STEP * MARK_STEP:
+		_redraw_marks()
 
 
 func set_destinations(goal: Dictionary, quest: Dictionary, quest_color: Color) -> void:
@@ -123,9 +158,10 @@ func set_destinations(goal: Dictionary, quest: Dictionary, quest_color: Color) -
 func set_route(points: PackedVector2Array, road_first := 0, road_last := -1) -> void:
 	if points == _route and _route_road == Vector2i(road_first, road_last):
 		return
-	_route = points.duplicate()
+	_route = points
 	_route_road = Vector2i(road_first, road_last)
-	if _anchor.is_finite():
+	if _anchor.is_finite() and is_visible_in_tree():
+		_route_canvas.queue_redraw()
 		_render()
 
 
@@ -134,7 +170,8 @@ func set_places(places: Array[Dictionary]) -> void:
 	if places == _places:
 		return
 	_places = places
-	if _anchor.is_finite():
+	if _anchor.is_finite() and is_visible_in_tree():
+		_places_canvas.queue_redraw()
 		_render()
 
 
@@ -144,47 +181,58 @@ func set_bike(at: Vector2) -> void:
 		_redraw_marks()
 
 
-func _process(_delta: float) -> void:
-	if _data == null or not _position.is_finite() or not is_visible_in_tree():
+func _process(delta: float) -> void:
+	if _data == null or not _position.is_finite():
 		return
-	var moved := not _anchor.is_finite() or _position.distance_to(_anchor) > SHIFT_M
+	var moved := not _anchor.is_finite() or _position.distance_squared_to(_anchor) > SHIFT_M * SHIFT_M
+	_outer_poll -= delta
+	if not moved and not _data.pending and not _data.outer_changed() and (_outer_poll > 0.0 or not _data.uses_outer()):
+		return
+	_outer_poll = OUTER_POLL
 	if moved:
 		_anchor = _position
-	var half := MAP_CENTER.x / PIXELS_PER_METER
-	if _data.update(Rect2(_anchor - Vector2.ONE * half, Vector2.ONE * half * 2.0), TILE_BUDGET) or moved:
-		_render()
+		_surface.position = _to_canvas(Vector2.ZERO)
+		_route_canvas.queue_redraw()
 		_slide()
+	var half := MAP_CENTER.x / PIXELS_PER_METER
+	var old_features := _data.feature_revision
+	var old_tiles := _data.tile_revision
+	var changed := _data.update(Rect2(_anchor - Vector2.ONE * half, Vector2.ONE * half * 2.0), TILE_BUDGET)
+	if moved or _data.tile_revision != old_tiles:
+		_tiles_canvas.queue_redraw()
+	if moved or _data.feature_revision != old_features:
+		_lines_canvas.queue_redraw()
+		_places_canvas.queue_redraw()
+		_redraw_marks()
+	if changed or moved:
+		_render()
 
 
-## Подложку — перерисовать (новый мир, показ, сдвиг дальше SHIFT_M); опорная точка переставится в _process
 func refresh() -> void:
 	_anchor = Vector2.INF
-	if _canvas != null and is_visible_in_tree():
-		_process(0.0)
+	_arrow.visible = _data != null and _position.is_finite()
+	if is_visible_in_tree():
 		_redraw_marks()
 
 
 func _render() -> void:
-	_canvas.queue_redraw()
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-## Сдвиг круга по готовой подложке и верхний слой — то, что меняется каждый кадр
 func _slide() -> void:
-	if _mask == null or not _anchor.is_finite() or not _position.is_finite():
-		_redraw_marks()
-		return
 	var corner := MAP_CENTER - CENTER + (_position - _anchor) * PIXELS_PER_METER
 	_mask.set_shader_parameter("view_offset", corner / MAP_SIZE)
-	_redraw_marks()
 
 
 func _redraw_marks() -> void:
 	if _marks != null and is_visible_in_tree():
+		_marks_at = _position
+		_arrow.visible = _data != null and _position.is_finite()
 		_marks.queue_redraw()
 
 
 func _on_visibility_changed() -> void:
+	set_process(is_visible_in_tree())
 	if is_visible_in_tree():
 		refresh()
 	elif _data != null:
@@ -216,18 +264,25 @@ func _draw() -> void:
 	draw_circle(center, CENTER.x + 1.5, HudStyle.PAPER, true, -1.0, true)
 
 
-func _draw_map() -> void:
-	_canvas.draw_rect(Rect2(Vector2.ZERO, MAP_CENTER * 2.0), MapData.EMPTY)
+func _draw_tiles() -> void:
+	if _data != null:
+		Paint.tiles(_tiles_canvas, _data, false)
+
+
+func _draw_lines() -> void:
+	if _data != null:
+		Paint.lines(_lines_canvas, _data, PIXELS_PER_METER, false)
+
+
+func _draw_map_places() -> void:
 	if _data == null or not _anchor.is_finite():
 		return
-	Paint.surface(_canvas, _data, _to_canvas(Vector2.ZERO), PIXELS_PER_METER)
-	_draw_route()
 	var taken: Array[Vector2] = []
 	for place: Dictionary in _visible_settlements():
 		var at := _to_canvas(place.position)
 		taken.append(at)
-		_canvas.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
-		_canvas.draw_circle(at, 2.5, Color("#706387"), true, -1.0, true)
+		_places_canvas.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
+		_places_canvas.draw_circle(at, 2.5, Color("#706387"), true, -1.0, true)
 	_draw_places(taken)
 
 
@@ -249,21 +304,21 @@ func _draw_places(taken: Array[Vector2]) -> void:
 		shown += 1
 		if item[2] == "peak":
 			var tri := PackedVector2Array([at + Vector2(0, -5.5), at + Vector2(5, 3.5), at + Vector2(-5, 3.5)])
-			_canvas.draw_colored_polygon(tri, Color("#8a6a45"))
+			_places_canvas.draw_colored_polygon(tri, Color("#8a6a45"))
 			tri.append(tri[0])
-			_canvas.draw_polyline(tri, Color.WHITE, 1.2, true)
+			_places_canvas.draw_polyline(tri, Color.WHITE, 1.2, true)
 		else:
 			var diamond := PackedVector2Array([at + Vector2(0, -4.5), at + Vector2(4.5, 0), at + Vector2(0, 4.5), at + Vector2(-4.5, 0)])
-			_canvas.draw_colored_polygon(diamond, Color("#3f6f6a"))
+			_places_canvas.draw_colored_polygon(diamond, Color("#3f6f6a"))
 			diamond.append(diamond[0])
-			_canvas.draw_polyline(diamond, Color.WHITE, 1.2, true)
+			_places_canvas.draw_polyline(diamond, Color.WHITE, 1.2, true)
 
 
 ## Маршрут: дорожная часть пути идёт по тем же точкам участков, что и линии дорог подложки (граф навигации — вершины
 ## линий), поэтому её рисуем поверх дороги той же толщиной другим цветом — подсвечивается сама дорога. Подходы вне дорог
 ## — тонкий пунктир. Только отрезки в пределах подложки
 func _draw_route() -> void:
-	if _route.size() < 2:
+	if _route.size() < 2 or not _anchor.is_finite():
 		return
 	var area := Rect2(Vector2.ZERO, MAP_CENTER * 2.0).grow(8.0)
 	var road := PackedVector2Array()
@@ -271,7 +326,7 @@ func _draw_route() -> void:
 	var a := _to_canvas(_route[0])
 	for i in range(1, _route.size()):
 		var b := _to_canvas(_route[i])
-		if area.has_point(a) or area.has_point(b):
+		if area.intersects(Rect2(a, Vector2.ZERO).expand(b).grow(0.01)):
 			if i > _route_road.x and i <= _route_road.y:
 				road.append(a)
 				road.append(b)
@@ -280,17 +335,17 @@ func _draw_route() -> void:
 				off.append(b)
 		a = b
 	for i in range(0, off.size(), 2):
-		_canvas.draw_dashed_line(off[i], off[i + 1], ROUTE_EDGE, 2.0, 4.0, true, true)
+		_route_canvas.draw_dashed_line(off[i], off[i + 1], ROUTE_EDGE, 2.0, 4.0, true, true)
 	if road.is_empty():
 		return
 	var outer := 6.0
 	var inner := 4.0
-	_canvas.draw_multiline(road, ROUTE_EDGE, outer, true)
+	_route_canvas.draw_multiline(road, ROUTE_EDGE, outer, true)
 	for i in range(0, road.size(), 2):
-		_canvas.draw_circle(road[i], outer * 0.5, ROUTE_EDGE, true, -1.0, true)
-	_canvas.draw_multiline(road, ROUTE, inner, true)
+		_route_canvas.draw_circle(road[i], outer * 0.5, ROUTE_EDGE, true, -1.0, true)
+	_route_canvas.draw_multiline(road, ROUTE, inner, true)
 	for i in range(0, road.size(), 2):
-		_canvas.draw_circle(road[i], inner * 0.5, ROUTE, true, -1.0, true)
+		_route_canvas.draw_circle(road[i], inner * 0.5, ROUTE, true, -1.0, true)
 
 
 ## Поселения подложки на открытой земле
@@ -309,8 +364,6 @@ func _draw_marks() -> void:
 	if _data != null and _position.is_finite():
 		_draw_label()
 		_draw_markers()
-		Paint.player(_marks, CENTER, _heading)
-	_draw_legend()
 
 
 ## Подпись ближайшего знакомого поселения
@@ -384,14 +437,14 @@ func _rim(target: Vector2, color: Color, kind: String, distance: bool) -> void:
 
 
 func _draw_legend() -> void:
-	_marks.draw_circle(Vector2(CENTER.x, 16.0), 10.0, Color(1, 1, 1, 0.92), true, -1.0, true)
-	_text("С", Vector2(CENTER.x, 20.0), 13, false)
+	_legend.draw_circle(Vector2(CENTER.x, 16.0), 10.0, Color(1, 1, 1, 0.92), true, -1.0, true)
+	_text("С", Vector2(CENTER.x, 20.0), 13, false, _legend)
 	var y := VIEW_SIZE - 17.0
 	var half := SCALE_M * PIXELS_PER_METER * 0.5
 	var left := Vector2(CENTER.x - half, y)
 	var right := Vector2(CENTER.x + half, y)
-	_marks.draw_polyline(PackedVector2Array([left - Vector2(0, 3), left, right, right - Vector2(0, 3)]), INK, 1.4, true)
-	_text("50 м", Vector2(CENTER.x, y - 6.0), 11)
+	_legend.draw_polyline(PackedVector2Array([left - Vector2(0, 3), left, right, right - Vector2(0, 3)]), INK, 1.4, true)
+	_text("50 м", Vector2(CENTER.x, y - 6.0), 11, true, _legend)
 
 
 func _fits(at: Vector2, margin: float) -> bool:
@@ -402,9 +455,11 @@ static func _text_width(title: String, font_size: int) -> float:
 	return ThemeDB.fallback_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 
 
-func _text(title: String, at: Vector2, font_size: int, outline := true) -> void:
+func _text(title: String, at: Vector2, font_size: int, outline := true, canvas: Control = null) -> void:
+	if canvas == null:
+		canvas = _marks
 	var font := ThemeDB.fallback_font
 	at.x -= _text_width(title, font_size) * 0.5
 	if outline:
-		_marks.draw_string_outline(font, at, title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 4, Color(1, 1, 1, 0.95))
-	_marks.draw_string(font, at, title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, INK)
+		canvas.draw_string_outline(font, at, title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 4, Color(1, 1, 1, 0.95))
+	canvas.draw_string(font, at, title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, INK)

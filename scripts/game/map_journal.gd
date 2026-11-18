@@ -15,6 +15,7 @@ var bike := 0.0   # проехано на велосипеде, м
 var distance: float:   # весь путь (подпись на карте)
 	get: return foot + bike
 var revision := 0
+var completed_legs := 0
 var legs: Array[Dictionary] = []
 var current := PackedVector2Array()
 var current_bounds := Rect2()
@@ -80,6 +81,7 @@ func end_trip() -> void:
 	var points := _with_endpoint(current)
 	if points.size() > 1:
 		legs.append({points = points, bounds = current_bounds.expand(points[-1])})
+		completed_legs += 1
 		if legs.size() > MAX_LEGS:
 			legs.pop_front()
 		revision += 1
@@ -146,6 +148,7 @@ func restore(state: Dictionary) -> void:
 		for point in points:
 			bounds = bounds.expand(point)
 		legs.append({points = points, bounds = bounds})
+	completed_legs += legs.size() + 1
 	revision += 1
 
 

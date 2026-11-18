@@ -124,6 +124,8 @@ var _seat_id := ""             # лавка, на которой сидит иг
 var _fix_progress := 0.0       # 0..1: удержание «взаимодействия» у сломанного объекта задания
 var paused := false
 var show_map := false
+var _map_disabled_3d := false
+var _map_stream_origin := Vector2.INF
 var info_timer := 0.0
 const DISCOVERY_TICKS := 6   # такты физики между проверками открытий мест (10 раз в секунду)
 var _discovery_tick := 0
@@ -546,6 +548,7 @@ func _photo_capturing(on: bool) -> void:
 
 
 func _exit_tree() -> void:
+	_resume_map_rendering()
 	if day != null:
 		RenderingServer.global_shader_parameter_set("vegetation_night", 0.0)
 		VisualStyle.release() # окружение мира закрыто; глобальные параметры стиля нейтральны для других сцен
@@ -828,12 +831,25 @@ func toggle_map() -> void:
 	_close_settlement(false)
 	show_map = not show_map
 	hud.set_map_visible(show_map)
+	# The atlas fills the viewport with opaque paper.
+	if show_map and not get_viewport().disable_3d:
+		get_viewport().disable_3d = true
+		_map_disabled_3d = true
+		_map_stream_origin = Vector2(player.x, player.z)
+	else:
+		_resume_map_rendering()
 	# на карте курсор нужен, чтобы выбрать место; закрыли — снова осматриваемся мышью
 	if show_map or paused:
 		_dragging = false
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	else:
 		capture_mouse()
+
+
+func _resume_map_rendering() -> void:
+	if _map_disabled_3d:
+		get_viewport().disable_3d = false
+		_map_disabled_3d = false
 
 
 func travel_active() -> bool:
@@ -1425,14 +1441,19 @@ func _process(delta: float) -> void:
 	_apply_render_clock(alpha)
 	t0 = _tick_mark("frame_day", t0)
 
-	if ambient != null:
+	if ambient != null and not _map_disabled_3d:
 		ambient.update(delta, camera.global_position, day.sunlight)
-	var decor_deadline := stream_coordinator.update(pos)
+	var decor_deadline := -1
+	# While the atlas covers the world, defer visual uploads around the same spot.
+	# Resume normal streaming if the rider coasts far enough to need new collision data.
+	if not _map_disabled_3d or Vector2(pos.x, pos.z).distance_squared_to(_map_stream_origin) >= PlanTerrain.RECHECK * PlanTerrain.RECHECK:
+		decor_deadline = stream_coordinator.update(pos)
 	t0 = _tick_mark("frame_stream", t0)
-	local_mist.update(camera.global_position, delta)
-	if _ocean != null:
-		_ocean.position = Vector3(pos.x, 0.0, pos.z)
-	update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta, decor_deadline)
+	if not _map_disabled_3d:
+		local_mist.update(camera.global_position, delta)
+		if _ocean != null:
+			_ocean.position = Vector3(pos.x, 0.0, pos.z)
+		update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta, decor_deadline)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta

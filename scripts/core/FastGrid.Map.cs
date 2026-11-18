@@ -2,6 +2,24 @@ using System;
 
 public partial class FastGrid
 {
+	// The atlas uses a single indexed-color texture for the complete start plan.
+	public byte[] PaintAtlas(int cells, byte[] biome, byte[] lake, byte[] palette)
+	{
+		byte[] rgb = new byte[cells * 3];
+		int water = palette.Length - 6;
+		int empty = palette.Length - 3;
+		for (int i = 0, pixel = 0; i < cells; i++, pixel += 3)
+		{
+			int color = i < biome.Length ? biome[i] * 3 : empty;
+			if (i < lake.Length && lake[i] != 0)
+				color = water;
+			rgb[pixel] = palette[color];
+			rgb[pixel + 1] = palette[color + 1];
+			rgb[pixel + 2] = palette[color + 2];
+		}
+		return rgb;
+	}
+
 	// CPU copy of MapBaker._paint_rows. The seed, sampling order and RGB rounding
 	// are shared with the GDScript fallback, including water pixels on the flat map.
 	public Godot.Collections.Dictionary PaintMap(int width, int height, int scale, long seedValue,

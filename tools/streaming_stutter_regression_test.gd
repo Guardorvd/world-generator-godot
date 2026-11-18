@@ -1,6 +1,7 @@
 extends SceneTree
 const Source := preload("res://scripts/render/chunk_source.gd")
 const Budget := preload("res://scripts/core/cpu_cache_budget.gd")
+const Carpet := preload("res://scripts/render/ground_carpet.gd")
 const FrameBudget := preload("res://scripts/render/stream_frame_budget.gd")
 var failures := 0
 var checks := 0
@@ -29,6 +30,7 @@ func run() -> void:
 	await _test_cancellation()
 	_test_pool_and_slices()
 	_test_deadlines()
+	_test_carpet_publication()
 	print("streaming_stutter: ", checks, " checks, ", failures, " failures")
 	quit(1 if failures else 0)
 
@@ -170,3 +172,19 @@ func _test_deadlines() -> void:
 	check(within_budget.update(Vector3.ZERO) > Time.get_ticks_usec(), "unused publication time is available to decor")
 	within_budget.region_update = func(_x: float, _z: float) -> bool: return true
 	check(within_budget.update(Vector3.ZERO) == -1, "normal-priority region publication consumes the decor slot")
+
+
+func _test_carpet_publication() -> void:
+	var carpet := Carpet.new()
+	carpet._last = Vector2.ZERO
+	carpet._road_revision = 1
+	carpet._out = [{}, {}, {}, {}]
+	carpet._out_n = PackedInt32Array([1, 2, 3, 4])
+	for i in 4:
+		carpet.layers.append({n = 0, nodes = {}})
+	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false) and carpet.count == 0,
+		"carpet holds completed buffers without an upload grant")
+	check(carpet.update(Vector2.ZERO, 0.01, 1) and carpet.count == 3 and not carpet._out.is_empty(),
+		"one carpet grant presents one near/far pair")
+	check(carpet.update(Vector2.ZERO, 0.01, 1) and carpet.count == 10 and carpet._out.is_empty(),
+		"the next grant publishes the remaining pair")
