@@ -28,7 +28,15 @@ const SITE_SIZES := {
 	ruin = {half = Vector2(1.7, 1.7), flat = 3.0, height = 2.4},
 	keep = {half = Vector2(1.6, 1.6), flat = 2.4, height = 5.0},
 	stone = {half = Vector2(0.35, 0.25), flat = 3.0, height = 2.0},
+	bench = {half = Vector2(0.95, 0.3), flat = 1.6, height = 0.9},
+	pier = {half = Vector2(0.8, 0.8), flat = 3.0, height = 0.5},
 }
+## Постройки мест без твёрдого ящика: на вышку поднимаются, на лавку садятся, по причалу идут (настилы — Heightfield.add_site_decks)
+const NOT_SOLID := ["tower", "bench", "pier"]
+
+static func is_solid(kind: String) -> bool:
+	return kind not in NOT_SOLID
+
 
 ## Порядок моделей по категориям библиотеки (для линейки осмотра и отчётов).
 const MODEL_ORDER := [

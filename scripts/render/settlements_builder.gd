@@ -150,8 +150,10 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield, regional_p
 
 	var site_lods: Dictionary = catalog.site_lods
 	var legacy_m := {} if not site_lods.is_empty() else _legacy_site_materials(mat(Color8(0x3a, 0x2a, 0x1c)), opaque_mat)
-	_build_peaks(parent, w, heights, batch, legacy_m, site_lods, opaque_mat)
+	var repairables: Array = [] # лавки, туры и причалы: RepairLayer рисует сломанные и причалы, по лавкам садятся
+	_build_peaks(parent, w, heights, batch, legacy_m, site_lods, opaque_mat, repairables)
 	_build_sites(parent, w, heights, batch, legacy_m, {
+		repairables = repairables,
 		settlements = settlements_lib,
 		details = details_lib,
 		site_lods = site_lods,
@@ -168,7 +170,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield, regional_p
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
-	return {fires = fires, windows = opaque_mat, boards = boards}
+	return {fires = fires, windows = opaque_mat, boards = boards, repairables = repairables}
 
 
 static func _add_settlement_label(parent: Node3D, s: SettlementData, heights: Heightfield, yard: Dictionary) -> void:
@@ -621,7 +623,7 @@ static func _add_extra_plinth(batch: MeshBatch, extra_plinths: Dictionary, model
 
 
 static func _build_peaks(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary,
-		site_lods: Dictionary = {}, opaque_mat: Material = null) -> void:
+		site_lods: Dictionary = {}, opaque_mat: Material = null, repairables: Array = []) -> void:
 	var use_atlas := opaque_mat != null and site_lods.has("peak_cairn")
 	var peak_tints := SettlementModels.site_tints("peak_cairn", 0) if use_atlas else {}
 	var stone: Material = null if use_atlas else mat(Color8(0x8f, 0x88, 0x80))
@@ -641,8 +643,13 @@ static func _build_peaks(parent: Node3D, w: WorldData, heights: Heightfield, bat
 		var at := Transform3D(Basis(), Vector3(x, y, z))
 		if use_atlas:
 			var lods: Array = site_lods.peak_cairn
-			for level in lods.size():
-				batch.add_lod(lods[level], at, [opaque_mat], level, peak_tints, level <= 1)
+			var cairn_id := WorldData.place_id("peak", pk.x, pk.y)
+			var cairn_broken := Repairables.initially_broken(w.seed_num, cairn_id)
+			repairables.append({id = cairn_id, kind = "cairn", at = at, dynamic = cairn_broken, ok = lods, broken = site_lods.get("peak_cairn_broken", lods),
+				tints = peak_tints, box = {at = at.translated_local(Vector3(0, 1.2, 0)), half = Vector3(1.1, 1.3, 1.1)}})
+			if not cairn_broken: # целый тур — в общем батче, сломанный рисует RepairLayer (и меняет на целый после ремонта)
+				for level in lods.size():
+					batch.add_lod(lods[level], at, [opaque_mat], level, peak_tints, level <= 1)
 		else:
 			for k in PEAK_STONES.size():
 				batch.add(stone_meshes[k], at.translated_local(Vector3(0, PEAK_STONES[k].y, 0)), stone)
@@ -819,6 +826,19 @@ static func _outbuilding(batch: MeshBatch, at: Transform3D, drop: float, kind: S
 			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.35, 0.06, 0.06)), Vector3(-half.x + 0.45, 1.25, 0)), m.stone)
 
 
+## Постройки, чей пол стоит на верхнем углу земли (остальные — на нижнем); дома — всегда на верхнем
+const FLOOR_AT_HIGH := ["barn", "barn_loft", "boat_shed", "shelter"]
+
+
+## Высота пола постройки kind с центром (x, z) и поворотом yaw — как у модели в _build_sites; по ней стоят настилы
+## (Heightfield.add_site_decks) и причал
+static func hut_floor(heights: Heightfield, x: float, z: float, yaw: float, kind: String) -> float:
+	if kind == "tower":
+		return TowerLayout.base_height(heights, x, z, yaw)
+	var foot := footing(heights, Transform3D(Basis(Vector3.UP, yaw), Vector3(x, 0, z)), SettlementSets.half_of(kind))
+	return foot.y if (SettlementSets.is_home(kind) or kind in FLOOR_AT_HIGH) else foot.x
+
+
 ## Нижний и верхний угол земли под постройкой half (м), повёрнутой как at: Vector2(низ, верх)
 static func footing(heights: Heightfield, at: Transform3D, half: Vector2) -> Vector2:
 	var low := INF
@@ -862,10 +882,12 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 			var foot := footing(heights, at, half)
 			var low := foot.x
 			var high := foot.y
-			at.origin.y = high if (SettlementSets.is_home(u.t) or u.t in ["barn", "barn_loft", "boat_shed", "shelter"]) else low
+			at.origin.y = high if (SettlementSets.is_home(u.t) or u.t in FLOOR_AT_HIGH) else low
 			if u.t == "tower":
 				at.origin.y = TowerLayout.base_height(heights, at.origin.x, at.origin.z, u.a) # та же отметка, что у настилов лестницы
 			top = maxf(top, at.origin.y)
+			if u.t in ["bench", "pier"] and not site_lods.is_empty() and _site_repairable(cat.repairables, w, heights, s, u, at, site_lods, batch):
+				continue
 			if use_catalog and cat.settlements.has(u.t):
 				var entry: Dictionary = cat.settlements[u.t]
 				var outbuilding: bool = entry.get("category", "home") != "home"
@@ -934,6 +956,24 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 					batch.add(keep, at * Transform3D(Basis.from_scale(Vector3(1, h, 1)), Vector3(0, h * 0.5 - 0.3, 0)), old_stone)
 		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (TowerLayout.HEIGHT + 2.0 if s.type == "tower" else 7.0), s.y * TILE), WorldData.place_id("site", s.x, s.y))
 		parent.add_child(label)
+
+
+## Лавка или причал места s: запись для RepairLayer (cat.repairables). true — модель рисует слой, в батч её не добавлять:
+## причал (меши зависят от воды у домика) и сломанная лавка; целая лавка идёт в батч, слой только отдаёт её для посадки
+static func _site_repairable(list: Array, w: WorldData, heights: Heightfield, s: SiteData, u: HutData, at: Transform3D, site_lods: Dictionary, batch: MeshBatch) -> bool:
+	var id := WorldData.place_id("site", s.x, s.y)
+	var tints := SettlementModels.site_tints(u.t, u.v)
+	if u.t == "bench":
+		var broken := Repairables.initially_broken(w.seed_num, id)
+		list.append({id = id, kind = "bench", at = at, dynamic = broken, ok = site_lods.bench, broken = site_lods.bench_broken, tints = tints,
+			box = {at = at.translated_local(Vector3(0, 0.5, 0)), half = Vector3(0.95, 0.5, 0.45)}})
+		return broken
+	var foot := at
+	foot.origin.y = hut_floor(heights, at.origin.x, at.origin.z, u.a, "house_timber")
+	var m := FishingLayout.measure(heights, foot.origin, u.a)
+	list.append({id = id, kind = "pier", at = foot, dynamic = true, ok = RepairModels.pier_lods(m, false), broken = RepairModels.pier_lods(m, true), tints = tints,
+		box = {at = foot.translated_local(Vector3(0, m.dy + 0.5, FishingLayout.START + 1.5)), half = Vector3(1.1, 0.6, 1.6)}})
+	return true
 
 
 ## Каменный цоколь под постройкой size (м по x и z): от пола at на drop м вниз до нижнего угла

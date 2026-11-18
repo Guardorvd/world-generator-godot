@@ -112,7 +112,11 @@ var hour: float:        # час суток для инструментов и �
 var _hour_skip := 0.0    # остаток ручной перемотки, в игровых часах со знаком
 var day: DayCycle
 var _boards: Array = []  # доски маршрутов: {at (середина щита, повёрнута как щит), place}
-var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board", place}
+var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board" | "bench" | "repair", place, id}
+var repairs: Repairables       # что в мире починено (лавки, туры на вершинах, причалы); сохранение — поле "repairs"
+var repair_layer: RepairLayer  # модели починяемого: сломанное и причалы; отдаёт коробки наведения
+var _seat_id := ""             # лавка, на которой сидит игрок (камера ниже, ходьба заперта)
+var _fix_progress := 0.0       # 0..1: удержание «взаимодействия» у сломанного объекта задания
 var paused := false
 var show_map := false
 var info_timer := 0.0
@@ -235,7 +239,14 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
 	t = _mark("start_vegetation_setup_ms", t)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
-	heights.add_tower_stairs(world.sites) # 18.11.2026: на дозорные вышки можно подняться (настилы лестницы, TowerLayout)
+	repairs = Repairables.new(world.seed_num)
+	if not saved.is_empty():
+		repairs.restore(saved.get("repairs", {}))
+	repair_layer = RepairLayer.new()
+	repair_layer.name = "Repairs"
+	$Settlements.add_child(repair_layer)
+	repair_layer.setup(built.repairables, built.windows, repairs)
+	heights.add_site_decks(world.sites) # 18.11.2026: на вышки (TowerLayout) и причалы (FishingLayout) можно подняться и выйти
 	place_names = PlaceNames.new()
 	place_names.setup($Settlements, heights)
 	photo = PhotoCamera.new()
@@ -474,6 +485,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		garlands.sync_regions(regions.ledger.get("regions", {}), _garland_huts())
 	garlands.set_enabled(services.settings.tree_garlands)
 	interaction_service.quests = quests
+	interaction_service.is_broken = repairs.is_broken
 	interaction_service.world = world
 	interaction_service.all_places = hud.all_places
 	interaction_service.visited = hud.visited
@@ -580,6 +592,7 @@ func save_state() -> Dictionary:
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		atlas = hud.map_journal.save_state(),
 		explore = hud.explore.save_state(),
+		repairs = repairs.save_state(),
 		goal = hud.goal.get("key", ""),
 		lamp = bike_view.lamp_on(),
 		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour,
@@ -1162,6 +1175,14 @@ func _physics_process(dt: float) -> void:
 		fw = services.controls.bike_brake(fw, dt)
 	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
 	var jump := Input.is_action_just_pressed("jump")
+	if _seat_id != "":
+		# сидя: пошевелились или прыгнули — встаём, иначе ходьба заперта
+		if jump or absf(fw) > 0.2 or absf(st) > 0.2 or bike.riding or crash.active():
+			_stand_up()
+		else:
+			fw = 0.0
+			st = 0.0
+			jump = false
 	if _opening:
 		_opening_time += dt
 		fw = 1.0 if bike.speed < OpeningRoute.SPEED else (-1.0 if bike.speed > OpeningRoute.SPEED + 0.2 else 0.0)
@@ -1251,6 +1272,7 @@ func _physics_process(dt: float) -> void:
 			if not hud.explore.scanned.has(tower.id) and TowerLayout.on_deck(tower, player.x, player.z, player.feet):
 				_look_around(tower.id, Exploration.TOWER_RADIUS, "С вышки")
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
+	_tick_repair(dt)
 	_quest_progress(quests.tick(_quest_arrived))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
 	if reached != "":
@@ -1509,6 +1531,10 @@ func _update_hints() -> void:
 		"board": near = [[k.call("interact"), "Доска «%s»" % _target.place.name]]
 		"bike": near = [[k.call("interact"), "Сесть"]]
 		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
+		"bench": near = [[k.call("interact"), "Присесть"]]
+		"repair": near = [[k.call("interact"), ("Удерживайте: починить %s" if _fix_wanted(_target) else "Сломано: %s") % Repairables.KINDS[_target.repair_kind].title]]
+	if _seat_id != "":
+		near = [[k.call("interact"), "Встать"]]
 	# Внизу сводки — главное для того, чем игрок занят.
 	if bike.riding:
 		var hints := [[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]]
@@ -1553,6 +1579,8 @@ func _aim() -> Dictionary:
 	for b: Dictionary in _boards + (regions.boards if regions != null else []):
 		if eye.distance_squared_to(b.at.origin) < REACH * REACH:
 			items.append({kind = "board", at = b.at, half = Vector3(0.9, 0.48, 0.08), place = b.place})
+	if not bike.riding and repair_layer != null:
+		items.append_array(repair_layer.items(eye, REACH))
 	if _bag != null and _bag.visible and not bike.riding and eye.distance_squared_to(_bag.position) < REACH * REACH:
 		var at := _bag.transform
 		at.origin += at.basis * Vector3(0.0, 0.0, CargoBag.SIZE.z * 0.5)
@@ -1564,10 +1592,17 @@ func _aim() -> Dictionary:
 func interact() -> void:
 	_set_photo(false) # С фотоаппаратом у глаз — сначала убрать его.
 	_target = _aim()
+	if _seat_id != "":
+		_stand_up()
+		return
 	match _target.get("kind", ""):
 		"board": _open_settlement(_target.place)
 		"bike": toggle_bike()
 		"cargo": _quest_progress(quests.pick_up())
+		"bench": _sit(_target)
+		"repair":
+			if not _fix_wanted(_target):
+				hud.toast("Сломано: %s. Починить можно по заданию «Ремонт» с доски поселения" % Repairables.KINDS[_target.repair_kind].title)
 		_:
 			if bike.riding:
 				toggle_bike()
@@ -1612,6 +1647,52 @@ func _abandon_quest() -> void:
 
 func _quest_progress(text: String) -> void:
 	interaction_service.progress(text)
+
+## Лавка: сесть (камера ниже, взгляд вперёд по лавке, ходьба заперта до шага или прыжка). Только пешком, цела
+func _sit(item: Dictionary) -> void:
+	var seat := repair_layer.seat(item.id)
+	if seat.is_empty() or bike.riding or _opening or crash.active():
+		return
+	_set_photo(false)
+	player.x = seat.position.x
+	player.z = seat.position.z
+	player.vx = 0.0
+	player.vz = 0.0
+	player.feet = heights.surface_at(player.x, player.z, player.feet)
+	yaw = seat.yaw
+	_seat_id = item.id
+	camera_controller.seated = true
+	_snap()
+	hud.toast("Вы сели на лавку. Шаг или прыжок — встать")
+
+
+func _stand_up() -> void:
+	_seat_id = ""
+	camera_controller.seated = false
+
+
+## Шаг «починить» текущего задания ждёт именно этот объект (item — запись RepairLayer.items)
+func _fix_wanted(item: Dictionary) -> bool:
+	var step := quests.step() if quests != null else {}
+	return step.get("do") == "fix" and step.place.key == item.get("id", "")
+
+
+## Удержание «взаимодействия» у сломанного объекта текущего задания: кольцо в HUD растёт HOLD_TIME секунд, по завершении
+## объект цел (RepairLayer), задание засчитано. Отпустили или отвернулись — кольцо спадает, прогресс не копится
+func _tick_repair(dt: float) -> void:
+	var active: bool = _target.get("kind") == "repair" and _fix_wanted(_target) and not bike.riding and _seat_id == "" and not show_map \
+		and not _journal_open() and not photo.active and Input.is_action_pressed("interact")
+	if active:
+		_fix_progress = minf(1.0, _fix_progress + dt / Repairables.HOLD_TIME)
+		if _fix_progress >= 1.0:
+			_fix_progress = 0.0
+			var id: String = _target.id
+			repair_layer.repair(id)
+			_quest_progress(quests.repaired(id))
+	else:
+		_fix_progress = maxf(0.0, _fix_progress - dt * 2.0)
+	hud.set_repair(_fix_progress)
+
 
 ## Игрок у места шага задания. Припасы на вышку засчитываются только на её верхней площадке (шаг climb): сумку надо
 ## занести по лестнице пешком; тот же признак площадки, что у открытия мест с вышки (TowerLayout.on_deck)

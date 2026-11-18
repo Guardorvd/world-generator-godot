@@ -411,7 +411,7 @@ static func site_tints(kind: String, v: int) -> Dictionary:
 ## Три уровня детализации [LOD0, LOD1, LOD2] на общем атласе для вершин и сооружений StageSites.
 static func build_site_lods() -> Dictionary:
 	var out := {}
-	for key: String in ["shelter", "tower", "obelisk", "ruin", "keep", "stone", "peak_cairn"]:
+	for key: String in ["shelter", "tower", "obelisk", "ruin", "keep", "stone", "peak_cairn", "bench", "bench_broken", "peak_cairn_broken"]:
 		var lods: Array[ArrayMesh] = []
 		for level in 3:
 			lods.append(_build_site_mesh(key, level))
@@ -437,6 +437,10 @@ static func _build_site_mesh(kind: String, level: int) -> ArrayMesh:
 		"tower":
 			# 18.11.2026: настоящая вышка с лестницей - геометрия TowerLayout, модель TowerModels
 			TowerModels.build(st, level)
+		"bench", "bench_broken":
+			RepairModels.bench(st, level, kind == "bench_broken")
+		"peak_cairn_broken":
+			RepairModels.cairn_broken(st, level)
 		"obelisk":
 			if level == 2:
 				_box(st, Vector3(1.40, 1.00, 1.40), Vector3(0, 0.10, 0), Basis.IDENTITY, CELL_STONE)

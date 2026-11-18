@@ -13,6 +13,7 @@ const QUESTS := {
 	tour = preload("res://resources/icons/quest_tour.svg"),
 	delivery = preload("res://resources/icons/quest_delivery.svg"),
 	supplies = preload("res://resources/icons/quest_delivery.svg"),
+	repair = preload("res://resources/icons/quest_chronicle.svg"),
 	photo = preload("res://resources/icons/quest_photo.svg"),
 	fragile = preload("res://resources/icons/quest_fragile.svg"),
 	chronicle = preload("res://resources/icons/quest_chronicle.svg"),

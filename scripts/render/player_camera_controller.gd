@@ -38,6 +38,8 @@ const DIP_SPRING := 120.0       # пружина проседания при п�
 const DIP_DAMP := 18.0          # её затухание, 1/с
 const DIP_MIN := -0.6           # пределы проседания, м
 const DIP_MAX := 0.2
+const SEAT_DROP := 0.55        # сидя на лавке глаза ниже, чем стоя, м
+const SEAT_RATE := 1.4          # и опускаются и встают за доли секунды, м/с
 const TRAUMA_GAIN := 0.08       # тряска на 1 м/с удара сверх мягкого
 const TRAUMA_DECAY := 1.6       # затухание тряски, доля в секунду
 var settings: GameSettings
@@ -50,6 +52,8 @@ var _cam_dist := GameConfig.BIKE_CAM  # расстояние до седока: 
 var _bob_amp := 0.0     # сила покачивания при ходьбе: нарастает и стихает плавно
 var _dip := 0.0         # проседание камеры при приземлении, м (пружина)
 var _dip_v := 0.0
+var seated := false     # игрок сидит на лавке (GameWorld): камера опускается на SEAT_DROP
+var _seat_drop := 0.0
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
 var _cam_lead := 0.0    # 12.7: доворот камеры внутрь поворота, рад (только пока мышь не трогали)
 var _speed_rush := 0.0
@@ -134,7 +138,7 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and settings.head_bob else 0.0, _smooth(BOB_RESPONSE, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
 	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * BOB_AMP * stride * _bob_amp * (BOB_PHOTO if photo_active else 1.0)
-	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + dip, pos.z)
+	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + dip - _seat_drop, pos.z)
 	camera.rotation = Vector3(view_pitch + jolt.x * 0.03, view_yaw + jolt.y * 0.02, jolt.z * 0.03)
 
 
@@ -163,3 +167,4 @@ func tick_effects(dt: float) -> void:
 	_dip_v += (-DIP_SPRING * _dip - DIP_DAMP * _dip_v) * dt
 	_dip = clampf(_dip + _dip_v * dt, DIP_MIN, DIP_MAX)
 	_trauma = maxf(0.0, _trauma - dt * TRAUMA_DECAY)
+	_seat_drop = move_toward(_seat_drop, SEAT_DROP if seated else 0.0, SEAT_RATE * dt)

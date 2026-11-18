@@ -49,7 +49,7 @@ var _cells := {}                    # клетка -> номера сооруж�
 var outer_structures: Array = []    # 13.9: мосты закреплённых соседних областей (в конце structures)
 var _outer_cells := {}              # Vector2i клетки за картой -> номера сооружений
 var _deck_keys := {}                # настилы Trail Lab, уже добавленные (add_decks)
-var towers: Array = []              # вышки с лестницей (add_tower_stairs): {id, x, z, yaw, base} — верх площадки TowerLayout.on_deck
+var towers: Array = []              # вышки с лестницей (add_site_decks): {id, x, z, yaw, base} — верх площадки TowerLayout.on_deck
 var road_refinement: RoadRefinement: # 4.4: метровая сетка только у дорог, общая для меша и опоры
 	set(value):
 		road_refinement = value
@@ -438,8 +438,8 @@ func _set_places(w: WorldData) -> bool:
 			centers.append(s.y)
 			hut_start.append(huts.size() / 6)
 			for u in s.huts:
-				if for_sites and EntityCodec.value(u, "t", "house") == "tower":
-					continue # как в is_passable: у вышки нет твёрдого ящика, по лестнице идут настилы
+				if for_sites and not SettlementSets.is_solid(EntityCodec.value(u, "t", "house")):
+					continue # как в is_passable: у вышки, лавки и причала нет твёрдого ящика
 				# угол и полуширина — теми же функциями, что is_passable; cos и sin — движка, а не .NET
 				var angle: float = u.a if for_sites else PlayerState.hut_angle(s, u)
 				var half: Vector2 = PlayerState.hut_half(u)
@@ -603,24 +603,30 @@ func add_decks(list: Array) -> void:
 					_cells[i].append(k)
 
 
-## Дозорные вышки мест (StageSites, вид "tower"): лестница и верхняя площадка — настилы с перилами (TowerLayout),
-## по ним идёт та же опора, что по мостам (deck_at / surface_at / wall_at; C# RideGround получает их через
-## ground_changed). Вызывать после build_structures и после рельефа мест; повторный вызов ничего не добавляет.
+## Настилы построек мест (StageSites): лестница и верхняя площадка дозорной вышки (TowerLayout) и причал рыбацкого
+## домика (FishingLayout) — сооружения Heightfield, по ним идёт та же опора, что по мостам (deck_at / surface_at /
+## wall_at; C# RideGround получает их через ground_changed). Геометрия каждой постройки — из её Layout, один раз на модель и
+## на физику. Вызывать после build_structures и после рельефа мест; повторный вызов ничего не добавляет.
 ## Настилы встают перед сооружениями закреплённых областей: те по-прежнему в конце structures.
-func add_tower_stairs(sites: Array) -> void:
+func add_site_decks(sites: Array) -> void:
 	var made: Array = []
 	for s in sites:
 		for u in s.huts:
-			if EntityCodec.value(u, "t", "house") != "tower":
+			var kind: String = EntityCodec.value(u, "t", "house")
+			if kind != "tower" and kind != "pier":
 				continue
-			var key := "tower:%d:%d" % [roundi(u.x * 100.0), roundi(u.y * 100.0)]
+			var key := "%s:%d:%d" % [kind, roundi(u.x * 100.0), roundi(u.y * 100.0)]
 			if _deck_keys.has(key):
 				continue
 			_deck_keys[key] = true
 			var origin := Vector3(u.x * TILE, 0.0, u.y * TILE)
-			origin.y = TowerLayout.base_height(self, origin.x, origin.z, u.a)
-			towers.append({id = WorldData.place_id("site", s.x, s.y), x = origin.x, z = origin.z, yaw = u.a, base = origin.y})
-			made.append_array(TowerLayout.structures(origin, u.a, key))
+			if kind == "tower":
+				origin.y = TowerLayout.base_height(self, origin.x, origin.z, u.a)
+				towers.append({id = WorldData.place_id("site", s.x, s.y), x = origin.x, z = origin.z, yaw = u.a, base = origin.y})
+				made.append_array(TowerLayout.structures(origin, u.a, key))
+			else:
+				origin.y = SettlementsBuilder.hut_floor(self, origin.x, origin.z, u.a, "house_timber")
+				made.append(FishingLayout.structure(origin, u.a, key, FishingLayout.measure(self, origin, u.a)))
 	if made.is_empty():
 		return
 	clear_rock_seats()
@@ -635,14 +641,13 @@ func add_tower_stairs(sites: Array) -> void:
 		piece.ay = d.ay
 		piece.by = d.by
 		piece.style = "planks"
-		piece.rails = true
-		piece.deck = true # модель вышки рисует SettlementsBuilder, не StructuresBuilder
-		piece.tower = true
+		piece.rails = d.rails
+		piece.deck = true # модель рисует SettlementsBuilder (или слой RepairLayer), не StructuresBuilder
+		piece.site = true
 		structures.append(piece)
 	_add_outer(outer)
 	index_structures()
 	ground_changed()
-
 
 ## Remove only this region's collision records, preserving the plan's structure indices.
 func remove_outer_bridges(list: Array) -> void:

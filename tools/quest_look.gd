@@ -31,7 +31,8 @@ func _initialize() -> void:
 	world.peaks = [{x = 160, y = 40, i = 2, name = "Седая"}]
 	world.lakes = [{x = 60, y = 150, i = 3, name = "Тихое", cells = 900, sx = 70, sy = 140}]
 	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2},
-		{x = 40, y = 60, i = 6, name = "Заречный", type = "farm", rank = 1}]
+		{x = 40, y = 60, i = 6, name = "Заречный", type = "farm", rank = 1},
+		{x = 150, y = 150, i = 7, name = "Лавка у обрыва", type = "bench", rank = 1}]
 	_map_terrain()
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Variant in world.get(kind + "s"):
@@ -79,7 +80,12 @@ func _place(name: String) -> Dictionary:
 
 
 func _offers(quests: Quests) -> Array:
-	return quests.offers(_place("Ольховка"), places, [_place("Каменка")], {}, {}, 7)
+	return quests.offers(_place("Ольховка"), places, [_place("Каменка")], {}, {}, 7, _broken)
+
+
+## Сломанные объекты стенда: лавка — всегда, остальные по хешу мира (сид 0)
+func _broken(id: String) -> bool:
+	return id == _place("Лавка у обрыва").key or Repairables.initially_broken(0, id)
 
 
 func _arrived(place: Dictionary) -> bool:
@@ -98,8 +104,8 @@ func _logic() -> void:
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
 	# 18.11.2026: на доске только груз — припасы на вышку и на хутор или в дом, хрупкий груз в поселение
-	_check(kinds.size() == 3 and kinds.all(func(k: String) -> bool: return k in Quests.OFFERED and k in Quests.CARGO_KINDS) and kinds.count("supplies") == 2 and kinds.count("fragile") == 1,
-		"доска предлагает только груз: два «Припасы» и «Хрупкий груз» (%s)" % ", ".join(PackedStringArray(kinds)))
+	_check(kinds.size() == 4 and kinds.all(func(k: String) -> bool: return k in Quests.OFFERED) and kinds.count("supplies") == 2 and kinds.count("fragile") == 1 and kinds.count("repair") == 1,
+		"доска предлагает только груз и ремонт: два «Припасы», «Хрупкий груз», «Ремонт» (%s)" % ", ".join(PackedStringArray(kinds)))
 	var supply_targets := offers.filter(func(q: QuestData) -> bool: return q.kind == "supplies").map(func(q: QuestData) -> String: return q.target.name)
 	supply_targets.sort()
 	_check(supply_targets == ["Заречный", "Сторожевая"], "припасы — на вышку и на хутор, не в поселение и не к месту у порога (%s)" % ", ".join(PackedStringArray(supply_targets)))
@@ -166,6 +172,7 @@ func _logic() -> void:
 	at = Vector2(100, 100)
 	_check(quests.tick(_arrived).begins_with("Задание выполнено"), "летопись выполнена")
 	_supplies_and_old_saves()
+	_repair_quest()
 	var texts := {}
 	for kind: String in ["delivery", "fragile", "visit"]:
 		for p: Dictionary in places:
@@ -174,6 +181,36 @@ func _logic() -> void:
 	_check(texts.size() >= 6, "формулировки разные (%d): %s" % [texts.size(), ", ".join(PackedStringArray(texts.keys()))])
 	var saved := quests.save_state()
 	_check(Quests.valid_save(saved), "сохранение после новых видов проходит проверку")
+
+
+## Ремонт: берётся у доски, цель — сломанный объект; засчитывается только удержанием у нужного объекта (GameWorld вызывает repaired)
+func _repair_quest() -> void:
+	var quests := Quests.new()
+	var offered := _offers(quests)
+	var repair: QuestData = _by_kind(offered, "repair")
+	_check(not repair.is_empty() and Repairables.kind_of(repair.target) != "" and _broken(repair.target.key), "ремонт предлагает сломанное лавку, тур или причал (%s)" % repair.title)
+	_check(_offers(quests).map(func(q: QuestData) -> String: return q.id) == offered.map(func(q: QuestData) -> String: return q.id), "ремонт на доске устойчив при повторном открытии")
+	var calm := quests.offers(_place("Ольховка"), places, [_place("Каменка")], {}, {}, 7, func(_id: String) -> bool: return false)
+	_check(_by_kind(calm, "repair").is_empty(), "если ничего не сломано, ремонта на доске нет")
+	var bench := Quests._make("repair", _place("Ольховка"), [_place("Лавка у обрыва")])
+	quests.accept(bench)
+	_check(quests.step().do == "fix" and not quests.cargo and quests.goal().name == "Лавка у обрыва" and quests.known.has(bench.target.key), "ремонт: сразу цель, сумки нет, место известно")
+	_check(quests.step_text().contains("лавку") and quests.step_text().contains("удерживайте"), "шаг называет объект и удержание (%s)" % quests.step_text())
+	at = Vector2(150, 150)
+	_check(quests.tick(_arrived) == "" and quests.step().do == "fix", "приезд к лавке задание не закрывает: нужен ремонт")
+	_check(quests.repaired(_place("Седая").key) == "" and quests.step().do == "fix", "починка другого объекта не засчитана")
+	_check(quests.repaired(bench.target.key).begins_with("Задание выполнено") and quests.active.is_empty() and quests.done == 1, "ремонт лавки засчитан")
+	_check(not _offers(quests).any(func(q: QuestData) -> bool: return q.id == bench.id), "починенная лавка больше не предлагается")
+	for place_name: String in ["Седая", "Лавка у обрыва"]:
+		var q := Quests._make("repair", _place("Ольховка"), [_place(place_name)])
+		var held := Quests.new()
+		held.accept(q)
+		var restored := Quests.new()
+		var by_key := {}
+		for p: Dictionary in places:
+			by_key[p.key] = p
+		_check(Quests.valid_save(held.save_state()) and restored.restore_state(held.save_state(), by_key) and restored.step().do == "fix", "задание ремонта («%s») сохраняется и грузится" % place_name)
+		_check(restored.step_text().contains("тур") or restored.step_text().contains("лавку"), "объект в тексте: %s" % restored.step_text())
 
 
 ## Припасы: на вышку — только с верхней площадки, на хутор — у места; задание из старого сохранения грузится и заканчивается
@@ -288,7 +325,7 @@ func _run() -> void:
 	var pins := hud.board_places(home)
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	var buttons: Array[Node] = hud.settlement_panel.find_children("*", "Button", true, false)
-	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 3, "на доске три кнопки «Взять»")
+	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 4, "на доске четыре кнопки «Взять»")
 	_check(pins.size() == 3 and pins[1].name == "Колодец" and pins[2].name == "Тихое", "на доске два ближайших места")
 	var travels := []
 	hud.settlement_panel.travel_requested.connect(hud.ask_travel)

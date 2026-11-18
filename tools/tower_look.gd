@@ -1,7 +1,7 @@
 extends SceneTree
 ## 18.11.2026: изолированная сцена дозорной вышки без генерации мира. Синтетический рельеф 192 × 192 клеток
 ## (как у trail_world_network_test) с одной вышкой (StageSites, вид "tower"), поворот 0,6 рад.
-## 1. Настилы лестницы (Heightfield.add_tower_stairs) и ходок: PlayerState.step поднимается по пяти маршам на верхнюю
+## 1. Настилы лестницы (Heightfield.add_site_decks) и ходок: PlayerState.step поднимается по пяти маршам на верхнюю
 ##    площадку и спускается назад (пройден ли путь, время, ноги на площадке); с краёв площадки и марша не падает (перила);
 ##    C# RideGround и GDScript отвечают одинаково (verify_native_ride, 0 расхождений).
 ## 2. Модель: настоящий SettlementsBuilder.build по каталогу (нужна пересборка bake_assets.gd) — снимки сбоку и с площадки.
@@ -56,8 +56,8 @@ func run() -> void:
 	h.native_ride = true
 	Heightfield.verify_native_ride = true
 	var count := h.structures.size()
-	h.add_tower_stairs(w.sites)
-	h.add_tower_stairs(w.sites)
+	h.add_site_decks(w.sites)
+	h.add_site_decks(w.sites)
 	check(h.structures.size() == count + TowerLayout.structures(Vector3.ZERO, 0.0, "k").size(), "настилы вышки добавлены один раз (%d)" % (h.structures.size() - count))
 	check(h.towers.size() == 1, "вышка записана для проверки площадки")
 	var base: float = h.towers[0].base

@@ -9,6 +9,7 @@ var quests: Quests
 var world: WorldData
 var all_places: Callable
 var visited: Dictionary
+var is_broken: Callable  # Repairables.is_broken: какие объекты сломаны (задания «Ремонт»)
 var distance_text: Callable = Util.distance_text
 
 ## Место как цель задания: копия с ключом key = id
@@ -60,7 +61,7 @@ func offers(village: Variant, catalog: Variant = null) -> Array:
 		neighbors.append(target(world.place(r.to if r.from == here.id else r.from)))
 	var far := world.far_destination(here.id)
 	var places: Array = all_places.call() if catalog == null else catalog
-	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num)
+	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num, is_broken)
 
 func accept(q: QuestData) -> void:
 	quests.accept(q)

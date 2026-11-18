@@ -67,6 +67,8 @@ static func valid(d: Dictionary) -> bool:
 		return false
 	if d.has("explore") and not Exploration.valid_save(d.explore):
 		return false
+	if d.has("repairs") and not Repairables.valid_save(d.repairs):
+		return false
 	return preload("res://scripts/game/quests.gd").valid_save(d.quest)
 
 static func _number(v: Variant) -> bool:

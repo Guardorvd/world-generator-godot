@@ -22,11 +22,12 @@ const KINDS := {
 	fragile = {title = "Хрупкий груз", color = Color(1.0, 0.55, 0.45)},
 	chronicle = {title = "Летопись", color = Color(0.6, 0.9, 0.75)},
 	supplies = {title = "Припасы", color = Color(0.92, 0.8, 0.38)},
+	repair = {title = "Ремонт", color = Color(0.6, 0.78, 1.0)},
 }
 ## Что предлагает доска (18.11.2026). Остальные виды (посещение, обход, снимок, летопись и прежняя доставка в поселение)
 ## отключены, но их сборка и шаги остаются: взятое в старом сохранении задание грузится, выполняется и бросается как раньше.
 ## Вернуть вид на доску — добавить его сюда (снимок, летопись, посещение и обход включаются вместе).
-const OFFERED := ["supplies", "fragile"]
+const OFFERED := ["supplies", "fragile", "repair"]
 const SIGHT_KINDS := ["photo", "chronicle", "visit", "tour"]
 ## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
 const CARGO_KINDS := ["delivery", "fragile", "supplies"]
@@ -40,6 +41,7 @@ const STEPS := {
 	climb = {text = "Поднимитесь с сумкой на верхнюю площадку %s «%s»: велосипед оставьте внизу", case = "gen", goal = true},
 	shoot = {text = "Сфотографируйте %s «%s»", case = "acc", goal = true},
 	bring = {text = "Отвезите снимок в %s «%s»", case = "acc", goal = true},
+	fix = {text = "Почините %s «%s»: подойдите и удерживайте клавишу взаимодействия", case = "acc", goal = true},
 }
 ## Вид места в нужном падеже: название в кавычках остаётся как есть
 const CASES := {
@@ -66,6 +68,20 @@ const SUPPLY_TEXTS := {
 		"Хозяин редко выбирается в деревню. Привезите ему всё нужное прямо к порогу."],
 	farm = ["Хутор далеко от лавки: там ждут муку, керосин и гвозди. Сумку берите у доски — и по дороге к хутору.",
 		"К хутору дорога идёт полями. Привезите припасы к дому, пока не стемнело."],
+}
+## Ремонт (Repairables): задание берут у доски, ехать к сломанному объекту и чинить его удержанием «взаимодействия»
+const REPAIR_TITLES := {
+	bench = ["Починить лавку: «%s»", "Лавка на обрыве: «%s»"],
+	cairn = ["Сложить тур: «%s»", "Тур на вершине: «%s»"],
+	pier = ["Залатать причал: «%s»", "Причал у воды: «%s»"],
+}
+const REPAIR_TEXTS := {
+	bench = ["На смотровой лавке выпала доска и подломилась ножка. Подъедьте и приведите её в порядок.",
+		"Туристы жалуются: на лавке с видом не присесть. Подъедьте и поставьте её на ножки."],
+	cairn = ["Ветер или чьи-то шаги развалили тур на вершине, веха сломана. Подъедьте к вершине и сложите всё заново.",
+		"Тур на вершине осыпался: путники не видят знака. Верните камни на место."],
+	pier = ["У рыбацкого причала выпали доски, свая завалилась. Починим — рыбаки снова смогут грузить лодку.",
+		"Причал на озере совсем обветшал. Подъедьте к воде и залатайте настил."],
 }
 const SPOT_MIN_CELLS := 60.0  # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
 const FAR_CELLS := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
@@ -124,7 +140,7 @@ var _done := {}        # id выполненных: доска их больше
 
 ## Задания доски поселения here (место с key). places — все места мира, neighbors — поселения по дорогам,
 ## far — дальнее поселение по сети или пусто, visited — посещённые id. Порядок и выбор устойчивы для мира и счёта done
-func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, visited: Dictionary, seed_num: int) -> Array:
+func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, visited: Dictionary, seed_num: int, broken := Callable()) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("%s|%d|%d" % [here.key, seed_num, done])
 	var center := Vector2(here.x, here.y)
@@ -159,6 +175,12 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 		var to := _pick(trips if not trips.is_empty() and rng.randf() < ROLE_CHANCE else open, rng)
 		if not to.is_empty():
 			out.append(_make(carry_kind, here, [to]))
+	# ремонт: ближайшие сломанные лавка, тур или причал (broken(id) — Repairables.is_broken), не выполненные раньше
+	if "repair" in OFFERED and broken.is_valid():
+		var wrecks := spots.filter(func(p: Dictionary) -> bool: return Repairables.kind_of(p) != "" and broken.call(p.key) and not _done.has(_id("repair", here, p)))
+		var fix := _pick(wrecks.slice(0, 3), rng)
+		if not fix.is_empty():
+			out.append(_make("repair", here, [fix]))
 	if not SIGHT_KINDS.any(func(k: String) -> bool: return k in OFFERED):
 		return out
 	# снимок: одно из ближних мест, отвезти в соседнее поселение или обратно сюда;
@@ -194,7 +216,9 @@ static func _site_type(place: Dictionary) -> String:
 
 
 ## Вид места в падеже: для вышки, дома и хутора — своё слово, для остальных общее (CASES)
-static func _word(case: String, place: Dictionary) -> String:
+static func _word(case: String, place: Dictionary, do := "") -> String:
+	if do == "fix": # «лавку», «тур», «причал» — по объекту места, а не по виду места
+		return Repairables.KINDS.get(Repairables.kind_of(place), {}).get(case, "объект")
 	return SITE_WORDS.get(_site_type(place), {}).get(case, CASES[case].get(place.kind, "места"))
 
 
@@ -248,6 +272,11 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 			q.text = _variant(SUPPLY_TEXTS[type], id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
 			# на вышку сумку заносят наверх (шаг climb: игрок на верхней площадке), к дому и хутору — довозят (carry: у места)
 			q.steps = [{do = "pickup", place = here}, {do = "climb" if type == "tower" else "carry", place = target}]
+		"repair":
+			var object := Repairables.kind_of(target)
+			q.title = _variant(REPAIR_TITLES[object], id) % target.name
+			q.text = _variant(REPAIR_TEXTS[object], id, 1) + " Удерживайте клавишу взаимодействия у объекта, пока он не будет починен."
+			q.steps = [{do = "fix", place = target}]
 		"fragile":
 			q.title = _variant(FRAGILE_TITLES, id) % target.name
 			q.text = _variant(FRAGILE_TEXTS, id, 1) + " Быстрое перемещение с грузом недоступно."
@@ -313,7 +342,7 @@ func step_text(s: Dictionary = step()) -> String:
 	if s.is_empty():
 		return ""
 	var step_def: Dictionary = STEPS[s.do]
-	return step_def.text % [_word(step_def.case, s.place), s.place.name]
+	return step_def.text % [_word(step_def.case, s.place, s.do), s.place.name]
 
 
 ## Место, которое надо держать целью на компасе, или пусто
@@ -325,6 +354,14 @@ func goal() -> Dictionary:
 ## Место текущего шага (метка задания на компасе и картах) или пусто
 func marker() -> Dictionary:
 	return step().get("place", {})
+
+
+## Объект place_id починен (удержание у сломанного, GameWorld). Возвращает сообщение или пусто
+func repaired(place_id: String) -> String:
+	var s := step()
+	if s.get("do") != "fix" or s.place.key != place_id:
+		return ""
+	return _advance()
 
 
 ## Сумку у доски взяли (E)

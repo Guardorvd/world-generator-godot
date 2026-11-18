@@ -232,8 +232,8 @@ static func _is_passable_script(w: WorldData, heights: Heightfield, x: float, z:
 			continue
 		for u in s.huts:
 			var kind: String = EntityCodec.value(u, "t", "house")
-			if kind == "tower":
-				continue # вышка — каркас с лестницей: на неё поднимаются (Heightfield.add_tower_stairs), ящика нет
+			if not SettlementSets.is_solid(kind):
+				continue # вышка, лавка и причал не стена: на них поднимаются, садятся, идут (Heightfield.add_site_decks)
 			if _box_hits(x - u.x * TILE, z - u.y * TILE, u.a, SettlementSets.half_of(kind), r):
 				return false
 	if heights.wall_at(x, z, feet, r):

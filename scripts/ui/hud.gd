@@ -74,6 +74,7 @@ var _reticle_on_target := false
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
+var _repair: RepairArc  # 18.11.2026: кольцо удержания «взаимодействия» при ремонте
 var _stamina: StaminaArc  # 14.2: дуга выносливости (14.4: в левом нижнем углу), видна, пока силы тратятся или копятся
 var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
@@ -191,6 +192,15 @@ func _ready() -> void:
 	_brakes.hide()
 	add_child(_brakes)
 	move_child(_brakes, big_map.get_index())
+	_repair = RepairArc.new()
+	_repair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_repair.set_anchors_preset(Control.PRESET_CENTER)
+	_repair.offset_left = -RepairArc.DIAMETER * 0.5
+	_repair.offset_right = RepairArc.DIAMETER * 0.5
+	_repair.offset_top = 56
+	_repair.offset_bottom = 56 + RepairArc.DIAMETER
+	_repair.hide()
+	add_child(_repair)
 	_summary_switch = PanelContainer.new()
 	_summary_switch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_summary_switch.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
@@ -1038,6 +1048,33 @@ class Compass extends Control:
 				icon + Vector2(0, 4), icon + Vector2(-4, 0)]), tint)
 		HudStyle.centered(self, Vector2(cx + 6.0, top + 14.5), Util.distance_text(Vector2(dx, dz).length()), 12, tint)
 		return cx
+
+
+## Ремонт: доля удержания 0..1 (кольцо под прицелом; 0 — скрыто)
+func set_repair(value: float) -> void:
+	_repair.set_value(value)
+
+
+## 18.11.2026: кольцо ремонта — растёт, пока игрок удерживает «взаимодействие» у сломанного объекта задания
+class RepairArc extends Control:
+	const DIAMETER := 64.0
+	var value := 0.0
+
+	func set_value(v: float) -> void:
+		if is_equal_approx(v, value):
+			return
+		value = v
+		visible = v > 0.001
+		queue_redraw()
+
+	func _draw() -> void:
+		if value <= 0.001:
+			return
+		var c := size * 0.5
+		HudStyle.dial_face(self, c, DIAMETER * 0.5 - 2.0, 1.0)
+		draw_arc(c, 22.0, 0.0, TAU, 48, Color(HudStyle.BORDER, 0.65), 4.0, true)
+		draw_arc(c, 22.0, -PI * 0.5, -PI * 0.5 + TAU * value, 48, HudStyle.MINT, 4.0, true)
+		HudStyle.centered(self, c + Vector2(0, 4), "ремонт", 11, HudStyle.MUTED)
 
 
 ## 14.2: дуга выносливости (с 14.4 — кольцо в левом нижнем углу). Появляется, пока силы тратятся или копятся, полная — гаснет.

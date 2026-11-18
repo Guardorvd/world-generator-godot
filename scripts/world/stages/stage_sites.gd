@@ -26,7 +26,15 @@ const TYPES := {
 	obelisk = {base = 1.4, space = 80.0, clear = 1.5, title = "обелиск"},
 	farm = {base = 4.0, space = 22.0, clear = 5.0, title = "хутор"},
 	house = {base = 3.5, space = 30.0, clear = 3.0, title = "одинокий дом"},
+	# 18.11.2026: ставятся отдельно (_place_fishing, _place_benches), а не по общей сетке кандидатов: base 0
+	fishing = {base = 0.0, space = 40.0, clear = 2.0, title = "рыбацкий домик"},
+	bench = {base = 0.0, space = 16.0, clear = 1.0, title = "смотровая лавка"},
 }
+const FISHING_CHANCE := 0.4    # доля озёр с рыбацким домиком (но хотя бы один на мир, если есть подходящее озеро)
+const FISHING_MIN_CELLS := 60  # озёра меньше (клеток воды) не считаются
+const BENCH_CHANCE := 0.5      # доля вершин с лавкой
+const BENCH_RINGS := [6, 8, 10, 12, 14]  # клеток от вершины: 24–56 м ниже по склону
+const BENCH_SKIP := [Biomes.SNOW, Biomes.PEAK] # на снегу и на ледниках лавок нет
 ## Допуски перепада земли под постройками и памятниками (SettlementSets.flat_of).
 
 
@@ -89,6 +97,8 @@ static func run(w: WorldData) -> void:
 				continue
 			sites.append(site)
 			placed += 1
+	_place_fishing(w, river, dist_path, sites, names)
+	_place_benches(w, river, dist_path, sites, names)
 	w.sites = sites
 
 
@@ -146,7 +156,8 @@ static func _crowded(sites: Array, type: String, x: float, y: float) -> bool:
 
 
 ## Место со значимостью, названием и постройками; пусто, если главная постройка не встала
-static func _build(w: WorldData, river: PackedByteArray, type: String, x: float, y: float, i: int, names: Dictionary) -> SiteData:
+## facing — поворот постройки (вид «вперёд», +z модели) вместо случайного: рыбацкий домик лицом к воде, лавка лицом от вершины
+static func _build(w: WorldData, river: PackedByteArray, type: String, x: float, y: float, i: int, names: Dictionary, facing := NAN) -> SiteData:
 	var rng := WGRandom.at(w.seed_num, "site." + type, floori(x), floori(y))
 	var prom := _prominence(w, floori(x), floori(y))
 	var rank := 2
@@ -166,6 +177,13 @@ static func _build(w: WorldData, river: PackedByteArray, type: String, x: float,
 				parts.append(["stone", Vector2(cos(a), sin(a)) * 1.25])
 		"shelter":
 			parts = [["shelter", Vector2.ZERO]]
+		"fishing":
+			rank = 1
+			# домик и причал в одной точке: причал (модель и настил) уходит от двери в воду, длину считает FishingLayout по рельефу
+			parts = [["house_timber", Vector2.ZERO], ["pier", Vector2.ZERO]]
+		"bench":
+			rank = 1
+			parts = [["bench", Vector2.ZERO]]
 		"house":
 			rank = 1
 			var home_id := SettlementSets.pick_site_home(w.biome[i], w.elev[i], w.slope[i], rng.next_float())
@@ -188,14 +206,16 @@ static func _build(w: WorldData, river: PackedByteArray, type: String, x: float,
 				parts.append(["ruin", rooms[k]])
 			if rank == 3:
 				parts.append(["keep", Vector2(-1.4, -0.6)])
-	var turn := rng.next_float() * TAU
+	var turn := rng.next_float() * TAU if is_nan(facing) else facing
 	var huts: Array[HutData] = []
 	for k in parts.size():
 		var off: Vector2 = parts[k][1].rotated(turn)
 		var hx := x + off.x
 		var hy := y + off.y
-		if _fits(w, river, parts[k][0], hx, hy):
-			huts.append(HutData.new(hx, hy, floori(rng.next_float() * 4), parts[k][0], turn + (rng.next_float() - 0.5) * 0.3))
+		if parts[k][0] == "pier" or _fits(w, river, parts[k][0], hx, hy):
+			var variant := floori(rng.next_float() * 4)
+			var jitter := (rng.next_float() - 0.5) * 0.3
+			huts.append(HutData.new(hx, hy, variant, parts[k][0], turn + (jitter if is_nan(facing) else 0.0)))
 		elif k == 0:
 			return SiteData.new()
 	# Круг, от которого осталась пара камней, не читается как круг
@@ -226,6 +246,116 @@ static func _fits(w: WorldData, river: PackedByteArray, kind: String, hx: float,
 			low = minf(low, w.h[j])
 			high = maxf(high, w.h[j])
 	return (high - low) * GameConfig.HS <= SettlementSets.flat_of(kind)
+
+
+## Рыбацкие домики на берегах озёр (18.11.2026): у каждого озера (связная вода w.lake от FISHING_MIN_CELLS клеток — не только
+## названные) с шансом FISHING_CHANCE, но хотя бы один на мир. Домик стоит на суше в двух клетках от воды (в 3×3 клетках вокруг
+## воды нет, как требует _fits), дверь и причал смотрят на воду.
+static func _place_fishing(w: WorldData, river: PackedByteArray, dist_path, sites: Array, names: Dictionary) -> void:
+	var W := w.W
+	var lake := w.lake
+	var comp := PackedInt32Array()
+	comp.resize(w.N)
+	comp.fill(-1)
+	var sizes: Array[int] = []
+	var seed_hash := WGRandom.derive(w.seed_num, "site.fishing")
+	var start := lake.find(1)
+	while start >= 0:
+		if comp[start] < 0:
+			var group := sizes.size()
+			var queue := PackedInt32Array([start])
+			comp[start] = group
+			var head := 0
+			while head < queue.size():
+				var c := queue[head]
+				head += 1
+				var x := c % W
+				for direction in 8:
+					var n: int = c + Grid.DY[direction] * W + Grid.DX[direction]
+					if n >= 0 and n < w.N and absi(n % W - x) <= 1 and lake[n] != 0 and comp[n] < 0:
+						comp[n] = group
+						queue.append(n)
+			sizes.append(queue.size())
+		start = lake.find(1, start + 1)
+	var best := {}   # озеро -> {score, x, y, i, facing}
+	var steps: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	for i in w.N:
+		if comp[i] < 0 or sizes[comp[i]] < FISHING_MIN_CELLS:
+			continue
+		var x := i % W
+		var y := i / W
+		for step: Vector2i in steps:
+			# от клетки воды двигаемся прочь от неё: первая клетка суши рядом, домик — через одну
+			var near := Vector2i(x, y) + step
+			if near.x < 2 or near.y < 2 or near.x >= W - 2 or near.y >= w.H - 2 or lake[near.y * W + near.x] != 0:
+				continue
+			var spot := Vector2i(x, y) + step * 2
+			var j := spot.y * W + spot.x
+			if lake[j] != 0 or w.ocean[j] != 0 or river[j] != 0:
+				continue
+			var cx := spot.x + 0.5
+			var cy := spot.y + 0.5
+			if _settlement_dist(w, spot.x, spot.y) < NEAR_VILLAGE * 0.5 or not _fits(w, river, "house_timber", cx, cy):
+				continue
+			# ровнее — лучше; ближе к путям — лучше (до домика дойти); остальное решает хеш
+			var score := -w.slope[j] * 4.0 - minf(dist_path[j], 30.0) * 0.02 + WGRandom.hash2(spot.x, spot.y, seed_hash) * 0.5
+			var group := comp[i]
+			if not best.has(group) or score > best[group].score:
+				best[group] = {score = score, x = cx, y = cy, i = j, facing = atan2(-float(step.x), -float(step.y))}
+	var order := best.keys()
+	order.sort()
+	var chosen: Array = []
+	for group: int in order:
+		var rng := WGRandom.new(WGRandom.derive(w.seed_num, "site.fishing.%d" % group))
+		if rng.next_float() < FISHING_CHANCE:
+			chosen.append(group)
+	if chosen.is_empty() and not order.is_empty():
+		var largest: int = order[0] # хотя бы один: самое большое озеро с подходящим берегом
+		for group: int in order:
+			if sizes[group] > sizes[largest]:
+				largest = group
+		chosen.append(largest)
+	for group: int in chosen:
+		var c: Dictionary = best[group]
+		if _crowded(sites, "fishing", c.x, c.y):
+			continue
+		var site := _build(w, river, "fishing", c.x, c.y, c.i, names, c.facing)
+		if not site.is_empty():
+			sites.append(site)
+
+## Лавки у вершин (18.11.2026): у каждой вершины с шансом BENCH_CHANCE, ниже самой вершины (24–56 м), не на снегу и ледниках,
+## на ровном месте; лицом от вершины, к долине. Ближе к тропе — лучше.
+static func _place_benches(w: WorldData, river: PackedByteArray, dist_path, sites: Array, names: Dictionary) -> void:
+	var W := w.W
+	var seed_hash := WGRandom.derive(w.seed_num, "site.bench")
+	for pk in w.peaks:
+		var rng := WGRandom.new(WGRandom.derive(w.seed_num, "site.bench.%d.%d" % [floori(pk.x), floori(pk.y)]))
+		if rng.next_float() >= BENCH_CHANCE:
+			continue
+		var top := w.elev[clampi(floori(pk.y), 0, w.H - 1) * W + clampi(floori(pk.x), 0, W - 1)]
+		var best := {}
+		for ring: int in BENCH_RINGS:
+			for k in 16:
+				var angle := TAU * k / 16.0
+				var dir := Vector2(cos(angle), sin(angle))
+				var cell := Vector2i((Vector2(pk.x, pk.y) + dir * ring).floor())
+				if cell.x < 8 or cell.y < 8 or cell.x >= W - 8 or cell.y >= w.H - 8:
+					continue
+				var j := cell.y * W + cell.x
+				if w.biome[j] in BENCH_SKIP or w.ocean[j] != 0 or w.lake[j] != 0 or river[j] != 0 or w.slope[j] > 0.4 or w.elev[j] >= top:
+					continue
+				var cx := cell.x + 0.5
+				var cy := cell.y + 0.5
+				if not _fits(w, river, "bench", cx, cy):
+					continue
+				var score := -w.slope[j] * 3.0 + (0.6 if dist_path[j] < 8.0 else 0.0) + WGRandom.hash2(cell.x, cell.y, seed_hash) * 0.4
+				if best.is_empty() or score > best.score:
+					best = {score = score, x = cx, y = cy, i = j, facing = atan2(dir.x, dir.y)}
+		if best.is_empty() or _crowded(sites, "bench", best.x, best.y):
+			continue
+		var site := _build(w, river, "bench", best.x, best.y, best.i, names, best.facing)
+		if not site.is_empty():
+			sites.append(site)
 
 
 static func _name(w: WorldData, type: String, rank: int, x: int, y: int) -> String:
