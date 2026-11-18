@@ -19,6 +19,7 @@ const EVENT_MIN := 0.3        # сила явления (DayCycle.events), с к
 const UP_MIN := 0.12          # взгляд камеры выше горизонта не меньше чем на столько (y единичного вектора)
 const MAX_ALBUM := 128
 
+static var _pages: Array[Dictionary] = []
 const GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночные явления"]
 
 var revealed := {}   # id места -> true: открыто сверху
@@ -29,12 +30,19 @@ var play_s := 0.0
 var max_alt := 0.0   # высшая точка, м (как высота в сводке)
 var photos := 0
 var album := {}      # ключ страницы -> {path, date, place}
-var revision := 0    # растёт при любом изменении открытых мест и альбома
 var _last := Vector2.INF
 
 
-## Все страницы альбома по группам: [{key, group, title, hint}]
+## Название вида места с большой буквы («Дозорная вышка»)
+static func site_title(type: String) -> String:
+	var title: String = StageSites.TYPES[type].title
+	return title.left(1).to_upper() + title.substr(1)
+
+
+## Все страницы альбома по группам: [{key, group, title, hint}]; список собирается один раз
 static func pages() -> Array[Dictionary]:
+	if not _pages.is_empty():
+		return _pages
 	var out: Array[Dictionary] = []
 	for i in Biomes.LIST.size():
 		var biome: Dictionary = Biomes.LIST[i]
@@ -43,14 +51,21 @@ static func pages() -> Array[Dictionary]:
 		out.append({key = "biome:%d" % i, group = 0, title = biome.name, hint = "Снимок местности: «%s»" % biome.name})
 	out.append({key = "settlement", group = 1, title = "Поселение", hint = "Наведите рамку на поселение"})
 	for type: String in StageSites.TYPES:
-		var title: String = StageSites.TYPES[type].title
-		out.append({key = "site:" + type, group = 1, title = title.left(1).to_upper() + title.substr(1), hint = "Найдите и снимите: %s" % title})
+		out.append({key = "site:" + type, group = 1, title = site_title(type), hint = "Найдите и снимите: %s" % StageSites.TYPES[type].title})
 	out.append({key = "peak", group = 2, title = "Вершина", hint = "Любая вершина в рамке"})
 	out.append({key = "lake", group = 2, title = "Озеро", hint = "Любое озеро в рамке"})
 	out.append({key = "night:aurora", group = 3, title = "Полярное сияние", hint = "Ночью, камера выше горизонта"})
 	out.append({key = "night:comet", group = 3, title = "Комета", hint = "Ночью, камера выше горизонта"})
 	out.append({key = "night:meteor", group = 3, title = "Звездопад", hint = "Ночью, камера выше горизонта"})
+	_pages = out
 	return out
+
+
+static func page_title(key: String) -> String:
+	for page: Dictionary in pages():
+		if page.key == key:
+			return page.title
+	return key
 
 
 ## Счётчики пути: pos — положение игрока (м), riding — едет ли, alt — высота ног
@@ -98,8 +113,6 @@ func reveal_from(places: Array, eye: Vector3, radius: float, tile: float, is_kno
 			continue
 		revealed[id] = true
 		found.append(id)
-	if not found.is_empty():
-		revision += 1
 	return found
 
 
@@ -134,10 +147,7 @@ func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> Packe
 		if album.has(key) or album.size() >= MAX_ALBUM:
 			continue
 		album[key] = {path = str(shot.get("path", "")), date = date, place = str(shot.get("place", ""))}
-		for page: Dictionary in pages():
-			if page.key == key:
-				titles.append(page.title)
-	revision += 1
+		titles.append(page_title(key))
 	return titles
 
 
@@ -156,7 +166,6 @@ func restore(state: Dictionary) -> void:
 	photos = int(state.get("photos", 0))
 	album = state.get("album", {}).duplicate(true)
 	_last = Vector2.INF
-	revision += 1
 
 
 static func valid_save(state: Variant) -> bool:

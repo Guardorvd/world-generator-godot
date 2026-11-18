@@ -428,6 +428,11 @@ func board_places(settlement: Variant, catalog: Variant = null) -> Array:
 	return nearby
 
 
+## Место открыто на большой карте: посещено, прочитано на доске или увидено сверху (вышка, вершина)
+func is_open(id: String) -> bool:
+	return visited.has(id) or map_journal.read.has(id) or explore.revealed.has(id)
+
+
 func map_place_count() -> int:
 	return visited.size() + map_journal.read.size() + explore.revealed.size()
 
@@ -436,7 +441,7 @@ func sync_map_places() -> void:
 	if not big_map.visible or world == null:
 		return
 	var known: Array = []
-	var ids := map_journal.read.merged(visited).merged(explore.revealed)
+	var ids := map_journal.read.merged(visited).merged(explore.revealed) # те же три источника, что в is_open
 	for id: String in ids:
 		var place := world.place(id)
 		if not place.is_empty():
@@ -454,7 +459,7 @@ func _select_map_goal(place: Dictionary) -> void:
 
 func _sync_map_goal() -> void:
 	var id: String = goal.get("key", "")
-	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or visited.has(id) or map_journal.read.has(id) or explore.revealed.has(id))
+	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or is_open(id))
 	big_map.goal = Atlas.place_at(goal) if show_goal else Vector2.INF
 	big_map.refresh_overlay()
 
@@ -527,14 +532,13 @@ func journey_data() -> Dictionary:
 			"peak": label = "Вершины"
 			"lake": label = "Озёра"
 			"site":
-				var title: String = StageSites.TYPES[place.src.type].title if StageSites.TYPES.has(place.src.type) else "место"
-				label = title.left(1).to_upper() + title.substr(1)
+				label = Exploration.site_title(place.src.type) if StageSites.TYPES.has(place.src.type) else "Места"
 		if not total.has(label):
 			total[label] = 0
 			found[label] = 0
 			order.append(label)
 		total[label] += 1
-		if visited.has(place.key) or explore.revealed.has(place.key) or map_journal.read.has(place.key):
+		if is_open(place.key):
 			found[label] += 1
 	var rows: Array = []
 	for label: String in order:

@@ -8,6 +8,7 @@ extends SceneTree
 ## Нужно окно (не headless). Лимит 90 с.
 ##   godot --path . --script res://tools/tower_look.gd -- [--out <папка>] [--no-shots]
 
+const Fixture := preload("res://tools/trail_world_network_test.gd") # общий синтетический мир 192 × 192 с пологим склоном
 const TILE := GameConfig.TILE
 const DT := 1.0 / 60.0
 const YAW := 0.6
@@ -38,23 +39,6 @@ func _initialize() -> void:
 	run.call_deferred()
 
 
-static func synthetic() -> WorldData:
-	var world := WorldData.new()
-	world.W = 192; world.H = 192; world.N = world.W * world.H
-	world.seed_text = "tower stand"; world.seed_num = 4021
-	for owner in [world.geology, world.climate, world.civil]:
-		for property: Dictionary in owner.get_property_list():
-			var value: Variant = owner.get(property.name)
-			if value is GridBuffer2D.Float32 or value is GridBuffer2D.Byte or value is GridBuffer2D.Int32: value.resize()
-	world.biome.fill(Biomes.GRASS); world.dist_water.fill(100); world.lake_id.fill(-1)
-	for z in world.H:
-		for x in world.W:
-			var i := z * world.W + x
-			world.h[i] = (30 + z * 0.25 + sin(x * 0.025) * 2) / GameConfig.HS
-			world.elev[i] = world.h[i]; world.filled[i] = world.h[i]; world.slope[i] = 0.065
-	world.base_heights = Heightfield.new(world, false)
-	return world
-
 
 func local_to_world(at: Vector2) -> Vector2:
 	var p := Basis(Vector3.UP, YAW) * Vector3(at.x, 0.0, at.y)
@@ -62,7 +46,7 @@ func local_to_world(at: Vector2) -> Vector2:
 
 
 func run() -> void:
-	w = synthetic()
+	w = Fixture.synthetic()
 	w.available_rect = Rect2i(0, 0, w.W, w.H)
 	var site := SiteData.new(TOWER_CELL.x, TOWER_CELL.y, floori(TOWER_CELL.y) * w.W + floori(TOWER_CELL.x), "tower", 3, "Сторожевая", 2.0,
 		[HutData.new(TOWER_CELL.x, TOWER_CELL.y, 0, "tower", YAW)] as Array[HutData])

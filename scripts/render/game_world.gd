@@ -1716,9 +1716,8 @@ func _look_around(source: String, radius: float, from_text: String) -> void:
 	var explore := hud.explore
 	explore.scanned[source] = true
 	var eye := Vector3(player.x, player.feet + 1.7, player.z)
-	var found := explore.reveal_from(hud.all_places(), eye, radius, TILE, hud.knows, heights.ground_at, _occluded)
+	var found := explore.reveal_from(hud.all_places(), eye, radius, TILE, hud.is_open, heights.ground_at, _occluded)
 	if found.is_empty():
-		explore.revision += 1
 		hud.toast("%s новых мест не видно" % from_text)
 	else:
 		hud.toast("%s видно новых мест: %d" % [from_text, found.size()])
