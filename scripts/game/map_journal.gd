@@ -93,6 +93,29 @@ func _with_endpoint(points: PackedVector2Array) -> PackedVector2Array:
 	return points
 
 
+## 18.11.2026: где игрок уже ездил — множество клеток cell м, через которые прошёл трек (задания ведут в новые места)
+func explored_cells(cell := 128.0) -> Dictionary:
+	var out := {}
+	for leg: Dictionary in legs:
+		for point: Vector2 in leg.points:
+			out[Vector2i((point / cell).floor())] = true
+	for point: Vector2 in current:
+		out[Vector2i((point / cell).floor())] = true
+	return out
+
+
+## Откуда игрок приехал к at (метры): точка трека в back м от at, пройденная последней; INF — не понять
+func came_from(at: Vector2, back := 300.0) -> Vector2:
+	var tracks: Array = [current]
+	for i in range(legs.size() - 1, maxi(-1, legs.size() - 6), -1):
+		tracks.append(legs[i].points)
+	for points: PackedVector2Array in tracks:
+		for i in range(points.size() - 1, -1, -1):
+			if points[i].distance_to(at) >= back:
+				return points[i]
+	return Vector2.INF
+
+
 func save_state() -> Dictionary:
 	var history: Array = []
 	for leg: Dictionary in legs:

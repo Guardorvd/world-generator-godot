@@ -464,6 +464,7 @@ func map_place_count() -> int:
 
 
 func sync_map_places() -> void:
+	sync_minimap_places()
 	if not big_map.visible or world == null:
 		return
 	var known: Array = []
@@ -474,6 +475,17 @@ func sync_map_places() -> void:
 			known.append(InteractionService.target(place))
 	big_map.set_places(known)
 	_sync_map_goal()
+
+
+## 18.11.2026: значки известных вершин и сооружений на мини-карте (поселения и озёра она рисует сама)
+func sync_minimap_places() -> void:
+	if world == null:
+		return
+	var list: Array[Dictionary] = []
+	for place: Dictionary in all_places():
+		if place.kind in ["peak", "site"] and is_open(place.key):
+			list.append({at = Vector2(place.x, place.y) * TILE, kind = place.kind})
+	minimap.set_places(list)
 
 
 func _select_map_goal(place: Dictionary) -> void:
@@ -666,6 +678,7 @@ func _draw_tracker_progress() -> void:
 ## Новый шаг подсвечивает карточку и обновляет метки на компасе и карте.
 func quest_changed() -> void:
 	update_tracker()
+	sync_minimap_places() # взятое задание называет свои места
 	if is_node_ready():
 		compass.queue_redraw()
 		_sync_minimap_destinations()

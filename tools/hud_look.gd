@@ -289,9 +289,20 @@ func _run() -> void:
 	# 18.11.2026: маршрут на мини-карте и цель за краем круга — значок на ободке с расстоянием
 	var far_goal := Hud.marker_goal(Vector2(260, 60))
 	hud.set_goal(far_goal)
-	hud.minimap.set_route(PackedVector2Array([Vector2(512, 512), Vector2(540, 470), Vector2(600, 420), Vector2(700, 330), Vector2(1040, 240)]))
+	# маршрут по настоящей дороге фикстуры: подход от игрока, затем её точки
+	var road_pts := PackedVector2Array([Vector2(512, 512)])
+	for t: Dictionary in world.trails:
+		if t.kind == "road":
+			for p: Variant in t.pts.slice(2):
+				road_pts.append(Vector2(p.x, p.y) * GameConfig.TILE)
+			break
+	road_pts.append(Vector2(1040, 240))
+	hud.minimap.set_route(road_pts, 1, road_pts.size() - 2)
+	var icons: Array[Dictionary] = [{at = Vector2(470, 470), kind = "peak"}, {at = Vector2(474, 472), kind = "site"},
+		{at = Vector2(600, 560), kind = "site"}]
+	hud.minimap.set_places(icons)
 	await process_frame
-	_check(hud.minimap._route.size() == 5 and not hud.minimap._fits(hud.minimap.world_to_map(Vector2(1040, 240)), 8.0), "маршрут на мини-карте, цель за краем круга")
+	_check(hud.minimap._route.size() > 3 and not hud.minimap._fits(hud.minimap.world_to_map(Vector2(1040, 240)), 8.0), "маршрут на мини-карте, цель за краем круга")
 	await _shot("hud_minimap_route")
 	hud.minimap.set_route(PackedVector2Array())
 	hud.set_goal(Hud.marker_goal(Vector2(139, 122)))

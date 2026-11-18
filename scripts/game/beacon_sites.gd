@@ -3,17 +3,28 @@ extends RefCounted
 
 const COUNT := 3
 const TILE := GameConfig.TILE
-const MIN_RADIUS := 26.0 # клетки от доски
-const MAX_RADIUS := 105.0
+## 18.11.2026: точки дальше от доски (было 26–105 клеток — маяки ставили почти у деревни); сторона — по prefer
+## (Quests.prefer: не назад по своим следам и не по изъезженному), дальность первой точки — около IDEAL
+## Кольца [от, до] клеток от доски: сначала дальнее (240–680 м), если там не сложился треугольник — прежнее ближнее
+const RINGS := [Vector3(60.0, 170.0, 95.0), Vector3(26.0, 105.0, 26.0)] # от, до, желаемая дальность первой точки
 const ROAD_SAMPLE := 8.0
 const OFFSETS := [6.0, 10.0] # 24–40 м от оси пути
 const REACH := 3.0 # м для установки
 const NO_CELL := Vector2i(-1, -1)
 
 
-static func route(w: WorldData, heights: Heightfield, here: Dictionary, occupied: Dictionary) -> Array[Vector2i]:
+static func route(w: WorldData, heights: Heightfield, here: Dictionary, occupied: Dictionary, prefer := Callable()) -> Array[Vector2i]:
 	if heights == null or w.path_mask.size() != w.N:
 		return []
+	for ring: Vector3 in RINGS:
+		var found := _route(w, heights, here, occupied, prefer, ring.x, ring.y, ring.z)
+		if found.size() == COUNT:
+			return found
+	return []
+
+
+static func _route(w: WorldData, heights: Heightfield, here: Dictionary, occupied: Dictionary, prefer: Callable,
+		MIN_RADIUS: float, MAX_RADIUS: float, IDEAL: float) -> Array[Vector2i]:
 	var center := Vector2(here.x, here.y)
 	var candidates: Array[Vector2i] = []
 	var seen := {}
@@ -47,7 +58,7 @@ static func route(w: WorldData, heights: Heightfield, here: Dictionary, occupied
 							seen[cell] = true
 							candidates.append(cell)
 			next -= span
-	return _triangle(candidates, center)
+	return _triangle(candidates, center, prefer, IDEAL)
 
 
 static func _off_road(w: WorldData, cell: Vector2i) -> bool:
@@ -102,11 +113,14 @@ static func _approach(w: WorldData, heights: Heightfield, road: Vector2, target:
 
 
 ## Среди площадок выбираем треугольник, близкий к равностороннему. Начинаем со стороны доски.
-static func _triangle(candidates: Array[Vector2i], center: Vector2) -> Array[Vector2i]:
+static func _triangle(candidates: Array[Vector2i], center: Vector2, prefer := Callable(), IDEAL := 26.0) -> Array[Vector2i]:
+	var start_cost := func(cell: Vector2i) -> float:
+		return absf(center.distance_to(Vector2(cell)) - IDEAL) * 0.35 + (float(prefer.call(Vector2(cell))) * 40.0 if prefer.is_valid() else 0.0)
+	var costs := {}
+	for cell: Vector2i in candidates:
+		costs[cell] = start_cost.call(cell)
 	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		var da := center.distance_squared_to(Vector2(a))
-		var db := center.distance_squared_to(Vector2(b))
-		return da < db if da != db else a < b)
+		return costs[a] < costs[b] if costs[a] != costs[b] else a < b)
 	var best: Array[Vector2i] = []
 	var best_score := INF
 	for a: Vector2i in candidates.slice(0, 12):
@@ -117,7 +131,7 @@ static func _triangle(candidates: Array[Vector2i], center: Vector2) -> Array[Vec
 				continue
 			var mid := Vector2(a) + edge * 0.5
 			var cross := Vector2(-edge.y, edge.x) * (sqrt(3.0) * 0.5)
-			var base_score := absf(side - 52.0) + center.distance_to(Vector2(a)) * 0.35
+			var base_score := absf(side - 52.0) + float(costs[a])
 			if base_score >= best_score:
 				continue
 			for c: Vector2i in candidates:

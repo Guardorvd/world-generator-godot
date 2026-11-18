@@ -101,6 +101,15 @@ const PLAQUE_REACH_M := 4.5   # м: табличку обелиска снима
 const SHOT_REACH_M := 150.0 # м: снимок для задания — не дальше этого от места (до 18.11.2026 — 400 м: с ×4 снимали с соседнего холма)
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
 const FRAGILE_CHANCE := 0.35   # доля досок, где вместо доставки — хрупкий груз
+## 18.11.2026: задания ведут в разные стороны и постепенно дальше. travel = {explored: клетки EXPLORED_CELL м, где проходил
+## трек (MapJournal.explored_cells), from: точка трека в 300 м до доски — откуда игрок приехал (MapJournal.came_from)}.
+## Цена цели (_direction_cost): отклонение от желаемой дальности (растёт с числом выполненных: IDEAL_M + DONE_STEP_M · done),
+## назад по своим следам, по уже изъезженному, в ту же сторону, что другое задание этой доски. Из двух лучших — по жребию.
+const EXPLORED_CELL := 128.0
+const IDEAL_M := 350.0
+const DONE_STEP_M := 120.0
+const IDEAL_MAX_M := 1600.0
+const BACK_ANGLE := 0.96   # рад (55°): в этом секторе от направления, откуда приехали, — «назад»
 const CHRONICLE_CHANCE := 0.35 # доля досок, где вместо снимка — летопись двух мест
 
 ## Формулировки: %s — название цели (в кавычках, без склонения — поэтому через двоеточие). Выбор варианта — по хешу id задания (одно и то же на каждой доске).
@@ -164,7 +173,7 @@ var thanks := {}
 ## Задания доски поселения here (место с key). places — все места мира, neighbors — поселения по дорогам,
 ## far — дальнее поселение по сети или пусто, visited — посещённые id. Порядок и выбор устойчивы для мира и счёта done
 func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, visited: Dictionary, seed_num: int,
-		broken := Callable(), beacon_route := Callable(), paint_route := Callable()) -> Array:
+		broken := Callable(), beacon_route := Callable(), paint_route := Callable(), travel := {}) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("%s|%d|%d" % [here.key, seed_num, done])
 	var center := Vector2(here.x, here.y)
@@ -178,6 +187,7 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	if not far.is_empty() and not towns.any(func(t: Dictionary) -> bool: return t.key == far.key):
 		towns.append(far)
 	var out: Array = []
+	var aims: Array[Vector2] = []  # направления уже предложенных заданий этой доски, м
 	if _offers_field("beacons", here.key, beacon_route):
 		var cells: Array[Vector2i] = beacon_route.call()
 		if cells.size() == BeaconSites.COUNT:
@@ -193,7 +203,7 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	if "supplies" in OFFERED:
 		for group: Array in SUPPLY_GROUPS:
 			var sites := spots.filter(func(p: Dictionary) -> bool: return p.kind == "site" and _site_type(p) in group and not _done.has(_id("supplies", here, p)))
-			var supply := _pick(sites.slice(0, 3), rng)
+			var supply := _pick_toward(sites, rng, center, travel, aims)
 			if not supply.is_empty():
 				out.append(_make("supplies", here, [supply]))
 	# доставка в поселение: хрупкий груз (падение разбивает его); прежняя «Доставка» — только если её вернули на доску
@@ -207,13 +217,13 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 		# 16.11.2026: доставка чаще ведёт в дальнее, лесное или предгорное поселение (SettlementRoles) — путешествие,
 		# а не соседняя улица; где таких по дорогам нет, выбор прежний.
 		var trips := open.filter(func(t: Dictionary) -> bool: return ROLE_DELIVERY_TEXTS.has(_role(t)))
-		var to := _pick(trips if not trips.is_empty() and rng.randf() < ROLE_CHANCE else open, rng)
+		var to := _pick_toward(trips if not trips.is_empty() and rng.randf() < ROLE_CHANCE else open, rng, center, travel, aims)
 		if not to.is_empty():
 			out.append(_make(carry_kind, here, [to]))
 	# ремонт: ближайшие сломанные лавка, тур или причал (broken(id) — Repairables.is_broken), не выполненные раньше
 	if "repair" in OFFERED and broken.is_valid():
 		var wrecks := spots.filter(func(p: Dictionary) -> bool: return Repairables.kind_of(p) != "" and broken.call(p.key) and not _done.has(_id("repair", here, p)))
-		var fix := _pick(wrecks.slice(0, 3), rng)
+		var fix := _pick_toward(wrecks, rng, center, travel, aims)
 		if not fix.is_empty():
 			out.append(_make("repair", here, [fix]))
 	# летопись обелисков: одна на мир, пока не взята и не выполнена; все обелиски мира, ближние к доске первыми
@@ -280,6 +290,50 @@ func _offers_field(kind: String, giver: String, route: Callable) -> bool:
 
 static func _field_id(kind: String, giver: String) -> String:
 	return "%s:%s" % [kind, giver]
+
+
+## Цена цели target (клетки) от доски center (клетки): меньше — лучше. with_distance = false — только направление
+## (маяки и метки краской: дальность у них задана своими пределами)
+func _direction_cost(center: Vector2, target: Vector2, travel: Dictionary, used: Array, with_distance := true) -> float:
+	var to := (target - center) * GameConfig.TILE
+	var d := to.length()
+	var cost := 0.0
+	if with_distance:
+		var ideal := minf(IDEAL_M + DONE_STEP_M * done, IDEAL_MAX_M)
+		cost += absf(d - ideal) / ideal * 0.8
+	if d < 1.0:
+		return cost
+	var from: Variant = travel.get("from", Vector2.INF)
+	if from is Vector2 and from.is_finite():
+		var back: Vector2 = from - center * GameConfig.TILE
+		if back.length() > 1.0 and absf(to.angle_to(back)) < BACK_ANGLE:
+			cost += 1.0
+	var explored: Dictionary = travel.get("explored", {})
+	if explored.has(Vector2i((target * GameConfig.TILE / EXPLORED_CELL).floor())):
+		cost += 0.6
+	for dir: Vector2 in used:
+		if absf(to.angle_to(dir)) < 0.8:
+			cost += 0.4
+	return cost
+
+
+## Цель из list по цене направления: из двух лучших — по жребию; её направление пополняет used
+func _pick_toward(list: Array, rng: RandomNumberGenerator, center: Vector2, travel: Dictionary, used: Array[Vector2]) -> Dictionary:
+	if list.is_empty():
+		return {}
+	var scored: Array = []
+	for p: Dictionary in list:
+		scored.append([_direction_cost(center, Vector2(p.x, p.y), travel, used), p])
+	scored.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0] or (a[0] == b[0] and str(a[1].key) < str(b[1].key)))
+	var pick: Dictionary = scored[rng.randi() % mini(2, scored.size())][1]
+	used.append((Vector2(pick.x, pick.y) - center) * GameConfig.TILE)
+	return pick
+
+
+## Для маяков и меток краской (BeaconSites.route, PaintTargets.route): цена точки в клетках — только направление
+func prefer(here: Dictionary, travel: Dictionary) -> Callable:
+	var center := Vector2(here.x, here.y)
+	return func(cell: Vector2) -> float: return _direction_cost(center, cell, travel, [], false)
 
 
 static func _pick(list: Array, rng: RandomNumberGenerator) -> Dictionary:

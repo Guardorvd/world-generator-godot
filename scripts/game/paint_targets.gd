@@ -6,15 +6,25 @@ const TILE := GameConfig.TILE
 const KEY_PRECISION := 1000.0 # тысячные доли клетки
 const ROAD_SAMPLE := 4.0 # клетки
 const NEAR_BOARD := 18.0
-const MIN_TRIP := 12.0
-const MAX_TRIP := 115.0
+## 18.11.2026: метки дальше по дороге от доски (было 12–115 клеток — у самой деревни); сторона — по prefer (Quests.prefer)
+## Окна по дороге [от, до] клеток: сначала дальнее (280–720 м), если там не нашлось трёх объектов — прежнее ближнее
+const TRIPS := [Vector2(70.0, 180.0), Vector2(12.0, 115.0)]
 const VERGE := 5.0
 const MIN_GAP := 12.0
 
 
-static func route(w: WorldData, heights: Heightfield, here: Dictionary, painted: Dictionary) -> Array[Dictionary]:
+static func route(w: WorldData, heights: Heightfield, here: Dictionary, painted: Dictionary, prefer := Callable()) -> Array[Dictionary]:
 	if heights == null or w.chunks.is_empty():
 		return []
+	for trip: Vector2 in TRIPS:
+		var found := _route(w, heights, here, painted, prefer, trip.x, trip.y)
+		if not found.is_empty():
+			return found
+	return []
+
+
+static func _route(w: WorldData, heights: Heightfield, here: Dictionary, painted: Dictionary, prefer: Callable,
+		MIN_TRIP: float, MAX_TRIP: float) -> Array[Dictionary]:
 	var center := Vector2(here.x, here.y)
 	var best: Array[Dictionary] = []
 	var best_cost := INF
@@ -46,7 +56,7 @@ static func route(w: WorldData, heights: Heightfield, here: Dictionary, painted:
 				run.append(target)
 				next = leg * ROAD_SAMPLE + MIN_GAP
 				if run.size() == COUNT:
-					var cost := entry_gap + leg * ROAD_SAMPLE + (0.0 if road.kind == "road" else 16.0)
+					var cost := entry_gap + leg * ROAD_SAMPLE + (0.0 if road.kind == "road" else 16.0) 						+ (float(prefer.call(stations[cell])) * 60.0 if prefer.is_valid() else 0.0)
 					if cost < best_cost:
 						best = run
 						best_cost = cost

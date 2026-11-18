@@ -23,8 +23,8 @@ const TILE_BUDGET := 1    # новых участков подложки за к
 const SCALE_M := 50.0
 const INK := Color("#344d56")
 ## 18.11.2026: маршрут навигации на подложке и метки целей за краем круга (стрелка на ободке и расстояние)
-const ROUTE := Color("#f08a24")
-const ROUTE_EDGE := Color(1, 1, 1, 0.95)
+const ROUTE := Color("#ff9a2e")       # середина дороги маршрута
+const ROUTE_EDGE := Color("#b5560f")  # её кромка: та же толщина, что у дороги подложки — дорога «загорается»
 const GOAL := Color("#d98c28")
 const BIKE := Color("#276582")
 const RIM_INSET := 17.0
@@ -44,6 +44,10 @@ var _quest := Vector2.INF
 var _quest_color := Color.WHITE
 var _knows: Callable
 var _route := PackedVector2Array()  # путь навигации, мировые метры
+var _route_road := Vector2i(0, -1)
+var _places: Array[Dictionary] = []  # известные места для значков: {at — м, kind: peak | site}
+const PLACE_GAP := 20.0   # px: ближе друг к другу и к поселениям значки не ставятся — без мешанины
+const PLACE_MAX := 14     # значков на подложке (в круге видно примерно четверть)  # отрезки пути по дорогам (NavigationLine._road_first.._road_last), остальное — подходы
 
 
 func _ready() -> void:
@@ -88,6 +92,7 @@ func set_world(world: WorldData, knows := Callable(), source: MapData = null) ->
 	_goal = Vector2.INF
 	_quest = Vector2.INF
 	_route = PackedVector2Array()
+	_places = []
 	queue_redraw()
 	refresh()
 
@@ -114,10 +119,20 @@ func set_destinations(goal: Dictionary, quest: Dictionary, quest_color: Color) -
 
 
 ## Путь навигации (NavigationLine.path); пустой — маршрута нет. Подложка перерисовывается один раз
-func set_route(points: PackedVector2Array) -> void:
-	if points == _route:
+func set_route(points: PackedVector2Array, road_first := 0, road_last := -1) -> void:
+	if points == _route and _route_road == Vector2i(road_first, road_last):
 		return
 	_route = points.duplicate()
+	_route_road = Vector2i(road_first, road_last)
+	if _anchor.is_finite():
+		_render()
+
+
+## 18.11.2026: известные места (вершины и сооружения), значки на подложке; перерисовка только если список сменился
+func set_places(places: Array[Dictionary]) -> void:
+	if places == _places:
+		return
+	_places = places
 	if _anchor.is_finite():
 		_render()
 
@@ -203,32 +218,75 @@ func _draw_map() -> void:
 		return
 	Paint.surface(_canvas, _data, _to_canvas(Vector2.ZERO), PIXELS_PER_METER)
 	_draw_route()
+	var taken: Array[Vector2] = []
 	for place: Dictionary in _visible_settlements():
 		var at := _to_canvas(place.position)
+		taken.append(at)
 		_canvas.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
 		_canvas.draw_circle(at, 2.5, Color("#706387"), true, -1.0, true)
+	_draw_places(taken)
 
 
-## Маршрут поверх дорог: широкая белая кайма и яркая середина, только отрезки в пределах подложки
+## Значки известных мест: ближние к середине первыми, не теснее PLACE_GAP друг к другу и к поселениям, не больше PLACE_MAX
+func _draw_places(taken: Array[Vector2]) -> void:
+	var area := Rect2(Vector2.ZERO, MAP_CENTER * 2.0).grow(-6.0)
+	var near: Array = []
+	for place: Dictionary in _places:
+		var at := _to_canvas(place.at)
+		if area.has_point(at):
+			near.append([at.distance_squared_to(MAP_CENTER), at, place.kind])
+	near.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var shown := 0
+	for item: Array in near:
+		var at: Vector2 = item[1]
+		if shown >= PLACE_MAX or taken.any(func(t: Vector2) -> bool: return t.distance_squared_to(at) < PLACE_GAP * PLACE_GAP):
+			continue
+		taken.append(at)
+		shown += 1
+		if item[2] == "peak":
+			var tri := PackedVector2Array([at + Vector2(0, -5.5), at + Vector2(5, 3.5), at + Vector2(-5, 3.5)])
+			_canvas.draw_colored_polygon(tri, Color("#8a6a45"))
+			tri.append(tri[0])
+			_canvas.draw_polyline(tri, Color.WHITE, 1.2, true)
+		else:
+			var diamond := PackedVector2Array([at + Vector2(0, -4.5), at + Vector2(4.5, 0), at + Vector2(0, 4.5), at + Vector2(-4.5, 0)])
+			_canvas.draw_colored_polygon(diamond, Color("#3f6f6a"))
+			diamond.append(diamond[0])
+			_canvas.draw_polyline(diamond, Color.WHITE, 1.2, true)
+
+
+## Маршрут: дорожная часть пути идёт по тем же точкам участков, что и линии дорог подложки (граф навигации — вершины
+## линий), поэтому её рисуем поверх дороги той же толщиной другим цветом — подсвечивается сама дорога. Подходы вне дорог
+## — тонкий пунктир. Только отрезки в пределах подложки
 func _draw_route() -> void:
 	if _route.size() < 2:
 		return
 	var area := Rect2(Vector2.ZERO, MAP_CENTER * 2.0).grow(8.0)
-	var lines := PackedVector2Array()
+	var road := PackedVector2Array()
+	var off := PackedVector2Array()
 	var a := _to_canvas(_route[0])
 	for i in range(1, _route.size()):
 		var b := _to_canvas(_route[i])
 		if area.has_point(a) or area.has_point(b):
-			lines.append(a)
-			lines.append(b)
+			if i > _route_road.x and i <= _route_road.y:
+				road.append(a)
+				road.append(b)
+			else:
+				off.append(a)
+				off.append(b)
 		a = b
-	if lines.is_empty():
+	for i in range(0, off.size(), 2):
+		_canvas.draw_dashed_line(off[i], off[i + 1], ROUTE_EDGE, 2.0, 4.0, true, true)
+	if road.is_empty():
 		return
-	_canvas.draw_multiline(lines, ROUTE_EDGE, 7.0, true)
-	_canvas.draw_multiline(lines, ROUTE, 4.2, true)
-	# стыки отрезков без зазоров
-	for i in range(0, lines.size(), 2):
-		_canvas.draw_circle(lines[i], 2.1, ROUTE, true, -1.0, true)
+	var outer := 6.0
+	var inner := 4.0
+	_canvas.draw_multiline(road, ROUTE_EDGE, outer, true)
+	for i in range(0, road.size(), 2):
+		_canvas.draw_circle(road[i], outer * 0.5, ROUTE_EDGE, true, -1.0, true)
+	_canvas.draw_multiline(road, ROUTE, inner, true)
+	for i in range(0, road.size(), 2):
+		_canvas.draw_circle(road[i], inner * 0.5, ROUTE, true, -1.0, true)
 
 
 ## Поселения подложки на открытой земле

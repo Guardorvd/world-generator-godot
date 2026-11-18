@@ -512,6 +512,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	interaction_service.heights = heights
 	interaction_service.all_places = hud.all_places
 	interaction_service.visited = hud.visited
+	interaction_service.travel = func() -> Dictionary:
+		return {explored = hud.map_journal.explored_cells(Quests.EXPLORED_CELL), from = hud.map_journal.came_from(Vector2(player.x, player.z))}
 	interaction_service.message.connect(hud.toast_now)
 	interaction_service.close_requested.connect(_close_settlement)
 	bike_controller.message.connect(hud.toast)
@@ -1303,6 +1305,9 @@ func _physics_process(dt: float) -> void:
 			hud.toast(quests.thank(_at_village))
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_tick_repair(dt)
+	# 18.11.2026: сумка сама надевается у доски, где её выдают (взяли задание или вернулись за новым грузом)
+	if quests.step().get("do") == "pickup" and hud.at_place(quests.step().place, player.x, player.z):
+		_quest_progress(quests.pick_up())
 	_quest_progress(quests.tick(_quest_arrived))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
 	if reached != "":
@@ -1394,7 +1399,7 @@ func _process(delta: float) -> void:
 		navigation_line.update_line(pos, delta, navigating, hud.navigation_visible())
 		if navigation_line.route_revision != _route_revision:
 			_route_revision = navigation_line.route_revision
-			hud.minimap.set_route(navigation_line.path) # маршрут подсвечен и на мини-карте
+			hud.minimap.set_route(navigation_line.path, navigation_line._road_first, navigation_line._road_last) # маршрут подсвечен и на мини-карте
 		if navigating and navigation_line.status != _navigation_status:
 			_navigation_status = navigation_line.status
 			if _navigation_status != "": hud.toast_now(_navigation_status)

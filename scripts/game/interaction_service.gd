@@ -13,6 +13,7 @@ var heights: Heightfield
 var all_places: Callable
 var visited: Dictionary
 var is_broken: Callable  # Repairables.is_broken: какие объекты сломаны (задания «Ремонт»)
+var travel: Callable     # 18.11.2026: () -> {explored, from} — где игрок ездил и откуда приехал (Quests._direction_cost)
 var distance_text: Callable = Util.distance_text
 
 ## Место как цель задания: копия с ключом key = id
@@ -64,9 +65,11 @@ func offers(village: Variant, catalog: Variant = null) -> Array:
 		neighbors.append(target(world.place(r.to if r.from == here.id else r.from)))
 	var far := world.far_destination(here.id)
 	var places: Array = all_places.call() if catalog == null else catalog
+	var trip: Dictionary = travel.call() if travel.is_valid() else {}
+	var prefer := quests.prefer(here, trip)
 	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num, is_broken,
-		BeaconSites.route.bind(world, heights, here, quests.installed_beacons),
-		PaintTargets.route.bind(world, heights, here, quests.painted_objects))
+		BeaconSites.route.bind(world, heights, here, quests.installed_beacons, prefer),
+		PaintTargets.route.bind(world, heights, here, quests.painted_objects, prefer), trip)
 
 func accept(q: QuestData) -> void:
 	quests.accept(q)
