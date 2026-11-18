@@ -674,13 +674,11 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_drop(p)
 		last_trees = p
 		last_fill = p
-		_fill(px, pz, _wanted(p))
+		_fill(px, pz, _wanted(p), carpet.build_now.bind(p, _road_revision) if carpet != null else Callable())
 		for built: Dictionary in _built:
 			_apply_chunk(built)
 		_built.clear()
 		_apply_grass(true)
-		if carpet != null:
-			carpet.build_now(p, _road_revision)
 		_refresh_details = false # the initial snapshot already includes these trees
 		return true
 	if carpet != null:
@@ -888,7 +886,7 @@ func _drop(p: Vector2) -> void:
 
 ## Заполнение при появлении: трава, подлесок и деревья — в задачах пула. Те же функции, что у фоновой подгрузки,
 ## поэтому результат тот же; _built — в порядке missing.
-func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
+func _fill(px: float, pz: float, missing: Array[Vector2i], while_filling_details := Callable()) -> void:
 	var results: Array = []
 	results.resize(missing.size())
 	if not missing.is_empty():
@@ -904,6 +902,8 @@ func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
 	for built: Dictionary in results:
 		if built.has("outer"): snapshot.trees.append(built.outer)
 	var details := WorkerThreadPool.add_task(_fill_details.bind(px, pz, Vector2.ZERO, _epoch, stream.clock, true, snapshot), true, "Трава и подлесок")
+	if while_filling_details.is_valid():
+		while_filling_details.call()
 	WorkerThreadPool.wait_for_task_completion(details)
 	_built = []
 	for built: Dictionary in results:

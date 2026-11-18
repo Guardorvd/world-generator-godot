@@ -14,7 +14,9 @@ const STEP := 4             # шаг сетки кандидатов, клето
 const NEAR_VILLAGE := 13.0  # ближе к костру поселения (клеток) — его окрестности, не отдельное место
 const SPACE := 14.0         # между любыми двумя местами, клеток
 const DENSITY_CELL := 128.0 # размер областей, где тип встречается чаще или реже, клеток
-const RING := 10            # радиус, по которому холм сравнивается с окрестностью, клеток
+const RING := [Vector2i(10, 0), Vector2i(7, 7), Vector2i(0, 10), Vector2i(-7, 7),
+	Vector2i(-10, 0), Vector2i(-7, -7), Vector2i(0, -10), Vector2i(7, -7)]
+const SETTLEMENT_REACH := 70.0 # дальше от поселения оценки уже не зависят от расстояния
 
 ## Сколько мест каждого типа на мир размером 512 (w.scale = 1); сид умножает на 0,5..1,5.
 ## Порядок — от значимых к мелким: значимые первыми выбирают лучшие места.
@@ -41,30 +43,42 @@ const BENCH_SKIP := [Biomes.SNOW, Biomes.PEAK] # на снегу и на лед�
 static func run(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
+	var paths := w.path_mask
+	var ocean := w.ocean
+	var lake := w.lake
+	var elev := w.elev
+	var slope := w.slope
+	var biome := w.biome
 	var human := PackedByteArray()
 	human.resize(w.N)
 	for i in w.N:
-		human[i] = 1 if w.path_mask[i] >= 2 else 0
+		human[i] = int(paths[i] >= 2)
 	var dist_path := Grid.distance_field(W, H, human)
 	var river := w.river_cells()
 	var pick_seed := WGRandom.derive(w.seed_num, "site.candidate")
 	var cand := {}
 	var density_seed := {}
 	for type: String in TYPES:
+		if TYPES[type].base <= 0.0:
+			continue
 		cand[type] = []
 		density_seed[type] = WGRandom.derive(w.seed_num, "site.density." + type)
 	for y in range(8, H - 8, STEP):
+		var nearby: Array[SettlementData] = []
+		for s: SettlementData in w.settlements:
+			if absf(s.y - y) <= SETTLEMENT_REACH:
+				nearby.append(s)
 		for x in range(8, W - 8, STEP):
 			var i := y * W + x
-			if w.ocean[i] != 0 or w.lake[i] != 0 or river[i] != 0 or w.path_mask[i] != 0:
+			if ocean[i] != 0 or lake[i] != 0 or river[i] != 0 or paths[i] != 0:
 				continue
-			var settle := _settlement_dist(w, x, y)
+			var settle := _settlement_dist(nearby, x, y)
 			if settle < NEAR_VILLAGE:
 				continue
-			var f := {e = w.elev[i], sl = w.slope[i], dp = dist_path[i], settle = settle, bi = w.biome[i],
-				habit = float(Biomes.LIST[w.biome[i]].get("habit", 0.0)), prom = _prominence(w, x, y),
+			var f := {e = elev[i], sl = slope[i], dp = dist_path[i], settle = settle, bi = biome[i],
+				habit = float(Biomes.LIST[biome[i]].get("habit", 0.0)), prom = _prominence(elev, W, H, x, y),
 				r = WGRandom.hash2(x, y, pick_seed)}
-			for type: String in TYPES:
+			for type: String in cand:
 				var s := _score(type, f)
 				if s == -INF:
 					continue
@@ -78,7 +92,7 @@ static func run(w: WorldData) -> void:
 	var names := {}
 	for s: SettlementData in w.settlements:
 		names[s.name] = true
-	for type: String in TYPES:
+	for type: String in cand:
 		var list: Array = cand[type]
 		list.sort()
 		var rng := WGRandom.new(WGRandom.derive(w.seed_num, "site.count." + type))
@@ -104,7 +118,7 @@ static func run(w: WorldData) -> void:
 
 ## Оценка клетки для типа места или -INF, если тип здесь не стоит
 static func _score(type: String, f: Dictionary) -> float:
-	var open: bool = f.bi in [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA, Biomes.TUNDRA]
+	const OPEN := [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA, Biomes.TUNDRA]
 	match type:
 		"tower":
 			# Холм с видом на дорогу или тропу.
@@ -115,7 +129,7 @@ static func _score(type: String, f: Dictionary) -> float:
 			# У пути, чаще на открытом месте или на перевале.
 			if f.dp < 1.5 or f.dp > 4.0 or f.sl > 0.35 or f.settle < 30.0:
 				return -INF
-			return f.e * 0.8 + (0.3 if open else 0.0) + f.r * 0.8
+			return f.e * 0.8 + (0.3 if f.bi in OPEN else 0.0) + f.r * 0.8
 		"ruin":
 			# Брошенное место: в стороне от нынешних дорог, часто на возвышенности.
 			if f.habit <= 0.0 and f.bi not in [Biomes.FOREST, Biomes.TAIGA]:
@@ -131,7 +145,7 @@ static func _score(type: String, f: Dictionary) -> float:
 			# Поле у дороги в дне пути от поселения.
 			if f.bi not in [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA] or f.sl > 0.25:
 				return -INF
-			if f.dp < 2.0 or f.dp > 10.0 or f.settle > 70.0:
+			if f.dp < 2.0 or f.dp > 10.0 or f.settle > SETTLEMENT_REACH:
 				return -INF
 			return f.habit + (1.0 - absf(f.settle - 30.0) / 40.0) * 0.5 + f.r * 0.4
 		"shelter":
@@ -140,7 +154,7 @@ static func _score(type: String, f: Dictionary) -> float:
 				return -INF
 			return f.e + (1.0 - f.dp / 10.0) * 0.3 + f.r * 0.3
 		"stones":
-			if not open or f.prom < 0.008 or f.dp < 6.0 or f.settle < 35.0 or f.sl > 0.4:
+			if f.bi not in OPEN or f.prom < 0.008 or f.dp < 6.0 or f.settle < 35.0 or f.sl > 0.4:
 				return -INF
 			return f.prom * 20.0 + f.r * 0.5
 	return -INF
@@ -159,7 +173,7 @@ static func _crowded(sites: Array, type: String, x: float, y: float) -> bool:
 ## facing — поворот постройки (вид «вперёд», +z модели) вместо случайного: рыбацкий домик лицом к воде, лавка лицом от вершины
 static func _build(w: WorldData, river: PackedByteArray, type: String, x: float, y: float, i: int, names: Dictionary, facing := NAN) -> SiteData:
 	var rng := WGRandom.at(w.seed_num, "site." + type, floori(x), floori(y))
-	var prom := _prominence(w, floori(x), floori(y))
+	var prom := _prominence(w.elev, w.W, w.H, floori(x), floori(y))
 	var rank := 2
 	var parts: Array = [] # [вид, смещение в клетках] до поворота; первая — главная
 	match type:
@@ -254,13 +268,17 @@ static func _fits(w: WorldData, river: PackedByteArray, kind: String, hx: float,
 static func _place_fishing(w: WorldData, river: PackedByteArray, dist_path, sites: Array, names: Dictionary) -> void:
 	var W := w.W
 	var lake := w.lake
+	var start := lake.find(1)
+	if start < 0:
+		return
 	var comp := PackedInt32Array()
 	comp.resize(w.N)
 	comp.fill(-1)
 	var sizes: Array[int] = []
+	var lake_cells := PackedInt32Array()
 	var seed_hash := WGRandom.derive(w.seed_num, "site.fishing")
-	var start := lake.find(1)
 	while start >= 0:
+		lake_cells.append(start)
 		if comp[start] < 0:
 			var group := sizes.size()
 			var queue := PackedInt32Array([start])
@@ -279,8 +297,9 @@ static func _place_fishing(w: WorldData, river: PackedByteArray, dist_path, site
 		start = lake.find(1, start + 1)
 	var best := {}   # озеро -> {score, x, y, i, facing}
 	var steps: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	for i in w.N:
-		if comp[i] < 0 or sizes[comp[i]] < FISHING_MIN_CELLS:
+	for i in lake_cells:
+		var group := comp[i]
+		if sizes[group] < FISHING_MIN_CELLS:
 			continue
 		var x := i % W
 		var y := i / W
@@ -295,11 +314,10 @@ static func _place_fishing(w: WorldData, river: PackedByteArray, dist_path, site
 				continue
 			var cx := spot.x + 0.5
 			var cy := spot.y + 0.5
-			if _settlement_dist(w, spot.x, spot.y) < NEAR_VILLAGE * 0.5 or not _fits(w, river, "house_timber", cx, cy):
+			if _settlement_dist(w.settlements, spot.x, spot.y) < NEAR_VILLAGE * 0.5 or not _fits(w, river, "house_timber", cx, cy):
 				continue
 			# ровнее — лучше; ближе к путям — лучше (до домика дойти); остальное решает хеш
 			var score := -w.slope[j] * 4.0 - minf(dist_path[j], 30.0) * 0.02 + WGRandom.hash2(spot.x, spot.y, seed_hash) * 0.5
-			var group := comp[i]
 			if not best.has(group) or score > best[group].score:
 				best[group] = {score = score, x = cx, y = cy, i = j, facing = atan2(-float(step.x), -float(step.y))}
 	var order := best.keys()
@@ -369,23 +387,22 @@ static func _name(w: WorldData, type: String, rank: int, x: int, y: int) -> Stri
 
 
 ## Расстояние до ближайшего поселения, клеток
-static func _settlement_dist(w: WorldData, x: int, y: int) -> float:
+static func _settlement_dist(settlements: Array, x: int, y: int) -> float:
 	var best := INF
-	for s: SettlementData in w.settlements:
+	for s: SettlementData in settlements:
 		var dx := s.x - x
 		var dy := s.y - y
 		best = minf(best, dx * dx + dy * dy)
 	return sqrt(best)
 
 
-## Насколько клетка выше окрестности в кольце RING (единицы elev, 0,01 ≈ 2,6 м)
-static func _prominence(w: WorldData, x: int, y: int) -> float:
+## Насколько клетка выше окрестности на расстоянии 10 клеток (единицы elev, 0,01 ≈ 2,6 м)
+static func _prominence(elev: PackedFloat32Array, W: int, H: int, x: int, y: int) -> float:
 	var sum := 0.0
-	for k in 8:
-		var a := k * TAU / 8.0
-		var sx := clampi(x + roundi(cos(a) * RING), 0, w.W - 1)
-		var sy := clampi(y + roundi(sin(a) * RING), 0, w.H - 1)
-		sum += w.elev[sy * w.W + sx]
-	return w.elev[y * w.W + x] - sum / 8.0
+	for offset: Vector2i in RING:
+		var sx := clampi(x + offset.x, 0, W - 1)
+		var sy := clampi(y + offset.y, 0, H - 1)
+		sum += elev[sy * W + sx]
+	return elev[y * W + x] - sum / 8.0
 
 

@@ -2,7 +2,7 @@ class_name WorldLoader
 extends RefCounted
 ## Данные для игры, подготовленные в фоне: мир, высоты, массивы геометрии и изображения.
 ## Узлы отображения и GPU-ресурсы создаёт GameWorld.start в главном потоке.
-## Заливка карт и базовые высоты готовы независимо от троп и поселений, поэтому считаются параллельно
+## Заливка карт и кольцо за краем плана используют только географию и считаются параллельно
 ## с генерацией. Меши земли и воды используют готовую поверхность со всеми путями и сооружениями.
 
 var world: WorldData
@@ -47,6 +47,11 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	r.cache_size = size
 	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
 	var side := Thread.new()
+	var outer := Thread.new()
+	var build_outer := func(w: WorldData) -> Dictionary:
+		var t := Time.get_ticks_usec()
+		var land := OuterLand.new(w)
+		return {land = land, ms = (Time.get_ticks_usec() - t) / 1000.0}
 	var started := Time.get_ticks_usec()
 	var profile_before: Dictionary = services.resource_profile.stamp() if services.resource_profile != null else {}
 	if services.cache.enabled:
@@ -57,6 +62,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# С 10.2 кэш по слоям: подошли не все — генерация продолжается с первого неподходящего слоя
 	var on_climate := func(w: WorldData) -> void:
 		side.start(r._prepare.bind(w, px, w.base_heights))
+		outer.start(build_outer.bind(w))
 	# Картинки мира (текстура, карта, подстилка) тоже из кэша, если мир из кэша целиком (10.2)
 	var view := {}
 	if services.cache.enabled:
@@ -65,6 +71,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		r.from_cache = got.layers == WorldGenerator.LAYERS.size()
 		r.timings.cache_layers = got.layers
 		if r.from_cache:
+			outer.start(build_outer.bind(r.world))
 			if on_progress.is_valid():
 				on_progress.call(0.5, "Мир из кэша")
 			view = services.cache.load_view(seed_text, size)
@@ -117,19 +124,26 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 			r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
 			forest_times.forest_surface_ms = (Time.get_ticks_usec() - t0) / 1000.0
 		forest_task = WorkerThreadPool.add_task(forest_job, true, "Подстилка леса")
-	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
-	if on_progress.is_valid():
-		on_progress.call(0.88, "Рельеф, вода и заливка")
+	# Обычно заливка готова к концу генерации. Рельеф из кэша готовит тот же поток.
+	if on_progress.is_valid() and view.is_empty() and (not side.is_started() or side.is_alive()):
+		on_progress.call(0.87, "Заливка карты и текстуры рельефа")
 	var waited := Time.get_ticks_usec()
-	var painted: Array = side.wait_to_finish() if side.is_started() else ([] if r.surface_hit else r._prepare(r.world, px))
+	var painted: Array
+	if side.is_started():
+		painted = side.wait_to_finish()
+	elif r.surface_hit:
+		painted = r._paint(r.world, px) if view.is_empty() else []
+	else:
+		painted = r._prepare(r.world, px, null, view.is_empty())
+	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
 	r.timings.merge(r._prepare_times)
 	var plan_errors := StageTrailPlan.consistency_errors(r.world)
 	if not plan_errors.is_empty():
 		if forest_task >= 0: WorkerThreadPool.wait_for_task_completion(forest_task)
+		if outer.is_started(): outer.wait_to_finish()
 		r.error = "Несогласованные данные трасс: " + "; ".join(plan_errors)
 		return r
 	r.timings["cache_read_ms" if r.from_cache else "generate_ms"] = (generated - started) / 1000.0
-	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
 	var image_tasks: Array[int] = []
 	if not view.is_empty():
 		r.terrain_image = view.terrain
@@ -153,6 +167,8 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# Сначала готовая поверхность, затем геометрия земли и воды.
 	var keep_monolith := not services.cache.enabled
 	if not r.surface_hit:
+		if on_progress.is_valid():
+			on_progress.call(0.88, "Сборка рельефа и воды")
 		r.trail = StageTrailPlan.prepare(r.heights)
 	else: StageTrailPlan.restore_technical(r.heights, r.trail)
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
@@ -160,24 +176,30 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	r.timings.trail_ms = r.trail.get("ms", 0.0)
 	for message: String in r.trail.errors:
 		push_warning("Трасса стартовой области: " + message)
-	t = Time.get_ticks_usec()
 	if not r.surface_hit:
+		var water_times := {}
+		var water_job := func() -> void:
+			var water_started := Time.get_ticks_usec()
+			r.water_arrays = WaterBuilder.prepare(r.world, r.heights)
+			water_times.prepare_water_ms = (Time.get_ticks_usec() - water_started) / 1000.0
+			water_started = Time.get_ticks_usec()
+			for arrays: Array in r.water_arrays:
+				r.water_chunks.append(WaterBuilder.partition_arrays(arrays))
+			water_times.partition_water_ms = (Time.get_ticks_usec() - water_started) / 1000.0
+		var water_task := WorkerThreadPool.add_task(water_job, true, "Геометрия воды")
+		t = Time.get_ticks_usec()
 		if keep_monolith:
 			r.terrain_arrays = TerrainBuilder.build_arrays(r.world, r.heights)
 			r.timings.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
-		var water_started := Time.get_ticks_usec()
-		r.water_arrays = WaterBuilder.prepare(r.world, r.heights)
-		r.timings.prepare_water_ms = (Time.get_ticks_usec() - water_started) / 1000.0
 		t = Time.get_ticks_usec()
 		r.terrain_chunks = PlanTerrain.partition(r.terrain_arrays) if keep_monolith else TerrainBuilder.build_chunks(r.world, r.heights)
-		for arrays: Array in r.water_arrays: r.water_chunks.append(WaterBuilder.partition_arrays(arrays))
-	r.timings.partition_ms = (Time.get_ticks_usec() - t) / 1000.0
+		r.timings.partition_ms = (Time.get_ticks_usec() - t) / 1000.0
+		t = Time.get_ticks_usec()
+		WorkerThreadPool.wait_for_task_completion(water_task)
+		r.timings.water_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
+		r.timings.merge(water_times)
 	t = Time.get_ticks_usec()
-	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
-	r.world.outer = OuterLand.new(r.world)
-	r.timings.outer_ms = (Time.get_ticks_usec() - t) / 1000.0
-	t = Time.get_ticks_usec()
-	if on_progress.is_valid():
+	if on_progress.is_valid() and image_tasks.any(func(task: int) -> bool: return not WorkerThreadPool.is_task_completed(task)):
 		on_progress.call(0.93, "Текстура рельефа и карта")
 	if forest_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(forest_task)
@@ -185,6 +207,13 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		WorkerThreadPool.wait_for_task_completion(task)
 	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 	for measured: Dictionary in [forest_times, map_times, texture_times]: r.timings.merge(measured)
+	if on_progress.is_valid():
+		on_progress.call(0.95, "Подготовка места появления")
+	t = Time.get_ticks_usec()
+	var border: Dictionary = outer.wait_to_finish() if outer.is_started() else build_outer.call(r.world)
+	r.world.outer = border.land
+	r.timings.outer_ms = border.ms
+	r.timings.outer_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 	# Cache generation checks the version before expensive preparation. A broken saved definition is a
 	# loading error, never a reason to discard the world, silently remove trails or regenerate its geography.
 	if r.trail.get("state", "") == "stale" or (not r.trail.get("applied", false) and not r.trail.get("errors", PackedStringArray()).is_empty()):

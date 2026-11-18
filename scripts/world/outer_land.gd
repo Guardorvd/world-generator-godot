@@ -50,8 +50,12 @@ func _init(w: WorldData = null) -> void:
 	if w == null: return
 	W = w.W
 	H = w.H
-	_ring = [compute(w, -1, -1, w.W + 2, 1), compute(w, -1, w.H, w.W + 2, 1),
-		compute(w, -1, 0, 1, w.H), compute(w, w.W, 0, 1, w.H)]
+	var edges := [Rect2i(-1, -1, W + 2, 1), Rect2i(-1, H, W + 2, 1),
+		Rect2i(-1, 0, 1, H), Rect2i(W, 0, 1, H)]
+	var ledger := w.outer.get_ledger() if w.outer != null else {}
+	_ring.assign(Parallel.bands(edges.size(), func(i: int, _last: int) -> Dictionary:
+		var edge: Rect2i = edges[i]
+		return compute(w, edge.position.x, edge.position.y, edge.size.x, edge.size.y, ledger), 1))
 
 
 ## Поля клеток прямоугольника cw × ch с углом (x0, y0): h — высота в единицах WorldData.h (ниже 0 — море,

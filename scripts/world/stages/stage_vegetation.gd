@@ -6,7 +6,7 @@ extends RefCounted
 ## Пишет: w.obj_* (объекты: x, y, k — вид из Biomes.T_*, v — вариант, s — масштаб), w.chunks (номера объектов
 ## по чанкам), w.CS (сторона чанка в клетках), CW, CH (чанков по ширине и высоте), obj_count.
 
-const PROGRESS := 0.76
+const PROGRESS := 0.86
 const LABEL := "Леса, кустарники и камни"
 const VILLAGE_R := 7.0 # полуширина квадрата вокруг поселения, клеток
 # С 2.8 растительность следует характеру местности (высота, крутизна, вода), а не только биому
@@ -628,6 +628,8 @@ static func near_hut(settlements: Array, ox: float, oy: float, radius: float = 0
 ## Отступы между объектами — только внутри текущего чанка (begin_chunk), см. place_chunk.
 ## Без мира (за краем карты) — один общий список, без проверок троп и домов.
 class ObjStore:
+	# Радиус большинства объектов не превышает двух клеток. Более крупные используют общий список.
+	const HUT_SEARCH_RADIUS := 2.0
 	var x := PackedFloat64Array()
 	var y := PackedFloat64Array()
 	var k := PackedInt32Array()
@@ -639,6 +641,7 @@ class ObjStore:
 	# Поля мира копируются в хранилище: с 12.2 хранилищ несколько, по одному на поток, а частое чтение
 	# свойств общего объекта из многих потоков упирается в общие счётчики ссылок
 	var _huts := PackedFloat64Array() # x, y поселения или места и x, y дома — по четыре числа на дом
+	var _chunk_huts := PackedInt32Array() # индексы домов, чей отступ может пересечь текущий чанк
 	var _crown := PackedFloat64Array(Biomes.CROWN_RADIUS)
 	var _path_mask := PackedByteArray()
 	var _W := 0
@@ -678,19 +681,27 @@ class ObjStore:
 			var c := floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS)
 			chunk_lists[c] = []
 			_list = chunk_lists[c]
+			_chunk_huts.clear()
+			const REACH := HUT_SEARCH_RADIUS + 0.75
+			for n in range(0, _huts.size(), 4):
+				var hx := _huts[n + 2]
+				var hy := _huts[n + 3]
+				if hx >= x0 - REACH and hx <= x1 + REACH and hy >= y0 - REACH and hy <= y1 + REACH:
+					_chunk_huts.append(n)
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:
 		var massif := kind == Biomes.T_ROCK and RockModels.is_massif(variant)
 		var radius: float = _crown[kind] * sc
 		var cx := floori(ox)
 		var cy := floori(oy)
-		if w != null:
-			# = near_hut по поселениям и местам, по плоскому списку домов
-			for n in range(0, _huts.size(), 4):
-				if absf(_huts[n] - ox) <= VILLAGE_R + radius and absf(_huts[n + 1] - oy) <= VILLAGE_R + radius 						and absf(_huts[n + 2] - ox) < 0.75 + radius and absf(_huts[n + 3] - oy) < 0.75 + radius:
+		if radius <= HUT_SEARCH_RADIUS:
+			for n: int in _chunk_huts:
+				if _near_hut(n, ox, oy, radius):
 					return
-			# 15.0: прежняя проверка «крона не над клетками путей» убрана: просвет у путей решает place_chunk
-			# по стволу и кромке полотна (clear_of_path), кроны могут смыкаться над тропой
+		else:
+			for n in range(0, _huts.size(), 4):
+				if _near_hut(n, ox, oy, radius):
+					return
 		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
 		# Наибольший зазор (два старых дуба, масштаб до 1.5) около 2,6 клетки; поиск ±3 клетки покрывает любую пару (GAP_K).
 		var cw := _x1 - _x0
@@ -714,3 +725,7 @@ class ObjStore:
 		k.append(kind)
 		v.append(variant)
 		s.append(sc)
+
+	func _near_hut(n: int, ox: float, oy: float, radius: float) -> bool:
+		return absf(_huts[n + 2] - ox) < 0.75 + radius and absf(_huts[n + 3] - oy) < 0.75 + radius \
+			and absf(_huts[n] - ox) <= VILLAGE_R + radius and absf(_huts[n + 1] - oy) <= VILLAGE_R + radius

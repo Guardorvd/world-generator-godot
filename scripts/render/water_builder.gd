@@ -97,6 +97,7 @@ static func _lake_arrays(w: WorldData, heights: Heightfield, cells := Rect2i()) 
 	var idx := PackedInt32Array()
 	var lake := w.lake
 	var filled := w.filled
+	var ground := heights.hv
 	var area := Rect2i(0, 0, W - 1, H - 1) if not cells.has_area() else cells.intersection(Rect2i(0, 0, W - 1, H - 1))
 	for j in range(area.position.y, area.end.y):
 		for i in range(area.position.x, area.end.x):
@@ -111,8 +112,8 @@ static func _lake_arrays(w: WorldData, heights: Heightfield, cells := Rect2i()) 
 			var x1 := (i + 1.5) * TILE
 			var z0 := (j + 0.5) * TILE
 			var z1 := (j + 1.5) * TILE
-			var corners := [Vector3(x0, heights.hv[a], z0), Vector3(x1, heights.hv[a + 1], z0),
-				Vector3(x0, heights.hv[a + W], z1), Vector3(x1, heights.hv[a + W + 1], z1)]
+			var corners := [Vector3(x0, ground[a], z0), Vector3(x1, ground[a + 1], z0),
+				Vector3(x0, ground[a + W], z1), Vector3(x1, ground[a + W + 1], z1)]
 			_clip_lake([corners[0], corners[1], corners[2]], y, pos, idx)
 			_clip_lake([corners[1], corners[3], corners[2]], y, pos, idx)
 	return _arrays(pos, idx)

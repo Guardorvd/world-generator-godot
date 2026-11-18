@@ -2,6 +2,7 @@ extends RefCounted
 ## One read queue for terrain AND both water layers; main thread polls, workers only produce arrays.
 const MAX_ACTIVE := 2
 const MAX_QUEUED := 6
+const MAX_CROWN_TASKS := 2
 const READ_BYTES := 32 * 1024 * 1024
 const LRU := preload("res://scripts/core/byte_lru.gd")
 const FarForest := preload("res://scripts/render/distant_forest.gd")
@@ -66,9 +67,9 @@ func crowns(key: Vector2i) -> Variant:
 	_far_lock.unlock()
 	return value
 
-## Terrain tiles that arrived without a read (startup/cache) get their crowns on a worker.
+## Рельеф, пришедший без крон, получает их в фоновой задаче после публикации.
 func request_crowns(key: Vector2i) -> void:
-	if closed or _far_tasks.has(key) or crowns(key) != null: return
+	if closed or _far_tasks.size() >= MAX_CROWN_TASKS or _far_tasks.has(key) or crowns(key) != null: return
 	_far_tasks[key] = WorkerThreadPool.add_task(func() -> void: _make_crowns(key), false, "Далёкий лес")
 
 func _make_crowns(key: Vector2i) -> void:
@@ -99,7 +100,6 @@ func _release_handoff(id: Vector3i) -> void:
 
 func read(layer: int, key: Vector2i) -> Array:
 	var started := Time.get_ticks_usec()
-	if layer < 0 and crowns(key) == null: _make_crowns(key)
 	var ref: Variant = groups[layer + 1][key]
 	var arrays: Array = []
 	var repaired := false

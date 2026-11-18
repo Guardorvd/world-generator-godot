@@ -75,33 +75,38 @@ static func _cell_fields(w: WorldData) -> Array:
 	var W := w.W
 	var H := w.H
 	var elev := w.elev
+	var lake := w.lake
+	var ocean := w.ocean
+	var height := w.h
+	var filled := w.filled
 	var shade := PackedFloat32Array()
 	var wf := PackedFloat32Array()
 	var depth := PackedFloat32Array()
 	shade.resize(w.N)
 	wf.resize(w.N)
 	depth.resize(w.N)
-	var L := [-0.55, -0.55, 0.63]
 	for y in H:
+		var row := y * W
+		var above := maxi(0, y - 1) * W
+		var below := mini(H - 1, y + 1) * W
 		for x in W:
-			var i := y * W + x
-			var l := elev[y * W + maxi(0, x - 1)]
-			var r := elev[y * W + mini(W - 1, x + 1)]
-			var u := elev[maxi(0, y - 1) * W + x]
-			var d := elev[mini(H - 1, y + 1) * W + x]
-			var ex := 45.0
-			var nx := -(r - l) * 0.5 * ex
-			var ny := -(d - u) * 0.5 * ex
+			var i := row + x
+			var l := elev[row + maxi(0, x - 1)]
+			var r := elev[row + mini(W - 1, x + 1)]
+			var nx := -(r - l) * 0.5 * 45.0
+			var ny := -(elev[below + x] - elev[above + x]) * 0.5 * 45.0
 			var ln := sqrt(nx * nx + ny * ny + 1.0)
-			var dot: float = (nx * L[0] + ny * L[1] + L[2]) / ln
+			var dot := (nx * -0.55 + ny * -0.55 + 0.63) / ln
 			shade[i] = clampf(dot / 0.63, 0.45, 1.4)
 			var dep := 0.0
-			if w.ocean[i] != 0:
-				dep = -w.h[i]
-			elif w.lake[i] != 0:
-				dep = w.filled[i] - w.h[i]
+			var sea := ocean[i] != 0
+			var inland := lake[i] != 0
+			if sea:
+				dep = -height[i]
+			elif inland:
+				dep = filled[i] - height[i]
 			depth[i] = dep
-			wf[i] = 0.004 + minf(dep, 0.02) if (w.ocean[i] != 0 or w.lake[i] != 0) else -0.012
+			wf[i] = 0.004 + minf(dep, 0.02) if sea or inland else -0.012
 	return [shade, wf, depth]
 
 

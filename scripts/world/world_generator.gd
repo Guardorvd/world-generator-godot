@@ -160,11 +160,10 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 			_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)
-	var later := Time.get_ticks_usec()
-	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	var surface: Heightfield = w.generation.trail_surface
+	var later := Time.get_ticks_usec()
 	if surface == null:
-		# Слой природы и загрузчик используют одну восстановленную поверхность.
+		step.call(0.85, "Подготовка рельефа и дорожного полотна")
 		surface = Heightfield.base_of(w)
 		w.generation.surface_rock = RockRelief.field_of(w)
 		if w.trail_plan.get("mode", "") == "terrain_network":
@@ -177,9 +176,13 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		else:
 			RoadSurface.run(w)
 			surface.finish_paths()
+		later = _stage_time(w, "path_surface", later)
+	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	StageVegetation.run(w, surface)
 	_stage_time(w, "vegetation", later)
+	if w.generation.trail_surface == null and w.trail_plan.get("mode", "") != "terrain_network":
+		surface.weaken_world()
+		w.generation.trail_surface = surface
 	w.clear_noise_fields()
 	w.base_heights = null
-	step.call(0.86, "Отрисовка ландшафта")
 	return w

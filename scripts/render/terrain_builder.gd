@@ -30,7 +30,7 @@ static func _normal(hv: PackedFloat32Array, W: int, H: int, i: int, j: int) -> V
 
 
 ## Только CPU-массивы: подготовка в фоне, загрузка на GPU — в GameWorld.start.
-static func build_arrays(w: WorldData, heights: Heightfield, cells := Rect2i()) -> Array:
+static func build_arrays(w: WorldData, heights: Heightfield, cells := Rect2i(), patch_keys: Variant = null) -> Array:
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
@@ -75,14 +75,14 @@ static func build_arrays(w: WorldData, heights: Heightfield, cells := Rect2i()) 
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_INDEX] = idx
 	if heights.road_refinement != null:
-		refine_arrays(arrays, w, heights, area)
+		refine_arrays(arrays, w, heights, area, patch_keys)
 	return arrays
 
 
 ## One requested chunk plus a cell halo. Global normals, patch ordering and UVs are unchanged.
-static func build_chunk(w: WorldData, heights: Heightfield, key: Vector2i) -> Array:
+static func build_chunk(w: WorldData, heights: Heightfield, key: Vector2i, patch_keys: Variant = null) -> Array:
 	var area := Rect2i(key * PlanTerrain.CELLS, Vector2i.ONE * PlanTerrain.CELLS).grow(1)
-	return PlanTerrain.partition(build_arrays(w, heights, area)).get(key, [])
+	return PlanTerrain.partition(build_arrays(w, heights, area, patch_keys)).get(key, [])
 
 
 ## Поправить высоты меша в клетках changed (и нормали вокруг них) по heights.hv
@@ -112,14 +112,14 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 
 ## DOD (ноябрь 2026): весь проход одним вызовом C# (FastGrid.RefineTerrain), патчи — столбцами. Результат тот же, что у
 ## цикла в refine_arrays ниже (он остаётся эталоном для tools/dod_verify.gd).
-static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: Heightfield, area: Rect2i) -> bool:
+static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: Heightfield, area: Rect2i, patch_keys: Variant) -> bool:
 	var keys := PackedInt32Array()
 	var ph := PackedFloat32Array()
 	var pc := PackedColorArray()
 	var pu := PackedVector2Array()
 	var patches := heights.road_refinement.patches
 	var sampled := area.grow(1)
-	for key: int in patches:
+	for key: int in patch_keys:
 		if not sampled.has_point(Vector2i(key % w.W, key / w.W)):
 			continue
 		keys.append(key)
@@ -148,33 +148,58 @@ static func build_chunks(w: WorldData, heights: Heightfield) -> Dictionary:
 	var chunks := {}
 	if columns <= 0 or rows <= 0:
 		return chunks
+	var patches := {}
+	if heights.road_refinement != null:
+		# Порядок патчей задаёт порядок вершин меша. Раскладываем его один раз,
+		# с запасом на клетку меша и ещё клетку для нормалей.
+		const CELLS := PlanTerrain.CELLS
+		for k: int in heights.road_refinement.patches:
+			var x := k % w.W
+			var y := k / w.W
+			for cy in range(maxi(0, (y - 2) / CELLS), mini(rows - 1, (y + 2) / CELLS) + 1):
+				for cx in range(maxi(0, (x - 2) / CELLS), mini(columns - 1, (x + 2) / CELLS) + 1):
+					var key := Vector2i(cx, cy)
+					if not patches.has(key):
+						patches[key] = PackedInt32Array()
+					patches[key].append(k)
 	var count := columns * rows
 	var band := maxi(1, ceili(count / 8.0))
 	for part: Dictionary in Parallel.bands(count, func(first: int, last: int) -> Dictionary:
 		var result := {}
 		for i in range(first, last):
 			var key := Vector2i(i % columns, i / columns)
-			result[key] = build_chunk(w, heights, key)
+			result[key] = build_chunk(w, heights, key, patches.get(key, PackedInt32Array()))
 		return result, band):
 		chunks.merge(part)
 	return chunks
 
 
 ## Заменить только квадраты у путей сеткой 1 м. Это часть земли, отдельной накладной ленты нет.
-static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cells := Rect2i()) -> void:
+static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cells := Rect2i(), patch_keys: Variant = null) -> void:
 	var refinement := heights.road_refinement
 	if arrays.is_empty() or refinement == null:
 		return
+	if patch_keys != null and patch_keys.is_empty():
+		var colors := PackedColorArray()
+		var uv2 := PackedVector2Array()
+		var vertices: int = arrays[Mesh.ARRAY_VERTEX].size()
+		colors.resize(vertices)
+		colors.fill(Color(0, 0, 0, 0))
+		uv2.resize(vertices)
+		arrays[Mesh.ARRAY_COLOR] = colors
+		arrays[Mesh.ARRAY_TEX_UV2] = uv2
+		return
+	var keys: Variant = refinement.patches if patch_keys == null else patch_keys
 	var area := Rect2i(0, 0, w.W - 1, w.H - 1) if not cells.has_area() else cells
 	# At the plan rim normal samples can reach OuterLand; interior chunks only sample the plan.
 	var interior := Rect2i(1, 1, w.W - 3, w.H - 3)
 	if allow_fast_refine and (w.outer == null or interior.encloses(area)):
 		var native := Grid.fast_grid()
 		if native != null:
-			if _refine_native(native, arrays, w, heights, area):
+			if _refine_native(native, arrays, w, heights, area, keys):
 				return
 	var patches := {}
-	for key: int in refinement.patches:
+	for key: int in keys:
 		if area.has_point(Vector2i(key % w.W, key / w.W)): patches[key] = refinement.patches[key]
 	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]

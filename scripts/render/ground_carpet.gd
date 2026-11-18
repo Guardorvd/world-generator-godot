@@ -528,9 +528,14 @@ static func road_stone_tint(surface: int, h: float) -> Color:
 func _road_stones(i: int, j: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	var refine = heights.road_refinement
-	if refine == null:
+	if refine == null or stones <= 0.0:
 		return out
-	var w := world
+	var width := world.W
+	# Плитка 4×4 м пересекает не больше четырёх патчей сетки с началом в центрах клеток.
+	var key := j * width + i
+	var patches: Dictionary = refine.patches
+	if not patches.has(key) and not patches.has(key - 1) and not patches.has(key - width) and not patches.has(key - width - 1):
+		return out
 	var step := TILE / STONE_SUB
 	var sky := 1.0 - forest.get_pixel(i, j).r
 	var n := 0
@@ -541,13 +546,13 @@ func _road_stones(i: int, j: int) -> PackedFloat32Array:
 		var gz := j * STONE_SUB + m / STONE_SUB
 		var x := (gx + WGRandom.hash2(gx, gz, 311)) * step
 		var z := (gz + WGRandom.hash2(gx, gz, 313)) * step
-		if refine.weight_at(x, z, w.W) < 0.08:
+		if refine.weight_at(x, z, width) < 0.08:
 			continue
-		var at: Dictionary = refine.sample(x, z, w.W)
+		var at: Dictionary = refine.sample(x, z, width)
 		if at.is_empty():
 			continue
 		var h := WGRandom.hash2(gx, gz, 317)
-		var size := road_stone(at.weight, at.across, at.surface, at.road, h / maxf(stones, 0.001), stone_clump(x, z)) if stones > 0.0 else 0.0
+		var size := road_stone(at.weight, at.across, at.surface, at.road, h / maxf(stones, 0.001), stone_clump(x, z))
 		if size <= 0.0 or heights.depth_at(x, z) > 0.0:
 			continue
 		if out.is_empty():
@@ -561,9 +566,9 @@ func _road_stones(i: int, j: int) -> PackedFloat32Array:
 		y_high = maxf(y_high, y)
 	out.resize(n * STRIDE)
 	if n > 0:
-		var key := Vector2i(i, j)
-		var old: Vector2 = _tile_y.get(key, Vector2.ZERO)
-		_tile_y[key] = Vector2(y_low, y_high + 0.7) if old == Vector2.ZERO else Vector2(minf(old.x, y_low), maxf(old.y, y_high + 0.7))
+		var tile := Vector2i(i, j)
+		var old: Vector2 = _tile_y.get(tile, Vector2.ZERO)
+		_tile_y[tile] = Vector2(y_low, y_high + 0.7) if old == Vector2.ZERO else Vector2(minf(old.x, y_low), maxf(old.y, y_high + 0.7))
 	return out
 
 

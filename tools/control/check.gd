@@ -282,6 +282,7 @@ func _process(delta: float) -> bool:
 					# первая загрузка генерирует мир и пишет его в чистый кэш прогона
 					GameContext.scope.cache.enabled = true
 					GameContext.scope.cache.dir = out.path_join("world_cache")
+					GameContext.scope.settings.remember_seed(seed_text)
 					GameContext.scope.cache.invalidate_from(seed_text, size, 0)
 				if compute_probe != null:
 					compute_before = compute_probe.CaptureMetrics()

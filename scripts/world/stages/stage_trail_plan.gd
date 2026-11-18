@@ -39,16 +39,17 @@ static func prepare(h: Heightfield) -> Dictionary:
 	var consistency := consistency_errors(w)
 	if not consistency.is_empty():
 		return {state = str(plan.get("state", "none")), applied = false, variant = "", errors = consistency, ms = 0.0, earthworks = {}}
+	var ready: Heightfield = w.generation.trail_surface
+	if ready != null:
+		copy_surface(h, ready)
+		w.generation.trail_surface = null
 	if plan.get("mode", "") != "terrain_network" or stale(plan):
-		h.finish_paths()
+		if ready == null:
+			h.finish_paths()
 		return apply(h)
 	var started := Time.get_ticks_usec()
 	var errors := PackedStringArray()
-	if w.generation.trail_surface != null:
-		var ready: Heightfield = w.generation.trail_surface
-		copy_surface(h, ready)
-		w.generation.trail_surface = null
-	else:
+	if ready == null:
 		errors = load(NETWORK_SCRIPT).restore(h, plan)
 	var out := {state = plan.state, applied = plan.state == "found" and errors.is_empty(), variant = "основной",
 		errors = errors, ms = 0.0, earthworks = {}}

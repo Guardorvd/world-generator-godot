@@ -14,6 +14,9 @@ var occupied: Array[AABB] = [] # несколько крупных детале�
 var _occ_cells := {} # Vector2i(клетка мира) -> PackedInt32Array номеров в occupied: травинка смотрит 1–4 клетки, а не весь список
 var _cells := {} # Vector2i(клетка) -> [x, z, радиус, объект, ...], см. prepare
 var _max_r := 0.0
+var _place_cells := {}
+var _clear_rect := Rect2i()
+var _clear_ground := PackedByteArray()
 
 
 func _init(w: WorldData, h: Heightfield) -> void:
@@ -149,10 +152,23 @@ func ground_clear(x: float, z: float, radius: float, root_collar := false) -> bo
 		var cx := floori(x / TILE)
 		var cy := floori(z / TILE)
 		if cx >= 0 and cy >= 0 and cx < world.W and cy < world.H and world.path_mask[cy * world.W + cx] != 0: return false
-	if StageVegetation.near_hut(world.settlements, x / TILE, z / TILE, radius / TILE + 0.3) \
-			or StageVegetation.near_hut(world.sites, x / TILE, z / TILE, radius / TILE + 0.3):
+	var hut_radius := radius / TILE + 0.3
+	if not _place_cells.is_empty() and (StageVegetation.VILLAGE_R + hut_radius) * TILE <= OuterLand.SETTLEMENT_REACH:
+		if StageVegetation.near_hut(_place_cells.get(OuterLand.collision_cell(x, z), []), x / TILE, z / TILE, hut_radius):
+			return false
+	elif StageVegetation.near_hut(world.settlements, x / TILE, z / TILE, hut_radius) \
+			or StageVegetation.near_hut(world.sites, x / TILE, z / TILE, hut_radius):
 		return false
+	var lo := Vector2i(floori((x - radius) / TILE), floori((z - radius) / TILE))
+	var hi := Vector2i(floori((x + radius) / TILE), floori((z + radius) / TILE))
+	var footprint := Rect2i(lo, hi - lo + Vector2i.ONE)
+	if not root_collar and _clear_rect.has_area() and _clear_rect.encloses(footprint) and _clear_footprint(footprint):
+		return true
 	var steps := ceili(radius * 2.0)
+	var width := world.W
+	var height := world.H
+	var paths := world.path_mask
+	var refinement := heights.road_refinement
 	var rc := world.river_cells() # коридор ленты реки, как у генератора растительности
 	for j in steps + 1:
 		for i in steps + 1:
@@ -160,14 +176,14 @@ func ground_clear(x: float, z: float, radius: float, root_collar := false) -> bo
 			var pz := z + lerpf(-radius, radius, float(j) / maxi(1, steps))
 			var cx := floori(px / TILE)
 			var cy := floori(pz / TILE)
-			if cx < 0 or cy < 0 or cx >= world.W or cy >= world.H:
+			if cx < 0 or cy < 0 or cx >= width or cy >= height:
 				if not (region_dry(px, pz) if root_collar else region_clear(px, pz)): return false
 				continue
-			var k := cy * world.W + cx
+			var k := cy * width + cx
 			# 15.0: у дорог и троп — их настоящее полотно (weight_at ниже), а не клетка 4 м; звериная тропа без полотна — клеткой
-			if (not root_collar and (world.path_mask[k] == 1 or (world.path_mask[k] > 1 and heights.road_refinement == null))) or rc[k] != 0:
+			if (not root_collar and (paths[k] == 1 or (paths[k] > 1 and refinement == null))) or rc[k] != 0:
 				return false
-			if not root_collar and heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, world.W) > 0.08:
+			if not root_collar and refinement != null and refinement.weight_at(px, pz, width) > 0.08:
 				return false
 			if root_collar and heights._cell_list(px, pz) != null:
 				return false
@@ -177,11 +193,59 @@ func ground_clear(x: float, z: float, radius: float, root_collar := false) -> bo
 	return true
 
 
+func _clear_footprint(rect: Rect2i) -> bool:
+	var size := _clear_rect.size.x
+	for y in range(rect.position.y - _clear_rect.position.y, rect.end.y - _clear_rect.position.y):
+		var row := y * size - _clear_rect.position.x
+		for x in range(rect.position.x, rect.end.x):
+			if _clear_ground[row + x] == 0:
+				return false
+	return true
+
+
+## Клетка целиком сухая, если в четырёх пересекающих её квадах нет дорожных патчей и озёр,
+## все вершины выше уровня моря, а клетку не задевает река. Остальные клетки проверяются по точкам.
+func _prepare_clear_ground(px: float, pz: float, radius: float) -> void:
+	var width := world.W
+	var height := world.H
+	var lo := Vector2i(floori((px - radius) / TILE), floori((pz - radius) / TILE))
+	var hi := Vector2i(floori((px + radius) / TILE), floori((pz + radius) / TILE))
+	_clear_rect = Rect2i(lo, hi - lo + Vector2i.ONE).intersection(Rect2i(1, 1, width - 2, height - 2))
+	var paths := world.path_mask
+	var river := world.river_cells()
+	var lake := world.lake
+	var ground := heights.hv
+	if not _clear_rect.has_area() or paths.size() != world.N or river.size() != world.N or lake.size() != world.N or ground.size() != world.N:
+		_clear_rect = Rect2i()
+	_clear_ground.resize(_clear_rect.get_area())
+	_clear_ground.fill(0)
+	var refinement := heights.road_refinement
+	var patches: Dictionary = refinement.patches if refinement != null else {}
+	var ribbons := heights._river_cells
+	for y in range(_clear_rect.position.y, _clear_rect.end.y):
+		for x in range(_clear_rect.position.x, _clear_rect.end.x):
+			var k := y * width + x
+			if paths[k] == 1 or (paths[k] > 1 and refinement == null) or river[k] != 0 or ribbons.has(k):
+				continue
+			if patches.has(k) or patches.has(k - 1) or patches.has(k - width) or patches.has(k - width - 1):
+				continue
+			var dry := true
+			for row in range(k - width, k + width + 1, width):
+				if lake[row - 1] != 0 or lake[row] != 0 or lake[row + 1] != 0 \
+						or not (ground[row - 1] >= 0.0 and ground[row] >= 0.0 and ground[row + 1] >= 0.0):
+					dry = false
+					break
+			if dry:
+				_clear_ground[(y - _clear_rect.position.y) * _clear_rect.size.x + x - _clear_rect.position.x] = 1
+
+
 ## Один раз на обновление: стволы, валуны и кусты вокруг игрока раскладываются по клеткам мира,
 ## чтобы проверка детали или травинки смотрела несколько соседних клеток, а не целые чанки.
 func prepare(px: float, pz: float, radius: float) -> void:
 	_cells.clear()
 	_max_r = 0.0
+	_place_cells = OuterLand.index_collision_places(world.settlements + world.sites)
+	_prepare_clear_ground(px, pz, radius)
 	var side := world.CS * TILE
 	for cy in range(maxi(0, floori((pz - radius) / side)), mini(world.CH, ceili((pz + radius) / side))):
 		for cx in range(maxi(0, floori((px - radius) / side)), mini(world.CW, ceili((px + radius) / side))):

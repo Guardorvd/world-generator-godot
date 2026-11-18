@@ -8,7 +8,7 @@ var noise := {}
 var scale := 1.0
 var profile := {}
 var base_heights: Heightfield
-var trail_surface: Heightfield # accepted preparation; consumed by WorldLoader, never serialized
+var trail_surface: Heightfield # готовый рельеф с путями; передаётся загрузчику и не сериализуется
 var light := PackedFloat32Array() # только до конца генерации; в дисковый кэш не входит
 var surface_rock := PackedByteArray() # one byte/cell, shared by placement and the existing forest texture
 ## 11.11.2026: дорожная сеть этапа StageTrails как набор уникальных участков (StageTrails._add_trail).
