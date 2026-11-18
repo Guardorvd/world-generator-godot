@@ -428,9 +428,9 @@ func board_places(settlement: Variant, catalog: Variant = null) -> Array:
 	return nearby
 
 
-## Место открыто на большой карте: посещено, прочитано на доске или увидено сверху (вышка, вершина)
+## Место открыто на большой карте: посещено, прочитано на доске, увидено сверху (вышка, вершина) или названо взятым заданием
 func is_open(id: String) -> bool:
-	return visited.has(id) or map_journal.read.has(id) or explore.revealed.has(id)
+	return visited.has(id) or map_journal.read.has(id) or explore.revealed.has(id) or (quests != null and quests.known.has(id))
 
 
 func map_place_count() -> int:
@@ -441,7 +441,7 @@ func sync_map_places() -> void:
 	if not big_map.visible or world == null:
 		return
 	var known: Array = []
-	var ids := map_journal.read.merged(visited).merged(explore.revealed) # те же три источника, что в is_open
+	var ids := map_journal.read.merged(visited).merged(explore.revealed).merged(quests.known if quests != null else {}) # те же источники, что в is_open
 	for id: String in ids:
 		var place := world.place(id)
 		if not place.is_empty():
@@ -517,7 +517,7 @@ func at_place(place: Dictionary, x: float, z: float) -> bool:
 
 ## Название места известно: посещено, цель, место взятого задания (11.9+) или открыто сверху (вышка, вершина)
 func knows(id: String) -> bool:
-	return visited.has(id) or explore.revealed.has(id) or goal.get("key") == id or (quests != null and quests.known.has(id))
+	return is_open(id) or goal.get("key") == id
 
 
 ## Данные экрана «Путешествие» (JournalPanel.open): счётчики пути, открытые места по видам и страницы альбома

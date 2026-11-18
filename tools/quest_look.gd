@@ -30,7 +30,8 @@ func _initialize() -> void:
 	world.settlements = [home, {x = 180, y = 130, i = 1, name = "Каменка", importance = 1.0, connections = [0], huts = []}]
 	world.peaks = [{x = 160, y = 40, i = 2, name = "Седая"}]
 	world.lakes = [{x = 60, y = 150, i = 3, name = "Тихое", cells = 900, sx = 70, sy = 140}]
-	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2}]
+	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2},
+		{x = 40, y = 60, i = 6, name = "Заречный", type = "farm", rank = 1}]
 	_map_terrain()
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Variant in world.get(kind + "s"):
@@ -96,7 +97,12 @@ func _logic() -> void:
 	var quests := Quests.new()
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
-	_check(kinds.size() == 3 and kinds[0] in Quests.CARGO_KINDS and kinds[1] in ["photo", "chronicle"] and kinds[2] in ["visit", "tour"], "доска предлагает доставку, снимок и посещение или обход (%s)" % ", ".join(PackedStringArray(kinds)))
+	# 18.11.2026: на доске только груз — припасы на вышку и на хутор или в дом, хрупкий груз в поселение
+	_check(kinds.size() == 3 and kinds.all(func(k: String) -> bool: return k in Quests.OFFERED and k in Quests.CARGO_KINDS) and kinds.count("supplies") == 2 and kinds.count("fragile") == 1,
+		"доска предлагает только груз: два «Припасы» и «Хрупкий груз» (%s)" % ", ".join(PackedStringArray(kinds)))
+	var supply_targets := offers.filter(func(q: QuestData) -> bool: return q.kind == "supplies").map(func(q: QuestData) -> String: return q.target.name)
+	supply_targets.sort()
+	_check(supply_targets == ["Заречный", "Сторожевая"], "припасы — на вышку и на хутор, не в поселение и не к месту у порога (%s)" % ", ".join(PackedStringArray(supply_targets)))
 	var offer_id := func(q: QuestData) -> String: return q.id
 	_check(offers.map(offer_id) == _offers(quests).map(offer_id), "те же задания при повторном открытии доски")
 	_check(not offers.any(func(q: QuestData) -> bool: return q.target.name == "Колодец"), "место в паре шагов от поселения не задание")
@@ -159,6 +165,7 @@ func _logic() -> void:
 	_check(quests.photographed(_place("Сторожевая").key, 100.0) != "" and quests.step().do == "bring", "летопись: оба снимка — отвезти")
 	at = Vector2(100, 100)
 	_check(quests.tick(_arrived).begins_with("Задание выполнено"), "летопись выполнена")
+	_supplies_and_old_saves()
 	var texts := {}
 	for kind: String in ["delivery", "fragile", "visit"]:
 		for p: Dictionary in places:
@@ -167,6 +174,52 @@ func _logic() -> void:
 	_check(texts.size() >= 6, "формулировки разные (%d): %s" % [texts.size(), ", ".join(PackedStringArray(texts.keys()))])
 	var saved := quests.save_state()
 	_check(Quests.valid_save(saved), "сохранение после новых видов проходит проверку")
+
+
+## Припасы: на вышку — только с верхней площадки, на хутор — у места; задание из старого сохранения грузится и заканчивается
+func _supplies_and_old_saves() -> void:
+	var quests := Quests.new()
+	var offered := _offers(quests)
+	var tower_supply: QuestData = offered.filter(func(q: QuestData) -> bool: return q.target.name == "Сторожевая")[0]
+	var farm_supply: QuestData = offered.filter(func(q: QuestData) -> bool: return q.target.name == "Заречный")[0]
+	_check(tower_supply.steps[1].do == "climb" and farm_supply.steps[1].do == "carry", "вышка — шаг «подняться», хутор — «довезти»")
+	_check(not farm_supply.title.is_empty() and not farm_supply.text.is_empty() and not tower_supply.title.is_empty() and tower_supply.text.length() > 40, "тексты припасов написаны")
+	quests.accept(tower_supply)
+	_check(quests.known.has(tower_supply.target.key) and quests.known.has(tower_supply.giver), "взятое задание открывает вышку и поселение")
+	var on_deck := [false]
+	var arrived := func(place: Dictionary) -> bool:
+		return Vector2(place.x, place.y).distance_to(at) < 5.0 and (quests.step().do != "climb" or on_deck[0])
+	quests.pick_up()
+	_check(quests.cargo and quests.step().do == "climb" and quests.step_text().contains("вышки") and quests.step_text().contains("площадку"), "после сумки — подняться на площадку вышки (%s)" % quests.step_text())
+	at = Vector2(130, 40)
+	_check(quests.tick(arrived) == "" and quests.cargo, "у подножия вышки задание не засчитано")
+	on_deck[0] = true
+	_check(quests.tick(arrived).begins_with("Задание выполнено") and not quests.cargo and quests.done == 1, "на верхней площадке — припасы доставлены")
+	_check(not _offers(quests).any(func(q: QuestData) -> bool: return q.id == tower_supply.id), "доставленные на вышку припасы больше не предлагаются")
+	quests.accept(farm_supply)
+	quests.pick_up()
+	_check(quests.step_text().contains("хутор"), "хутор назван в шаге (%s)" % quests.step_text())
+	at = Vector2(40, 60)
+	_check(quests.tick(arrived).begins_with("Задание выполнено"), "на хутор довозят до места, без подъёма")
+	# сохранение с припасами и с отключёнными видами: проверка, загрузка и выполнение
+	var by_key := {}
+	for p: Dictionary in places:
+		by_key[p.key] = p
+	for old: QuestData in [Quests._make("supplies", _place("Ольховка"), [_place("Сторожевая")]), Quests._make("visit", _place("Ольховка"), [_place("Тихое")]),
+			Quests._make("photo", _place("Ольховка"), [_place("Седая"), _place("Каменка")]), Quests._make("delivery", _place("Ольховка"), [_place("Каменка")])]:
+		var held := Quests.new()
+		held.accept(old)
+		var state := held.save_state()
+		var restored := Quests.new()
+		_check(Quests.valid_save(state) and restored.restore_state(state, by_key) and restored.active.kind == old.kind, "сохранённое задание «%s» (%s) грузится" % [old.kind, old.title])
+		restored.abandon()
+		_check(restored.active.is_empty(), "и бросается («%s»)" % old.kind)
+	var visit_held := Quests.new()
+	visit_held.accept(Quests._make("visit", _place("Ольховка"), [_place("Тихое")]))
+	var back_from_save := Quests.new()
+	back_from_save.restore_state(visit_held.save_state(), by_key)
+	at = Vector2(60, 150)
+	_check(back_from_save.tick(_arrived).begins_with("Задание выполнено"), "посещение из старого сохранения заканчивается")
 
 
 func _shot(name: String) -> void:
@@ -253,6 +306,7 @@ func _run() -> void:
 	for b: Button in buttons:
 		if b.tooltip_text == "Взять задание: " + Quests.KINDS[offers[0].kind].title.to_lower():
 			b.pressed.emit()
+			break
 	_check(accepted.size() == 1 and accepted[0].kind in Quests.CARGO_KINDS, "кнопка «Взять» отдаёт задание")
 	quests.accept(accepted[0])
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
@@ -307,7 +361,7 @@ func _personal_map() -> void:
 	short_ride.record(Vector2(900, 0), 0.1)
 	var short_track := short_ride.save_state()
 	_check(short_save.legs.size() == 1 and short_save.legs[0][-1] == Vector2(2, 0)
-		and short_track.legs == short_save.legs and is_equal_approx(short_track.distance, 2.0),
+		and short_track.legs == short_save.legs and is_equal_approx(short_track.foot + short_track.bike, 2.0),
 		"короткая поездка сохраняется, скачок координат не попадает в трек")
 	var trail := hud.map_journal
 	for i in 25:
@@ -322,8 +376,9 @@ func _personal_map() -> void:
 	_check(trail.current.is_empty() and trail.read.size() == 3 and trail.distance > 350.0, "трек и открытия восстанавливаются при загрузке")
 	hud.visited[_place("Каменка").key] = true
 	hud.set_map_visible(true)
-	_check(hud.big_map.places.size() == 4 and not hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Седая"),
-		"личная карта показывает только посещённые и прочитанные места")
+	# посещённые и прочитанные на доске + место взятого задания (вышка «Сторожевая»): оно видно на карте сквозь туман ориентиров
+	_check(hud.big_map.places.size() == 5 and hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Сторожевая") and not hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Седая"),
+		"личная карта показывает посещённые, прочитанные и названные заданием места")
 	var cursor := Vector2(630.0, 320.0)
 	var before := hud.big_map.screen_to_world(cursor)
 	hud.big_map._zoom_at(cursor, 1.1)

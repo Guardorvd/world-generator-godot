@@ -1251,7 +1251,7 @@ func _physics_process(dt: float) -> void:
 			if not hud.explore.scanned.has(tower.id) and TowerLayout.on_deck(tower, player.x, player.z, player.feet):
 				_look_around(tower.id, Exploration.TOWER_RADIUS, "С вышки")
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
-	_quest_progress(quests.tick(func(place: Dictionary) -> bool: return hud.at_place(place, player.x, player.z)))
+	_quest_progress(quests.tick(_quest_arrived))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
 	if reached != "":
 		hud.toast(reached)
@@ -1612,6 +1612,16 @@ func _abandon_quest() -> void:
 
 func _quest_progress(text: String) -> void:
 	interaction_service.progress(text)
+
+## Игрок у места шага задания. Припасы на вышку засчитываются только на её верхней площадке (шаг climb): сумку надо
+## занести по лестнице пешком; тот же признак площадки, что у открытия мест с вышки (TowerLayout.on_deck)
+func _quest_arrived(place: Dictionary) -> bool:
+	if quests.step().get("do") == "climb":
+		for tower: Dictionary in heights.towers:
+			if tower.id == place.key:
+				return TowerLayout.on_deck(tower, player.x, player.z, player.feet)
+	return hud.at_place(place, player.x, player.z)
+
 
 func _quest_photo(shot: Dictionary) -> void:
 	interaction_service.photographed(shot)

@@ -21,9 +21,15 @@ const KINDS := {
 	photo = {title = "Снимок", color = Color(0.75, 0.95, 0.6)},
 	fragile = {title = "Хрупкий груз", color = Color(1.0, 0.55, 0.45)},
 	chronicle = {title = "Летопись", color = Color(0.6, 0.9, 0.75)},
+	supplies = {title = "Припасы", color = Color(0.92, 0.8, 0.38)},
 }
+## Что предлагает доска (18.11.2026). Остальные виды (посещение, обход, снимок, летопись и прежняя доставка в поселение)
+## отключены, но их сборка и шаги остаются: взятое в старом сохранении задание грузится, выполняется и бросается как раньше.
+## Вернуть вид на доску — добавить его сюда (снимок, летопись, посещение и обход включаются вместе).
+const OFFERED := ["supplies", "fragile"]
+const SIGHT_KINDS := ["photo", "chronicle", "visit", "tour"]
 ## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
-const CARGO_KINDS := ["delivery", "fragile"]
+const CARGO_KINDS := ["delivery", "fragile", "supplies"]
 ## Шаги. reach — дойти до места; pickup — взять сумку у доски (E); carry — довезти сумку;
 ## shoot — снять место в видоискателе (в прицеле его название); bring — довезти снимок.
 ## goal — ставить ли место шага целью на компасе (у pickup сумка рядом, хватает метки задания)
@@ -31,6 +37,7 @@ const STEPS := {
 	reach = {text = "Доберитесь до %s «%s»", case = "gen", goal = true},
 	pickup = {text = "Наденьте сумку у доски %s «%s»", case = "gen", goal = false},
 	carry = {text = "Довезите сумку в %s «%s»", case = "acc", goal = true},
+	climb = {text = "Поднимитесь с сумкой на верхнюю площадку %s «%s»: велосипед оставьте внизу", case = "gen", goal = true},
 	shoot = {text = "Сфотографируйте %s «%s»", case = "acc", goal = true},
 	bring = {text = "Отвезите снимок в %s «%s»", case = "acc", goal = true},
 }
@@ -39,7 +46,28 @@ const CASES := {
 	gen = {settlement = "поселения", peak = "вершины", lake = "озера", site = "места"},
 	acc = {settlement = "поселение", peak = "вершину", lake = "озеро", site = "место"},
 }
-const SPOT_MIN_CELLS := 60.0   # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
+## Виды места в нужном падеже для мест, куда возят припасы (вместо общего «места»)
+const SITE_WORDS := {
+	tower = {gen = "вышки", acc = "вышку"},
+	house = {gen = "дома", acc = "дом"},
+	farm = {gen = "хутора", acc = "хутор"},
+}
+const SUPPLY_GROUPS := [["tower"], ["house", "farm"]]  # одно задание на группу: вышка и одинокий дом или хутор
+const SUPPLY_TITLES := {
+	tower = ["Дозорным: «%s»", "Масло для фонаря: «%s»", "Провиант: «%s»"],
+	house = ["Припасы: «%s»", "Соль и спички: «%s»", "Крупа и свечи: «%s»"],
+	farm = ["Припасы: «%s»", "Мука и керосин: «%s»", "Зерно и гвозди: «%s»"],
+}
+const SUPPLY_TEXTS := {
+	tower = ["Дозорные просидели на вышке всю неделю. Отвезите им еду и масло, а сумку занесите наверх по лестнице: велосипед оставьте у подножия.",
+		"На вышке кончилось масло для фонаря. Доберитесь, оставьте велосипед внизу и поднимитесь с сумкой на верхнюю площадку.",
+		"Дозорный ждёт провиант. Лестница длинная — несколько пролётов, зато сверху видно далеко."],
+	house = ["В одиноком доме на отшибе ждут соль, спички и крупу. Сумку берите у доски — и по дороге к дому.",
+		"Хозяин редко выбирается в деревню. Привезите ему всё нужное прямо к порогу."],
+	farm = ["Хутор далеко от лавки: там ждут муку, керосин и гвозди. Сумку берите у доски — и по дороге к хутору.",
+		"К хутору дорога идёт полями. Привезите припасы к дому, пока не стемнело."],
+}
+const SPOT_MIN_CELLS := 60.0  # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
 const FAR_CELLS := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
 const SHOT_REACH_M := 400.0 # м: снимок для задания — не дальше этого от места
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
@@ -110,15 +138,29 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	if not far.is_empty() and not towns.any(func(t: Dictionary) -> bool: return t.key == far.key):
 		towns.append(far)
 	var out: Array = []
-	# доставка: в соседнее по дороге поселение, иногда — в дальнее; иногда хрупкий груз
-	var carry_kind := "fragile" if rng.randf() < FRAGILE_CHANCE else "delivery"
-	var open := towns.filter(func(t: Dictionary) -> bool: return not _done.has(_id(carry_kind, here, t)))
-	# 16.11.2026: доставка чаще ведёт в дальнее, лесное или предгорное поселение (SettlementRoles) — путешествие,
-	# а не соседняя улица; где таких по дорогам нет, выбор прежний.
-	var trips := open.filter(func(t: Dictionary) -> bool: return ROLE_DELIVERY_TEXTS.has(_role(t)))
-	var to := _pick(trips if not trips.is_empty() and rng.randf() < ROLE_CHANCE else open, rng)
-	if not to.is_empty():
-		out.append(_make(carry_kind, here, [to]))
+	# припасы: на вышку (сумку надо занести наверх по лестнице) и в одинокий дом или на хутор; ближние места первыми
+	if "supplies" in OFFERED:
+		for group: Array in SUPPLY_GROUPS:
+			var sites := spots.filter(func(p: Dictionary) -> bool: return p.kind == "site" and _site_type(p) in group and not _done.has(_id("supplies", here, p)))
+			var supply := _pick(sites.slice(0, 3), rng)
+			if not supply.is_empty():
+				out.append(_make("supplies", here, [supply]))
+	# доставка в поселение: хрупкий груз (падение разбивает его); прежняя «Доставка» — только если её вернули на доску
+	var carry_kind := ""
+	if "fragile" in OFFERED and ("delivery" not in OFFERED or rng.randf() < FRAGILE_CHANCE):
+		carry_kind = "fragile"
+	elif "delivery" in OFFERED:
+		carry_kind = "delivery"
+	if carry_kind != "":
+		var open := towns.filter(func(t: Dictionary) -> bool: return not _done.has(_id(carry_kind, here, t)))
+		# 16.11.2026: доставка чаще ведёт в дальнее, лесное или предгорное поселение (SettlementRoles) — путешествие,
+		# а не соседняя улица; где таких по дорогам нет, выбор прежний.
+		var trips := open.filter(func(t: Dictionary) -> bool: return ROLE_DELIVERY_TEXTS.has(_role(t)))
+		var to := _pick(trips if not trips.is_empty() and rng.randf() < ROLE_CHANCE else open, rng)
+		if not to.is_empty():
+			out.append(_make(carry_kind, here, [to]))
+	if not SIGHT_KINDS.any(func(k: String) -> bool: return k in OFFERED):
+		return out
 	# снимок: одно из ближних мест, отвезти в соседнее поселение или обратно сюда;
 	# иногда летопись — два соседних места и обратно сюда
 	var used := {}
@@ -143,6 +185,17 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 		else:
 			out.append(_make("visit", here, [walk]))
 	return out
+
+
+## Вид места-сооружения (SiteData.type: tower, house, farm…) или ""
+static func _site_type(place: Dictionary) -> String:
+	var src: Variant = place.get("src")
+	return "" if src == null or place.get("kind") != "site" else str(EntityCodec.value(src, "type", ""))
+
+
+## Вид места в падеже: для вышки, дома и хутора — своё слово, для остальных общее (CASES)
+static func _word(case: String, place: Dictionary) -> String:
+	return SITE_WORDS.get(_site_type(place), {}).get(case, CASES[case].get(place.kind, "места"))
 
 
 ## Роль поселения-цели (SettlementData.role) или "" — у мест и старых миров её нет
@@ -187,6 +240,14 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 			q.title = _variant(DELIVERY_TITLES, id) % target.name
 			q.text = _variant(ROLE_DELIVERY_TEXTS.get(_role(target), DELIVERY_TEXTS), id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
 			q.steps = [{do = "pickup", place = here}, {do = "carry", place = target}]
+		"supplies":
+			var type := _site_type(target)
+			if not SUPPLY_TITLES.has(type):
+				type = "house"
+			q.title = _variant(SUPPLY_TITLES[type], id) % target.name
+			q.text = _variant(SUPPLY_TEXTS[type], id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
+			# на вышку сумку заносят наверх (шаг climb: игрок на верхней площадке), к дому и хутору — довозят (carry: у места)
+			q.steps = [{do = "pickup", place = here}, {do = "climb" if type == "tower" else "carry", place = target}]
 		"fragile":
 			q.title = _variant(FRAGILE_TITLES, id) % target.name
 			q.text = _variant(FRAGILE_TEXTS, id, 1) + " Быстрое перемещение с грузом недоступно."
@@ -252,7 +313,7 @@ func step_text(s: Dictionary = step()) -> String:
 	if s.is_empty():
 		return ""
 	var step_def: Dictionary = STEPS[s.do]
-	return step_def.text % [CASES[step_def.case].get(s.place.kind, "места"), s.place.name]
+	return step_def.text % [_word(step_def.case, s.place), s.place.name]
 
 
 ## Место, которое надо держать целью на компасе, или пусто
@@ -290,9 +351,9 @@ func photographed(place_id: String, distance := 0.0) -> String:
 ## Такт игры: arrived(place) -> bool — игрок у места. Возвращает сообщение, если шаг пройден
 func tick(arrived: Callable) -> String:
 	var s := step()
-	if s.is_empty() or s.do not in ["reach", "carry", "bring"] or not arrived.call(s.place):
+	if s.is_empty() or s.do not in ["reach", "carry", "climb", "bring"] or not arrived.call(s.place):
 		return ""
-	if s.do == "carry":
+	if s.do in ["carry", "climb"]:
 		cargo = false
 	return _advance()
 
@@ -348,7 +409,7 @@ static func valid_save(d: Dictionary) -> bool:
 	for s: Variant in q.steps:
 		if not s is Dictionary or not STEPS.has(s.get("do", "")) or not s.get("place") is String:
 			return false
-	return d.cargo == (q.kind in CARGO_KINDS and q.steps[q.step].do == "carry")
+	return d.cargo == (q.kind in CARGO_KINDS and q.steps[q.step].do in ["carry", "climb"])
 
 
 func restore_state(d: Dictionary, places: Dictionary) -> bool:
