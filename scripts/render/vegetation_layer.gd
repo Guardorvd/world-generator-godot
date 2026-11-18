@@ -124,6 +124,10 @@ const ROCK_CONTACT := 0.55
 var world: WorldData
 var heights: Heightfield
 var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
+## 18.11.2026: ключи veg по чанкам (Vector2i -> Array[Vector3i]). _drop и refresh проверяют чанки, а не тысячи
+## записей veg (замер стресс-теста в лесу: до 3600 записей, _drop в среднем 1,5 мс, до 5 мс). Пишется только через
+## _veg_put/_veg_erase.
+var _veg_keys := {}
 var grass: MultiMesh
 var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
 var _grass_high := -Vector3.INF
@@ -863,20 +867,39 @@ func _by_distance(list: Array, p: Vector2) -> Array:
 	return out
 
 
+func _veg_put(key: Vector3i, entry: Dictionary) -> void:
+	if not veg.has(key):
+		var chunk := Vector2i(key.x, key.y)
+		if not _veg_keys.has(chunk):
+			_veg_keys[chunk] = []
+		_veg_keys[chunk].append(key)
+	veg[key] = entry
+
+
+func _veg_erase(key: Vector3i) -> void:
+	if not veg.erase(key):
+		return
+	var chunk := Vector2i(key.x, key.y)
+	var keys: Array = _veg_keys[chunk]
+	keys.erase(key)
+	if keys.is_empty():
+		_veg_keys.erase(chunk)
+
+
 func _drop(p: Vector2) -> void:
 	# Дальность считается один раз на чанк, а не на каждый вид в нём (в езде это было ~6 мс на проверку)
 	var limit := drop_radius + stream.lead().length()
 	var far := {}
-	for key: Vector3i in veg.keys():
-		var chunk := Vector2i(key.x, key.y)
-		if not far.has(chunk):
-			far[chunk] = _distance(chunk, p) > limit
+	for chunk: Vector2i in _veg_keys.keys():
+		far[chunk] = _distance(chunk, p) > limit
 		if far[chunk]:
 			# 15.1: узлы за drop_radius уже за своей дальностью видимости (tree_r + полчанка) и не рисуются:
 			# прятать и помечать их здесь не нужно — это делает _free_trash по бюджету кадра (на тысячах узлов
 			# при переносе было 13–22 мс за кадр).
-			_trash.append_array(veg[key].nodes)
-			veg.erase(key)
+			for key: Vector3i in _veg_keys[chunk]:
+				_trash.append_array(veg[key].nodes)
+				veg.erase(key)
+			_veg_keys.erase(chunk)
 	for chunk: Vector2i in _loaded.keys():
 		if far[chunk] if far.has(chunk) else _distance(chunk, p) > limit:
 			_loaded.erase(chunk)
@@ -1357,11 +1380,11 @@ func refresh(rect: Rect2i) -> void:
 		_dirty[chunk] = _epoch
 		_loaded.erase(chunk)
 		world.outer.veg.erase(chunk)
-		for key: Vector3i in veg.keys():
-			if key.x == chunk.x and key.y == chunk.y:
-				for node: MultiMeshInstance3D in veg[key].nodes:
-					_trash_node(node)
-				veg.erase(key)
+		for key: Vector3i in _veg_keys.get(chunk, []):
+			for node: MultiMeshInstance3D in veg[key].nodes:
+				_trash_node(node)
+			veg.erase(key)
+		_veg_keys.erase(chunk)
 	for x in range(floori(float(rect.position.x) / side), floori(float(rect.end.x - 1) / side) + 1):
 		for y in range(floori(float(rect.position.y) / side), floori(float(rect.end.y - 1) / side) + 1):
 			if not _on_map(Vector2i(x, y)):
@@ -1401,7 +1424,7 @@ func _discard_partial(built: Dictionary, beyond_range := false) -> void:
 				_trash.append_array(veg[key].nodes)
 			else:
 				_retire_nodes(veg[key].nodes)
-			veg.erase(key)
+			_veg_erase(key)
 	_loaded.erase(chunk)
 
 
@@ -1429,7 +1452,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 		var resume: int = built.get("node_cursor", 0)
 		if resume == 0:
 			entry.nodes = []
-			veg[Vector3i(chunk.x, chunk.y, entry.get("key_kind", kind))] = entry
+			_veg_put(Vector3i(chunk.x, chunk.y, entry.get("key_kind", kind)), entry)
 		var node_index := 0
 		for part in ["trunk", "crown"]:
 			if not def.has(part):
