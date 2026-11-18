@@ -912,6 +912,8 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 					var plate: Dictionary = ObeliskModels.plaque(form)
 					cat.plaques.append({id = oid, name = s.name, form = form, size = plate.size,
 						at = Transform3D(at.basis, at.origin) * Transform3D(Basis.IDENTITY, plate.pos)})
+					# 18.11.2026: ночная подсветка снизу с четырёх сторон (один дешёвый меш на обелиск)
+					parent.add_child(ObeliskModels.glow_node(form, Transform3D(at.basis, at.origin), absi(hash(oid))))
 				var xf := at
 				if u.t == "keep":
 					xf.basis = xf.basis.scaled(Vector3(1.0, (5.0 + float(v) * 1.5) / 6.4, 1.0))
@@ -1024,6 +1026,7 @@ static func _plinth(batch: MeshBatch, unit: Mesh, at: Transform3D, drop: float, 
 ## night — 0 днём, 1 ночью
 static func set_night(windows: StandardMaterial3D, night: float) -> void:
 	var lit := smoothstep(0.25, 0.85, night)
+	ObeliskModels.set_night(lit)
 	if windows != null:
 		if windows.emission_enabled:
 			windows.emission_energy_multiplier = lit * 2.6

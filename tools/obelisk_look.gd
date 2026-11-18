@@ -172,3 +172,24 @@ func _shots(parent: Node3D, plaques: Array) -> void:
 		sheet.blit_rect(images[k], Rect2i(Vector2i.ZERO, images[k].get_size()), Vector2i((k % 3) * 640, (k / 3) * 360))
 	sheet.save_png(out.path_join("obelisk_sheet.png"))
 	print("лист ", out.path_join("obelisk_sheet.png"))
+	# 18.11.2026: ночь — подсветка снизу с четырёх сторон (ObeliskModels.glow_node) и светящиеся стёкла фонарей
+	sun.visible = false
+	env.environment.background_color = Color(0.03, 0.04, 0.08)
+	env.environment.ambient_light_color = Color(0.09, 0.1, 0.16)
+	SettlementsBuilder.set_night(SettlementsBuilder.shared_opaque_mat, 1.0)
+	var night: Array[Image] = []
+	for p: Dictionary in order:
+		var target: Vector3 = p.at.origin
+		cam.position = target + p.at.basis.z * 7.0 + p.at.basis.x * 3.0 + Vector3(0, 1.8, 0)
+		cam.look_at(target + Vector3(0, 1.6, 0))
+		for i in 8:
+			await process_frame
+		var image := root.get_viewport().get_texture().get_image()
+		image.convert(Image.FORMAT_RGB8)
+		night.append(image)
+	var night_sheet := Image.create(1920, 720, false, Image.FORMAT_RGB8)
+	for k in night.size():
+		night_sheet.blit_rect(night[k], Rect2i(Vector2i.ZERO, night[k].get_size()), Vector2i((k % 3) * 640, (k / 3) * 360))
+	night_sheet.save_png(out.path_join("obelisk_night.png"))
+	SettlementsBuilder.set_night(SettlementsBuilder.shared_opaque_mat, 0.0)
+	print("ночь ", out.path_join("obelisk_night.png"))

@@ -9,6 +9,9 @@ const DARK := SettlementModels.CELL_DARK_WOOD
 const STONE := SettlementModels.CELL_STONE
 const ROOF := SettlementModels.CELL_ROOF
 const FLAG := SettlementModels.CELL_FLOWER_A
+const LIGHT := SettlementModels.CELL_WINDOW   # ночью светится (эмиссия общего материала, SettlementsBuilder.set_night)
+const PLANK := SettlementModels.CELL_PLASTER
+const METAL := SettlementModels.CELL_METAL
 const SINK := 1.8       # на сколько стойки уходят под землю у нижнего угла, м
 const ROOF_POSTS := 3.0 # высота стоек крыши над площадкой, м
 const ROOF_RISE := 1.9
@@ -28,6 +31,9 @@ static func build(st: SurfaceTool, level: int) -> void:
 	if level <= 1:
 		for edge: Dictionary in TowerLayout.rails():
 			_rail(st, edge.a, edge.b, edge.y, level)
+	_lights(st, level)
+	if level == 0:
+		_furniture(st)
 
 
 static func _box(st: SurfaceTool, size: Vector3, center: Vector3, basis: Basis, cell: int) -> void:
@@ -100,9 +106,86 @@ static func _roof(st: SurfaceTool, level: int) -> void:
 			_box(st, Vector3(0.16, 0.16, 2.0 * p + 0.2), Vector3(s * p, top + ROOF_POSTS - 0.1, 0), Basis.IDENTITY, DARK)
 	SettlementModels._cyl(st, 0.0, 3.9, ROOF_RISE, 4, Vector3(0, top + ROOF_POSTS + ROOF_RISE * 0.5, 0), Basis(Vector3.UP, PI / 4.0), ROOF)
 	if level <= 1:
+		# 18.11.2026: потолок из досок — снизу крыша больше не просвечивает пустой изнанкой
+		_box(st, Vector3(2.0 * p + 0.5, 0.06, 2.0 * p + 0.5), Vector3(0, top + ROOF_POSTS + 0.03, 0), Basis.IDENTITY, PLANK)
+	if level == 0:
+		# стропила от углов к коньку и свесы
+		var apex_y := top + ROOF_POSTS + ROOF_RISE - 0.15
+		for sx: float in [-1.0, 1.0]:
+			for sz: float in [-1.0, 1.0]:
+				_beam(st, Vector3(sx * 2.7, top + ROOF_POSTS + 0.05, sz * 2.7), Vector3(0, apex_y, 0), 0.12, DARK)
+	if level <= 1:
 		var apex := top + ROOF_POSTS + ROOF_RISE
 		_box(st, Vector3(0.1, 2.2, 0.1), Vector3(0, apex + 1.0, 0), Basis.IDENTITY, DARK)
 		_box(st, Vector3(1.0, 0.6, 0.06), Vector3(0.5, apex + 1.7, 0), Basis.IDENTITY, FLAG)
+
+
+## Огни: фонарь под крышей над настилом и фонари на угловых площадках. Ячейка LIGHT светится ночью — без
+## источников света, одной эмиссией общего материала; на дальнем LOD остаётся фонарь под крышей (видно огонёк издалека)
+static func _lights(st: SurfaceTool, level: int) -> void:
+	var top := TowerLayout.DECK_Y
+	var hang := top + ROOF_POSTS - 0.05
+	if level <= 1:
+		_box(st, Vector3(0.04, 0.6, 0.04), Vector3(0, hang - 0.3, 0), Basis.IDENTITY, METAL)
+		_box(st, Vector3(0.42, 0.08, 0.42), Vector3(0, hang - 0.62, 0), Basis.IDENTITY, DARK)
+	_box(st, Vector3(0.34, 0.42, 0.34), Vector3(0, hang - 0.87, 0), Basis.IDENTITY, LIGHT)
+	if level <= 1:
+		_box(st, Vector3(0.42, 0.06, 0.42), Vector3(0, hang - 1.1, 0), Basis.IDENTITY, DARK)
+	if level > 0:
+		return
+	# фонари на стойках угловых площадок, наружу от каркаса
+	var k := 0
+	for p: Dictionary in TowerLayout.platforms():
+		if k >= 4:
+			break
+		var at: Vector2 = p.c
+		var out := Vector2(signf(at.x), signf(at.y))
+		var post := Vector3(at.x + out.x * (TowerLayout.LAND_HALF - 0.1), p.y, at.y + out.y * (TowerLayout.LAND_HALF - 0.1))
+		_box(st, Vector3(0.22, 0.28, 0.22), post + Vector3(0, 1.25, 0), Basis.IDENTITY, LIGHT)
+		_box(st, Vector3(0.28, 0.05, 0.28), post + Vector3(0, 1.42, 0), Basis.IDENTITY, DARK)
+		k += 1
+
+
+## Обжитая площадка (только ближний LOD): дощатый бортик под перилами, стол с картой и подзорной трубой, лавка, ящик,
+## бочка, колокол. Всё у бортика — середина и проход от входа свободны
+static func _furniture(st: SurfaceTool) -> void:
+	var top := TowerLayout.DECK_Y
+	var d := TowerLayout.DECK_HALF
+	var gate := TowerLayout.TOP_HALF.x
+	# бортик из досок на трёх закрытых сторонах и по бокам от входа
+	for side: Array in [[Vector2(-d, -d), Vector2(d, -d)], [Vector2(d, -d), Vector2(d, d)], [Vector2(-d, -d), Vector2(-d, d)],
+			[Vector2(-d, d), Vector2(-gate, d)], [Vector2(gate, d), Vector2(d, d)]]:
+		var a: Vector2 = side[0]
+		var b: Vector2 = side[1]
+		var mid := (a + b) * 0.5
+		var length := a.distance_to(b)
+		var along_x := absf(b.x - a.x) > absf(b.y - a.y)
+		_box(st, Vector3(length if along_x else 0.05, 0.42, 0.05 if along_x else length), Vector3(mid.x, top + 0.23, mid.y), Basis.IDENTITY, PLANK)
+	# стол с картой и подзорной трубой в северо-западном углу
+	var table := Vector3(-d + 0.75, top, -d + 0.6)
+	_box(st, Vector3(1.1, 0.06, 0.7), table + Vector3(0, 0.78, 0), Basis.IDENTITY, TIMBER)
+	for leg: Vector2 in [Vector2(-0.48, -0.28), Vector2(0.48, -0.28), Vector2(-0.48, 0.28), Vector2(0.48, 0.28)]:
+		_box(st, Vector3(0.06, 0.76, 0.06), table + Vector3(leg.x, 0.38, leg.y), Basis.IDENTITY, DARK)
+	_box(st, Vector3(0.62, 0.012, 0.44), table + Vector3(0.05, 0.817, 0.02), Basis(Vector3.UP, 0.12), FLAG)
+	SettlementModels._cyl(st, 0.035, 0.05, 0.5, 6, table + Vector3(-0.3, 0.86, -0.15), Basis(Vector3.BACK, PI * 0.5).rotated(Vector3.UP, 0.4), METAL)
+	# лавка вдоль восточного бортика
+	var bench := Vector3(d - 0.35, top, -0.6)
+	_box(st, Vector3(0.4, 0.06, 1.5), bench + Vector3(0, 0.45, 0), Basis.IDENTITY, TIMBER)
+	for z: float in [-0.6, 0.6]:
+		_box(st, Vector3(0.34, 0.43, 0.06), bench + Vector3(0, 0.215, z), Basis.IDENTITY, DARK)
+	# ящик и бочка в северо-восточном углу
+	_box(st, Vector3(0.6, 0.5, 0.5), Vector3(d - 0.45, top + 0.25, -d + 0.4), Basis(Vector3.UP, 0.15), DARK)
+	_box(st, Vector3(0.62, 0.04, 0.52), Vector3(d - 0.45, top + 0.51, -d + 0.4), Basis(Vector3.UP, 0.15), TIMBER)
+	SettlementModels._cyl(st, 0.27, 0.27, 0.75, 8, Vector3(-d + 0.45, top + 0.375, 0.6), Basis.IDENTITY, TIMBER)
+	_box(st, Vector3(0.58, 0.05, 0.05), Vector3(-d + 0.45, top + 0.2, 0.6), Basis.IDENTITY, METAL)
+	_box(st, Vector3(0.58, 0.05, 0.05), Vector3(-d + 0.45, top + 0.6, 0.6), Basis.IDENTITY, METAL)
+	# сигнальный колокол на балке у входа
+	var bell := Vector3(1.4, top + ROOF_POSTS - 0.1, d - 0.3)
+	_box(st, Vector3(0.03, 0.35, 0.03), bell - Vector3(0, 0.17, 0), Basis.IDENTITY, METAL)
+	SettlementModels._cyl(st, 0.09, 0.2, 0.32, 8, bell - Vector3(0, 0.5, 0), Basis.IDENTITY, METAL)
+	# под каркасом у земли — поленница и ящик: внизу не пусто
+	_box(st, Vector3(1.2, 0.6, 0.45), Vector3(-1.3, 0.3, -1.6), Basis.IDENTITY, SettlementModels.CELL_LOGS_END)
+	_box(st, Vector3(0.6, 0.45, 0.6), Vector3(1.3, 0.22, -1.5), Basis(Vector3.UP, 0.4), DARK)
 
 
 ## Один марш: ступени (верх на высоте настила физики в середине ступени), косоуры, перила
@@ -141,7 +224,9 @@ static func _landing(st: SurfaceTool, p: Dictionary, k: int, level: int) -> void
 	var at: Vector2 = p.c
 	var half: Vector2 = p.half
 	var y: float = p.y
-	_box(st, Vector3(2.0 * half.x, 0.14, 2.0 * half.y), Vector3(at.x, y - 0.07, at.y), Basis.IDENTITY, TIMBER)
+	# 18.11.2026: площадка у входа (k = 4) частью лежит под настилом на той же высоте — чуть ниже, без мерцания граней
+	var sink := 0.012 if k >= 4 else 0.0
+	_box(st, Vector3(2.0 * half.x, 0.14, 2.0 * half.y), Vector3(at.x, y - 0.07 - sink, at.y), Basis.IDENTITY, TIMBER)
 	if k >= 4 or level == 2:
 		return
 	var out := Vector2(signf(at.x), signf(at.y))
