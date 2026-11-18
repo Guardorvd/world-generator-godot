@@ -1,7 +1,6 @@
 class_name Hud
 extends Control
-const BrakeIndicator = preload("res://scripts/ui/brake_indicator.gd")
-var _brakes: BrakeIndicator
+const RideDial = preload("res://scripts/ui/ride_dial.gd")
 ## Интерфейс поверх 3D: сведения о местности, мини-карта, большая карта, всплывающие сообщения,
 ## прицел и подсказки. Прицел, панель сведений и надписи — узлы сцены main.tscn (правятся в редакторе),
 ## мини-карта и личная карта рисуются кодом (LocalMap, WorldMapView). Подсказки внизу и у прицела меняются по тому, что игрок
@@ -30,7 +29,7 @@ const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
-## 14.2: края экрана темнеют к углам, середина не тронута; strength — от StaminaArc.warning
+## 14.2: края экрана темнеют к углам, середина не тронута; strength — от RideDial.warning
 const VIGNETTE_CODE := """shader_type canvas_item;
 uniform float strength = 0.0;
 void fragment() {
@@ -84,7 +83,7 @@ var _hint_urgent := false # подсказка, которую видно и б�
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
 var _repair: RepairArc  # 18.11.2026: кольцо удержания «взаимодействия» при ремонте
-var _stamina: StaminaArc  # 14.2: дуга выносливости (14.4: в левом нижнем углу), видна, пока силы тратятся или копятся
+var _ride: RideDial  # 18.11.2026: прибор движения слева внизу — скорость, дуга сил (14.2) и тормоза в одном круге
 var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
 var _prompt_items: Array = []
@@ -184,26 +183,15 @@ func _ready() -> void:
 	_vignette.visible = false
 	add_child(_vignette)
 	move_child(_vignette, 0)
-	# 14.4: в левом нижнем углу, а не у прицела
-	_stamina = StaminaArc.new()
-	_stamina.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_stamina.offset_left = 18
-	_stamina.offset_right = 18 + StaminaArc.DIAMETER
-	_stamina.offset_top = -18 - StaminaArc.DIAMETER
-	_stamina.offset_bottom = -18
-	_stamina.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_stamina)
-	move_child(_stamina, big_map.get_index())
-	_brakes = BrakeIndicator.new()
-	_brakes.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_brakes.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_brakes.offset_left = 102
-	_brakes.offset_right = 102 + BrakeIndicator.DIAMETER
-	_brakes.offset_top = -18 - BrakeIndicator.DIAMETER
-	_brakes.offset_bottom = -18
-	_brakes.hide()
-	add_child(_brakes)
-	move_child(_brakes, big_map.get_index())
+	_ride = RideDial.new()
+	_ride.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_ride.offset_left = 18
+	_ride.offset_right = 18 + RideDial.DIAMETER
+	_ride.offset_top = -18 - RideDial.DIAMETER
+	_ride.offset_bottom = -18
+	_ride.hide()
+	add_child(_ride)
+	move_child(_ride, big_map.get_index())
 	_repair = RepairArc.new()
 	_repair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_repair.set_anchors_preset(Control.PRESET_CENTER)
@@ -230,18 +218,30 @@ func _ready() -> void:
 
 
 func _style_summary() -> void:
-	_info_panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13, Vector2(14, 10)))
-	HudStyle.label(info, 20)
+	# 18.11.2026: две строки вместо карточки — [биом · время] и [высота  температура  дорога]; подписи «Высота» и
+	# «Температура» и разделитель скрыты (единицы говорят сами), дорога встала в строку показаний
+	_info_panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 7)))
+	$InfoPanel/Rows.add_theme_constant_override("separation", 3)
+	HudStyle.label(info, 17)
 	var clock_card := _clock_label.get_parent() as PanelContainer
-	clock_card.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 6, Vector2(8, 3), false))
-	HudStyle.label(_clock_label, 14, HudStyle.MINT)
+	clock_card.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 6, Vector2(7, 1), false))
+	HudStyle.label(_clock_label, 13, HudStyle.MINT)
+	HudStyle.label(_altitude, 14)
+	HudStyle.label(_temperature, 14)
+	HudStyle.label(_nearby, 12, HudStyle.MINT)
+	$InfoPanel/Rows/Divider.hide()
+	var readings: HBoxContainer = $InfoPanel/Rows/Readings
+	readings.add_theme_constant_override("separation", 12)
+	for cell: Control in [$InfoPanel/Rows/Readings/Altitude, $InfoPanel/Rows/Readings/Temperature]:
+		cell.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		cell.get_node("Title").hide()
+	_surface.reparent(readings, false)
 	HudStyle.label(_surface, 13, HudStyle.MUTED)
-	HudStyle.label(_altitude, 17)
-	HudStyle.label(_temperature, 17)
-	HudStyle.label(_nearby, 13, HudStyle.MINT)
-	HudStyle.label($InfoPanel/Rows/Readings/Altitude/Title, 11, HudStyle.MUTED)
-	HudStyle.label($InfoPanel/Rows/Readings/Temperature/Title, 11, HudStyle.MUTED)
-	$InfoPanel/Rows/Divider.color = HudStyle.BORDER
+	_surface.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_surface.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_surface.clip_text = true
+	_surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_surface.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_nearby.hide()
 	_surface.hide()
 	_info_panel.resized.connect(_place_toast)
@@ -839,21 +839,28 @@ func set_hints(bottom: Array, near: Array, urgent := false) -> void:
 ## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED.
 ## 14.2: state — Stamina.State: трата ниже LOW пульсирует и затемняет края, накат подсвечен
 func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
-	var allowed: bool = not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
-	_stamina.set_value(value, exhausted, state, allowed)
-	var urgent := state == Stamina.State.DRAIN and value < StaminaArc.LOW
-	_stamina.visible = allowed and (_summary_progress > 0.0 or urgent)
-	_stamina.modulate.a = 1.0 if urgent else smoothstep(0.0, 1.0, _summary_progress)
+	_ride.set_stamina(value, exhausted, state, _gauges_allowed())
 	var mat: ShaderMaterial = _vignette.material
-	mat.set_shader_parameter("strength", _stamina.warning * 0.4)
-	_vignette.visible = _stamina.warning > 0.01
+	mat.set_shader_parameter("strength", _ride.warning * 0.4)
+	_vignette.visible = _ride.warning > 0.01
+	_show_ride()
 
 
+## Скорость и тормоз велосипеда для прибора движения
 func set_brakes(bike: BikeRide) -> void:
-	var allowed: bool = not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
-	var urgent: bool = bike.brakes.risk > 0.65 or bike.brakes.skid > 0.2
-	_brakes.update_state(bike, allowed and (_summary_progress > 0.0 or urgent))
-	_brakes.modulate.a = 1.0 if urgent else smoothstep(0.0, 1.0, _summary_progress)
+	_ride.set_ride(bike, _gauges_allowed())
+	_show_ride()
+
+
+func _gauges_allowed() -> bool:
+	return not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
+
+
+## Прибор виден со сводкой; без неё — только когда срочно (силы на исходе, тормоз на грани)
+func _show_ride() -> void:
+	var urgent := _ride.stamina_urgent() or _ride.brake_urgent()
+	_ride.visible = _gauges_allowed() and (_summary_progress > 0.0 or urgent)
+	_ride.modulate.a = 1.0 if urgent else smoothstep(0.0, 1.0, _summary_progress)
 
 
 func _fill_chips(row: Container, items: Array, style: StyleBoxFlat) -> void:
@@ -1047,15 +1054,17 @@ static func _set_optional_text(label: Label, value: String) -> void:
 	label.visible = not value.is_empty()
 
 
-## Компас: градусы, лента направлений и две отдельные метки расстояния.
+## Компас: градусы, лента направлений; цель и задание — значок прямо на ленте по своему курсу и расстояние рядом
+## в той же строке, что градусы (18.11.2026: без свисающих под лентой плашек). За краем обзора значок прижат к краю
+## ленты и приглушён, а расстояние встаёт внутрь.
 class Compass extends Control:
 	const HALF_ANGLE := 72.0
 	const TICK := 7.5
 	const INSET := 18.0
-	const BADGE_WIDTH := 72.0
+	const ROW := 17.0       # середина верхней строки: градусы, значки и расстояния
+	const RULER := 31.0
 	var hud: Hud
 	var _back := HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13)
-	var _badge := HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 7, Vector2.ZERO, false)
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1067,45 +1076,79 @@ class Compass extends Control:
 		var mid := size.x * 0.5
 		draw_style_box(_back, Rect2(Vector2.ZERO, size))
 		HudStyle.centered(self, Vector2(mid, 21), "%03d°" % posmod(roundi(heading), 360), 16, HudStyle.CREAM)
-		draw_line(Vector2(INSET, 31), Vector2(size.x - INSET, 31), Color(HudStyle.BORDER, 0.7), 1.0)
+		draw_line(Vector2(INSET, RULER), Vector2(size.x - INSET, RULER), Color(HudStyle.BORDER, 0.7), 1.0)
 		for i in range(ceili((heading - HALF_ANGLE) / TICK), floori((heading + HALF_ANGLE) / TICK) + 1):
 			var off := i * TICK - heading
 			var x := _ruler_x(off)
 			var direction := i % 6 == 0
 			var a := lerpf(1.0, 0.36, smoothstep(HALF_ANGLE * 0.56, HALF_ANGLE, absf(off)))
-			draw_line(Vector2(x, 31), Vector2(x, 38 if direction else 35), Color(HudStyle.MUTED, a), 1.0, true)
+			draw_line(Vector2(x, RULER), Vector2(x, RULER + (7 if direction else 4)), Color(HudStyle.MUTED, a), 1.0, true)
 			if direction:
 				var d := posmod(-roundi(i / 6.0), 8)
 				HudStyle.centered(self, Vector2(x, 49), Hud.DIRS[d], 13 if d % 2 == 0 else 11, Color(HudStyle.CREAM, a))
-		draw_colored_polygon(PackedVector2Array([Vector2(mid - 4, 26), Vector2(mid + 4, 26), Vector2(mid, 32)]), HudStyle.MINT)
+		draw_colored_polygon(PackedVector2Array([Vector2(mid - 4, RULER - 5), Vector2(mid + 4, RULER - 5), Vector2(mid, RULER + 1)]), HudStyle.MINT)
+		# занято: градусы посередине; расстояния не налезают на них и друг на друга
+		var taken: Array[Rect2] = [Rect2(mid - 25.0, ROW - 9.0, 50.0, 18.0)]
 		var quest := hud.quest_place()
-		var qx := -INF
 		if not quest.is_empty():
-			qx = _destination(quest, hud.quest_color(), true, -INF)
+			_destination(quest, hud.quest_color(), true, taken)
 		if not hud.goal.is_empty():
-			_destination(hud.goal, HudStyle.AMBER, false, qx)
+			_destination(hud.goal, HudStyle.AMBER, false, taken)
 
 	func _ruler_x(offset: float) -> float:
 		return size.x * 0.5 + clampf(offset / HALF_ANGLE, -1.0, 1.0) * (size.x * 0.5 - INSET)
 
-	func _destination(place: Dictionary, color: Color, quest: bool, other_x: float) -> float:
+	func _destination(place: Dictionary, color: Color, quest: bool, taken: Array[Rect2]) -> void:
 		var dx: float = place.x * Hud.TILE - hud.px
 		var dz: float = place.y * Hud.TILE - hud.pz
 		var offset := -rad_to_deg(wrapf(hud.heading_to(place.x * Hud.TILE, place.y * Hud.TILE) - hud.yaw, -PI, PI))
 		var x := _ruler_x(offset)
-		var cx := clampf(x, BADGE_WIDTH * 0.5, size.x - BADGE_WIDTH * 0.5)
-		var top := size.y + 6.0 + (25.0 if absf(cx - other_x) < BADGE_WIDTH else 0.0)
-		var tint := color if absf(offset) <= HALF_ANGLE else color.lerp(HudStyle.MUTED, 0.42)
-		draw_line(Vector2(x, size.y - 2), Vector2(x, size.y + 6), tint, 1.5, true)
-		draw_style_box(_badge, Rect2(cx - BADGE_WIDTH * 0.5, top, BADGE_WIDTH, 21.0))
-		var icon := Vector2(cx - BADGE_WIDTH * 0.5 + 10, top + 10.5)
+		var inside := absf(offset) <= HALF_ANGLE
+		var tint := color if inside else color.lerp(HudStyle.MUTED, 0.42)
+		draw_line(Vector2(x, ROW + 5.0), Vector2(x, RULER), Color(tint, 0.8), 1.5, true)
+		var text := Util.distance_text(Vector2(dx, dz).length())
+		var font := ThemeDB.fallback_font
+		var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+		# сторона подписи: наружу от середины, если там свободно, иначе внутрь; в пределах ленты
+		var right := Rect2(x + 8.0, ROW - 8.0, width, 16.0)
+		var left := Rect2(x - 8.0 - width, ROW - 8.0, width, 16.0)
+		var sides: Array[Rect2] = [right, left]
+		if x < size.x * 0.5:
+			sides.reverse()
+		var bounds := Rect2(6.0, 0.0, size.x - 12.0, size.y)
+		var chosen: Rect2 = sides[0] if bounds.encloses(sides[0]) else sides[1]
+		var free := false
+		for side: Rect2 in sides:
+			if bounds.encloses(side) and not taken.any(func(r: Rect2) -> bool: return r.intersects(side)):
+				chosen = side
+				free = true
+				break
+		# обе стороны заняты (цель и задание в одном курсе, чаще у края ленты) — встать дальше соседней подписи
+		# со своим значком у подписи, чтобы было видно, чьё это расстояние
+		var side := signf(chosen.position.x - x)
+		var moved := false
+		for attempt in 3:
+			if free:
+				break
+			var next := Rect2(chosen.position + Vector2(side * (width + 20.0), 0.0), chosen.size)
+			if not bounds.encloses(next):
+				break
+			chosen = next
+			moved = true
+			free = not taken.any(func(r: Rect2) -> bool: return r.intersects(next))
+		taken.append(chosen.grow_individual(14.0 if moved and side > 0.0 else 0.0, 0.0, 14.0 if moved and side < 0.0 else 0.0, 0.0))
+		# сдвинутая подпись несёт значок с собой: на курсе уже стоит значок соседа
+		_mark(Vector2(chosen.end.x + 7.0 if side < 0.0 else chosen.position.x - 7.0, ROW) if moved else Vector2(x, ROW), quest, tint)
+		draw_string(font, Vector2(chosen.position.x, ROW + 4.5), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, tint)
+
+	## Значок места: квадрат — задание, ромб — цель путешествия; с тёмной обводкой поверх ленты
+	func _mark(at: Vector2, quest: bool, tint: Color) -> void:
 		if quest:
-			draw_rect(Rect2(icon - Vector2.ONE * 2.5, Vector2.ONE * 5.0), tint)
+			draw_rect(Rect2(at - Vector2.ONE * 3.5, Vector2.ONE * 7.0), HudStyle.SURFACE)
+			draw_rect(Rect2(at - Vector2.ONE * 2.5, Vector2.ONE * 5.0), tint)
 		else:
-			draw_colored_polygon(PackedVector2Array([icon + Vector2(0, -4), icon + Vector2(4, 0),
-				icon + Vector2(0, 4), icon + Vector2(-4, 0)]), tint)
-		HudStyle.centered(self, Vector2(cx + 6.0, top + 14.5), Util.distance_text(Vector2(dx, dz).length()), 12, tint)
-		return cx
+			draw_colored_polygon(PackedVector2Array([at + Vector2(0, -5), at + Vector2(5, 0), at + Vector2(0, 5), at + Vector2(-5, 0)]), HudStyle.SURFACE)
+			draw_colored_polygon(PackedVector2Array([at + Vector2(0, -4), at + Vector2(4, 0), at + Vector2(0, 4), at + Vector2(-4, 0)]), tint)
 
 
 ## Ремонт: доля удержания 0..1 (кольцо под прицелом; 0 — скрыто)
@@ -1133,89 +1176,3 @@ class RepairArc extends Control:
 		draw_arc(c, 22.0, 0.0, TAU, 48, Color(HudStyle.BORDER, 0.65), 4.0, true)
 		draw_arc(c, 22.0, -PI * 0.5, -PI * 0.5 + TAU * value, 48, HudStyle.MINT, 4.0, true)
 		HudStyle.centered(self, c + Vector2(0, 4), "ремонт", 11, HudStyle.MUTED)
-
-
-## 14.2: дуга выносливости (с 14.4 — кольцо в левом нижнем углу). Появляется, пока силы тратятся или копятся, полная — гаснет.
-## Засечка на Stamina.RECOVERED — с неё после истощения снова работает Shift. Белый шлейф за краем
-## заливки быстро тает и показывает темп траты. Ниже LOW при трате дуга пульсирует, warning (0..1) затемняет
-## края экрана; при восстановлении предупреждение гаснет быстро. Накат подсвечен холодным ореолом.
-class StaminaArc extends Control:
-	const DIAMETER := 76.0
-	const R := 28.0
-	const FROM := deg_to_rad(135.0)       # кольцо с разрывом внизу: от левого низа через верх к правому низу
-	const SPAN := deg_to_rad(270.0)
-	const WIDTH := 4.0
-	const LOW := 0.2
-	const GHOST_LAG := 1.5                # 1/с: шлейф догоняет заливку с запаздыванием — чем быстрее трата, тем он
-	                                      # длиннее рывок Shift (треть дуги) тает за доли секунды
-	var value := 1.0
-	var exhausted := false
-	var state := Stamina.State.IDLE
-	var warning := 0.0                    # 0..1, сила предупреждения (виньетка, пульс)
-	var _alpha := 0.0
-	var _coast := 0.0                     # 0..1, ореол наката
-	var _drain := 0.0                     # 14.5: 0..1, расход идёт — дуга тёплого цвета и мягко пульсирует
-	var _kick := 0.0                      # 14.5: вспышка в момент, когда расход начался
-	var _ghost := 1.0
-	var _t := 0.0
-
-	func set_value(v: float, tired: bool, st: Stamina.State, allowed: bool) -> void:
-		var dt := get_process_delta_time()
-		_t += dt
-		var was_visible := _alpha > 0.01
-		var active := st == Stamina.State.DRAIN or st == Stamina.State.COAST or st == Stamina.State.REST or v < 0.999
-		_alpha = move_toward(_alpha, 1.0 if allowed and active else 0.0, dt * (4.0 if allowed and active else 1.5))
-		_ghost = v if v >= _ghost else lerpf(_ghost, v, Util.damp(GHOST_LAG, dt))
-		var low := 1.0 - smoothstep(0.05, LOW, v) if v < LOW or tired else 0.0
-		# предупреждение нарастает мягко при трате и гаснет быстро, как только силы пошли в плюс
-		var warn_goal := low if st == Stamina.State.DRAIN and allowed else 0.0
-		warning = move_toward(warning, warn_goal, dt * (1.5 if warn_goal > warning else 5.0))
-		_coast = move_toward(_coast, 1.0 if st == Stamina.State.COAST and allowed else 0.0, dt * 4.0)
-		var draining := st == Stamina.State.DRAIN and allowed
-		if draining and state != Stamina.State.DRAIN:
-			_kick = 1.0
-		_kick = maxf(0.0, _kick - dt * 2.5)
-		_drain = move_toward(_drain, 1.0 if draining else 0.0, dt * (6.0 if draining else 3.0))
-		value = v
-		exhausted = tired
-		state = st
-		if was_visible or _alpha > 0.01:
-			queue_redraw()
-
-	func _arc(from: float, to: float, width: float, color: Color) -> void:
-		if to - from < 0.002:
-			return
-		var c := size / 2.0
-		draw_arc(c, R, FROM + SPAN * from, FROM + SPAN * to, 48, color, width, true)
-
-	func _draw() -> void:
-		if _alpha <= 0.01:
-			return
-		var a := _alpha
-		var c := size / 2.0
-		HudStyle.dial_face(self, c, DIAMETER * 0.5 - 2.0, a)
-		_arc(0.0, 1.0, WIDTH, Color(HudStyle.BORDER, 0.65 * a))
-		if _coast > 0.0:
-			_arc(0.0, value, WIDTH + 5.0, Color(0.45, 0.85, 1.0, 0.20 * _coast * a))
-		_arc(value, _ghost, WIDTH, Color(HudStyle.CREAM, 0.55 * a))
-		var fill := HudStyle.MINT
-		if exhausted:
-			fill = HudStyle.RED
-		elif value < LOW:
-			fill = HudStyle.AMBER
-		fill = fill.lerp(Color(0.6, 0.9, 1.0), _coast * 0.6)
-		# 14.5: расход — тёплый оттенок и мягкий пульс, в начале расхода — вспышка шире и ярче
-		if not exhausted and value >= LOW:
-			fill = fill.lerp(HudStyle.AMBER, _drain * 0.55)
-		fill = fill.lerp(Color.WHITE, _kick * 0.5)
-		var pulse := 0.5 + 0.5 * sin(_t * 7.0)
-		var spend := 0.5 + 0.5 * sin(_t * 4.5)
-		fill.a = a * lerpf(lerpf(0.95, 0.75 + 0.25 * spend, _drain), 0.55 + 0.4 * pulse, warning)
-		_arc(0.0, value, WIDTH + warning * pulse * 1.5 + _drain * spend * 1.0 + _kick * 3.0, fill)
-		# засечка цены рывка (треть полоски): поперёк дуги, светлая с тёмной обводкой
-		var ang := FROM + SPAN * Stamina.RECOVERED
-		var dir := Vector2(cos(ang), sin(ang))
-		var mark := Color(HudStyle.CREAM, a if exhausted or value < Stamina.RECOVERED + 0.1 else 0.6 * a)
-		draw_line(c + dir * (R - 4.0), c + dir * (R + 4.0), Color(HudStyle.SURFACE, a), 3.0)
-		draw_line(c + dir * (R - 3.0), c + dir * (R + 3.0), mark, 1.5, true)
-		HudStyle.dial_text(self, c, value, "СИЛЫ", fill, a)

@@ -339,8 +339,8 @@ func _run() -> void:
 	var stamina := Stamina.new()
 	stamina.value = 0.4
 	await _tick(stamina, 75, true, 1.0, true)
-	_check(stamina.value < 0.2 and hud._stamina.warning > 0.05 and hud._vignette.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._stamina.warning)
-	_check(hud._stamina._ghost > stamina.value, "шлейф отстаёт от заливки")
+	_check(stamina.value < 0.2 and hud._ride.warning > 0.05 and hud._vignette.visible and hud._ride.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._ride.warning)
+	_check(hud._ride._ghost > stamina.value, "шлейф отстаёт от заливки")
 	await _shot("hud_drain")
 	# Brake gauge: normal braking, danger, and contexts where it must disappear.
 	var bike := BikeRide.new()
@@ -350,25 +350,25 @@ func _run() -> void:
 	for frame in 30:
 		hud.set_brakes(bike)
 		await process_frame
-	_check(hud._brakes.visible and hud._brakes.pressure > 0.7, "дуга тормоза видна при движении вперёд")
+	_check(hud._ride.visible and hud._ride.brake_alpha > 0.9 and hud._ride.pressure > 0.7 and hud._ride.riding, "дуга тормоза и скорость на приборе при движении вперёд")
 	await _shot("hud_brake")
 	bike.brakes.risk = 0.8
 	hud.set_brakes(bike)
 	await _shot("hud_brake_warning")
 	bike.airborne = true
 	hud.set_brakes(bike)
-	_check(not hud._brakes.visible, "в полёте индикатор скрыт сразу")
+	_check(hud._ride.brake_alpha == 0.0, "в полёте дуга тормоза скрыта сразу")
 	bike.airborne = false
 	bike.speed = -2.0
 	for frame in 30:
 		hud.set_brakes(bike)
 		await process_frame
-	_check(not hud._brakes.visible, "задний ход не показывает торможение")
+	_check(hud._ride.brake_alpha < 0.01, "задний ход не показывает торможение")
 	# истощение, потом накат: предупреждение гаснет быстро, ореол наката
 	await _tick(stamina, 330, true, 1.0, true)
 	_check(stamina.exhausted, "полоска истощена")
 	await _tick(stamina, 30, true, 0.0, false)
-	_check(stamina.state == Stamina.State.COAST and hud._stamina.warning < 0.05 and hud._stamina._coast > 0.9, "накат: предупреждение погасло, ореол наката")
+	_check(stamina.state == Stamina.State.COAST and hud._ride.warning < 0.05 and hud._ride._coast > 0.9, "накат: предупреждение погасло, ореол наката")
 	await _tick(stamina, 150, true, 0.0, false)
 	await _shot("hud_coast")
 	hud.set_hints([["Правый бампер", "Поставить велосипед"], ["Треугольник", "Открыть меню"],
