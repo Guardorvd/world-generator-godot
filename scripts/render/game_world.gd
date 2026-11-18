@@ -54,6 +54,7 @@ var _speed_rush: float:
 	get: return camera_controller._speed_rush
 	set(value): camera_controller._speed_rush = value
 var opening_place := {}
+var _route_revision := -1
 var _opening := false
 var _opening_time := 0.0
 var _opening_camera := Vector3.ZERO
@@ -1391,6 +1392,9 @@ func _process(delta: float) -> void:
 	if navigation_line != null:
 		var navigating := not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike() and not _settlement_open()
 		navigation_line.update_line(pos, delta, navigating, hud.navigation_visible())
+		if navigation_line.route_revision != _route_revision:
+			_route_revision = navigation_line.route_revision
+			hud.minimap.set_route(navigation_line.path) # маршрут подсвечен и на мини-карте
 		if navigating and navigation_line.status != _navigation_status:
 			_navigation_status = navigation_line.status
 			if _navigation_status != "": hud.toast_now(_navigation_status)

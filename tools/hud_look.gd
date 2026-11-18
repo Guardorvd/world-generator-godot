@@ -286,6 +286,15 @@ func _run() -> void:
 	hud.quest_changed()
 	_check(hud.tracker.visible and hud._tracker_count.text == "2 / 2" and hud._tracker_note.visible, "карточка задания показывает ход доставки")
 	await _shot("hud_map")
+	# 18.11.2026: маршрут на мини-карте и цель за краем круга — значок на ободке с расстоянием
+	var far_goal := Hud.marker_goal(Vector2(260, 60))
+	hud.set_goal(far_goal)
+	hud.minimap.set_route(PackedVector2Array([Vector2(512, 512), Vector2(540, 470), Vector2(600, 420), Vector2(700, 330), Vector2(1040, 240)]))
+	await process_frame
+	_check(hud.minimap._route.size() == 5 and not hud.minimap._fits(hud.minimap.world_to_map(Vector2(1040, 240)), 8.0), "маршрут на мини-карте, цель за краем круга")
+	await _shot("hud_minimap_route")
+	hud.minimap.set_route(PackedVector2Array())
+	hud.set_goal(Hud.marker_goal(Vector2(139, 122)))
 	# 18.11.2026: личная карта в стиле нацпарка — открыто только вокруг пройденного пути и открытых мест
 	for i in 40:
 		hud.map_journal.record(Vector2(400 + i * 8.0, 470 + sin(i * 0.3) * 30.0), 0.3, true)

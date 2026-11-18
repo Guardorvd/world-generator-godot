@@ -43,6 +43,7 @@ var _flow := 0.0    # сдвиг штрихов навстречу при дви
 var _timer := 0.0
 var _reroute_timer := 0.0
 var status := ""
+var route_revision := 0   # 18.11.2026: растёт при каждом новом пути или сбросе — мини-карта перерисовывает маршрут
 var _revision := ""
 var _progress := 0.0
 ## 18.11.2026, цена кадра: перерисовка 4 раза/с больше не проверяет весь видимый путь заново и не ищет высоту каждого
@@ -89,6 +90,7 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	if _search_roads != null: _search_roads.cancelled = true
 	_goal = goal
 	path.clear()
+	route_revision += 1
 	(mesh as ImmediateMesh).clear_surfaces()
 	_wrong = 0.0
 	_flow = 0.0
@@ -123,6 +125,7 @@ func _rebuild(at: Vector2, feet := INF, recheck_graph := false, fresh := false) 
 	_accept_path()
 
 func _accept_path() -> void:
+	route_revision += 1
 	status = roads.status
 	(mesh as ImmediateMesh).clear_surfaces()
 	_progress = 0.0

@@ -22,6 +22,12 @@ const SHIFT_M := 80.0     # дальше от опорной точки — по
 const TILE_BUDGET := 1    # новых участков подложки за кадр
 const SCALE_M := 50.0
 const INK := Color("#344d56")
+## 18.11.2026: маршрут навигации на подложке и метки целей за краем круга (стрелка на ободке и расстояние)
+const ROUTE := Color("#f08a24")
+const ROUTE_EDGE := Color(1, 1, 1, 0.95)
+const GOAL := Color("#d98c28")
+const BIKE := Color("#276582")
+const RIM_INSET := 17.0
 
 var _viewport: SubViewport
 var _canvas: Node2D
@@ -37,6 +43,7 @@ var _goal := Vector2.INF
 var _quest := Vector2.INF
 var _quest_color := Color.WHITE
 var _knows: Callable
+var _route := PackedVector2Array()  # путь навигации, мировые метры
 
 
 func _ready() -> void:
@@ -80,6 +87,7 @@ func set_world(world: WorldData, knows := Callable(), source: MapData = null) ->
 	_bike = Vector2.INF
 	_goal = Vector2.INF
 	_quest = Vector2.INF
+	_route = PackedVector2Array()
 	queue_redraw()
 	refresh()
 
@@ -103,6 +111,15 @@ func set_destinations(goal: Dictionary, quest: Dictionary, quest_color: Color) -
 	_quest = next_quest
 	_quest_color = quest_color
 	_redraw_marks()
+
+
+## Путь навигации (NavigationLine.path); пустой — маршрута нет. Подложка перерисовывается один раз
+func set_route(points: PackedVector2Array) -> void:
+	if points == _route:
+		return
+	_route = points.duplicate()
+	if _anchor.is_finite():
+		_render()
 
 
 func set_bike(at: Vector2) -> void:
@@ -185,10 +202,33 @@ func _draw_map() -> void:
 	if _data == null or not _anchor.is_finite():
 		return
 	Paint.surface(_canvas, _data, _to_canvas(Vector2.ZERO), PIXELS_PER_METER)
+	_draw_route()
 	for place: Dictionary in _visible_settlements():
 		var at := _to_canvas(place.position)
 		_canvas.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
 		_canvas.draw_circle(at, 2.5, Color("#706387"), true, -1.0, true)
+
+
+## Маршрут поверх дорог: широкая белая кайма и яркая середина, только отрезки в пределах подложки
+func _draw_route() -> void:
+	if _route.size() < 2:
+		return
+	var area := Rect2(Vector2.ZERO, MAP_CENTER * 2.0).grow(8.0)
+	var lines := PackedVector2Array()
+	var a := _to_canvas(_route[0])
+	for i in range(1, _route.size()):
+		var b := _to_canvas(_route[i])
+		if area.has_point(a) or area.has_point(b):
+			lines.append(a)
+			lines.append(b)
+		a = b
+	if lines.is_empty():
+		return
+	_canvas.draw_multiline(lines, ROUTE_EDGE, 7.0, true)
+	_canvas.draw_multiline(lines, ROUTE, 4.2, true)
+	# стыки отрезков без зазоров
+	for i in range(0, lines.size(), 2):
+		_canvas.draw_circle(lines[i], 2.1, ROUTE, true, -1.0, true)
 
 
 ## Поселения подложки на открытой земле
@@ -233,18 +273,52 @@ func _draw_label() -> void:
 
 
 func _draw_markers() -> void:
-	if _bike.is_finite() and _fits(world_to_map(_bike), 7.0):
+	if _bike.is_finite():
 		var at := world_to_map(_bike)
-		_marks.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
-		_marks.draw_circle(at, 2.6, Color("#276582"), true, -1.0, true)
-	if _goal.is_finite() and _fits(world_to_map(_goal), 8.0):
+		if _fits(at, 7.0):
+			_marks.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
+			_marks.draw_circle(at, 2.6, BIKE, true, -1.0, true)
+		elif _position.distance_to(_bike) > 8.0:
+			_rim(_bike, BIKE, "bike", false)
+	var same := _goal.is_finite() and _quest.is_finite() and _goal.distance_to(_quest) < 6.0
+	if _goal.is_finite() and not same:
 		var at := world_to_map(_goal)
-		_marks.draw_circle(at, 6.5, Color.WHITE, true, -1.0, true)
-		_marks.draw_circle(at, 4.5, Color("#d98c28"), false, 2.5, true)
-	if _quest.is_finite() and _fits(world_to_map(_quest), 8.0):
+		if _fits(at, 8.0):
+			_marks.draw_circle(at, 6.5, Color.WHITE, true, -1.0, true)
+			_marks.draw_circle(at, 4.5, GOAL, false, 2.5, true)
+		else:
+			_rim(_goal, GOAL, "goal", true)
+	if _quest.is_finite():
 		var at := world_to_map(_quest)
-		_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), _quest_color)
-		_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), INK, false, 1.5)
+		if _fits(at, 8.0):
+			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), _quest_color)
+			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), INK, false, 1.5)
+		else:
+			_rim(_quest, _quest_color, "quest", true)
+
+
+## Цель за краем круга: значок на ободке в её сторону, остриё наружу, расстояние — внутрь круга
+func _rim(target: Vector2, color: Color, kind: String, distance: bool) -> void:
+	var dir := (target - _position).normalized()
+	if dir.is_zero_approx():
+		return
+	var at := CENTER + dir * (CENTER.x - RIM_INSET)
+	var side := Vector2(-dir.y, dir.x)
+	_marks.draw_circle(at, 7.5, Color.WHITE, true, -1.0, true)
+	# остриё за значком — куда ехать
+	_marks.draw_colored_polygon(PackedVector2Array([at + dir * 14.5, at + dir * 8.0 + side * 5.0, at + dir * 8.0 - side * 5.0]), INK)
+	match kind:
+		"quest":
+			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), color)
+			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), INK, false, 1.2)
+		"goal":
+			_marks.draw_circle(at, 4.5, color, false, 2.5, true)
+		_:
+			_marks.draw_circle(at, 4.0, color, true, -1.0, true)
+	if distance:
+		var label := Util.distance_text(_position.distance_to(target))
+		var inward := at - dir * (18.0 + absf(dir.x) * _text_width(label, 11) * 0.5)
+		_text(label, inward + Vector2(0.0, 4.0), 11)
 
 
 func _draw_legend() -> void:
