@@ -54,7 +54,77 @@ func overlap(w: WorldData, a: int, b: int) -> float:
 	return total
 
 
+func _fork_spacing() -> void:
+	var w := Fixture.world()
+	w.trails = []
+	w.cost.resize(w.N)
+	w.cost.fill(1.0)
+	StageTrails._net_reset(w)
+	var lower := line(Vector2i(8, 48), Vector2i(88, 48))
+	var bend := line(Vector2i(88, 48), Vector2i(88, 58))
+	var upper := line(Vector2i(88, 58), Vector2i(8, 58))
+	StageTrails._add_trail(w, cells(lower + bend.slice(1) + upper.slice(1)), "road")
+	StageTrails._add_trail(w, cells(line(Vector2i(40, 29), Vector2i(40, 48))), "road")
+	StageTrails._add_trail(w, cells(line(Vector2i(11, 58), Vector2i(11, 72))), "mountain")
+	var dry := PackedByteArray()
+	var distance := PackedFloat32Array()
+	distance.resize(w.N)
+	distance.fill(100.0)
+	var forks := StageTrails.RoadForks.new(w, dry)
+	forks.refresh(dry)
+	var origin := 48 * w.W + 55
+	var shared := 48 * w.W + 40
+	var spaced := 48 * w.W + 65
+	check(forks.sources(origin, distance, StageTrails.EXIT_R) == PackedInt32Array([shared, spaced]),
+		"spur tries the existing main-road fork before a station 100 m away")
+	check(forks.sources(48 * w.W + 11, distance, StageTrails.EXIT_R).is_empty(),
+		"nearby upper switchback does not attract an attachment on the lower turn")
+	var departure := origin - w.W
+	var preferred: PackedFloat32Array = forks.preferred_cost(w.cost)
+	check(preferred[departure] > w.cost[departure] and preferred[origin] == w.cost[origin]
+		and preferred[shared + w.W] == w.cost[shared + w.W], "only a new exit near the fork costs more")
+	check(forks.pressure(PackedInt32Array([origin, departure])) > 0.0
+		and forks.pressure(PackedInt32Array([shared, shared + w.W])) == 0.0, "through routes and rides prefer a shared three-way junction")
+	var ride := cells(line(Vector2i(55, 48), Vector2i(55, 27)))
+	forks.reserve(ride)
+	check(forks.crowds_chosen(cells(line(Vector2i(61, 48), Vector2i(61, 27))))
+		and not forks.crowds_chosen(cells(line(Vector2i(61, 58), Vector2i(61, 70)))),
+		"chosen ride keeps room near its junction along the host road")
+	StageTrails._add_trail(w, cells(line(Vector2i(40, 48), Vector2i(40, 54))), "trail")
+	forks.refresh(dry)
+	check(forks.sources(origin, distance, StageTrails.EXIT_R) == PackedInt32Array([spaced]),
+		"a fourth arm favours spacing over growing the same intersection")
+	var axis := PackedByteArray()
+	axis.resize(w.N)
+	axis[48 * w.W + 48] = 1
+	var isolated := StageTrails.RoadForks.new(w, axis)
+	isolated.refresh(axis)
+	check(isolated.sources(origin, distance, StageTrails.EXIT_R).is_empty(), "fork preference stops at a structure axis")
+	var surface := Heightfield.new(w, false)
+	var finder := Pathfinder.new(w.W, w.H, StageTrails._route_heights(w, surface))
+	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.road)
+	axis.fill(0)
+	var state := {on_axis = axis, surface = surface}
+	var connection := cells(line(Vector2i(8, 48), Vector2i(60, 48)) + line(Vector2i(60, 48), Vector2i(60, 27)).slice(1))
+	var detour := cells(line(Vector2i(8, 48), Vector2i(66, 48)) + line(Vector2i(66, 48), Vector2i(66, 27)).slice(1)
+		+ line(Vector2i(66, 27), Vector2i(60, 27)).slice(1))
+	var cost := PackedFloat32Array()
+	cost.resize(w.N)
+	cost.fill(INF)
+	for c: int in connection: cost[c] = 3.0
+	for c: int in detour: cost[c] = 1.0
+	finder.search_budget = 0
+	check(StageTrails._prefer_dry_connection(w, finder, forks, cost, connection, state, 0) == connection,
+		"settlement link keeps its confirmed route when the extra search is unavailable")
+	finder.search_budget = 100000
+	var revised := StageTrails._prefer_dry_connection(w, finder, forks, cost, connection, state, 0)
+	check(revised[0] == connection[0] and revised[-1] == connection[-1] and forks.pressure(revised) < forks.pressure(connection)
+		and finder.search_budget == 100000, "dry settlement link moves a crowded departure with the same endpoints and budget")
+	finder.release()
+
+
 func run() -> void:
+	_fork_spacing()
 	var w := Fixture.world()
 	w.trails = []
 	w.cost.resize(w.N)

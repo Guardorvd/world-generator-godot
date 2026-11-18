@@ -20,6 +20,7 @@ extends RefCounted
 const Topology := preload("res://scripts/world/road_topology.gd")
 const RoadRecords := preload("res://scripts/world/road_records.gd")
 const RoadRides := preload("res://scripts/world/road_rides.gd")
+const RoadForks := preload("res://scripts/world/road_forks.gd")
 ## Линия пути по найденным клеткам: срезание лесенки, дуги, заходы, проверка участка и профиля
 const RoadLine := preload("res://scripts/world/road_line.gd")
 
@@ -721,6 +722,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var road_cost := w.cost.duplicate()
 	var state := {on_axis = PackedByteArray(), surface = surface}
 	state.on_axis.resize(w.N)
+	var forks := RoadForks.new(w, state.on_axis)
 	finder.links.resize(w.N)
 	var setup_us := Time.get_ticks_usec()
 	var reach := _bridge_reach(w)
@@ -796,7 +798,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		finder.search_budget = budgets[b]
 		var attempt_us := Time.get_ticks_usec()
 		var search_ms: float = finder.search_stats().get("call_ms", 0.0)
+		var structures := w.bridges.size() + w.tunnels.size()
 		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state)
+		if not q.is_empty() and structures == w.bridges.size() + w.tunnels.size():
+			q = _prefer_dry_connection(w, finder, forks, road_cost, q, state, structures)
 		# Каждая попытка: пара, прямое расстояние, списанный запас, исход, время попытки и поиска в ней, мс
 		# (поиск — только с Pathfinder.profile_searches; стенд road_plan_test).
 		link_log.append([a, b, roundi(distance), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", ""),
@@ -1285,7 +1290,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 				pairs.append([a, b, d])
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] < q[2] if p[2] != q[2] else _key(p[0], p[1]) < _key(q[0], q[1]))
 	w.generation_profile.second_ways = []
-	w.generation_profile.spur_forks = []
+	var forks := RoadForks.new(w, state.on_axis)
 	var network := _network_cost(w)
 	var near := _net_near(w)
 	for index in pairs.size():
@@ -1316,12 +1321,9 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			continue
 		var corr := _corridor(w, [old])
 		var avoiding := _exit_cost(w, corr, a, b)
-		var p := _land_path(finder, avoiding, a, b, "trail")
 		# Совпадение с прежней связью и доля новой земли — по добавляемой части (_core): общий выезд не в счёт
 		# Повторные касания сети в общем выезде (сход и возврат у поселения) не в счёт: _adds_network — за кругами EXIT_R
-		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(_core(w, p), corr) > AVOID_SHARE or not _new_ground(w, _core(w, p)) or not _exit_clean(w, p, near):
-			continue
-		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
+		var q := _secondary_path(w, finder, forks, avoiding, a, b, state,
 			func(q: PackedInt32Array) -> bool: return _length(w, q) * SHORTCUT < old_len and _share(_core(w, q), corr) <= AVOID_SHARE and _new_ground(w, _core(w, q)) and _exit_clean(w, q, near))
 		if q.is_empty():
 			continue
@@ -1340,12 +1342,8 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			step.call(0.705 + 0.015 * index / maxi(1, primary_paths.size()), "Обходные тропы: %d/%d" % [index + 1, primary_paths.size()])
 		var corr := _corridor(w, [e[2]])
 		var avoiding := _exit_cost(w, corr, st[e[0]].i, st[e[1]].i)
-		var p := _land_path(finder, avoiding, st[e[0]].i, st[e[1]].i, "trail")
 		# Совпадение, новая земля, другой рельеф и удаление от связи — по добавляемой части (_core): общий выезд не в счёт
-		if p.is_empty() or _length(w, p) > _length(w, e[2]) * ALT_LEN or _share(_core(w, p), corr) > AVOID_SHARE \
-				or not _new_ground(w, _core(w, p)) or not _different_relief(w, _core(w, p), e[2]) or not _exit_clean(w, p, near) or _far_share(w, _core(w, p), e[2]) < FAR_SHARE:
-			continue
-		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
+		var q := _secondary_path(w, finder, forks, avoiding, st[e[0]].i, st[e[1]].i, state,
 			func(q: PackedInt32Array) -> bool: return _length(w, q) <= _length(w, e[2]) * ALT_LEN and _share(_core(w, q), corr) <= AVOID_SHARE and _new_ground(w, _core(w, q)) and _different_relief(w, _core(w, q), e[2]) and _exit_clean(w, q, near) and _far_share(w, _core(w, q), e[2]) >= FAR_SHARE)
 		if q.is_empty():
 			continue
@@ -1383,7 +1381,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if (o - tv).length_squared() < SHORE_GAP * SHORE_GAP: spaced = false
 		if t >= 0 and spaced:
 			targets.append(tv) # и неудачная попытка: соседние точки перегона нашли бы тот же берег
-			if _spur(w, finder, anchors[index], t, SHORE_MAX, "shore", road_cost, state, near, settle_d, all_paths):
+			if _spur(w, finder, anchors[index], t, SHORE_MAX, "shore", road_cost, state, near, settle_d, all_paths, forks):
 				shores += 1
 				near = _net_near(w)
 	# 17.11.2026: смотровые точки — вершины холмов над перегоном (_overlook): короткая тропа наверх, откуда видно долину.
@@ -1406,74 +1404,120 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if (o - tv).length_squared() < VIEW_GAP * VIEW_GAP: spaced = false
 		if not spaced: continue
 		view_targets.append(tv)
-		if _spur(w, finder, legs[index], t, VIEW_MAX, "view", road_cost, state, near, settle_d, all_paths):
+		if _spur(w, finder, legs[index], t, VIEW_MAX, "view", road_cost, state, near, settle_d, all_paths, forks):
 			views += 1
 			near = _net_near(w)
 
 
-## Путь короткой тропы от клетки сети source к цели t; пустой — не годится (длиннее BRANCH_LEN прямых, дубль сети)
-static func _spur_path(w: WorldData, finder: Pathfinder, source: int, t: int, state: Dictionary, near: PackedFloat32Array) -> PackedInt32Array:
-	var p := _land_path(finder, w.cost, source, t, "trail")
-	var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
-	if p.is_empty() or _length(w, p) > d * BRANCH_LEN or not _new_ground(w, p) or not _adds_network(w, p, near):
+## A single extra search can move where a through route leaves the existing road.
+## Keep all original route and structure checks, and fall back if the detour is poor.
+static func _secondary_path(w: WorldData, finder: Pathfinder, forks: RefCounted, cost: PackedFloat32Array,
+		a: int, b: int, state: Dictionary, accept: Callable) -> PackedInt32Array:
+	var path := _land_path(finder, cost, a, b, "trail")
+	if path.is_empty() or not accept.call(path):
 		return PackedInt32Array()
-	return _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE,
-		func(q: PackedInt32Array) -> bool: return _length(w, q) <= d * BRANCH_LEN and _new_ground(w, q) and _adds_network(w, q, near))
+	forks.refresh(state.on_axis)
+	var crowd: float = forks.pressure(path)
+	if crowd > 0.0 and finder.search_budget != 0:
+		var preferred: PackedFloat32Array = forks.preferred_cost(cost)
+		var limit := _fork_length_limit(w, path)
+		var better := func(q: PackedInt32Array) -> bool:
+			return _length(w, q) <= limit and forks.pressure(q) + 0.05 < crowd and accept.call(q)
+		var moved := _fork_search(finder, func() -> PackedInt32Array:
+			var q := _land_path(finder, preferred, a, b, "trail")
+			return _structures(w, q, false, finder, preferred, state, 0, ROAD_GRADE, better) if not q.is_empty() and better.call(q) else PackedInt32Array())
+		if not moved.is_empty():
+			return moved
+	return _structures(w, path, false, finder, cost, state, 0, ROAD_GRADE, accept)
 
 
-const FORK_GAP := 25.0 # клеток (100 м): ближе к готовому съезду новый съезд не делается — отходит от него
+static func _fork_length_limit(w: WorldData, path: PackedInt32Array) -> float:
+	var length := _length(w, path)
+	return length + maxf(4.0, length * 0.20)
 
 
-## Съезды необязательных путей: начала коротких троп (_spur, generation_profile.spur_forks) и концы записей вторых
-## путей, лежащие на чужом участке (road_owner — другой участок: узел на дороге, а не тупик у цели)
-static func _fork_cells(w: WorldData) -> PackedInt32Array:
-	var out := PackedInt32Array(w.generation_profile.get("spur_forks", []))
-	var owner := w.generation.road_owner
-	for note: Array in w.generation_profile.get("second_ways", []):
-		for k: int in note[1]:
-			var pts: Array = w.trails[k].pts
-			for p: Dictionary in [pts[0], pts[-1]]:
-				var c := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
-				if owner[c] >= 0 and owner[c] != k: out.append(c)
-	return out
+## Another alignment for an already established settlement link. Any search
+## or structure failure leaves the confirmed connection available for publication.
+static func _prefer_dry_connection(w: WorldData, finder: Pathfinder, forks: RefCounted, cost: PackedFloat32Array,
+		path: PackedInt32Array, state: Dictionary, structures: int) -> PackedInt32Array:
+	forks.refresh(state.on_axis)
+	var crowd: float = forks.pressure(path)
+	var axis: PackedByteArray = state.on_axis
+	var dry := func(q: PackedInt32Array) -> bool:
+		for c: int in q:
+			if axis[c] != 0 or _wet(w, c): return false
+		return true
+	if crowd <= 0.0 or not dry.call(path):
+		return path
+	var preferred: PackedFloat32Array = forks.preferred_cost(cost)
+	var limit := _fork_length_limit(w, path)
+	var better := func(q: PackedInt32Array) -> bool:
+		return w.bridges.size() + w.tunnels.size() == structures and _length(w, q) <= limit and forks.pressure(q) + 0.05 < crowd and dry.call(q)
+	var available := finder.search_budget
+	var moved := _fork_search(finder, func() -> PackedInt32Array:
+		var q := _explicit(w, _road_path(finder, preferred, path[0], path[-1]), state.on_axis)
+		return _structures(w, q, true, finder, preferred, state, 0, ROAD_GRADE, better) if not q.is_empty() and better.call(q) else PackedInt32Array())
+	# This link already succeeded. The spare alignment trial cannot consume the
+	# budget reserved for later settlement connections.
+	finder.search_budget = available
+	state.failure = ""
+	return path if moved.is_empty() else moved
+
+
+## Reserve the rest of the stage budget for the original route and later targets.
+static func _fork_search(finder: Pathfinder, search: Callable) -> PackedInt32Array:
+	var available := finder.search_budget
+	var limit := mini(24000, available / 8) if available >= 0 else 24000
+	if limit <= 0:
+		return PackedInt32Array()
+	finder.search_budget = limit
+	var path: PackedInt32Array = search.call()
+	finder.search_budget = available - (limit - finder.search_budget) if available >= 0 else available
+	return path
 
 
 ## Короткая тропа от сети к цели t (берег, смотровая точка): от ближайшей к цели точки сети (не дальше reach), а если
 ## она у поселения или её нет — от точки перегона anchor. Не длиннее BRANCH_LEN прямых, не дубль сети. true — добавлена.
 static func _spur(w: WorldData, finder: Pathfinder, anchor: int, t: int, reach: int, what: String, road_cost: PackedFloat32Array,
-		state: Dictionary, near: PackedFloat32Array, settle_d: PackedFloat32Array, all_paths: Array) -> bool:
+		state: Dictionary, near: PackedFloat32Array, settle_d: PackedFloat32Array, all_paths: Array, forks: RefCounted) -> bool:
 	var source := _nearest_path(w, t, reach)
 	if source < 0 or settle_d[source] < EXIT_R:
 		source = anchor
-	# 17.11.2026: съезд ближе FORK_GAP к уже готовому съезду необязательного пути — сначала от того же узла: общий
-	# съезд, дальше путь может идти по готовому ответвлению и отделиться от него. Мягко: если от общего узла тропа
-	# не годится, она строится от своей точки, как раньше
-	var sources := PackedInt32Array()
-	var sx := source % w.W
-	var sy := source / w.W
-	var gap := FORK_GAP * FORK_GAP + 1.0
-	var shared := -1
-	for f: int in _fork_cells(w):
-		var d2 := float((f % w.W - sx) * (f % w.W - sx) + (f / w.W - sy) * (f / w.W - sy))
-		if d2 > 0.0 and d2 < gap and w.cost[f] != INF and settle_d[f] >= EXIT_R:
-			gap = d2
-			shared = f
-	if shared >= 0: sources.append(shared)
-	sources.append(source)
-	var q := PackedInt32Array()
-	for from: int in sources:
-		q = _spur_path(w, finder, from, t, state, near)
-		if not q.is_empty():
-			source = from
-			break
+	var direct := _land_path(finder, w.cost, source, t, "trail")
+	var max_length := _cell_centre(source, w.W).distance_to(_cell_centre(t, w.W)) * BRANCH_LEN
+	var accept := func(q: PackedInt32Array) -> bool:
+		return _length(w, q) <= max_length and _new_ground(w, q) and _adds_network(w, q, near)
+	var q := _from_quieter_fork(w, finder, forks, source, t, direct, "trail", TRAIL_GRADE, state.on_axis, settle_d,
+		func(p: PackedInt32Array, better: Callable) -> PackedInt32Array:
+			var valid := func(route: PackedInt32Array) -> bool: return accept.call(route) and better.call(route)
+			return _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE, valid) if valid.call(p) else PackedInt32Array())
+	if q.is_empty() and not direct.is_empty() and accept.call(direct):
+		q = _structures(w, direct, false, finder, w.cost, state, 0, ROAD_GRADE, accept)
 	if q.is_empty():
 		return false
 	_note_way(w, what, _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 	all_paths.append(q)
-	var forks: Array = w.generation_profile.get("spur_forks", [])
-	forks.append(source)
-	w.generation_profile.spur_forks = forks
 	return true
+
+
+static func _from_quieter_fork(w: WorldData, finder: Pathfinder, forks: RefCounted, source: int, target: int,
+		direct: PackedInt32Array, kind: String, grade: float, on_axis: PackedByteArray,
+		settle_d: PackedFloat32Array, finish: Callable) -> PackedInt32Array:
+	forks.refresh(on_axis)
+	var crowd: float = forks.pressure_at(source) if direct.is_empty() else forks.pressure(direct)
+	if crowd <= 0.0:
+		return PackedInt32Array()
+	var limit := _fork_length_limit(w, direct) if not direct.is_empty() else _cell_centre(source, w.W).distance_to(_cell_centre(target, w.W)) * BRANCH_LEN
+	var better := func(p: PackedInt32Array) -> bool: return _length(w, p) <= limit and forks.pressure(p) + 0.05 < crowd
+	var takeoff: int = forks.crowded_takeoff(direct)
+	for from: int in forks.sources(takeoff if takeoff >= 0 else source, settle_d, EXIT_R):
+		if from == source: continue # already searched
+		var path := _fork_search(finder, func() -> PackedInt32Array:
+			var p := _land_path(finder, w.cost, from, target, kind, grade)
+			return finish.call(p, better) if not p.is_empty() and better.call(p) else PackedInt32Array())
+		if not path.is_empty():
+			return path
+	return PackedInt32Array()
 
 
 const VIEW_MIN := 12     # смотровая точка не ближе стольких клеток (48 м) от точки перегона
@@ -1814,8 +1858,8 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray, water_d: PackedF
 ## 17.11.2026: общий выезд длиннее (было 12 клеток, 48 м — развилки всё равно оставались у самого поселения), а новая
 ## земля в этом круге в EXIT_MUL раз дороже: путь выходит из поселения по готовой дороге и отделяется на перегоне.
 ## Мягко: если подходящего выезда нет, путь платит за новую землю, а не пропадает.
-const EXIT_R := 28.0   # клеток (112 м): окрестность поселения, где необязательные пути не отделяются от сети
-const EXIT_MUL := 3.0
+const EXIT_R := 35.0   # клеток (140 м): предпочтение общему выезду из поселения
+const EXIT_MUL := 3.5
 
 
 ## Коридор near без клеток в круге EXIT_R вокруг концов a и b (в нём путь идёт по прежней связи свободно)
@@ -2631,6 +2675,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	w.generation_profile.mountain_fords_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	var fast := finder.fast() # 9.7: ближайший путь к вершине ищет C# (FastGrid.NearestPath), тот же перебор
 	var settle_d := _settle_dist(w)
+	var forks := RoadForks.new(w, on_axis)
 	for pk in w.peaks:
 		var detail_us := Time.get_ticks_usec()
 		var best := -1
@@ -2672,6 +2717,9 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
 			detail_us = Time.get_ticks_usec()
 			var p := _land_path(finder, w.cost, best, pk.i, "mountain", MOUNTAIN_GRADE)
+			var moved := _from_quieter_fork(w, finder, forks, best, pk.i, p, "mountain", MOUNTAIN_GRADE, on_axis, settle_d,
+				func(q: PackedInt32Array, _better: Callable) -> PackedInt32Array: return q)
+			if not moved.is_empty(): p = moved
 			search_us += Time.get_ticks_usec() - detail_us
 			detail_us = Time.get_ticks_usec()
 			if p.size() > 0:

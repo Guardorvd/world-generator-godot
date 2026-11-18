@@ -199,7 +199,11 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	finder.window = Rect2i()
 	finder.search_budget = -1
 	stats.search_ms = (Time.get_ticks_usec() - started) / 1000.0 - stats.prepare_ms
-	var chosen := _select(w, candidates, stats)
+	var forks := StageTrails.RoadForks.new(w, on_axis)
+	forks.refresh(on_axis)
+	for c: Dictionary in candidates:
+		c.fork_rank = float(c.score) - 0.60 * forks.ride_pressure(c.path)
+	var chosen := _select(w, candidates, stats, forks)
 	var publish_us := Time.get_ticks_usec()
 	var number := 0
 	for c: Dictionary in chosen:
@@ -525,34 +529,40 @@ static func _score(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Arra
 
 
 ## Жадный отбор: лучший каждого характера, затем по оценке; не больше двух спусков с одного старта; без дубликатов
-static func _select(w: WorldData, candidates: Array, stats: Dictionary) -> Array:
+static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: RefCounted = null) -> Array:
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return a.score > b.score if a.score != b.score else a.path[0] * 7 + a.path[-1] < b.path[0] * 7 + b.path[-1])
+		var first: float = a.get("fork_rank", a.score)
+		var second: float = b.get("fork_rank", b.score)
+		return first > second if first != second else a.path[0] * 7 + a.path[-1] < b.path[0] * 7 + b.path[-1])
 	var near := PackedByteArray()
 	near.resize(w.N)
 	var chosen: Array = []
 	var used := {}
 	var per_top := {}
 	var limit := maxi(1, roundi(MAX_RIDES * w.scale))
-	for pass_n in 2:
+	# Prefer space between the chosen junctions both within each style and when
+	# filling the remaining slots. Revisit the original candidates in each fallback.
+	for pass_n in 4:
 		var styles := {}
 		for c: Dictionary in chosen: styles[c.style] = true
 		for n in candidates.size():
 			var c: Dictionary = candidates[n]
 			if chosen.size() >= limit: break
 			if c.score < MIN_SCORE or used.has(n) or int(per_top.get(c.top.i, 0)) >= 2: continue
-			if pass_n == 0 and styles.has(c.style): continue
+			if pass_n < 2 and styles.has(c.style): continue
 			var path: PackedInt32Array = c.path
+			if forks != null and pass_n % 2 == 0 and forks.crowds_chosen(path): continue
 			var same := 0
 			for i: int in path:
 				if near[i] != 0: same += 1
 			if float(same) / path.size() > SAME_SHARE:
-				if pass_n == 1: stats.rejected["похож на принятый"] = int(stats.rejected.get("похож на принятый", 0)) + 1
+				if pass_n == 3: stats.rejected["похож на принятый"] = int(stats.rejected.get("похож на принятый", 0)) + 1
 				continue
 			chosen.append(c)
 			used[n] = true
 			styles[c.style] = true
 			per_top[c.top.i] = int(per_top.get(c.top.i, 0)) + 1
+			if forks != null: forks.reserve(path)
 			for k in range(0, path.size(), 2): # путь непрерывный: через клетку хватает при радиусе SAME_R
 				var i := path[k]
 				var cx := i % w.W
