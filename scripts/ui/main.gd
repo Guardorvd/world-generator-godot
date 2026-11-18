@@ -1387,6 +1387,12 @@ func _setup_save_controls() -> void:
 	_load_manual.pressed.connect(func() -> void: _confirm_load(_chosen_seed(), "manual"))
 	_save_status = %SaveStatus
 	%QuickSave.pressed.connect(func() -> void: _save_current("manual"))
+	# «Путешествие» из паузы: пауза снимается, экран открывается поверх игры (закрыть — J, Esc или кнопка)
+	%Journey.pressed.connect(func() -> void:
+		if game == null:
+			return
+		_resume()
+		game.open_journal())
 	%QuickLoad.pressed.connect(func() -> void:
 		if Saves.read_slot(game.world.seed_text, "manual").data.is_empty():
 			_message("Загрузка", "Ручного сохранения пока нет. Нажмите «Сохранить».")
@@ -1411,6 +1417,7 @@ func _control_rows() -> Array:
 	rows.append([c.label(&"flashlight"), "фонарик"])
 	rows.append([c.label(&"recover_bike"), "выбрать место для велосипеда"])
 	rows.append([c.label(&"toggle_map"), "карта"])
+	rows.append([c.label(&"journal"), "путешествие: путь и альбом"])
 	rows.append([c.label(&"photo") if pad else "ПКМ", "фотоаппарат"])
 	if not pad:
 		rows.append([c.label(&"time_skip"), "время суток (+Shift — назад)"])

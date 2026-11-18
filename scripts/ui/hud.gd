@@ -43,6 +43,8 @@ var world: WorldData
 var map_preview: Image
 var map_data: MapData
 var map_journal := Journal.new()
+var explore := Exploration.new()  # открытое сверху, счётчики пути и альбом (с 18.11.2026); сохранение — поле "explore"
+var journal_panel  # «Путешествие»: путь и альбом
 var minimap: LocalMap
 var controls: Controls = GameContext.scope.controls
 var big_map: Atlas
@@ -157,6 +159,8 @@ func _ready() -> void:
 	big_map.marker_requested.connect(func(at: Vector2) -> void: _select_map_goal(marker_goal(at)))
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
+	journal_panel = preload("res://scripts/ui/journal_panel.gd").new()
+	add_child(journal_panel)
 	_vignette = ColorRect.new()
 	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -248,6 +252,9 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	map_preview = map_image
 	map_data = MapData.new(w)
 	map_journal = Journal.new()
+	explore = Exploration.new()
+	if journal_panel != null:
+		journal_panel.clear()
 	minimap.set_world(w, knows, map_data)
 	big_map.journal = map_journal
 	big_map.set_source(map_data)
@@ -273,6 +280,9 @@ func clear_world() -> void:
 	map_preview = null
 	map_data = null
 	map_journal = Journal.new()
+	explore = Exploration.new()
+	if journal_panel != null:
+		journal_panel.clear()
 	big_map.journal = map_journal
 	big_map.set_source(null)
 	minimap.set_world(null)
@@ -304,7 +314,7 @@ func set_map_visible(v: bool) -> void:
 	big_map.hover = {}
 	_apply_reveal()
 	if v:
-		big_map.move_hint = "Колесо · масштаб     Перетащить · обзор     СКМ · к себе     Ctrl+ЛКМ · метка"
+		big_map.move_hint = "Колесо · масштаб     Перетащить · обзор     СКМ · к себе     Ctrl+ЛКМ · метка     %s · путешествие" % controls.label(&"journal")
 		sync_map_places()
 		big_map.set_player(Vector2(px, pz), yaw)
 
@@ -419,14 +429,14 @@ func board_places(settlement: Variant, catalog: Variant = null) -> Array:
 
 
 func map_place_count() -> int:
-	return visited.size() + map_journal.read.size()
+	return visited.size() + map_journal.read.size() + explore.revealed.size()
 
 
 func sync_map_places() -> void:
 	if not big_map.visible or world == null:
 		return
 	var known: Array = []
-	var ids := map_journal.read.merged(visited)
+	var ids := map_journal.read.merged(visited).merged(explore.revealed)
 	for id: String in ids:
 		var place := world.place(id)
 		if not place.is_empty():
@@ -444,7 +454,7 @@ func _select_map_goal(place: Dictionary) -> void:
 
 func _sync_map_goal() -> void:
 	var id: String = goal.get("key", "")
-	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or visited.has(id) or map_journal.read.has(id))
+	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or visited.has(id) or map_journal.read.has(id) or explore.revealed.has(id))
 	big_map.goal = Atlas.place_at(goal) if show_goal else Vector2.INF
 	big_map.refresh_overlay()
 
@@ -500,9 +510,42 @@ func at_place(place: Dictionary, x: float, z: float) -> bool:
 	return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < (2.5 if place.kind in ["peak", "marker"] else (4.0 if place.kind == "site" else 6.0))
 
 
-## Название места известно: посещено, цель или место взятого задания (11.9+)
+## Название места известно: посещено, цель, место взятого задания (11.9+) или открыто сверху (вышка, вершина)
 func knows(id: String) -> bool:
-	return visited.has(id) or goal.get("key") == id or (quests != null and quests.known.has(id))
+	return visited.has(id) or explore.revealed.has(id) or goal.get("key") == id or (quests != null and quests.known.has(id))
+
+
+## Данные экрана «Путешествие» (JournalPanel.open): счётчики пути, открытые места по видам и страницы альбома
+func journey_data() -> Dictionary:
+	var places := all_places() if world != null else []
+	var total := {}
+	var found := {}
+	var order: Array[String] = []
+	for place: Dictionary in places:
+		var label := "Поселения"
+		match place.kind:
+			"peak": label = "Вершины"
+			"lake": label = "Озёра"
+			"site":
+				var title: String = StageSites.TYPES[place.src.type].title if StageSites.TYPES.has(place.src.type) else "место"
+				label = title.left(1).to_upper() + title.substr(1)
+		if not total.has(label):
+			total[label] = 0
+			found[label] = 0
+			order.append(label)
+		total[label] += 1
+		if visited.has(place.key) or explore.revealed.has(place.key) or map_journal.read.has(place.key):
+			found[label] += 1
+	var rows: Array = []
+	for label: String in order:
+		rows.append([label, found[label], total[label]])
+	var pages: Array[Dictionary] = []
+	for page: Dictionary in Exploration.pages():
+		var entry := page.duplicate()
+		entry.shot = explore.album.get(page.key, {})
+		pages.append(entry)
+	return {foot = explore.foot_m, bike = explore.bike_m, time = explore.play_s, alt = explore.max_alt, photos = explore.photos,
+		quests = quests.done if quests != null else 0, places = rows, pages = pages, groups = Exploration.GROUPS}
 
 
 ## Место текущего шага задания (метка на компасе и картах) или пусто

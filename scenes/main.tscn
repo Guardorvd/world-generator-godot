@@ -862,6 +862,13 @@ text = "Автосохранение: каждые 60 секунд, при па�
 horizontal_alignment = 1
 autowrap_mode = 3
 
+[node name="Journey" type="Button" parent="UI/Root/Pause/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+tooltip_text = "Пройденный путь, открытые места и альбом снимков"
+text = "Путешествие"
+
 [node name="Settings" type="Button" parent="UI/Root/Pause/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2

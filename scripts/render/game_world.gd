@@ -444,11 +444,13 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 			places[p.key] = p
 		hud.visited = saved.visited.duplicate()
 		hud.map_journal.restore(saved.get("atlas", {}))
+		hud.explore.restore(saved.get("explore", {}))
 		if not quests.restore_state(saved.quest, places):
 			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
 		_quest_changed()
 		hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
 	photo.photo_taken.connect(_quest_photo)
+	photo.photo_taken.connect(_album_photo)
 	photo.wanted_reach = Quests.SHOT_REACH_M
 	if world.outer != null and outer != null:
 		outer.frame_budget = stream_coordinator.frame_budget
@@ -577,6 +579,7 @@ func save_state() -> Dictionary:
 	var state := {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		atlas = hud.map_journal.save_state(),
+		explore = hud.explore.save_state(),
 		goal = hud.goal.get("key", ""),
 		lamp = bike_view.lamp_on(),
 		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour,
@@ -852,6 +855,7 @@ func travel_to(place: Dictionary) -> void:
 		return
 	crash.abort()
 	hud.map_journal.end_trip()
+	hud.explore.break_trip()
 	player = arriving
 	yaw = arrival_yaw
 	pitch = -0.05
@@ -989,6 +993,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				look(event.screen_relative.x, event.screen_relative.y)
 		get_viewport().set_input_as_handled()
 		return
+	if _journal_open():
+		if event.is_action_pressed("pause") or event.is_action_pressed("back") or event.is_action_pressed("journal"):
+			close_journal()
+			get_viewport().set_input_as_handled()
+		return
 	if _settlement_open():
 		if event.is_action_pressed("pause") or event.is_action_pressed("interact") or event.is_action_pressed("back"):
 			_close_settlement()
@@ -1031,6 +1040,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("toggle_map"):
 		toggle_map()
+	elif event.is_action_pressed("journal"):
+		open_journal()
+		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("flashlight"):
 		toggle_flashlight()
 	elif event.is_action_pressed("time_skip"):
@@ -1162,7 +1174,7 @@ func _physics_process(dt: float) -> void:
 		st = clampf(-wrapf(wanted - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
 		jump = false
 	# при открытой карте руль, газ и прыжок не работают (велосипед катится по инерции)
-	var map_lock := show_map
+	var map_lock := show_map or _journal_open()
 	if time < _rescue_input_until or map_lock:
 		fw = 0.0
 		st = 0.0
@@ -1216,10 +1228,13 @@ func _physics_process(dt: float) -> void:
 	t0 = _tick_mark("audio", t0)
 	if crashed:
 		_snap()
-	if bike.riding and not _opening and not crashed and not crash.active():
+	# 18.11.2026: трек и счётчики пути ведутся и пешком, и на велосипеде (при езде player — положение велосипеда)
+	if not _opening and not crashed and not crash.active():
 		hud.map_journal.record(Vector2(player.x, player.z), dt)
+		hud.explore.tick(dt, Vector2(player.x, player.z), bike.riding, player.feet)
 	else:
 		hud.map_journal.end_trip()
+		hud.explore.break_trip()
 	# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
 	# радиус открытия — 2,5 клетки (10 м), за 0,1 с даже на спуске игрок проезжает 1–2 м
 	_discovery_tick += 1
@@ -1230,6 +1245,13 @@ func _physics_process(dt: float) -> void:
 			hud.toast(text)
 		if hud.visited.size() != known:
 			hud.sync_map_places()
+			for pk in world.peaks:
+				var peak_id := WorldData.place_id("peak", pk.x, pk.y)
+				if hud.visited.has(peak_id) and not hud.explore.scanned.has(peak_id) and Grid.hypot(pk.x - player.x / TILE, pk.y - player.z / TILE) < 6.0:
+					_look_around(peak_id, Exploration.PEAK_RADIUS, "С вершины")
+		for tower: Dictionary in heights.towers:
+			if not hud.explore.scanned.has(tower.id) and TowerLayout.on_deck(tower, player.x, player.z, player.feet):
+				_look_around(tower.id, Exploration.TOWER_RADIUS, "С вышки")
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_quest_progress(quests.tick(func(place: Dictionary) -> bool: return hud.at_place(place, player.x, player.z)))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
@@ -1298,7 +1320,7 @@ func _process(delta: float) -> void:
 	var summary := hud.summary_visible()
 	if not summary:
 		info_timer = 0.0
-	if not show_map and not _settlement_open():
+	if not show_map and not _settlement_open() and not _journal_open():
 		var stick := services.controls.look_delta(delta)
 		if stick != Vector2.ZERO:
 			look(stick.x, stick.y)
@@ -1324,7 +1346,7 @@ func _process(delta: float) -> void:
 			_navigation_status = navigation_line.status
 			if _navigation_status != "": hud.toast_now(_navigation_status)
 	if place_names != null:
-		place_names.update(camera, delta, hud.visited, not summary, quests.known)
+		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)
 	if _bag != null and _bag.visible:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
@@ -1659,6 +1681,64 @@ func _close_settlement(capture := true) -> void:
 	hud.settlement_panel.clear()
 	if capture and not paused and not show_map:
 		capture_mouse()
+
+
+## «Путешествие» (J, с большой карты и из паузы): путь и альбом. Игра идёт, но управление заперто, как на карте.
+func _journal_open() -> bool:
+	return hud != null and hud.journal_panel != null and hud.journal_panel.visible
+
+
+func open_journal(album := false) -> void:
+	if _opening or paused or player == null or travel_active() or crash.active() or _journal_open() or _placing_bike():
+		return
+	_set_photo(false)
+	_close_settlement(false)
+	services.controls.release_motion()
+	services.controls.read_bike_body(bike, false)
+	_dragging = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if not hud.journal_panel.closed.is_connected(close_journal):
+		hud.journal_panel.closed.connect(close_journal)
+	hud.journal_panel.open(hud.journey_data(), album)
+
+
+func close_journal(capture := true) -> void:
+	if not _journal_open():
+		return
+	hud.journal_panel.clear()
+	if capture and not paused and not show_map:
+		capture_mouse()
+
+
+## С верхней площадки вышки и с вершины видно далеко: все малые места в радиусе, не закрытые склоном, открываются
+## на картах и в подписях мира. Один источник — один раз (Exploration.scanned).
+func _look_around(source: String, radius: float, from_text: String) -> void:
+	var explore := hud.explore
+	explore.scanned[source] = true
+	var eye := Vector3(player.x, player.feet + 1.7, player.z)
+	var found := explore.reveal_from(hud.all_places(), eye, radius, TILE, hud.knows, heights.ground_at, _occluded)
+	if found.is_empty():
+		explore.revision += 1
+		hud.toast("%s новых мест не видно" % from_text)
+	else:
+		hud.toast("%s видно новых мест: %d" % [from_text, found.size()])
+	hud.sync_map_places()
+
+
+## Снимок попадает в альбом: биом под камерой, место в рамке, ночное явление над горизонтом
+func _album_photo(shot: Dictionary) -> void:
+	var place: Dictionary = {}
+	if str(shot.get("place", "")) != "":
+		place = world.place(shot.place)
+	var info := world.tile_info(player.x / TILE, player.z / TILE)
+	var events: Dictionary = day.events
+	var shower: float = events.get("meteor", 0.0)
+	var sky := {dark = _night, up = -camera.global_basis.z.y, aurora = events.get("aurora", 0.0), comet = events.get("comet", 0.0),
+		meteor = shower if shower >= DayCycle.METEOR_SHOWER else 0.0}
+	var keys := Exploration.classify(place, int(info.biome) if not info.is_empty() else -1, sky)
+	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true))
+	if not titles.is_empty():
+		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles))
 
 
 func _navigation_goal(place: Dictionary) -> void:

@@ -1,0 +1,187 @@
+class_name Exploration
+extends RefCounted
+## Путешествие: открытые издалека места, счётчики пути и страницы альбома. Данные без узлов сцены.
+## Хозяин — Hud (рядом с visited и журналом поездок MapJournal; на новом мире заменяется новым). Сохранение — необязательное
+## поле "explore" (формат сохранения прежний, старые файлы читаются). Трек поездок хранит MapJournal (поле "atlas").
+##
+## Открытые места: малые места (сооружения, озёра, вершины) видны на картах и подписаны в мире, когда игрок их посетил,
+## взял по ним задание или увидел сверху: с верхней площадки вышки и с вершины открываются все такие места в радиусе
+## TOWER_RADIUS / PEAK_RADIUS, которые видны из точки (линия прямой видимости — GameWorld._occluded). Одна вышка и одна
+## вершина открывают места один раз (scanned).
+##
+## Альбом: страницы заполняются сами при каждом снимке (PhotoCamera.photo_taken). Страница хранит первый снимок и дату.
+
+const TOWER_RADIUS := 700.0   # м
+const PEAK_RADIUS := 1500.0   # м
+const MAX_STEP := 30.0        # больше за такт — перенос, путь не считается
+const NIGHT_MIN := 0.55       # 1 - sunlight не меньше: достаточно темно для ночных явлений
+const EVENT_MIN := 0.3        # сила явления (DayCycle.events), с которой его видно
+const UP_MIN := 0.12          # взгляд камеры выше горизонта не меньше чем на столько (y единичного вектора)
+const MAX_ALBUM := 128
+
+const GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночные явления"]
+
+var revealed := {}   # id места -> true: открыто сверху
+var scanned := {}    # id вышки или вершины -> true: с неё уже смотрели
+var foot_m := 0.0
+var bike_m := 0.0
+var play_s := 0.0
+var max_alt := 0.0   # высшая точка, м (как высота в сводке)
+var photos := 0
+var album := {}      # ключ страницы -> {path, date, place}
+var revision := 0    # растёт при любом изменении открытых мест и альбома
+var _last := Vector2.INF
+
+
+## Все страницы альбома по группам: [{key, group, title, hint}]
+static func pages() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for i in Biomes.LIST.size():
+		var biome: Dictionary = Biomes.LIST[i]
+		if biome.get("water", false):
+			continue
+		out.append({key = "biome:%d" % i, group = 0, title = biome.name, hint = "Снимок местности: «%s»" % biome.name})
+	out.append({key = "settlement", group = 1, title = "Поселение", hint = "Наведите рамку на поселение"})
+	for type: String in StageSites.TYPES:
+		var title: String = StageSites.TYPES[type].title
+		out.append({key = "site:" + type, group = 1, title = title.left(1).to_upper() + title.substr(1), hint = "Найдите и снимите: %s" % title})
+	out.append({key = "peak", group = 2, title = "Вершина", hint = "Любая вершина в рамке"})
+	out.append({key = "lake", group = 2, title = "Озеро", hint = "Любое озеро в рамке"})
+	out.append({key = "night:aurora", group = 3, title = "Полярное сияние", hint = "Ночью, камера выше горизонта"})
+	out.append({key = "night:comet", group = 3, title = "Комета", hint = "Ночью, камера выше горизонта"})
+	out.append({key = "night:meteor", group = 3, title = "Звездопад", hint = "Ночью, камера выше горизонта"})
+	return out
+
+
+## Счётчики пути: pos — положение игрока (м), riding — едет ли, alt — высота ног
+func tick(dt: float, pos: Vector2, riding: bool, alt: float) -> void:
+	play_s += dt
+	if is_finite(alt):
+		max_alt = maxf(max_alt, alt)
+	if not pos.is_finite():
+		return
+	if _last.is_finite():
+		var step := _last.distance_to(pos)
+		if step < MAX_STEP:
+			if riding:
+				bike_m += step
+			else:
+				foot_m += step
+	_last = pos
+
+
+## Разрыв пути (перенос, загрузка): следующий такт не считается шагом
+func break_trip() -> void:
+	_last = Vector2.INF
+
+
+## Места kind site, lake, peak из places (элементы Hud.all_places: {key, kind, x, y — клетки}) в радиусе radius м от eye,
+## ещё не открытые (is_known(id) -> false) и видимые из eye: ground(x, z) -> высота земли, occluded(from, to) -> закрыто ли.
+## Возвращает id новых открытий и записывает их в revealed.
+func reveal_from(places: Array, eye: Vector3, radius: float, tile: float, is_known: Callable, ground: Callable, occluded: Callable) -> PackedStringArray:
+	var found := PackedStringArray()
+	var limit := radius * radius
+	for place: Dictionary in places:
+		if not place.kind in ["site", "lake", "peak"]:
+			continue
+		var id: String = place.key
+		if revealed.has(id) or is_known.call(id):
+			continue
+		var x: float = place.x * tile
+		var z: float = place.y * tile
+		var dx := x - eye.x
+		var dz := z - eye.z
+		if dx * dx + dz * dz > limit:
+			continue
+		var top := Vector3(x, float(ground.call(x, z)) + 4.0, z)
+		if occluded.is_valid() and occluded.call(eye, top):
+			continue
+		revealed[id] = true
+		found.append(id)
+	if not found.is_empty():
+		revision += 1
+	return found
+
+
+## Страницы, которые закрывает снимок. place — запись Hud.all_places() места в рамке или пусто; biome — номер биома
+## под камерой (или -1); sky — {dark: 1 - sunlight, up: y взгляда, aurora, comet, meteor: сила явлений ночи}
+static func classify(place: Dictionary, biome: int, sky: Dictionary) -> PackedStringArray:
+	var keys := PackedStringArray()
+	if biome >= 0 and biome < Biomes.LIST.size() and not Biomes.LIST[biome].get("water", false):
+		keys.append("biome:%d" % biome)
+	if not place.is_empty():
+		match place.kind:
+			"settlement":
+				keys.append("settlement")
+			"peak", "lake":
+				keys.append(place.kind)
+			"site":
+				var src: Variant = place.get("src")
+				if src != null and StageSites.TYPES.has(src.type):
+					keys.append("site:" + src.type)
+	if float(sky.get("dark", 0.0)) >= NIGHT_MIN and float(sky.get("up", -1.0)) >= UP_MIN:
+		for event: String in ["aurora", "comet", "meteor"]:
+			if float(sky.get(event, 0.0)) >= EVENT_MIN:
+				keys.append("night:" + event)
+	return keys
+
+
+## Записать снимок: страницы без снимка получают его (path, date). Возвращает названия вновь заполненных страниц.
+func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> PackedStringArray:
+	photos += 1
+	var titles := PackedStringArray()
+	for key: String in keys:
+		if album.has(key) or album.size() >= MAX_ALBUM:
+			continue
+		album[key] = {path = str(shot.get("path", "")), date = date, place = str(shot.get("place", ""))}
+		for page: Dictionary in pages():
+			if page.key == key:
+				titles.append(page.title)
+	revision += 1
+	return titles
+
+
+func save_state() -> Dictionary:
+	return {revealed = revealed.duplicate(), scanned = scanned.duplicate(), foot = foot_m, bike = bike_m, time = play_s,
+		alt = max_alt, photos = photos, album = album.duplicate(true)}
+
+
+func restore(state: Dictionary) -> void:
+	revealed = state.get("revealed", {}).duplicate()
+	scanned = state.get("scanned", {}).duplicate()
+	foot_m = float(state.get("foot", 0.0))
+	bike_m = float(state.get("bike", 0.0))
+	play_s = float(state.get("time", 0.0))
+	max_alt = float(state.get("alt", 0.0))
+	photos = int(state.get("photos", 0))
+	album = state.get("album", {}).duplicate(true)
+	_last = Vector2.INF
+	revision += 1
+
+
+static func valid_save(state: Variant) -> bool:
+	if not state is Dictionary:
+		return false
+	for key: String in ["revealed", "scanned", "album"]:
+		if not state.get(key) is Dictionary:
+			return false
+	for key: String in ["foot", "bike", "time", "alt"]:
+		var v: Variant = state.get(key)
+		if not (v is float or v is int) or not is_finite(float(v)) or v < 0.0:
+			return false
+	if not state.get("photos") is int or state.photos < 0:
+		return false
+	for group: String in ["revealed", "scanned"]:
+		for key: Variant in state[group]:
+			if not key is String or state[group][key] != true:
+				return false
+	if state.album.size() > MAX_ALBUM:
+		return false
+	for key: Variant in state.album:
+		var page: Variant = state.album[key]
+		if not key is String or not page is Dictionary:
+			return false
+		for field: String in ["path", "date", "place"]:
+			if not page.get(field) is String:
+				return false
+	return true

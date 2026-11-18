@@ -6,7 +6,7 @@ const POINTS_PER_LEG := 128
 const MAX_LEGS := 256
 const SAMPLE_TIME := 0.24
 const MIN_STEP := 3.5
-const MAX_STEP := 45.0
+const MAX_STEP := 30.0  # дальше за такт — перенос или возврат после падения: трек рвётся, перемычки нет
 const END_STEP := 1.0
 
 var read := {}

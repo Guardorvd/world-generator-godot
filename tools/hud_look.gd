@@ -218,6 +218,32 @@ func _map_checks(world: WorldData) -> void:
 	hud.visited[WorldData.place_id("settlement", 126, 114)] = true
 
 
+## 18.11.2026: экран «Путешествие» — вкладки «Путь» и «Альбом» (одна страница со снимком, остальные — серые силуэты)
+func _journal_checks() -> void:
+	var image := Image.create(640, 360, false, Image.FORMAT_RGB8)
+	image.fill(Color(0.35, 0.55, 0.75))
+	image.fill_rect(Rect2i(0, 210, 640, 150), Color(0.3, 0.5, 0.25))
+	var shot_path := OS.get_user_data_dir().path_join("hud_look_shot.jpg")
+	image.save_jpg(shot_path, 0.9)
+	hud.explore.foot_m = 4200.0
+	hud.explore.bike_m = 31800.0
+	hud.explore.play_s = 5400.0
+	hud.explore.max_alt = 812.0
+	var keys := Exploration.classify({}, Biomes.FOREST, {dark = 0.9, up = 0.4, aurora = 0.8})
+	hud.explore.add_photo({path = shot_path, place = ""}, keys, "2026-11-18 12:00:00")
+	_check(keys.has("biome:%d" % Biomes.FOREST) and keys.has("night:aurora"), "снимок ночью: страницы биома и сияния")
+	hud.journal_panel.open(hud.journey_data())
+	_check(hud.journal_panel.visible and hud.journal_panel._path_page.visible and not hud.journal_panel._album_page.visible, "«Путешествие» открывается на вкладке «Путь»")
+	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()), "экран помещается в 1280×720")
+	await _shot("hud_journal_path")
+	hud.journal_panel.open(hud.journey_data(), true)
+	_check(hud.journal_panel._album_page.visible and hud.journal_panel._album_page.get_child(0).get_child_count() >= 6, "вкладка «Альбом»: группы страниц")
+	await _shot("hud_journal_album")
+	hud.journal_panel.clear()
+	_check(not hud.journal_panel.visible, "закрытие прячет экран")
+	hud.explore = Exploration.new()
+
+
 func _run() -> void:
 	_build()
 	await process_frame
@@ -252,6 +278,7 @@ func _run() -> void:
 	hud.quest_changed()
 	_check(hud.tracker.visible and hud._tracker_count.text == "2 / 2" and hud._tracker_note.visible, "карточка задания показывает ход доставки")
 	await _shot("hud_map")
+	await _journal_checks()
 	hud.toast_now("Открыто место: перевал Седой")
 	hud.toast("Достигнута цель")
 	hud.toast_now("Открыто место: перевал Седой")
