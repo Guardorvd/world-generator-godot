@@ -243,7 +243,7 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 		w.elev = f.elev
 		w.slope = f.slope
 		return w
-	StageGeography.run(w)
+	StageGeography.run(w, false)
 	for i in w.N:
 		w.dist_water[i] = minf(w.dist_water[i], w.dist_ocean[i])
 		if f.has("dw"):

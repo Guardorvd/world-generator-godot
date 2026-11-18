@@ -10,7 +10,19 @@ const PROGRESS := 0.34
 const LABEL := "Высоты, уклоны и берега"
 
 
-static func run(w: WorldData) -> void:
+static func run(w: WorldData, parallel := true) -> void:
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var fields: Dictionary = fast.GeographyFields(w.W, w.H, w.h, w.filled, w.ocean, w.lake, w.river_cells(),
+			w.dist_ocean.size() == w.N, parallel)
+		w.dist_water = fields.dist_water if fields.has("dist_water") else w.dist_ocean.duplicate()
+		w.elev = fields.elev
+		w.slope = fields.slope
+		return
+	_run_script(w)
+
+
+static func _run_script(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
 	var N := w.N

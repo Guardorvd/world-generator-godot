@@ -1,10 +1,10 @@
 extends SceneTree
 ## Сверка переносов в C# (DOD): старый путь GDScript и новый путь C# на одних и тех же данных в одном процессе,
-## побайтно, и время обоих. Мир не генерируется: берётся готовая сохранённая географическая основа
-## («network_game_cache», слои мира и базовый рельеф), если её нет — тест выходит с пояснением.
+## побайтно, и время обоих. fields использует синтетические поля; rivers и mesh читают сохранённую
+## географическую основу («network_game_cache», слои мира и базовый рельеф).
 ## Русла рек (rivers) и меш с метровой сеткой (mesh) — пока есть оба пути. Дорожное полотно RoadBed и метровая сетка
 ## RoadRefinement с 16.11.2026 только на C#: их проверяет tools/road_golden.gd (хеши), здесь они лишь готовят рельеф для mesh.
-##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only rivers,mesh] [--dir <папка кэша>]
+##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,rivers,mesh] [--dir <папка кэша>]
 ## Лимит 240 с (watchdog). Код 1 при любом расхождении.
 
 const SEED := "Север-1234"
@@ -40,28 +40,83 @@ func run() -> void:
 		print("FAIL C# (FastGrid) недоступен: сначала dotnet build; сверка C# с самим собой ничего не доказывает")
 		quit(1)
 		return
+	if wanted("fields"):
+		verify_fields()
+	if (wanted("rivers") or wanted("mesh")) and not verify_saved_world():
+		quit(1)
+		return
+	print("DOD RESULT ", failures, " failures")
+	quit(1 if failures else 0)
+
+
+func verify_saved_world() -> bool:
 	var cache := WorldCache.new()
 	cache.dir = _arg("--dir", "res://tools/control/runs/network_game_cache")
 	var size := WorldGenerator.START_SIZE
 	var got := cache.read_only(SEED, size)
 	if got.has("error"):
 		print("НЕТ ФИКСТУРЫ: ", got.error)
-		quit(1)
-		return
+		return false
 	var w: WorldData = got.world
 	var base := preload("res://scripts/game/surface_snapshot.gd").restore(w, cache.load_artifact(SEED, size, "base"), "base")
 	if base == null:
 		print("НЕТ БАЗОВОГО РЕЛЬЕФА в ", cache.dir)
-		quit(1)
-		return
+		return false
 	w.base_heights = base
 	print("мир ", w.W, "x", w.H, ", путей ", w.trails.size(), ", мостов ", w.bridges.size(), ", туннелей ", w.tunnels.size())
 	if wanted("rivers"):
 		verify_rivers(w)
 	if wanted("mesh"):
 		verify_mesh(prepared_for_refinement(base))
-	print("DOD RESULT ", failures, " failures")
-	quit(1 if failures else 0)
+	return true
+
+
+func verify_fields() -> void:
+	for size: Vector2i in [Vector2i(1, 1), Vector2i(1, 53), Vector2i(289, 231)]:
+		var w := WorldData.new()
+		w.W = size.x
+		w.H = size.y
+		w.N = w.W * w.H
+		w.seed_num = 2718
+		w.noise.moist = Simplex.new(WorldGenerator.noise_rng(w.seed_num, "moist"))
+		w.h.resize(w.N)
+		w.ocean.resize(w.N)
+		var proposal := StageHydrology.lake_candidate(w.seed_num, w.W, w.H, 0)
+		for i in w.N:
+			var x := i % w.W
+			var y := i / w.W
+			w.ocean[i] = int(w.W > 48 and x < 5)
+			if w.ocean[i] != 0:
+				w.h[i] = -0.05
+			elif absi(x - int(proposal.x)) <= 3 and absi(y - int(proposal.y)) <= 3:
+				w.h[i] = 0.075
+			else:
+				w.h[i] = 0.15 + WGRandom.hash2(x, y, w.seed_num) * 0.35
+		if w.W == 1:
+			w.h[0] = -0.0
+		w.noise_field("moist")
+		Grid.allow_fast = false
+		var position := StageHydrology.position_field(w.h, w.W, w.H).to_byte_array()
+		Grid.allow_fast = true
+		check(position == StageHydrology.position_field(w.h, w.W, w.H, true).to_byte_array(), "%s: поле положения побайтно" % size)
+		for regional: bool in [true, false]:
+			StageHydrology.regional = regional
+			Grid.allow_fast = false
+			StageHydrology.run(w, 2)
+			StageGeography.run(w)
+			var reference := field_bytes(w)
+			Grid.allow_fast = true
+			StageHydrology.run(w, 2)
+			StageGeography.run(w)
+			check(reference == field_bytes(w), "%s: осадки, вода, высоты и уклоны побайтно (regional=%s)" % [size, regional])
+			if w.W > 48:
+				check(w.lake.count(1) >= StageHydrology.LAKE_MIN, "%s: синтетическая замкнутая котловина заполнилась" % size)
+	StageHydrology.regional = true
+
+
+func field_bytes(w: WorldData) -> Array:
+	return [w.filled.to_byte_array(), w.lake, w.rain.to_byte_array(), w.dist_ocean.to_byte_array(),
+		w.dist_water.to_byte_array(), w.elev.to_byte_array(), w.slope.to_byte_array()]
 
 
 ## Рельеф с полотном путей (RoadBed) и сооружениями, как перед RoadRefinement.build в finish_paths

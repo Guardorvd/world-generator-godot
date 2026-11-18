@@ -1,7 +1,154 @@
 using System;
+using System.Buffers;
+using Godot;
 
 public partial class FastGrid
 {
+	/// <summary>StageGeography: normalize water sources and elevations, then read that elevation snapshot for slopes.
+	/// A missing dist_water key tells the caller to copy its existing ocean distance field.</summary>
+	public Godot.Collections.Dictionary GeographyFields(int width, int height, float[] heights, float[] filled,
+		byte[] ocean, byte[] lake, byte[] river, bool canReuseOceanDistance, bool parallel)
+	{
+		int cells = checked(width * height);
+		parallel = parallel && cells >= 65536;
+		var elev = new float[cells];
+		var slope = new float[cells];
+		var water = new byte[cells];
+		RunRows(height, parallel, y =>
+		{
+			int start = y * width;
+			for (int i = start; i < start + width; i++)
+			{
+				water[i] = (ocean[i] | lake[i] | river[i]) != 0 ? (byte)1 : (byte)0;
+				elev[i] = ocean[i] != 0 ? 0f : lake[i] != 0 ? filled[i] : LandHeight(heights[i]);
+			}
+		});
+		RunRows(height, parallel, y =>
+		{
+			int row = y * width;
+			int up = y == 0 ? row : row - width;
+			int down = y == height - 1 ? row : row + width;
+			for (int x = 0; x < width; x++)
+			{
+				int i = row + x;
+				double gx = (double)elev[x == width - 1 ? i : i + 1] - elev[x == 0 ? i : i - 1];
+				double gy = (double)elev[down + x] - elev[up + x];
+				slope[i] = (float)(Math.Sqrt(gx * gx + gy * gy) * 0.5 * 60.0);
+			}
+		});
+		var result = new Godot.Collections.Dictionary { ["elev"] = elev, ["slope"] = slope };
+		if (!canReuseOceanDistance || !water.AsSpan().SequenceEqual(ocean))
+			result["dist_water"] = DistanceField(width, height, water);
+		return result;
+	}
+
+	/// <summary>StageHydrology.position_field. Two prefix passes with the original float32 rounding of both means.</summary>
+	public float[] TerrainPosition(int width, int height, float[] heights, int radius, bool parallel)
+	{
+		int cells = checked(width * height);
+		if (cells == 0)
+			return Array.Empty<float>();
+		parallel = parallel && cells >= 65536;
+		const int Block = 16;
+		var rowMean = new float[cells];
+		RunRows((height + Block - 1) / Block, parallel, band =>
+		{
+			var prefix = ArrayPool<double>.Shared.Rent(width + 1);
+			try
+			{
+				prefix[0] = 0.0;
+				int first = band * Block;
+				for (int y = first; y < Math.Min(height, first + Block); y++)
+				{
+					int row = y * width;
+					for (int x = 0; x < width; x++)
+						prefix[x + 1] = prefix[x] + LandHeight(heights[row + x]);
+					for (int x = 0; x < width; x++)
+					{
+						int from = Math.Max(0, x - radius), to = Math.Min(width, x + radius + 1);
+						rowMean[row + x] = (float)((prefix[to] - prefix[from]) / (to - from));
+					}
+				}
+			}
+			finally
+			{
+				ArrayPool<double>.Shared.Return(prefix);
+			}
+		});
+
+		var position = new float[cells];
+		RunRows((width + Block - 1) / Block, parallel, band =>
+		{
+			// Prefixes of adjacent columns share a contiguous block. Both reads and final writes stay row-major.
+			int first = band * Block;
+			int pitch = Math.Min(Block, width - first);
+			var prefix = ArrayPool<double>.Shared.Rent(checked((height + 1) * pitch));
+			try
+			{
+				Array.Clear(prefix, 0, pitch);
+				for (int y = 0; y < height; y++)
+				{
+					int row = y * width + first, at = y * pitch;
+					for (int x = 0; x < pitch; x++)
+						prefix[at + pitch + x] = prefix[at + x] + rowMean[row + x];
+				}
+				for (int y = 0; y < height; y++)
+				{
+					int from = Math.Max(0, y - radius), to = Math.Min(height, y + radius + 1);
+					int row = y * width + first, lo = from * pitch, hi = to * pitch;
+					for (int x = 0; x < pitch; x++)
+					{
+						float mean = (float)((prefix[hi + x] - prefix[lo + x]) / (to - from));
+						position[row + x] = LandHeight(heights[row + x]) - mean;
+					}
+				}
+			}
+			finally
+			{
+				ArrayPool<double>.Shared.Return(prefix);
+			}
+		});
+		return position;
+	}
+
+	// maxf(0.0, height) in GDScript preserves the sign of a zero height.
+	private static float LandHeight(float height) => height < 0f ? 0f : height;
+
+	/// <summary>StageHydrology.rainfall for the plan. Keep position and regional noise on the managed side.</summary>
+	public float[] HydrologyRain(int width, int height, float[] heights, float[] distOcean, double[] moistNoise,
+		int[] moistPerm, bool regional, double coastReach, double regionScale, double regionOx, double regionOy,
+		double regionAmp, double reliefWet, double reliefDry, int radius, double positionScale, Vector2 keep, double dryFloor)
+	{
+		int cells = checked(width * height);
+		bool parallel = cells >= 65536;
+		var rain = regional ? TerrainPosition(width, height, heights, radius, parallel) : new float[cells];
+		double far = Math.Exp(-coastReach / 30.0);
+		RunRows(height, parallel, y =>
+		{
+			double ry = y / regionScale + regionOy;
+			for (int x = 0; x < width; x++)
+			{
+				int i = y * width + x;
+				double coast = distOcean[i] < coastReach ? (Math.Exp(-distOcean[i] / 30.0) - far) / (1.0 - far) : 0.0;
+				double baseline = 0.66 + 0.48 * moistNoise[i] + 0.08 * coast;
+				double value = baseline;
+				double e = heights[i];
+				if (regional && e > 0.0 && e < keep.Y)
+				{
+					double region = Fbm(moistPerm, x / regionScale + regionOx, ry, 2);
+					double valley = ReliefSmooth(0.0, positionScale, -rain[i]);
+					double ridge = ReliefSmooth(0.0, positionScale, rain[i]);
+					value += (regionAmp * region + reliefWet * valley - reliefDry * ridge) * (1.0 - ReliefSmooth(keep.X, keep.Y, e));
+					double floor = Math.Min(baseline, dryFloor);
+					if (value < floor)
+						value = floor + (value - floor) * 0.3;
+				}
+				rain[i] = (float)Math.Clamp(value, 0.12, 1.0);
+			}
+		});
+		return rain;
+	}
+
 	/// <summary>Shared surface exposure; byte-identical to mountain_surface.gd.</summary>
 	public byte[] MountainExposure(float[] elev, float[] slope, float[] moist)
 	{

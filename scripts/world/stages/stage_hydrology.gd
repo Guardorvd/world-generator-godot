@@ -58,6 +58,13 @@ static func rainfall(noise_value: float, distance_to_ocean: float, region: float
 ## обрезается). Отрицательно в долинах и ложбинах, положительно на гребнях. parallel — строками на всех ядрах
 ## (только для полного плана: OuterLand уже считается в потоках)
 static func position_field(h: PackedFloat32Array, W: int, H: int, parallel := false) -> PackedFloat32Array:
+	var fast := Grid.fast_grid()
+	if fast != null:
+		return fast.TerrainPosition(W, H, h, POSITION_R, parallel)
+	return _position_script(h, W, H, parallel)
+
+
+static func _position_script(h: PackedFloat32Array, W: int, H: int, parallel: bool) -> PackedFloat32Array:
 	var R := POSITION_R
 	var e := PackedFloat32Array()
 	e.resize(W * H)
@@ -111,6 +118,29 @@ static func region_field(w: WorldData, x0: int, y0: int, cw: int, ch: int, paral
 	return Parallel.fbm_rect(w.noise.moist, x0, y0, cw, ch, REGION_SCALE, 2, REGION_OX, REGION_OY, parallel_rows)
 
 
+static func _rain_field(w: WorldData) -> PackedFloat32Array:
+	var noise_values := w.noise_field("moist")
+	var fast := Grid.fast_grid()
+	if fast != null:
+		return fast.HydrologyRain(w.W, w.H, w.h, w.dist_ocean, noise_values, w.noise.moist.perm,
+			regional, COAST_REACH, REGION_SCALE, REGION_OX, REGION_OY, REGION_AMP, RELIEF_WET, RELIEF_DRY,
+			POSITION_R, POSITION_SCALE, REGION_KEEP, DRY_FLOOR)
+	var region := region_field(w, 0, 0, w.W, w.H, true)
+	var dist_ocean := w.dist_ocean
+	var h := w.h
+	var W := w.W
+	var position := _position_script(h, W, w.H, true)
+	var rain := PackedFloat32Array()
+	for part: PackedFloat32Array in Parallel.bands(w.H, func(y0: int, y1: int) -> PackedFloat32Array:
+		var out := PackedFloat32Array()
+		out.resize((y1 - y0) * W)
+		for i in range(y0 * W, y1 * W):
+			out[i - y0 * W] = rainfall(noise_values[i], dist_ocean[i], region[i], h[i], position[i])
+		return out):
+		rain.append_array(part)
+	return rain
+
+
 ## lake_budget = 0 explicitly exercises a freshwater-free world; -1 selects by seed.
 static func run(w: WorldData, lake_budget := -1) -> void:
 	w.filled = w.h.duplicate()
@@ -132,51 +162,56 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 	w.rivers.clear()
 	w.river_exits.clear()
 	w.dist_ocean = Grid.distance_field(w.W, w.H, w.ocean)
-	var noise_values := w.noise_field("moist")
-	var region := region_field(w, 0, 0, w.W, w.H, true)
-	var dist_ocean := w.dist_ocean
-	var h := w.h
-	var W := w.W
-	var position := position_field(h, W, w.H, true)
-	# Полосами на всех ядрах: по клетке независимо, результат тот же, что подряд
-	var rain := PackedFloat32Array()
-	for part: PackedFloat32Array in Parallel.bands(w.H, func(y0: int, y1: int) -> PackedFloat32Array:
-		var out := PackedFloat32Array()
-		out.resize((y1 - y0) * W)
-		for i in range(y0 * W, y1 * W):
-			out[i - y0 * W] = rainfall(noise_values[i], dist_ocean[i], region[i], h[i], position[i])
-		return out):
-		rain.append_array(part)
-	w.rain = rain
+	w.rain = _rain_field(w)
+	w.generation_profile.freshwater_lakes = _place_lakes(w, lake_budget)
+
+
+static func _place_lakes(w: WorldData, lake_budget: int) -> int:
 	var budget_rng := WGRandom.new(WGRandom.derive(w.seed_num, "water.rare_lakes"))
 	var want := mini(2, floori(budget_rng.next_float() * 3.0)) if lake_budget < 0 else clampi(lake_budget, 0, 2)
+	var W := w.W
+	var H := w.H
+	if want == 0 or mini(W, H) <= 48:
+		return 0
+	var N := w.N
+	var heights := w.h
+	var filled := w.filled
+	var ocean := w.ocean
+	var lake := w.lake
+	var dist_ocean := w.dist_ocean
+	var neighbors := PackedInt32Array()
+	for k in 8:
+		neighbors.append(Grid.DY[k] * W + Grid.DX[k])
 	var count := 0
 	# Work is bounded independently of the number of depressions in the map.
-	for attempt in (192 if want > 0 and mini(w.W, w.H) > 48 else 0):
+	for attempt in 192:
 		if count >= want: break
-		var candidate := lake_candidate(w.seed_num, w.W, w.H, attempt)
+		var candidate := lake_candidate(w.seed_num, W, H, attempt)
 		var x: int = candidate.x
 		var y: int = candidate.y
-		var c := y * w.W + x
+		var c := y * W + x
 		# A short local descent only proposes a basin; it never edits terrain.
 		for step in 24:
 			var best := c
-			for k in 8:
-				var n: int = c + Grid.DY[k] * w.W + Grid.DX[k]
-				if n >= 0 and n < w.N and absi(n % w.W - c % w.W) <= 1 and w.h[n] < w.h[best]: best = n
+			var cx := c % W
+			for offset in neighbors:
+				var n := c + offset
+				if n >= 0 and n < N and absi(n % W - cx) <= 1 and heights[n] < heights[best]: best = n
 			if best == c: break
 			c = best
-		if w.ocean[c] != 0 or w.lake[c] != 0 or w.dist_ocean[c] < 12.0: continue
-		var level := w.h[c] + float(candidate.depth)
+		if ocean[c] != 0 or lake[c] != 0 or dist_ocean[c] < 12.0: continue
+		var level := heights[c] + float(candidate.depth)
 		# Зеркало пресного озера должно быть выше глобальной плоскости океана.
 		if level * GameConfig.HS <= GameConfig.LAKE_DROP: continue
-		var cells := _closed_basin(w, c, level)
+		var cells := _closed_basin(W, H, heights, ocean, lake, neighbors, c, level)
 		if cells.is_empty(): continue
 		for i in cells:
-			w.lake[i] = 1
-			w.filled[i] = level
+			lake[i] = 1
+			filled[i] = level
 		count += 1
-	w.generation_profile.freshwater_lakes = count
+	w.lake = lake
+	w.filled = filled
+	return count
 
 
 ## Each proposal owns its random stream. Rejecting a basin must not consume or
@@ -191,25 +226,26 @@ static func lake_candidate(seed_num: int, width: int, height: int, attempt: int)
 
 ## Reject open, narrow, oversized or overlapping pools. One constant level per lake.
 ## Eight-neighbour closure also rejects diagonal leaks; no artificial banks or steps.
-static func _closed_basin(w: WorldData, start: int, level: float) -> PackedInt32Array:
+static func _closed_basin(W: int, H: int, heights: PackedFloat32Array, ocean: PackedByteArray, lake: PackedByteArray,
+		neighbors: PackedInt32Array, start: int, level: float) -> PackedInt32Array:
 	var cells := PackedInt32Array([start])
 	var seen := {start: true}
 	var head := 0
-	var origin := Vector2i(start % w.W, start / w.W)
+	var origin := Vector2i(start % W, start / W)
 	var lo := origin
 	var hi := origin
 	while head < cells.size():
 		var c := cells[head]
 		head += 1
-		var p := Vector2i(c % w.W, c / w.W)
-		if p.x < 4 or p.y < 4 or p.x >= w.W - 4 or p.y >= w.H - 4 or absi(p.x - origin.x) > 20 or absi(p.y - origin.y) > 20:
+		var p := Vector2i(c % W, c / W)
+		if p.x < 4 or p.y < 4 or p.x >= W - 4 or p.y >= H - 4 or absi(p.x - origin.x) > 20 or absi(p.y - origin.y) > 20:
 			return PackedInt32Array()
 		lo = lo.min(p)
 		hi = hi.max(p)
-		for k in 8:
-			var n: int = c + Grid.DY[k] * w.W + Grid.DX[k]
-			if w.ocean[n] != 0 or w.lake[n] != 0: return PackedInt32Array()
-			if w.h[n] >= level or seen.has(n): continue
+		for offset in neighbors:
+			var n := c + offset
+			if ocean[n] != 0 or lake[n] != 0: return PackedInt32Array()
+			if heights[n] >= level or seen.has(n): continue
 			seen[n] = true
 			cells.append(n)
 			if cells.size() > LAKE_MAX: return PackedInt32Array()
