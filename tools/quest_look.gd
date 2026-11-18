@@ -302,6 +302,19 @@ func _repair_quest() -> void:
 			by_key[p.key] = p
 		_check(Quests.valid_save(held.save_state()) and restored.restore_state(held.save_state(), by_key) and restored.step().do == "fix", "задание ремонта («%s») сохраняется и грузится" % place_name)
 		_check(restored.step_text().contains("тур") or restored.step_text().contains("лавку"), "объект в тексте: %s" % restored.step_text())
+	# 18.11.2026: ремонт по пути без задания — благодарность ждёт в поселении, засчитывается по приезду и сохраняется
+	var road := Quests.new()
+	var village := _place("Ольховка")
+	var note := road.repaired_on_way(_place("Седая"), village)
+	_check(note.contains("Ольховка") and road.thanks.size() == 1 and road.done == 0 and road.thanks_lines().size() == 1, "ремонт по пути: зовут в поселение (%s)" % note)
+	var by_place := {}
+	for p: Dictionary in places:
+		by_place[p.key] = p
+	var kept := Quests.new()
+	_check(Quests.valid_save(road.save_state()) and kept.restore_state(road.save_state(), by_place) and kept.thanks.size() == 1, "благодарность сохраняется")
+	_check(kept.thank(func(_id: String) -> bool: return false) == "" and kept.done == 0, "вдали от поселения не засчитано")
+	var thanked := kept.thank(func(id: String) -> bool: return id == village.key)
+	_check(thanked.contains("благодарит") and kept.done == 1 and kept.by_giver.get(village.key) == 1 and kept.thanks.is_empty(), "в поселении засчитано (%s)" % thanked)
 
 
 ## Припасы: на вышку — только с верхней площадки, на хутор — у места; задание из старого сохранения грузится и заканчивается

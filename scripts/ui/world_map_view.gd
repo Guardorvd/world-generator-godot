@@ -162,7 +162,8 @@ func _refresh_base() -> void:
 	var frame := _world_rect()
 	if _bounds.has_area():
 		frame = frame.intersection(_bounds.grow(160.0))
-	if _data.update(frame, 10) or _base_dirty:
+	# не больше 4 новых участков за кадр: при перетаскивании и масштабе карта не замирает на сборке картинок
+	if _data.update(frame, 4) or _base_dirty:
 		queue_redraw()
 	_base_dirty = false
 

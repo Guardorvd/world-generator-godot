@@ -84,14 +84,24 @@ func update(view: Rect2, tile_budget := 0) -> bool:
 		if not visible_bins.has_point(key):
 			tiles.erase(key)
 			tiles_changed = true
+	# 18.11.2026: ближние к середине окна участки первыми, в бюджет идут только собранные картинки (готовая текстура
+	# плана из _base_textures почти ничего не стоит) — при бюджете середина карты не ждёт края
+	var keys: Array[Vector2i] = []
 	for y in range(visible_bins.position.y, visible_bins.end.y):
 		for x in range(visible_bins.position.x, visible_bins.end.x):
-			var key := Vector2i(x, y)
-			if tile_budget > 0 and work >= tile_budget:
-				pending = pending or uses_outer or not tiles.has(key)
-			elif _update_tile(key, chunks, regions):
-				work += 1
-				tiles_changed = true
+			keys.append(Vector2i(x, y))
+	if tile_budget > 0:
+		var mid := view.get_center() / SPAN - Vector2.ONE * 0.5
+		keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return Vector2(a).distance_squared_to(mid) < Vector2(b).distance_squared_to(mid))
+	for key: Vector2i in keys:
+		if tile_budget > 0 and work >= tile_budget:
+			pending = pending or uses_outer or not tiles.has(key)
+			continue
+		var change := _update_tile(key, chunks, regions)
+		if change != 0:
+			tiles_changed = true
+		if change == 2:
+			work += 1
 	if features_changed:
 		_visible_bins = visible_bins
 		_collect_features(visible_bins)
@@ -125,7 +135,8 @@ func _update_outer_features(ledger: Dictionary, regions: Dictionary) -> bool:
 	return true
 
 
-func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> bool:
+## 0 — участок не менялся, 1 — сменился без сборки (готовая текстура, убран), 2 — собрана новая картинка
+func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> int:
 	var origin := key * CELLS
 	var rect := Rect2i(origin, Vector2i(CELLS, CELLS))
 	var inside := rect.intersects(_plan_rect)
@@ -133,10 +144,10 @@ func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> boo
 	var style_key := Vector3i(key.x, key.y, int(park))
 	if plan_tile:
 		if tiles.has(key):
-			return false
+			return 0
 		if _base_textures.has(style_key):
 			tiles[key] = {texture = _base_textures[style_key], fields = null, chunk = null}
-			return true
+			return 1
 	var region_key := world.region_at(origin)
 	var entry: Dictionary = regions.get(region_key, {})
 	var fields: Variant = entry.get("fields")
@@ -146,11 +157,13 @@ func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> boo
 	var archived := fields == null and not png.is_empty()
 	if (not old.is_empty() and is_same(fields, old.fields)
 			and (old.get("used_archive", false) or is_same(chunk, old.chunk)) and archived == old.get("archived", false)):
-		return false
+		return 0
 	var archive := _region_image(region_key, png) if archived else null
 	if not inside and fields == null and chunk == null and archive == null:
-		return tiles.erase(key)
-	var img := Image.create(CELLS, CELLS, false, Image.FORMAT_RGB8)
+		return 1 if tiles.erase(key) else 0
+	# 18.11.2026: байты RGB8 вместо Image.set_pixel на каждую из 4096 клеток — участок собирается в разы быстрее
+	var rgb := PackedByteArray()
+	rgb.resize(CELLS * CELLS * 3)
 	var region_rect: Rect2i = entry.get("rect", Rect2i())
 	var archive_rect := Rect2i(region_rect.position, archive.get_size()).intersection(region_rect) if archive != null else Rect2i()
 	var archive_covers_tile := archive_rect.encloses(rect)
@@ -158,34 +171,59 @@ func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> boo
 	var regional_lakes: PackedByteArray = fields.lake if fields != null else PackedByteArray()
 	var regional_rivers: PackedByteArray = fields.river if fields != null else PackedByteArray()
 	var chunk_biomes: PackedByteArray = chunk.biome if chunk != null else PackedByteArray()
+	var bytes := _palette_bytes()
+	var water := PALETTE.size() * 3
+	var empty := water + 3
+	var o := 0
 	for y in CELLS:
 		for x in CELLS:
 			var cell := origin + Vector2i(x, y)
+			var at := empty   # смещение цвета в bytes; -1 — цвет посчитан в color
 			var color := EMPTY
 			if _plan_rect.has_point(cell):
 				var i := cell.y * world.W + cell.x
 				if i < _base_biomes.size():
-					color = PALETTE[_base_biomes[i]]
+					at = _base_biomes[i] * 3
 				if i < _base_lakes.size() and _base_lakes[i] != 0:
-					color = WATER
+					at = water
 				elif park and i < _base_biomes.size() and _base_biomes[i] >= Biomes.BEACH and _base_heights.size() == world.N:
-					color = _paper_relief(cell, i, color)
+					color = _paper_relief(cell, i, PALETTE[_base_biomes[i]])
+					at = -1
 			elif fields != null and region_rect.has_point(cell):
 				var local := cell - region_rect.position
 				var i := local.y * region_rect.size.x + local.x
-				color = WATER if regional_lakes[i] != 0 or regional_rivers[i] != 0 else PALETTE[regional_biomes[i]]
+				at = water if regional_lakes[i] != 0 or regional_rivers[i] != 0 else regional_biomes[i] * 3
 			elif archive_rect.has_point(cell):
 				color = archive.get_pixelv(cell - region_rect.position).lerp(EMPTY, 0.42)
+				at = -1
 			elif chunk != null:
 				# У сырых кусков OuterLand по краям есть запас для меша.
-				color = PALETTE[chunk_biomes[(y + 1) * (CELLS + 3) + x + 1]]
-			img.set_pixel(x, y, color)
-	var texture := ImageTexture.create_from_image(img)
+				at = chunk_biomes[(y + 1) * (CELLS + 3) + x + 1] * 3
+			if at >= 0:
+				rgb[o] = bytes[at]
+				rgb[o + 1] = bytes[at + 1]
+				rgb[o + 2] = bytes[at + 2]
+			else:
+				rgb[o] = color.r8
+				rgb[o + 1] = color.g8
+				rgb[o + 2] = color.b8
+			o += 3
+	var texture := ImageTexture.create_from_image(Image.create_from_data(CELLS, CELLS, false, Image.FORMAT_RGB8, rgb))
 	if plan_tile:
 		_base_textures[style_key] = texture
 	tiles[key] = {texture = texture, fields = fields, chunk = null if archive_covers_tile else chunk,
 		archived = archived, used_archive = archive_covers_tile}
-	return true
+	return 2
+
+
+static var _palette_rgb := PackedByteArray()
+
+## PALETTE, затем WATER и EMPTY байтами RGB8 (по 3 на цвет)
+static func _palette_bytes() -> PackedByteArray:
+	if _palette_rgb.is_empty():
+		for color: Color in PALETTE + [WATER, EMPTY]:
+			_palette_rgb.append_array(PackedByteArray([color.r8, color.g8, color.b8]))
+	return _palette_rgb
 
 
 func _region_image(key: Vector2i, png: PackedByteArray) -> Image:

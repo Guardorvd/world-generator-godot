@@ -693,7 +693,12 @@ func update_tracker() -> void:
 			note = "сумка за спиной"
 		_tracker_kind.add_theme_color_override("font_color", quest_color())
 	var series := quests.series_progress() if quests != null else Vector2i.ZERO
-	_set_optional_text(_tracker_series, "Летопись обелисков: %d из %d" % [series.x, series.y] if series.y > 0 else "")
+	var side := PackedStringArray()
+	if series.y > 0:
+		side.append("Летопись обелисков: %d из %d" % [series.x, series.y])
+	if quests != null:
+		side.append_array(quests.thanks_lines()) # 18.11.2026: ремонт по пути — где ждут с благодарностью
+	_set_optional_text(_tracker_series, "\n".join(side))
 	_tracker_head.visible = not title.is_empty()
 	_tracker_progress.visible = not title.is_empty()
 	_tracker_kind.text = kind

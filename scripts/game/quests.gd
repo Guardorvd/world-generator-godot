@@ -98,7 +98,7 @@ const REPAIR_TEXTS := {
 const SPOT_MIN_CELLS := 60.0  # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
 const FAR_CELLS := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
 const PLAQUE_REACH_M := 4.5   # м: табличку обелиска снимают не дальше этого (PhotoCamera.plaque_near); 18.11.2026
-const SHOT_REACH_M := 400.0 # м: снимок для задания — не дальше этого от места
+const SHOT_REACH_M := 150.0 # м: снимок для задания — не дальше этого от места (до 18.11.2026 — 400 м: с ×4 снимали с соседнего холма)
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
 const FRAGILE_CHANCE := 0.35   # доля досок, где вместо доставки — хрупкий груз
 const CHRONICLE_CHANCE := 0.35 # доля досок, где вместо снимка — летопись двух мест
@@ -155,6 +155,10 @@ var painted_objects := {} # адреса объектов, на которые �
 ## обелисков в любом порядке. steps — по одному шагу plaque на обелиск, снятые стоят первыми (step — сколько снято)
 var series := QuestData.new()
 var series_done := false   # серия выполнена: доска её больше не предлагает
+## 18.11.2026: починено по пути, без задания с доски. Ремонт засчитан сразу, а ближайшее поселение ждёт игрока
+## с благодарностью: приехал туда — выполненное задание в счёт поселения (thank). id объекта -> {village — id
+## поселения, name — его название, what — что починено, «лавка «…»»}
+var thanks := {}
 
 
 ## Задания доски поселения here (место с key). places — все места мира, neighbors — поселения по дорогам,
@@ -481,6 +485,48 @@ func repaired(place_id: String) -> String:
 	return _advance()
 
 
+## Починено по пути (не шаг активного задания): place — починенное место, village — поселение, где отблагодарят
+## (InteractionService.target). Возвращает уведомление
+func repaired_on_way(place: Dictionary, village: Dictionary) -> String:
+	var what := "%s «%s»" % [Repairables.KINDS.get(Repairables.kind_of(place), {}).get("title", "объект"), place.name]
+	if village.is_empty():
+		return "Починено: %s" % what
+	thanks[place.key] = {village = village.key, name = village.name, what = what}
+	changed.emit()
+	return "Починено: %s. Загляните в поселение «%s» — там отблагодарят" % [what, village.name]
+
+
+## Игрок у поселения: arrived(village_id) -> bool. Благодарности этого поселения засчитываются как выполненные
+## задания «Ремонт». Возвращает сообщение или пусто
+func thank(arrived: Callable) -> String:
+	var texts := PackedStringArray()
+	for id: String in thanks.keys():
+		var entry: Dictionary = thanks[id]
+		if not arrived.call(entry.village):
+			continue
+		thanks.erase(id)
+		_done["repair:%s>%s" % [entry.village, id]] = true
+		done += 1
+		by_giver[entry.village] = by_giver.get(entry.village, 0) + 1
+		last = "Ремонт: %s" % entry.what
+		texts.append("Поселение «%s» благодарит за ремонт: %s" % [entry.name, entry.what])
+	if texts.is_empty():
+		return ""
+	changed.emit()
+	return "\n".join(texts)
+
+
+## Поселения, где ждут благодарность: строки для счётчика задания
+func thanks_lines() -> PackedStringArray:
+	var by_village := {}
+	for entry: Dictionary in thanks.values():
+		by_village[entry.name] = by_village.get(entry.name, 0) + 1
+	var out := PackedStringArray()
+	for village: String in by_village:
+		out.append("Загляните в «%s»: благодарность за ремонт%s" % [village, "" if by_village[village] == 1 else " ×%d" % by_village[village]])
+	return out
+
+
 ## Сумку у доски взяли (E)
 func pick_up() -> String:
 	if step().get("do") != "pickup":
@@ -559,7 +605,7 @@ func save_state() -> Dictionary:
 	return {active = _addresses(active), cargo = cargo, done = done, last = last,
 		by_giver = by_giver.duplicate(), known = known.duplicate(), completed = _done.duplicate(),
 		series = _addresses(series), series_done = series_done, beacons = installed_beacons.duplicate(),
-		painted = painted_objects.duplicate()}
+		painted = painted_objects.duplicate(), thanks = thanks.duplicate(true)}
 
 
 static func _addresses(quest: QuestData) -> Dictionary:
@@ -635,6 +681,17 @@ static func valid_save(d: Dictionary) -> bool:
 	for id: Variant in painted:
 		if not id is String or PaintTargets.address(id).is_empty() or painted[id] != true:
 			return false
+	# благодарности за ремонт по пути — необязательное поле (с 18.11.2026)
+	var thanked: Variant = d.get("thanks", {})
+	if not thanked is Dictionary:
+		return false
+	for id: Variant in thanked:
+		var entry: Variant = thanked[id]
+		if not id is String or not entry is Dictionary:
+			return false
+		for key: String in ["village", "name", "what"]:
+			if not entry.get(key) is String:
+				return false
 	var q: Dictionary = d.active
 	if q.is_empty():
 		return not d.cargo
@@ -674,6 +731,7 @@ func restore_state(d: Dictionary, places: Dictionary, plan := Rect2i(), world: W
 	_done = d.completed.duplicate()
 	installed_beacons = beacons.duplicate()
 	painted_objects = d.get("painted", {}).duplicate()
+	thanks = d.get("thanks", {}).duplicate(true)
 	series = QuestData.new()
 	series_done = d.get("series_done", false)
 	if not d.get("series", {}).is_empty():

@@ -1292,6 +1292,8 @@ func _physics_process(dt: float) -> void:
 		for tower: Dictionary in heights.towers:
 			if not hud.explore.scanned.has(tower.id) and TowerLayout.on_deck(tower, player.x, player.z, player.feet):
 				_look_around(tower.id, Exploration.TOWER_RADIUS, "С вышки")
+		if not quests.thanks.is_empty():
+			hud.toast(quests.thank(_at_village))
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_tick_repair(dt)
 	_quest_progress(quests.tick(_quest_arrived))
@@ -1430,7 +1432,14 @@ func opening_active() -> bool:
 
 
 func _opening_welcome() -> void:
-	if not opening_place.is_empty():
+	if opening_place.is_empty():
+		return
+	# 18.11.2026: старт на дороге к удалённой деревне (OpeningRoute) — она впереди и становится целью компаса
+	if opening_place.kind == "settlement":
+		hud.toast_now("Впереди — «%s»" % opening_place.name)
+		if hud.goal.is_empty():
+			hud.set_goal(InteractionService.target(opening_place))
+	else:
 		hud.toast_now("Начало пути: «%s»" % opening_place.name)
 
 
@@ -1556,7 +1565,7 @@ func _update_hints() -> void:
 		"paint": near = [[k.call("interact"), "Нанести метку"]]
 		"bench": near = [[k.call("interact"), "Присесть"]]
 		"plaque": near = [[k.call("interact"), "Прочитать табличку"]]
-		"repair": near = [[k.call("interact"), ("Удерживайте: починить %s" if _fix_wanted(_target) else "Сломано: %s") % Repairables.KINDS[_target.repair_kind].title]]
+		"repair": near = [[k.call("interact"), "Удерживайте: починить %s" % Repairables.KINDS[_target.repair_kind].title]]
 	if _seat_id != "":
 		near = [[k.call("interact"), "Встать"]]
 	# Внизу сводки — главное для того, чем игрок занят.
@@ -1651,9 +1660,7 @@ func interact() -> void:
 		"paint": _quest_progress(quests.paint_object(_target.id))
 		"bench": _sit(_target)
 		"plaque": _read_plaque(_target)
-		"repair":
-			if not _fix_wanted(_target):
-				hud.toast("Сломано: %s. Починить можно по заданию «Ремонт» с доски поселения" % Repairables.KINDS[_target.repair_kind].title)
+		"repair": pass # чинят удержанием (_tick_repair), с заданием и без
 		_:
 			if bike.riding:
 				toggle_bike()
@@ -1722,16 +1729,12 @@ func _stand_up() -> void:
 	camera_controller.seated = false
 
 
-## Шаг «починить» текущего задания ждёт именно этот объект (item — запись RepairLayer.items)
-func _fix_wanted(item: Dictionary) -> bool:
-	var step := quests.step() if quests != null else {}
-	return step.get("do") == "fix" and step.place.key == item.get("id", "")
-
-
-## Удержание «взаимодействия» у сломанного объекта текущего задания: кольцо в HUD растёт HOLD_TIME секунд, по завершении
-## объект цел (RepairLayer), задание засчитано. Отпустили или отвернулись — кольцо спадает, прогресс не копится
+## Удержание «взаимодействия» у сломанного объекта: кольцо в HUD растёт HOLD_TIME секунд, по завершении объект цел
+## (RepairLayer). Отпустили или отвернулись — кольцо спадает, прогресс не копится.
+## 18.11.2026: чинить можно и без задания с доски. Если объект — шаг активного «Ремонта», задание засчитано как раньше;
+## иначе ближайшее поселение ждёт игрока с благодарностью (Quests.repaired_on_way, засчитывается в Quests.thank)
 func _tick_repair(dt: float) -> void:
-	var active: bool = _target.get("kind") == "repair" and _fix_wanted(_target) and not bike.riding and _seat_id == "" and not show_map \
+	var active: bool = _target.get("kind") == "repair" and not bike.riding and _seat_id == "" and not show_map \
 		and not _journal_open() and not photo.active and Input.is_action_pressed("interact")
 	if active:
 		_fix_progress = minf(1.0, _fix_progress + dt / Repairables.HOLD_TIME)
@@ -1739,10 +1742,36 @@ func _tick_repair(dt: float) -> void:
 			_fix_progress = 0.0
 			var id: String = _target.id
 			repair_layer.repair(id)
-			_quest_progress(quests.repaired(id))
+			var text := quests.repaired(id)
+			if text != "":
+				_quest_progress(text)
+			else:
+				var place := world.place(id)
+				if not place.is_empty():
+					hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)))
 	else:
 		_fix_progress = maxf(0.0, _fix_progress - dt * 2.0)
 	hud.set_repair(_fix_progress)
+
+
+## Поселение, где отблагодарят за ремонт по пути: ближайшее к месту на открытой земле (InteractionService.target) или пусто
+func _thanks_village(place: Dictionary) -> Dictionary:
+	var best := {}
+	var best_d := INF
+	for p: Dictionary in hud.all_places():
+		if p.kind != "settlement" or not hud.in_open_land(p):
+			continue
+		var d := Vector2(p.x, p.y).distance_squared_to(Vector2(place.x, place.y))
+		if d < best_d:
+			best_d = d
+			best = p
+	return best
+
+
+## Игрок у поселения, где ждут благодарность за ремонт по пути (Quests.thanks)
+func _at_village(id: String) -> bool:
+	var village := world.place(id)
+	return not village.is_empty() and hud.at_place(InteractionService.target(village), player.x, player.z)
 
 
 ## Игрок у места шага задания. Припасы на вышку засчитываются только на её верхней площадке (шаг climb): сумку надо
@@ -1910,10 +1939,17 @@ func _album_photo(shot: Dictionary) -> void:
 	var shower: float = events.get("meteor", 0.0)
 	var sky := {dark = _night, up = -camera.global_basis.z.y, aurora = events.get("aurora", 0.0), comet = events.get("comet", 0.0),
 		meteor = shower if shower >= DayCycle.METEOR_SHOWER else 0.0}
-	var keys := Exploration.classify(place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
+	# 18.11.2026: место засчитывается только вблизи (Exploration.ALBUM_REACH), приближение не помогает
+	var far := not place.is_empty() and float(shot.get("dist", 0.0)) > Exploration.album_reach(place.kind)
+	var keys := Exploration.classify({} if far else place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
 	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true))
 	if not titles.is_empty():
 		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles))
+	if far:
+		for key: String in Exploration.classify(place, -1, {}):
+			if not hud.explore.album.has(key):
+				hud.toast("Для альбома слишком далеко: подойдите к «%s» ближе %s" % [place.name, Util.distance_text(Exploration.album_reach(place.kind))])
+				break
 
 
 func _navigation_goal(place: Dictionary) -> void:

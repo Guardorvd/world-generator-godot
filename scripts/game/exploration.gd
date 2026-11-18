@@ -17,6 +17,9 @@ const NIGHT_MIN := 0.55       # 1 - sunlight не меньше: достаточ
 const EVENT_MIN := 0.3        # сила явления (DayCycle.events), с которой его видно
 const UP_MIN := 0.12          # взгляд камеры выше горизонта не меньше чем на столько (y единичного вектора)
 const MAX_ALBUM := 128
+## 18.11.2026: место в рамке закрывает страницу альбома, только если снято вблизи — м от камеры до края места
+## (PhotoCamera shot.dist). Приближение фотоаппарата расстояние не меняет: с соседнего холма через ×4 не засчитывается
+const ALBUM_REACH := {settlement = 150.0, site = 60.0, peak = 300.0, lake = 150.0}
 
 static var _pages: Array[Dictionary] = []
 const GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночные явления", "Летопись обелисков"]
@@ -120,6 +123,11 @@ static func classify(place: Dictionary, biome: int, sky: Dictionary, plaque := "
 			if float(sky.get(event, 0.0)) >= EVENT_MIN:
 				keys.append("night:" + event)
 	return keys
+
+
+## Не дальше скольких метров место kind засчитывается в альбом
+static func album_reach(kind: String) -> float:
+	return ALBUM_REACH.get(kind, 60.0)
 
 
 ## Записать снимок: страницы без снимка получают его (path, date). Возвращает названия вновь заполненных страниц.
