@@ -1068,9 +1068,15 @@ func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
 
 
 func _build_chunk(chunk: Vector2i) -> Dictionary:
+	var built := _build_entries(_plan_items(world.chunks[chunk.y * world.CW + chunk.x]))
+	built.chunk = chunk
+	return built
+
+
+func _plan_items(ids: PackedInt32Array) -> Dictionary:
 	var items := {x = PackedFloat64Array(), y = PackedFloat64Array(), k = PackedInt32Array(), v = PackedInt32Array(),
 		s = PackedFloat64Array(), ground = PackedFloat32Array()}
-	for o in world.chunks[chunk.y * world.CW + chunk.x]:
+	for o in ids:
 		var kind := world.obj_k[o]
 		if not _defs.has(kind):
 			continue
@@ -1106,9 +1112,22 @@ func _build_chunk(chunk: Vector2i) -> Dictionary:
 		if not items.has("normals"):
 			items.normals = PackedVector3Array()
 		items.normals.append(normal)
-	var built := _build_entries(items)
-	built.chunk = chunk
-	return built
+	return items
+
+
+## Точная модель и трансформация одного объекта для разметки. Буферы чанков не меняются.
+func paint_surface(id: int) -> Dictionary:
+	var entries: Array = _build_entries(_plan_items(PackedInt32Array([id]))).entries
+	if entries.is_empty():
+		return {}
+	var entry: Dictionary = entries[0]
+	var rock := world.obj_k[id] == Biomes.T_ROCK
+	var mesh: Mesh = _defs[entry.kind].get("crown" if rock else "trunk")
+	if mesh == null:
+		return {}
+	var buf: PackedFloat32Array = entry.cbuf if rock else entry.tbuf
+	var basis := Basis(Vector3(buf[0], buf[4], buf[8]), Vector3(buf[1], buf[5], buf[9]), Vector3(buf[2], buf[6], buf[10]))
+	return {mesh = ForestModels.lod_meshes(mesh)[0], transform = Transform3D(basis, Vector3(buf[3], buf[7], buf[11]))}
 
 
 ## Буферы MultiMesh по силуэтам для объектов items (столбцы x, y в клетках, k, v, s, ground — земля, м)

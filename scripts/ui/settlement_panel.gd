@@ -215,8 +215,10 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var thanks: int = quests.by_giver.get(here, 0)
 	_label("Задания поселения «%s»%s" % [settlement.name, " · выполнено для него: %d" % thanks if thanks > 0 else ""], 14, page, MUTED)
-	var cards := HBoxContainer.new()
-	cards.add_theme_constant_override("separation", 8)
+	var cards := GridContainer.new()
+	cards.columns = mini(4, offers.size())
+	cards.add_theme_constant_override("h_separation", 8)
+	cards.add_theme_constant_override("v_separation", 8)
 	page.add_child(cards)
 	for q: QuestData in offers:
 		var card := _card(cards, Quests.KINDS[q.kind].color, false)

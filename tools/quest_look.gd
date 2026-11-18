@@ -3,14 +3,17 @@ extends SceneTree
 ## мест — для доски. Проверяет Quests: три вида на доске, устойчивость выбора, шаги доставки (сумка), снимка
 ## (нужное место в прицеле) и посещения, отказ, выполненное не предлагается снова.
 ## Снимает дорожную доску, личную карту и интерфейс доставки. Нужно окно.
-##   godot --path . --script res://tools/quest_look.gd -- [--out <папка>]
+##   godot --path . --script res://tools/quest_look.gd -- [--out <папка>] [--logic-only]
 
 const Quests = preload("res://scripts/game/quests.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
+const BeaconSites = Quests.BeaconSites
+const PaintTargets = Quests.PaintTargets
 
 var out := ""
 var failed := 0
 var world := WorldData.new()
+var heights := Heightfield.new()
 var main: Node
 var camera: Camera3D
 var hud: Hud
@@ -37,6 +40,7 @@ func _initialize() -> void:
 		{x = 140, y = 20, i = 9, name = "Межевой обелиск", type = "obelisk", rank = 2},
 		{x = 190, y = 70, i = 10, name = "Лунный обелиск", type = "obelisk", rank = 2}]
 	_map_terrain()
+	_roadside_objects()
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Variant in world.get(kind + "s"):
 			places.append(InteractionService.target(world.place(WorldData.place_id(kind, src.x, src.y))))
@@ -67,6 +71,42 @@ func _map_terrain() -> void:
 	world.trails = [{kind = "road", pts = [{x = 35, y = 121}, {x = 70, y = 111}, {x = 100, y = 100},
 		{x = 133, y = 110}, {x = 161, y = 113}, {x = 180, y = 130}, {x = 210, y = 146}]},
 		{kind = "trail", pts = [{x = 70, y = 111}, {x = 76, y = 125}, {x = 70, y = 140}]}]
+	var paths := PackedByteArray()
+	paths.resize(world.N)
+	for trail: Dictionary in world.trails:
+		Grid.stamp_path(paths, world.W, world.H, trail.pts, 3 if trail.kind == "road" else 2, 0.7)
+	world.path_mask = paths
+	var lake := PackedByteArray()
+	lake.resize(world.N)
+	var ground := PackedFloat32Array()
+	ground.resize(world.N)
+	var filled := relief.duplicate()
+	for i in world.N:
+		lake[i] = 1 if biomes[i] == Biomes.LAKE else 0
+		ground[i] = 15.0 + relief[i] * GameConfig.HS * 0.25
+		filled[i] = (ground[i] + 3.0 + GameConfig.LAKE_DROP) / GameConfig.HS
+	world.lake = lake
+	world.filled = filled
+	heights.world = world
+	heights.hv = ground
+
+
+func _roadside_objects() -> void:
+	world.CW = ceili(float(world.W) / world.CS)
+	world.CH = ceili(float(world.H) / world.CS)
+	var chunks: Array[PackedInt32Array] = []
+	for i in world.CW * world.CH:
+		chunks.append(PackedInt32Array())
+	world.obj_x = PackedFloat64Array([112.0, 125.0, 137.0, 149.0, 161.0, 177.0])
+	world.obj_y = PackedFloat64Array([107.0, 105.0, 114.0, 109.0, 117.0, 123.0])
+	world.obj_k = PackedInt32Array([Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_ROCK, Biomes.T_PINE, Biomes.T_ROCK, Biomes.T_BIRCH])
+	world.obj_s = PackedFloat64Array([1.3, 1.2, 1.0, 1.3, 1.1, 1.2])
+	world.obj_count = world.obj_x.size()
+	world.obj_v.resize(world.obj_count)
+	for i in world.obj_count:
+		var chunk := floori(world.obj_y[i] / world.CS) * world.CW + floori(world.obj_x[i] / world.CS)
+		chunks[chunk].append(i)
+	world.chunks = chunks
 
 
 func _check(ok: bool, text: String) -> void:
@@ -83,7 +123,13 @@ func _place(name: String) -> Dictionary:
 
 
 func _offers(quests: Quests) -> Array:
-	return quests.offers(_place("Ольховка"), places, [_place("Каменка")], {}, {}, 7, _broken)
+	var board := InteractionService.new()
+	board.quests = quests
+	board.world = world
+	board.heights = heights
+	board.visited = {}
+	board.is_broken = _broken
+	return board.offers(world.settlements[0], places)
 
 
 ## Сломанные объекты стенда: лавка — всегда, остальные по хешу мира (сид 0)
@@ -106,9 +152,8 @@ func _logic() -> void:
 	var quests := Quests.new()
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
-	# 18.11.2026: на доске только груз — припасы на вышку и на хутор или в дом, хрупкий груз в поселение
-	_check(kinds.size() == 5 and kinds.all(func(k: String) -> bool: return k in Quests.OFFERED) and kinds.count("supplies") == 2 and kinds.count("fragile") == 1 and kinds.count("repair") == 1 and kinds.count("obelisks") == 1,
-		"доска предлагает груз, ремонт и серию: два «Припасы», «Хрупкий груз», «Ремонт», «Летопись обелисков» (%s)" % ", ".join(PackedStringArray(kinds)))
+	_check(kinds == ["beacons", "paint", "supplies", "supplies", "fragile", "repair", "obelisks"],
+		"на доске есть разметка, маяки и прежние задания (%s)" % ", ".join(PackedStringArray(kinds)))
 	var supply_targets := offers.filter(func(q: QuestData) -> bool: return q.kind == "supplies").map(func(q: QuestData) -> String: return q.target.name)
 	supply_targets.sort()
 	_check(supply_targets == ["Заречный", "Сторожевая"], "припасы — на вышку и на хутор, не в поселение и не к месту у порога (%s)" % ", ".join(PackedStringArray(supply_targets)))
@@ -305,6 +350,169 @@ func _supplies_and_old_saves() -> void:
 	_check(back_from_save.tick(_arrived).begins_with("Задание выполнено"), "посещение из старого сохранения заканчивается")
 
 
+func _beacon_quest() -> void:
+	var quests := Quests.new()
+	var offer := _by_kind(_offers(quests), "beacons")
+	_check(not offer.is_empty() and offer.steps.size() == 4, "маяки: обычная сумка и три установки")
+	if offer.is_empty():
+		return
+	_check(offer.steps == _by_kind(_offers(quests), "beacons").steps, "те же площадки при повторном открытии доски")
+	var by_key := {}
+	for place: Dictionary in places:
+		by_key[place.key] = place
+	var plan := Rect2i(0, 0, world.W, world.H)
+	var sites: Array[Vector2] = []
+	for s: Dictionary in offer.steps.slice(1):
+		var cell := BeaconSites.cell_of(s.place.key)
+		var xz := Vector2(s.place.x, s.place.y) * GameConfig.TILE
+		_check(world.path_mask[cell.y * world.W + cell.x] == 0 and heights.depth_at(xz.x, xz.y) == 0.0,
+			"маяк %d на суше вне дороги" % s.number)
+		sites.append(Vector2(cell))
+	_check(absf((sites[1] - sites[0]).cross(sites[2] - sites[0])) > 200.0, "площадки образуют треугольник")
+	quests.accept(offer)
+	var first: String = offer.steps[1].place.key
+	var second: String = offer.steps[2].place.key
+	var third: String = offer.steps[3].place.key
+	var resumed := Quests.new()
+	_check(resumed.restore_state(quests.save_state(), by_key, plan) and resumed.goal().is_empty()
+		and resumed.step().do == "pickup", "до получения сумки восстанавливается шаг у доски")
+	_check(quests.install_beacon(first).is_empty() and quests.goal().is_empty(), "без сумки площадка скрыта")
+	quests.pick_up()
+	_check(quests.cargo and quests.goal().key == first and not quests.known.has(second) and not quests.known.has(third),
+		"с сумкой видна только первая точка")
+	_check(quests.crashed().is_empty() and quests.install_beacon(second).is_empty()
+		and quests.tick(func(_place: Dictionary) -> bool: return true).is_empty(), "падение и прибытие не устанавливают маяк")
+	var game := GameWorld.new()
+	game.heights = heights
+	game.quests = quests
+	game.bike = BikeRide.new()
+	game.player = PlayerState.new()
+	var at_m := sites[0] * GameConfig.TILE + Vector2.ONE * GameConfig.TILE * 0.5
+	_check(game._beacon_interaction().is_empty(), "вдали от маяка установка недоступна")
+	game.player.x = at_m.x
+	game.player.z = at_m.y
+	game.player.feet = heights.ground_at(at_m.x, at_m.y)
+	game.bike.riding = true
+	_check(game._beacon_interaction().is_empty(), "для установки нужно сойти с велосипеда")
+	game.bike.riding = false
+	_check(game._beacon_interaction().get("id") == first, "пешком рядом с площадкой доступна установка")
+	game.free()
+	quests.install_beacon(first)
+	_check(quests.goal().key == second and quests.beacons_in_world().has(first)
+		and quests.install_beacon(first).is_empty(), "повторно поставить первый маяк нельзя, открылась вторая точка")
+	var layer := GameWorld.BeaconLayer.new()
+	layer.sync(quests.beacons_in_world(), quests.goal(), heights)
+	_check(layer.get_child_count() == 2, "установленный маяк и метка следующей площадки есть в мире")
+	_check(resumed.restore_state(bytes_to_var(var_to_bytes(quests.save_state())), by_key, plan)
+		and resumed.cargo and resumed.goal().key == second and resumed.beacons_in_world().has(first),
+		"сохранение восстанавливает сумку, установленный маяк и текущую точку")
+	resumed.abandon()
+	_check(resumed.goal().is_empty() and not resumed.cargo and resumed.beacons_in_world().is_empty(),
+		"отказ убирает сумку и маяки незавершённого задания")
+	quests.install_beacon(second)
+	_check(quests.goal().key == third and quests.cargo, "после второй установки открывается третья точка")
+	quests.install_beacon(third)
+	_check(quests.active.is_empty() and not quests.cargo and quests.done == 1
+		and quests.by_giver.get(offer.giver) == 1 and _by_kind(_offers(quests), "beacons").is_empty(),
+		"третий маяк завершает задание на месте и убирает его с доски")
+	_check(resumed.restore_state(quests.save_state(), by_key, plan) and resumed.beacons_in_world().size() == 3,
+		"три установленных маяка остаются после завершения и перезагрузки")
+	layer.sync(resumed.beacons_in_world(), resumed.goal(), heights)
+	_check(layer.get_children().filter(func(node: Node3D) -> bool: return node.visible).size() == 3,
+		"после завершения в мире видны три маяка")
+	layer.free()
+
+
+func _paint_quest() -> void:
+	var quests := Quests.new()
+	var offer := _by_kind(_offers(quests), "paint")
+	_check(offer.steps.size() == 4, "разметка: сумка и три объекта")
+	if offer.is_empty():
+		return
+	var steps := offer.steps.slice(1)
+	var ids: Array = steps.map(func(s: Dictionary) -> String: return s.place.key)
+	_check(steps == _by_kind(_offers(quests), "paint").steps.slice(1), "разметка выбирает те же объекты при открытии доски")
+	_check(steps[0].place.x < steps[1].place.x and steps[1].place.x < steps[2].place.x
+		and steps.any(func(s: Dictionary) -> bool: return s.place.rock), "дерево и камень выбираются по ходу одной дороги")
+	quests.accept(offer)
+	_check(quests.goal().is_empty() and quests.paint_object(ids[0]).is_empty(), "без сумки цели и краски нет")
+	quests.pick_up()
+	_check(quests.goal().key == ids[0] and quests.paint_object(ids[1]).is_empty()
+		and quests.known.keys().all(func(id: String) -> bool: return id not in ids), "разметка открывает только текущую цель")
+	var goal := quests.goal()
+	_check(goal.approach.distance_to(Vector2(goal.x, goal.y) * GameConfig.TILE) > goal.radius,
+		"навигация ведёт к месту рядом с объектом")
+	quests.paint_object(ids[0])
+	_check(quests.goal().key == ids[1] and quests.painted_objects.has(ids[0]) and quests.paint_object(ids[0]).is_empty(),
+		"после разметки краска остаётся и следующая цель открывается")
+	var catalog := {}
+	for p: Dictionary in places:
+		catalog[p.key] = p
+	var resumed := Quests.new()
+	_check(resumed.restore_state(bytes_to_var(var_to_bytes(quests.save_state())), catalog, Rect2i(), world)
+		and resumed.cargo and resumed.goal() == quests.goal() and resumed.painted_objects.has(ids[0]),
+		"краска, сумка и текущий объект восстанавливаются")
+	resumed.abandon()
+	_check(resumed.painted_objects.has(ids[0]) and resumed.goal().is_empty() and not resumed.cargo, "нанесённая краска остаётся при отказе")
+	var replacement := _by_kind(_offers(resumed), "paint")
+	_check(not replacement.is_empty() and not replacement.steps.any(func(s: Dictionary) -> bool: return s.place.key == ids[0]),
+		"на доске уже покрашенный объект не выбирается повторно")
+	quests.paint_object(ids[1])
+	quests.paint_object(ids[2])
+	_check(quests.done == 1 and quests.active.is_empty() and not quests.cargo and _by_kind(_offers(quests), "paint").is_empty(),
+		"третья метка завершает задание на месте")
+	_check(resumed.restore_state(quests.save_state(), catalog, Rect2i(), world) and resumed.painted_objects.size() == 3,
+		"краска на всех трёх объектах сохраняется после выполнения")
+
+
+func _paint_look() -> void:
+	var vegetation := VegetationLayer.new()
+	vegetation.world = world
+	vegetation.heights = heights
+	for kind: int in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE]:
+		var def := ForestModels.definition(kind, 0)
+		var mesh: Mesh = def.trunk
+		vegetation._defs[kind] = {trunk = mesh, box = mesh.get_aabb(), ref = def.ref}
+	var rock := Models.boulder(Vector3(1.3, 0.78, 1.05), 72, 0.24)
+	vegetation._defs[Biomes.T_ROCK] = {crown = rock, box = rock.get_aabb(), leaves = [Color.GRAY]}
+	var layer := GameWorld.PaintLayer.new()
+	layer.vegetation = vegetation
+	root.add_child(layer)
+	var tree_place := PaintTargets.place(world, 0)
+	var rock_place := PaintTargets.place(world, 2)
+	layer.sync({tree_place.key: true}, rock_place)
+	_check(layer._highlight != null and layer._painted[tree_place.key] != null and layer._highlight.mesh == rock,
+		"краска и подсветка используют меши настоящего дерева и камня")
+	var box_at: Vector3 = layer._item.at.origin
+	var eye := box_at + Vector3(0.0, 0.3, 2.0)
+	var item := layer.item(eye, GameWorld.REACH)
+	_check(layer.item(eye + Vector3(0.0, 0.0, 7.0), GameWorld.REACH).is_empty()
+		and InteractionService.new().select([item], eye, (box_at - eye).normalized()).get("id") == rock_place.key,
+		"активный объект выбирается взглядом в пределах взаимодействия")
+	var previous_view := camera.transform
+	for p: Dictionary in [tree_place, rock_place]:
+		var overlay: MeshInstance3D = layer._highlight if p.rock else layer._painted[p.key]
+		overlay.position = Vector3(0.7 if p.rock else -0.7, 0.05, 0.0)
+		var original := MeshInstance3D.new()
+		original.mesh = overlay.mesh
+		original.transform = overlay.transform
+		var material := StandardMaterial3D.new()
+		material.albedo_color = Color("#666969") if p.rock else Color("#624b36")
+		original.material_override = material
+		layer.add_child(original)
+	camera.look_at_from_position(Vector3(0.1, 1.65, 4.0), Vector3(0.1, 1.10, 0.0), Vector3.UP)
+	await _shot("quest_paint_objects")
+	layer.sync({tree_place.key: true, rock_place.key: true}, {})
+	var painted_rock: MeshInstance3D = layer._painted[rock_place.key]
+	painted_rock.position = Vector3(0.7, 0.05, 0.0)
+	_check(layer._highlight == null and layer.item(eye, GameWorld.REACH).is_empty(),
+		"после разметки подсветка и взаимодействие исчезают, краска на камне остаётся")
+	await _shot("quest_painted_objects")
+	camera.transform = previous_view
+	layer.queue_free()
+	vegetation.free()
+
+
 func _shot(name: String) -> void:
 	await process_frame
 	await process_frame
@@ -351,12 +559,20 @@ func _build() -> BikeView:
 
 func _run() -> void:
 	_logic()
+	_beacon_quest()
+	_paint_quest()
+	if "--logic-only" in OS.get_cmdline_user_args():
+		quit(1 if failed else 0)
+		return
 	var bike := _build()
 	await process_frame
 	bike.rider.pose(0.6, 0.3, Vector3(-0.24, 0.98, -0.43), Vector3(0.24, 0.98, -0.43))
 	hud = main.get_node("UI/Root/Hud")
 	for path: String in ["UI/Root/Back", "UI/Root/Menu"]:
 		main.get_node(path).visible = false
+	bike.hide()
+	await _paint_look()
+	bike.show()
 	hud.visible = true
 	hud.lock_hint.visible = false
 	var quests := Quests.new()
@@ -371,7 +587,7 @@ func _run() -> void:
 	var pins := hud.board_places(home)
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	var buttons: Array[Node] = hud.settlement_panel.find_children("*", "Button", true, false)
-	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 5, "на доске пять кнопок «Взять» (четыре задания и серия)")
+	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 7, "на доске семь кнопок «Взять»")
 	_check(pins.size() == 3 and pins[1].name == "Колодец" and pins[2].name == "Тихое", "на доске два ближайших места")
 	var travels := []
 	hud.settlement_panel.travel_requested.connect(hud.ask_travel)
@@ -383,14 +599,14 @@ func _run() -> void:
 	_check(travels == [_place("Тихое").key], "подтверждение передаёт выбранное место")
 	await _shot("quest_board")
 	_check(hud.get_global_rect().encloses(hud.settlement_panel.get_global_rect()), "доска помещается на экране 720 px")
-	# взять доставку кнопкой: текущее задание со шагами и «Отказаться»
+	# взять маяки кнопкой: текущее задание со шагами и «Отказаться»
 	var accepted := []
 	hud.settlement_panel.quest_accepted.connect(func(q: QuestData) -> void: accepted.append(q))
 	for b: Button in buttons:
 		if b.tooltip_text == "Взять задание: " + Quests.KINDS[offers[0].kind].title.to_lower():
 			b.pressed.emit()
 			break
-	_check(accepted.size() == 1 and accepted[0].kind in Quests.CARGO_KINDS, "кнопка «Взять» отдаёт задание")
+	_check(accepted.size() == 1 and accepted[0].kind == "beacons", "кнопка «Взять» отдаёт задание на маяки")
 	quests.accept(accepted[0])
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	buttons = hud.settlement_panel.find_children("*", "Button", true, false)
@@ -405,6 +621,25 @@ func _run() -> void:
 	drop.pressed.emit()
 	_check(dropped[0] == 1, "второе нажатие отказывается")
 	hud.settlement_panel.hide()
+	hud.set_map_visible(true)
+	_check(not hud.big_map.quest.is_finite(), "карта не показывает площадку до получения сумки")
+	quests.pick_up()
+	hud.quest_changed()
+	var first_marker := hud.big_map.quest
+	_check(first_marker == Hud.Atlas.place_at(quests.goal()), "на большой карте видна первая площадка")
+	quests.install_beacon(quests.goal().key)
+	hud.quest_changed()
+	_check(hud.big_map.quest != first_marker and hud.big_map.quest == Hud.Atlas.place_at(quests.goal()),
+		"метка на карте переключается на следующий маяк")
+	await _shot("quest_beacon_map")
+	quests.accept(_by_kind(offers, "paint"))
+	hud.quest_changed()
+	_check(not hud.big_map.quest.is_finite(), "до сумки карта не выдаёт объекты разметки")
+	quests.pick_up()
+	hud.quest_changed()
+	_check(hud.big_map.quest == Hud.Atlas.place_at(quests.goal()), "на карте виден только текущий объект разметки")
+	hud.set_map_visible(false)
+	quests.accept(_by_kind(offers, "supplies"))
 	await _personal_map()
 	# сумка за спиной седока и счётчик
 	quests.pick_up()

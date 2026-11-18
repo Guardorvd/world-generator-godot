@@ -4,9 +4,12 @@ extends RefCounted
 signal message(text: String)
 signal close_requested
 const Quests = preload("res://scripts/game/quests.gd")
+const BeaconSites = preload("res://scripts/game/beacon_sites.gd")
+const PaintTargets = preload("res://scripts/game/paint_targets.gd")
 const AIM_R := 0.3
 var quests: Quests
 var world: WorldData
+var heights: Heightfield
 var all_places: Callable
 var visited: Dictionary
 var is_broken: Callable  # Repairables.is_broken: какие объекты сломаны (задания «Ремонт»)
@@ -61,7 +64,9 @@ func offers(village: Variant, catalog: Variant = null) -> Array:
 		neighbors.append(target(world.place(r.to if r.from == here.id else r.from)))
 	var far := world.far_destination(here.id)
 	var places: Array = all_places.call() if catalog == null else catalog
-	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num, is_broken)
+	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num, is_broken,
+		BeaconSites.route.bind(world, heights, here, quests.installed_beacons),
+		PaintTargets.route.bind(world, heights, here, quests.painted_objects))
 
 func accept(q: QuestData) -> void:
 	quests.accept(q)

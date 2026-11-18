@@ -13,6 +13,11 @@ extends RefCounted
 
 signal changed  # взято, пройден шаг, выполнено или брошено: интерфейсу пора перерисоваться
 
+const BeaconSites = preload("res://scripts/game/beacon_sites.gd")
+const PaintTargets = preload("res://scripts/game/paint_targets.gd")
+const FIELD_STEPS := {"beacons": "install", "paint": "paint"}
+const FIELD_COUNTS := {"beacons": BeaconSites.COUNT, "paint": PaintTargets.COUNT}
+const FIELD_PLACES := ["beacon", "paint"]
 ## Виды заданий: подпись и цвет для доски, счётчика и меток; значок — UiIcons.QUESTS (с 12.5 векторный)
 const KINDS := {
 	visit = {title = "Посещение", color = Color(0.55, 0.85, 1.0)},
@@ -24,14 +29,16 @@ const KINDS := {
 	supplies = {title = "Припасы", color = Color(0.92, 0.8, 0.38)},
 	repair = {title = "Ремонт", color = Color(0.6, 0.78, 1.0)},
 	obelisks = {title = "Летопись обелисков", color = Color(0.6, 0.9, 0.75)},
+	beacons = {title = "Связь", color = Color(0.45, 0.88, 0.83)},
+	paint = {title = "Разметка", color = Color(1.0, 0.79, 0.34)},
 }
 ## Что предлагает доска (18.11.2026). Остальные виды (посещение, обход, снимок, летопись и прежняя доставка в поселение)
 ## отключены, но их сборка и шаги остаются: взятое в старом сохранении задание грузится, выполняется и бросается как раньше.
 ## Вернуть вид на доску — добавить его сюда (снимок, летопись, посещение и обход включаются вместе).
-const OFFERED := ["supplies", "fragile", "repair", "obelisks"]
+const OFFERED := ["supplies", "fragile", "repair", "obelisks", "beacons", "paint"]
 const SIGHT_KINDS := ["photo", "chronicle", "visit", "tour"]
 ## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
-const CARGO_KINDS := ["delivery", "fragile", "supplies"]
+const CARGO_KINDS := ["delivery", "fragile", "supplies", "beacons", "paint"]
 ## Шаги. reach — дойти до места; pickup — взять сумку у доски (E); carry — довезти сумку;
 ## shoot — снять место в видоискателе (в прицеле его название); bring — довезти снимок.
 ## goal — ставить ли место шага целью на компасе (у pickup сумка рядом, хватает метки задания)
@@ -44,6 +51,8 @@ const STEPS := {
 	bring = {text = "Отвезите снимок в %s «%s»", case = "acc", goal = true},
 	plaque = {text = "Сфотографируйте вблизи табличку: %s «%s»", case = "acc", goal = true},
 	fix = {text = "Почините %s «%s»: подойдите и удерживайте клавишу взаимодействия", case = "acc", goal = true},
+	install = {text = "Установите маяк связи · %d из %d", goal = true},
+	paint = {text = "Отметьте краской %s · %d из %d", goal = true},
 }
 ## Вид места в нужном падеже: название в кавычках остаётся как есть
 const CASES := {
@@ -140,6 +149,8 @@ var last := ""         # название последнего выполнен�
 var by_giver := {}     # id поселения -> выполнено его заданий
 var known := {}        # id мест взятых заданий: как посещённые, их названия видны в мире, на карте и в видоискателе
 var _done := {}        # id выполненных: доска их больше не предлагает
+var installed_beacons := {} # координатные ключи маяков завершённых заданий
+var painted_objects := {} # адреса объектов, на которые уже нанесена краска
 ## «Летопись обелисков» — серия, а не обычное задание: идёт параллельно с активным (доставка, ремонт), снимки табличек всех
 ## обелисков в любом порядке. steps — по одному шагу plaque на обелиск, снятые стоят первыми (step — сколько снято)
 var series := QuestData.new()
@@ -148,7 +159,8 @@ var series_done := false   # серия выполнена: доска её бо
 
 ## Задания доски поселения here (место с key). places — все места мира, neighbors — поселения по дорогам,
 ## far — дальнее поселение по сети или пусто, visited — посещённые id. Порядок и выбор устойчивы для мира и счёта done
-func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, visited: Dictionary, seed_num: int, broken := Callable()) -> Array:
+func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, visited: Dictionary, seed_num: int,
+		broken := Callable(), beacon_route := Callable(), paint_route := Callable()) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("%s|%d|%d" % [here.key, seed_num, done])
 	var center := Vector2(here.x, here.y)
@@ -162,6 +174,17 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	if not far.is_empty() and not towns.any(func(t: Dictionary) -> bool: return t.key == far.key):
 		towns.append(far)
 	var out: Array = []
+	if _offers_field("beacons", here.key, beacon_route):
+		var cells: Array[Vector2i] = beacon_route.call()
+		if cells.size() == BeaconSites.COUNT:
+			var targets: Array[Dictionary] = []
+			for i in cells.size():
+				targets.append(BeaconSites.place(cells[i], i + 1))
+			out.append(_make("beacons", here, targets))
+	if _offers_field("paint", here.key, paint_route):
+		var targets: Array[Dictionary] = paint_route.call()
+		if targets.size() == PaintTargets.COUNT:
+			out.append(_make("paint", here, targets))
 	# припасы: на вышку (сумку надо занести наверх по лестнице) и в одинокий дом или на хутор; ближние места первыми
 	if "supplies" in OFFERED:
 		for group: Array in SUPPLY_GROUPS:
@@ -246,6 +269,15 @@ static func _id(kind: String, here: Dictionary, target: Dictionary) -> String:
 	return "%s:%s>%s" % [kind, here.key, target.key]
 
 
+func _offers_field(kind: String, giver: String, route: Callable) -> bool:
+	var id := _field_id(kind, giver)
+	return kind in OFFERED and route.is_valid() and active.id != id and not _done.has(id)
+
+
+static func _field_id(kind: String, giver: String) -> String:
+	return "%s:%s" % [kind, giver]
+
+
 static func _pick(list: Array, rng: RandomNumberGenerator) -> Dictionary:
 	return {} if list.is_empty() else list[rng.randi() % list.size()]
 
@@ -302,6 +334,17 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 			q.title = _variant(FRAGILE_TITLES, id) % target.name
 			q.text = _variant(FRAGILE_TEXTS, id, 1) + " Быстрое перемещение с грузом недоступно."
 			q.steps = [{do = "pickup", place = here}, {do = "carry", place = target}]
+		"beacons", "paint":
+			q.id = _field_id(kind, here.key)
+			if kind == "beacons":
+				q.title = "Три маяка связи"
+				q.text = "Возьмите сумку у доски. У каждой отметки сойдите с велосипеда и установите маяк. После установки откроется следующая точка."
+			else:
+				q.title = "Метки у дороги"
+				q.text = "Возьмите сумку с краской. Спешьтесь, наведитесь на подсвеченное дерево или камень и нанесите метку."
+			q.steps = [{do = "pickup", place = here}]
+			for i in at.size():
+				q.steps.append({do = FIELD_STEPS[kind], place = at[i], number = i + 1})
 		"photo":
 			var back: Dictionary = at[1]
 			q.title = "Снимок: «%s»" % target.name
@@ -341,7 +384,8 @@ func accept(q: QuestData) -> void:
 	cargo = false
 	# взятое задание называет свои места: их не надо «открывать» заново, название узнаётся сразу
 	for s: Dictionary in active.steps:
-		known[s.place.key] = true
+		if s.place.kind not in FIELD_PLACES:
+			known[s.place.key] = true
 	changed.emit()
 
 
@@ -371,6 +415,10 @@ func step_text(s: Dictionary = step()) -> String:
 	if s.is_empty():
 		return ""
 	var step_def: Dictionary = STEPS[s.do]
+	if s.do == "install":
+		return step_def.text % [s.number, BeaconSites.COUNT]
+	if s.do == "paint":
+		return step_def.text % [s.place.name.to_lower(), s.number, PaintTargets.COUNT]
 	return step_def.text % [_word(step_def.case, s.place, s.do), s.place.name]
 
 
@@ -441,6 +489,33 @@ func pick_up() -> String:
 	return _advance()
 
 
+## Установка только в текущей точке; близость проверяет GameWorld.
+func install_beacon(place_id: String) -> String:
+	var s := step()
+	if not cargo or s.get("do") != "install" or s.place.key != place_id:
+		return ""
+	if active.step == BeaconSites.COUNT:
+		for i in range(1, active.steps.size()):
+			installed_beacons[active.steps[i].place.key] = true
+	return _advance()
+
+
+func beacons_in_world() -> Dictionary:
+	var result := installed_beacons.duplicate()
+	if active.kind == "beacons":
+		for i in range(1, active.step):
+			result[active.steps[i].place.key] = true
+	return result
+
+
+func paint_object(place_id: String) -> String:
+	var s := step()
+	if not cargo or s.get("do") != "paint" or s.place.key != place_id or painted_objects.has(place_id):
+		return ""
+	painted_objects[place_id] = true
+	return _advance()
+
+
 ## Нужен ли для задания снимок места place_id
 func wants_photo(place_id: String) -> bool:
 	var s := step()
@@ -474,6 +549,7 @@ func _advance() -> String:
 	done += 1
 	by_giver[active.giver] = by_giver.get(active.giver, 0) + 1
 	active = QuestData.new()
+	cargo = false
 	changed.emit()
 	return "Задание выполнено: %s" % last
 
@@ -482,7 +558,8 @@ func _advance() -> String:
 func save_state() -> Dictionary:
 	return {active = _addresses(active), cargo = cargo, done = done, last = last,
 		by_giver = by_giver.duplicate(), known = known.duplicate(), completed = _done.duplicate(),
-		series = _addresses(series), series_done = series_done}
+		series = _addresses(series), series_done = series_done, beacons = installed_beacons.duplicate(),
+		painted = painted_objects.duplicate()}
 
 
 static func _addresses(quest: QuestData) -> Dictionary:
@@ -490,6 +567,8 @@ static func _addresses(quest: QuestData) -> Dictionary:
 	if not q.is_empty():
 		q.target = q.target.key
 		for s: Dictionary in q.steps:
+			if s.do == "paint":
+				s.approach = s.place.approach
 			s.place = s.place.key
 	return q
 
@@ -506,6 +585,23 @@ static func _valid_quest(q: Dictionary) -> bool:
 	for s: Variant in q.steps:
 		if not s is Dictionary or not STEPS.has(s.get("do", "")) or not s.get("place") is String:
 			return false
+		if s.do in FIELD_STEPS.values() and s.do != FIELD_STEPS.get(q.kind):
+			return false
+	if q.kind in FIELD_STEPS:
+		if q.id != _field_id(q.kind, q.giver) or q.steps.size() != FIELD_COUNTS[q.kind] + 1 \
+				or q.steps[0].do != "pickup" or q.steps[0].place != q.giver or q.steps[1].place != q.target:
+			return false
+		var seen := {}
+		for i in range(1, q.steps.size()):
+			var s: Dictionary = q.steps[i]
+			if s.do != FIELD_STEPS[q.kind] or s.get("number") != i or s.place in seen:
+				return false
+			if s.do == "install" and BeaconSites.cell_of(s.place) == BeaconSites.NO_CELL:
+				return false
+			if s.do == "paint":
+				if PaintTargets.address(s.place).is_empty() or not s.get("approach") is Vector2 or not s.approach.is_finite():
+					return false
+			seen[s.place] = true
 	return true
 
 
@@ -527,27 +623,57 @@ static func valid_save(d: Dictionary) -> bool:
 		return false
 	if d.has("series_done") and not d.series_done is bool:
 		return false
+	var beacons: Variant = d.get("beacons", {})
+	if not beacons is Dictionary:
+		return false
+	for id: Variant in beacons:
+		if not id is String or BeaconSites.cell_of(id) == BeaconSites.NO_CELL or beacons[id] != true:
+			return false
+	var painted: Variant = d.get("painted", {})
+	if not painted is Dictionary:
+		return false
+	for id: Variant in painted:
+		if not id is String or PaintTargets.address(id).is_empty() or painted[id] != true:
+			return false
 	var q: Dictionary = d.active
 	if q.is_empty():
 		return not d.cargo
 	if not _valid_quest(q):
 		return false
-	return d.cargo == (q.kind in CARGO_KINDS and q.steps[q.step].do in ["carry", "climb"])
+	if q.kind == "paint":
+		for i in range(1, q.steps.size()):
+			if painted.has(q.steps[i].place) != (i < q.step):
+				return false
+	return d.cargo == (q.kind in CARGO_KINDS and q.steps[q.step].do in ["carry", "climb", "install", "paint"])
 
 
-func restore_state(d: Dictionary, places: Dictionary) -> bool:
+func restore_state(d: Dictionary, places: Dictionary, plan := Rect2i(), world: WorldData = null) -> bool:
 	if not valid_save(d):
 		return false
-	var q := _resolve(d.active, places)
+	var q := _resolve(d.active, places, world)
 	if q == null:
-		return false
+		# При изменении растительности снимается только задание, потерявшее цель.
+		if d.active.get("kind") != "paint" or world == null:
+			return false
+		q = QuestData.new()
+	var beacons: Dictionary = d.get("beacons", {})
+	if plan.has_area():
+		for id: String in beacons:
+			if not plan.has_point(BeaconSites.cell_of(id)):
+				return false
+		if q.kind == "beacons":
+			for s: Dictionary in q.steps:
+				if s.do == "install" and not plan.has_point(BeaconSites.cell_of(s.place.key)):
+					return false
 	active = q
-	cargo = d.cargo
+	cargo = d.cargo and not q.is_empty()
 	done = d.done
 	last = d.last
 	by_giver = d.by_giver.duplicate()
 	known = d.known.duplicate()
 	_done = d.completed.duplicate()
+	installed_beacons = beacons.duplicate()
+	painted_objects = d.get("painted", {}).duplicate()
 	series = QuestData.new()
 	series_done = d.get("series_done", false)
 	if not d.get("series", {}).is_empty():
@@ -559,14 +685,28 @@ func restore_state(d: Dictionary, places: Dictionary) -> bool:
 
 
 ## Задание из записи сохранения с местами из places (ключ → место); null, если какого-то места нет
-static func _resolve(saved: Dictionary, places: Dictionary) -> QuestData:
+static func _resolve(saved: Dictionary, places: Dictionary, world: WorldData = null) -> QuestData:
 	var q := saved.duplicate(true)
 	if not q.is_empty():
-		if not places.has(q.giver) or not places.has(q.target):
+		if not places.has(q.giver):
 			return null
-		q.target = places[q.target]
 		for s: Dictionary in q.steps:
-			if not places.has(s.place):
+			if s.do == "install":
+				s.place = BeaconSites.place(BeaconSites.cell_of(s.place), s.number)
+			elif s.do == "paint":
+				s.place = PaintTargets.resolve(world, s.place)
+				if s.place.is_empty():
+					return null
+				s.place.approach = s.approach
+				s.erase("approach")
+			elif places.has(s.place):
+				s.place = places[s.place]
+			else:
 				return null
-			s.place = places[s.place]
+		if q.kind in FIELD_STEPS:
+			q.target = q.steps[1].place
+		elif places.has(q.target):
+			q.target = places[q.target]
+		else:
+			return null
 	return QuestData.from_dict(q)

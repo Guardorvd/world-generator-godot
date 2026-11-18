@@ -32,6 +32,8 @@ const PlaceNames = preload("res://scripts/render/place_names.gd")
 const PhotoCamera = preload("res://scripts/render/photo_camera.gd")
 const Quests = preload("res://scripts/game/quests.gd")
 const CargoBag = preload("res://scripts/render/cargo_bag.gd")
+const BeaconLayer = preload("res://scripts/render/beacon_layer.gd")
+const PaintLayer = preload("res://scripts/render/paint_layer.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BikePlacement = preload("res://scripts/render/bike_placement.gd")
 const DayTiming := preload("res://scripts/game/day_timing.gd")
@@ -42,6 +44,8 @@ var photo: PhotoCamera
 var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
 var _bag: Node3D         # сумка доставки у доски, пока её не взяли
 var _bag_label: Label3D  # подпись над ней
+var _beacon_layer: BeaconLayer
+var _paint_layer: PaintLayer
 var _quest_goal := ""    # key места, которое задание поставило целью на компасе
 var navigation_line: NavigationLine
 var _navigation_status := ""
@@ -451,6 +455,11 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	hud.travel_requested.connect(travel_to)
 	hud.map_close_requested.connect(toggle_map)
 	quests = Quests.new()
+	_beacon_layer = BeaconLayer.new()
+	add_child(_beacon_layer)
+	_paint_layer = PaintLayer.new()
+	_paint_layer.vegetation = vegetation
+	add_child(_paint_layer)
 	quests.changed.connect(_quest_changed)
 	hud.quests = quests
 	if not saved.is_empty():
@@ -460,10 +469,12 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		hud.visited = saved.visited.duplicate()
 		hud.map_journal.restore(saved.get("atlas", {}))
 		hud.explore.restore(saved.get("explore", {}))
-		if not quests.restore_state(saved.quest, places):
+		if not quests.restore_state(saved.quest, places, Rect2i(0, 0, world.W, world.H), world):
 			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
 		_quest_changed()
-		hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
+		# Точка установки уже восстановлена из шага задания, её нет в каталоге мест.
+		if hud.goal.get("kind") not in Quests.FIELD_PLACES or hud.goal.key != saved.goal:
+			hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
 	photo.photo_taken.connect(_quest_photo)
 	photo.photo_taken.connect(_album_photo)
 	photo.wanted_reach = Quests.SHOT_REACH_M
@@ -491,6 +502,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	interaction_service.quests = quests
 	interaction_service.is_broken = repairs.is_broken
 	interaction_service.world = world
+	interaction_service.heights = heights
 	interaction_service.all_places = hud.all_places
 	interaction_service.visited = hud.visited
 	interaction_service.message.connect(hud.toast_now)
@@ -588,7 +600,7 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 	for id: String in saved.visited:
 		if not places.has(id):
 			return false
-	return Quests.new().restore_state(saved.quest, places)
+	return Quests.new().restore_state(saved.quest, places, Rect2i(0, 0, w.W, w.H), w)
 
 
 func save_state() -> Dictionary:
@@ -1540,6 +1552,8 @@ func _update_hints() -> void:
 		"board": near = [[k.call("interact"), "Доска «%s»" % _target.place.name]]
 		"bike": near = [[k.call("interact"), "Сесть"]]
 		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
+		"beacon": near = [[k.call("interact"), "Установить маяк"]]
+		"paint": near = [[k.call("interact"), "Нанести метку"]]
 		"bench": near = [[k.call("interact"), "Присесть"]]
 		"plaque": near = [[k.call("interact"), "Прочитать табличку"]]
 		"repair": near = [[k.call("interact"), ("Удерживайте: починить %s" if _fix_wanted(_target) else "Сломано: %s") % Repairables.KINDS[_target.repair_kind].title]]
@@ -1591,6 +1605,10 @@ func _aim() -> Dictionary:
 			items.append({kind = "board", at = b.at, half = Vector3(0.9, 0.48, 0.08), place = b.place})
 	if not bike.riding and repair_layer != null:
 		items.append_array(repair_layer.items(eye, REACH))
+	if not bike.riding and player.on_ground and _paint_layer != null:
+		var mark := _paint_layer.item(eye, REACH)
+		if not mark.is_empty():
+			items.append(mark)
 	if not bike.riding:
 		for plate: Dictionary in _plaques:
 			if eye.distance_squared_to(plate.at.origin) < REACH * REACH:
@@ -1599,7 +1617,23 @@ func _aim() -> Dictionary:
 		var at := _bag.transform
 		at.origin += at.basis * Vector3(0.0, 0.0, CargoBag.SIZE.z * 0.5)
 		items.append({kind = "cargo", at = at, half = CargoBag.SIZE * 0.5 + Vector3(0.05, 0.08, 0.05)})
-	return interaction_service.select(items, from, dir)
+	var selected := interaction_service.select(items, from, dir)
+	return _beacon_interaction() if selected.is_empty() else selected
+
+
+func _beacon_interaction() -> Dictionary:
+	if bike.riding or not player.on_ground or quests == null or not quests.cargo:
+		return {}
+	var step := quests.step()
+	if step.get("do") != "install":
+		return {}
+	var x := float(step.place.x) * TILE
+	var z := float(step.place.y) * TILE
+	if Vector2(player.x, player.z).distance_to(Vector2(x, z)) > Quests.BeaconSites.REACH:
+		return {}
+	if absf(player.feet - heights.ground_at(x, z)) > 1.0:
+		return {}
+	return {kind = "beacon", id = step.place.key}
 
 
 ## Действие с тем, на что смотрит игрок; на велосипеде без цели — слезть.
@@ -1613,6 +1647,8 @@ func interact() -> void:
 		"board": _open_settlement(_target.place)
 		"bike": toggle_bike()
 		"cargo": _quest_progress(quests.pick_up())
+		"beacon": _quest_progress(quests.install_beacon(_target.id))
+		"paint": _quest_progress(quests.paint_object(_target.id))
 		"bench": _sit(_target)
 		"plaque": _read_plaque(_target)
 		"repair":
@@ -1741,6 +1777,8 @@ func _quest_changed() -> void:
 	var s := quests.step()
 	photo.wanted = s.place.key if s.get("do") == "shoot" else ""
 	_sync_delivery_bag()
+	_beacon_layer.sync(quests.beacons_in_world(), goal, heights)
+	_paint_layer.sync(quests.painted_objects, goal)
 	bike_view.set_pack(quests.cargo)
 	hud.quest_changed()
 

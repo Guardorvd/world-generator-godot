@@ -20,6 +20,8 @@ var places: Array = []
 var player := Vector2.INF
 var heading := 0.0
 var goal := Vector2.INF
+var quest := Vector2.INF
+var quest_color := Color.WHITE
 var move_hint := ""
 var _data: Data
 var _overlay: Control
@@ -60,6 +62,7 @@ func set_source(source: Data) -> void:
 	places = []
 	player = Vector2.INF
 	goal = Vector2.INF
+	quest = Vector2.INF
 	_last_revision = -1
 	reset_view()
 
@@ -278,6 +281,10 @@ func _draw_overlay() -> void:
 	if not park:
 		if goal.is_finite():
 			_overlay.draw_circle(world_to_screen(goal), 10.0, Color("#cc822c"), false, 2.5, true)
+		if quest.is_finite():
+			var at := world_to_screen(quest)
+			_overlay.draw_rect(Rect2(at - Vector2.ONE * 6.0, Vector2.ONE * 12.0), Color("#244648"))
+			_overlay.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), quest_color)
 		if player.is_finite():
 			Paint.player(_overlay, world_to_screen(player), heading)
 	_draw_legend()

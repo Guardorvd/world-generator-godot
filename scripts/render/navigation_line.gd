@@ -95,6 +95,8 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_target = Vector2(goal.x, goal.y) * GameConfig.TILE
 	if goal.kind == "lake":
 		_target = Vector2(goal.src.sx, goal.src.sy) * GameConfig.TILE
+	elif goal.kind == "paint":
+		_target = goal.approach
 	_rebuild(at, feet)
 
 

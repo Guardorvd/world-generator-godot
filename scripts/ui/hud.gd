@@ -478,6 +478,9 @@ func _sync_map_goal() -> void:
 	var id: String = goal.get("key", "")
 	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or is_open(id))
 	big_map.goal = Atlas.place_at(goal) if show_goal else Vector2.INF
+	var objective := quest_place()
+	big_map.quest = Atlas.place_at(objective) if objective.get("kind") in Quests.FIELD_PLACES else Vector2.INF
+	big_map.quest_color = quest_color()
 	big_map.refresh_overlay()
 
 
@@ -515,7 +518,7 @@ func restore_goal(key: String, marker_position := Vector2.INF) -> void:
 
 ## Игрок в (x, z) метрах: если он дошёл до цели, цель снимается и возвращается текст сообщения
 func check_goal(x: float, z: float) -> String:
-	if goal.is_empty() or not at_place(goal, x, z):
+	if goal.is_empty() or goal.kind in Quests.FIELD_PLACES or not at_place(goal, x, z):
 		return ""
 	var text := "Вы добрались до цели: «%s»" % goal.name
 	set_goal({})
