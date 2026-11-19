@@ -163,39 +163,82 @@ func _test_main_and_carousel(main: Node, carousel: Node) -> void:
 
 
 func _test_loading_and_cancellation(main: Node) -> void:
-	main._ui_stack.force_animate_in_headless = false
+	var loading := main.get_node("%Loading") as Control
+	var panel := loading.get_node("Panel") as Control
+	var back := main.get_node("%Back") as Control
+	var previous_step := main.get_node("%PreviousStep") as Label
+	var cancel := main.get_node("%CancelLoad") as Button
 	main.busy = true
 	main._load_started_ms = Time.get_ticks_msec()
-	main._load_label = ""
 	main._load_cancel_requested = false
 	main._load_quit_requested = false
 	main._load_cancel_flag = main.CancelFlag.new()
-	main._set_progress(0.0, "Фаза 1")
-	main.get_node("%Loading").visible = true
+	main._set_progress(0.0, "Фаза 1", true)
+	main._show("loading", {enter_duration = main.LOAD_ENTER_SECONDS})
+	_check(loading.visible and is_zero_approx(loading.modulate.a) and cancel.has_focus(),
+		"5.2 Loading проявляется из прозрачного состояния и получает фокус")
+	await create_timer(0.22).timeout
+	var bottom_left := panel.position + Vector2(0.0, panel.size.y)
+	_check(bottom_left.is_equal_approx(Vector2(48.0, loading.size.y - 48.0)),
+		"5.2 карточка Loading привязана к левому нижнему углу с отступом 48")
+
 	main._set_progress(0.8, "Фаза 2")
-	_check(is_zero_approx(main.bar.value) and main.load_step.text == "Фаза 2",
-		"5.2 _set_progress задаёт цель интерполяции без мгновенного рывка ProgressBar")
-	main._process(0.05)
-	_check(main.bar.value > 0.05 and main.bar.value < 0.75,
-		"5.2 Progress.value плавно догоняет цель через Util.damp(8.0, dt)")
+	_check(is_zero_approx(main.bar.value) and previous_step.visible and previous_step.text == "Фаза 1",
+		"5.2 Progress получает цель, предыдущая подпись остаётся видимой")
+	main._tick_loading(0.05)
+	_check(is_equal_approx(main.bar.value, 0.8 * Util.damp(8.0, 0.05)),
+		"5.2 Progress плавно догоняет цель с дробной точностью")
+	main._load_step_tween.custom_step(0.06)
+	_check(is_equal_approx(previous_step.modulate.a, 0.5) and is_equal_approx(main.load_step.modulate.a, 0.5),
+		"5.2 обе подписи видны на середине cross-fade")
+	main._set_progress(0.9, "Фаза 3")
+	await create_timer(0.16).timeout
+	_check(not previous_step.visible and main.load_step.text == "Фаза 3" and is_equal_approx(main.load_step.modulate.a, 1.0),
+		"5.2 быстрая смена этапа завершает cross-fade последней подписью")
 
-	var dialogs_before := 0
-	for child in main.get_children():
-		if child is AcceptDialog:
-			dialogs_before += 1
-	main._exit_game()
-	var dialogs_after := 0
-	for child in main.get_children():
-		if child is AcceptDialog:
-			dialogs_after += 1
-	_check(main._load_quit_requested and main._load_cancel_flag.is_cancelled(),
-		"5.2 попытка закрыть окно во время загрузки переводит её в кооперативную отмену перед выходом")
-	_check(dialogs_after == dialogs_before and main.get_node("%CancelLoad").disabled,
-		"5.2 выход во время загрузки не блокируется запрещающей модалкой и отмечает состояние отмены")
+	var dissolve: Tween = main._ui_stack.dissolve_to_world(back, loading, main.LOAD_DISSOLVE_SECONDS)
+	dissolve.custom_step(0.07)
+	var sine_alpha := 0.5 + cos(PI / 4.0) * 0.5
+	_check(is_equal_approx(loading.modulate.a, sine_alpha) and is_equal_approx(back.modulate.a, sine_alpha)
+		and is_zero_approx(loading.offset_top), "5.2 карточка и фон растворяются на месте по EaseInOutSine")
+	dissolve.custom_step(0.22)
+	_check(not loading.visible and not back.visible, "5.2 dissolve скрывает оба слоя по завершении")
+	main._show("loading", {instant = true})
 
+	# Управляемая неделимая фаза. После B поток остаётся жив, а отложенный прогресс игнорируется.
+	var gate := Semaphore.new()
+	main.gen_thread = Thread.new()
+	main.gen_thread.start(func() -> WorldLoader:
+		gate.wait()
+		return null)
+	root.push_input(_pad_button(JOY_BUTTON_B))
+	_check(main._load_cancel_requested and main._load_cancel_flag.is_cancelled() and cancel.disabled,
+		"5.2 B запрашивает отмену и блокирует повторное нажатие кнопки")
+	var cancel_text: String = main.load_step.text
+	main._report_load_progress(0.95, "Поздний этап", main._load_cancel_flag)
+	await process_frame
+	_check(main.busy and main.gen_thread.is_alive() and main.load_step.text == cancel_text,
+		"5.2 ожидание не блокирует кадры, запоздалый прогресс не стирает статус")
+	main._notification(Node.NOTIFICATION_WM_CLOSE_REQUEST)
+	_check(main._load_quit_requested and "Выход" in main.load_step.text,
+		"5.2 закрытие окна меняет уже запрошенную отмену на выход")
+	main._load_quit_requested = false # Продолжить тест в том же SceneTree.
+	gate.post()
+	while main.busy:
+		await process_frame
+	_check(main.gen_thread == null and main._is_screen("menu"), "5.2 поток присоединён, меню восстановлено")
+
+	# Esc в начале dissolve возвращает карточку и фоновый слой для статуса отмены.
+	main.busy = true
+	main._load_cancel_flag = main.CancelFlag.new()
+	main._show("loading", {instant = true})
+	dissolve = main._ui_stack.dissolve_to_world(back, loading, main.LOAD_DISSOLVE_SECONDS)
+	dissolve.custom_step(0.07)
+	root.push_input(_action_event(&"pause"))
+	_check(main._is_screen("loading") and main._load_cancel_requested and loading.visible
+		and is_equal_approx(loading.modulate.a, 1.0), "5.2 Esc отменяет переход до передачи управления")
 	main.busy = false
 	main._load_cancel_requested = false
-	main._load_quit_requested = false
 	main._load_cancel_flag = null
 	main._show("menu", {instant = true})
 

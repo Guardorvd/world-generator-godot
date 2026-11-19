@@ -11,6 +11,7 @@ var controls: Controls = GameContext.scope.controls
 signal photo_taken(shot: Dictionary)  # {path, place — id места в прицеле или "", name, dist — м до места, plaque — id обелиска, чья табличка в кадре вблизи, или ""}
 signal capturing(on: bool)            # кадр снимается: интерфейс игры на этот кадр прячут
 
+const UiAudio := preload("res://scripts/ui/ui_audio.gd")
 const DWELL := 1.5        # с: столько держать незнакомое место в прицеле, чтобы всплыло название
 const QUICK := 0.3        # с: для посещённого, цели и узнанного раньше
 const ZOOMS := [1.0, 1.5, 2.0, 3.0, 4.0]
@@ -66,10 +67,16 @@ var _preview := 0.0
 var _view: Control
 var _click: AudioStreamPlayer
 var _tick: AudioStreamPlayer
+var feedback: UiAudio
+var _deny_tween: Tween
+var _prompt_offset := 0.0
 
 
 func _ready() -> void:
 	layer = 0 # сообщения интерфейса игры остаются поверх рамки
+	if feedback == null:
+		feedback = UiAudio.new()
+		add_child(feedback)
 	_view = Control.new()
 	_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_view.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -90,6 +97,7 @@ func _ready() -> void:
 
 func enter() -> void:
 	active = true
+	plaque_view = {}
 	zoom = 0
 	target = {}
 	named = {}
@@ -102,6 +110,7 @@ func exit() -> void:
 	target = {}
 	named = {}
 	progress = 0.0
+	_reset_prompt_shake()
 	_cancel_capture()
 
 
@@ -116,7 +125,15 @@ func _exit_tree() -> void:
 	active = false
 	_cooldown = 0.0
 	_busy = false
+	_reset_prompt_shake()
 	_cancel_capture()
+
+
+func _reset_prompt_shake() -> void:
+	if _deny_tween != null and _deny_tween.is_valid():
+		_deny_tween.kill()
+	_deny_tween = null
+	_prompt_offset = 0.0
 
 
 func _cancel_capture() -> void:
@@ -172,6 +189,7 @@ func update(camera: Camera3D, dt: float) -> void:
 ## такой снимок засчитывается (shot.plaque). Иначе рамка янтарная с подсказкой: far — подойти ближе, oblique — встать напротив,
 ## edge — навести ближе к центру. Табличку с обратной стороны и закрытую склоном не отмечаем.
 func _track_plaques(camera: Camera3D) -> void:
+	var previous_lock: Variant = plaque_view.get("id") if plaque_view.get("state") == "ok" else null
 	plaque_view = {}
 	if not active or plaques.is_empty():
 		return
@@ -209,6 +227,8 @@ func _track_plaques(camera: Camera3D) -> void:
 		elif not inside:
 			state = "edge"
 		plaque_view = {id = p.id, name = p.name, state = state, dist = d, corners = corners}
+	if plaque_view.get("state") == "ok" and plaque_view.id != previous_lock:
+		feedback.play(&"photo_focus_lock", 1.15)
 
 
 ## 14.3: метка оставленного велосипеда в видоискателе — видна сквозь склоны и лес, ближе 8 м не нужна.
@@ -287,7 +307,16 @@ func pick(camera: Camera3D) -> Dictionary:
 
 ## ЛКМ: снимок. Рамка и интерфейс прячутся на один кадр, он сохраняется в FOLDER, потом вспышка и карточка
 func shoot() -> void:
-	if not active or _busy or not is_inside_tree() or is_queued_for_deletion() or not can_process():
+	if not active or not is_inside_tree() or is_queued_for_deletion() or not can_process():
+		return
+	if _busy:
+		if _cooldown > 0.0:
+			feedback.play(&"error_deny")
+			_reset_prompt_shake()
+			_deny_tween = create_tween()
+			UiAudio.tween_shake(_deny_tween, func(offset: float) -> void:
+				_prompt_offset = offset
+				_view.queue_redraw(), 5.0)
 		return
 	_busy = true
 	_pending_place = named.duplicate(true)
@@ -401,7 +430,7 @@ func _draw_view(c: Control) -> void:
 			var y := mid + (float(ZOOMS.size() - 1) / 2.0 - i) * 16.0
 			var on := i == zoom
 			c.draw_line(Vector2(frame.end.x - (20.0 if on else 12.0), y), Vector2(frame.end.x - 6.0, y), Color(1, 1, 1, (0.9 if on else 0.4) * e), 2.0 if on else 1.0)
-		_text(c, font, ("%s — снимок · ← → — приближение · %s — убрать фотоаппарат" % [controls.label("photo_shoot"), controls.label("photo")]) if controls.joypad else "ЛКМ — снимок · Колесо — приближение · ПКМ — убрать фотоаппарат", Vector2(center.x, frame.end.y - 18.0), 15, Color(1, 1, 1, 0.75 * e), 0.5)
+		_text(c, font, ("%s — снимок · ← → — приближение · %s — убрать фотоаппарат" % [controls.label("photo_shoot"), controls.label("photo")]) if controls.joypad else "ЛКМ — снимок · Колесо — приближение · ПКМ — убрать фотоаппарат", Vector2(center.x + _prompt_offset, frame.end.y - 18.0), 15, Color(1, 1, 1, 0.75 * e), 0.5)
 		# название над местом: всплывает с лёгким увеличением
 		if _name_a > 0.0 and not _shown.is_empty():
 			var ne := 1.0 - pow(1.0 - _name_a, 3.0)
@@ -455,7 +484,7 @@ func _draw_plaque(c: Control, font: Font, e: float) -> void:
 		oblique = "Табличка · встаньте напротив",
 		edge = "Табличка · наведите её ближе к центру",
 	}
-	_text(c, font, hints[plaque_view.state], Vector2(mid.x, low + 24.0), 15, tone, 0.5)
+	_text(c, font, hints[plaque_view.state], Vector2(mid.x + _prompt_offset, low + 24.0), 15, tone, 0.5)
 
 
 ## Метка велосипеда: голубой круг как на картах; у края кадра — стрелка наружу

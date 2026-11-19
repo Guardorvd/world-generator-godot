@@ -581,6 +581,13 @@ func _drain_jobs() -> void:
 		_write_room.post()
 
 
+func has_pending_writes() -> bool:
+	_lock.lock()
+	var active := _writer_active
+	_lock.unlock()
+	return active
+
+
 func wait_writes() -> void:
 	_enqueue_lock.lock()
 	_join_writes()

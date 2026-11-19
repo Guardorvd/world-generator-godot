@@ -271,6 +271,12 @@ func land(x: float, z: float, feet: float, impact: float) -> void:
 	_land.play()
 
 
+func bike_placed() -> void:
+	_land.volume_db = -14.0
+	_land.pitch_scale = 1.0
+	_land.play()
+
+
 func _play_step(x: float, z: float, feet: float, db: float) -> void:
 	var p: AudioStreamPlayer = _steps[_surface(x, z, feet)]
 	p.volume_db = db

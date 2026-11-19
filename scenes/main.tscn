@@ -255,9 +255,9 @@ layout_mode = 1
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 48.0
-offset_top = -42.0
+offset_top = -48.0
 offset_right = 488.0
-offset_bottom = -42.0
+offset_bottom = -48.0
 grow_vertical = 0
 mouse_filter = 2
 theme_override_constants/separation = 12
@@ -746,9 +746,9 @@ layout_mode = 1
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 48.0
-offset_top = -42.0
+offset_top = -48.0
 offset_right = 488.0
-offset_bottom = -42.0
+offset_bottom = -48.0
 grow_vertical = 0
 theme_type_variation = &"WorldCard"
 
@@ -786,15 +786,39 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 14)
 layout_mode = 2
 max_value = 1.0
+step = 0.0
 show_percentage = false
 
-[node name="Step" type="Label" parent="UI/Root/Loading/Panel/Box"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 44)
+[node name="Status" type="VBoxContainer" parent="UI/Root/Loading/Panel/Box"]
 layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="Stage" type="Control" parent="UI/Root/Loading/Panel/Box/Status"]
+custom_minimum_size = Vector2(0, 22)
+layout_mode = 2
+mouse_filter = 2
+
+[node name="PreviousStep" type="Label" parent="UI/Root/Loading/Panel/Box/Status/Stage"]
+unique_name_in_owner = true
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_type_variation = &"SubtitleLabel"
+text_overrun_behavior = 3
+
+[node name="Step" type="Label" parent="UI/Root/Loading/Panel/Box/Status/Stage"]
+unique_name_in_owner = true
+anchor_right = 1.0
+anchor_bottom = 1.0
 theme_type_variation = &"SubtitleLabel"
 text = "Подготовка"
-autowrap_mode = 3
+text_overrun_behavior = 3
+
+[node name="LoadElapsed" type="Label" parent="UI/Root/Loading/Panel/Box/Status"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+text = "Прошло 0:00"
 
 [node name="CancelLoad" type="Button" parent="UI/Root/Loading/Panel/Box"]
 unique_name_in_owner = true

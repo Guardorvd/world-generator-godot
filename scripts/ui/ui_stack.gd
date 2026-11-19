@@ -77,7 +77,7 @@ func push(screen: String, opts := {}) -> void:
 	if not prev.is_empty():
 		_animate_exit(prev, opts)
 	_animate_enter(screen, opts)
-	_update_dimmer(float(opts.get("dimmer_duration", 0.18)), not _should_animate(opts), false)
+	_update_dimmer(float(opts.get("dimmer_duration", 0.18)), not should_animate(opts), false)
 	var sound: StringName = opts.get("sound", &"")
 	if sound != &"" and _audio != null:
 		_audio.play(sound)
@@ -102,7 +102,7 @@ func pop(opts := {}) -> Dictionary:
 			instant = opts.get("instant", false),
 		})
 	var next_dimmer := _effective_dimmer_alpha()
-	_update_dimmer(float(opts.get("dimmer_duration", 0.14)), not _should_animate(opts), next_dimmer <= 0.0)
+	_update_dimmer(float(opts.get("dimmer_duration", 0.14)), not should_animate(opts), next_dimmer <= 0.0)
 	var sound: StringName = opts.get("sound", &"")
 	if sound != &"" and _audio != null:
 		_audio.play(sound)
@@ -119,7 +119,7 @@ func replace(screen: String, opts := {}) -> void:
 			return_focus = null,
 			dimmer = float(opts.get("dimmer", 0.0)),
 		})
-	var animate := _should_animate(opts)
+	var animate := should_animate(opts)
 	for s: String in _screens:
 		if s == screen:
 			continue
@@ -136,7 +136,7 @@ func replace(screen: String, opts := {}) -> void:
 		_audio.play(sound)
 
 
-func dissolve_to_world(back_node: Control, loading_node: Control, duration := 0.28) -> void:
+func dissolve_to_world(back_node: Control, loading_node: Control, duration: float) -> Tween:
 	_clear_peek_state()
 	_stack.clear()
 	_update_dimmer(0.0, true, true)
@@ -145,27 +145,28 @@ func dissolve_to_world(back_node: Control, loading_node: Control, duration := 0.
 		if s != "loading":
 			_reset_hidden(s)
 	_kill_screen_tween("loading")
-	if not _should_animate({}):
+	if not should_animate():
 		_hide_world_transition_nodes(back_node, loading_node)
-		return
+		return null
 	if loading_node != null:
 		_set_interactive(loading_node, false)
 	if back_node != null:
 		back_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dissolve_tween = create_tween()
-	_dissolve_tween.set_parallel(true)
+	_dissolve_tween.set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	if loading_node != null and loading_node.visible:
-		_dissolve_tween.tween_property(loading_node, "modulate:a", 0.0, duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		_dissolve_tween.tween_method(_set_screen_offset_y.bind(loading_node), loading_node.offset_top, 12.0, duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		_dissolve_tween.tween_property(loading_node, "modulate:a", 0.0, duration)
 	if back_node != null and back_node.visible:
-		_dissolve_tween.tween_property(back_node, "modulate:a", 0.0, duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	_dissolve_tween.set_parallel(false)
-	_dissolve_tween.tween_callback(func() -> void:
+		_dissolve_tween.tween_property(back_node, "modulate:a", 0.0, duration)
+	_dissolve_tween.chain().tween_callback(func() -> void:
 		_dissolve_tween = null
 		_hide_world_transition_nodes(back_node, loading_node))
+	return _dissolve_tween
 
 
 func cancel_dissolve(back_node: Control, loading_node: Control) -> void:
+	if _dissolve_tween == null:
+		return
 	_kill_dissolve()
 	if back_node != null:
 		back_node.modulate.a = 1.0
@@ -188,7 +189,7 @@ func _hide_world_transition_nodes(back_node: Control, loading_node: Control) -> 
 		back_node.mouse_filter = Control.MOUSE_FILTER_STOP
 
 
-func _should_animate(opts: Dictionary) -> bool:
+func should_animate(opts := {}) -> bool:
 	if bool(opts.get("instant", false)):
 		return false
 	if _host == null or not _host.is_inside_tree():
@@ -268,7 +269,7 @@ func _animate_enter(screen: String, opts: Dictionary) -> void:
 	var was_visible := node.visible
 	node.visible = true
 	_set_interactive(node, true)
-	if not _should_animate(opts):
+	if not should_animate(opts):
 		node.modulate.a = 1.0
 		_set_screen_offset_y(0.0, node)
 		return
@@ -299,7 +300,7 @@ func _animate_exit(screen: String, opts: Dictionary) -> void:
 		_set_screen_offset_y(0.0, node)
 		_set_interactive(node, true)
 		return
-	if not _should_animate(opts):
+	if not should_animate(opts):
 		node.visible = false
 		node.modulate.a = 1.0
 		_set_screen_offset_y(0.0, node)
@@ -351,7 +352,7 @@ func _update_dimmer(duration: float, instant := false, ease_in := false) -> void
 		_dimmer.mouse_filter = Control.MOUSE_FILTER_STOP
 	else:
 		_dimmer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if instant or duration <= 0.0 or not _should_animate({}):
+	if instant or duration <= 0.0 or not should_animate():
 		_dimmer.color.a = target
 		_dimmer.visible = target > 0.0
 		return

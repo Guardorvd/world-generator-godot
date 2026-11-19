@@ -33,6 +33,7 @@ const TOAST_REPEAT := 20.0 # 19.11.2026: то же сообщение раньш
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
+const UiAudio = preload("res://scripts/ui/ui_audio.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 ## 14.2: края экрана темнеют к углам, середина не тронута; strength — от RideDial.warning
 const VIGNETTE_CODE := """shader_type canvas_item;
@@ -88,6 +89,11 @@ var _summary_hint_left := SUMMARY_HINT_TIME
 var _summary_hint: Label
 var _summary_switch: PanelContainer
 var _reticle_on_target := false
+var _reticle_open := 0.0
+var _reticle_tween: Tween
+var _aim_id := ""
+var _prompt_aimed := true
+var interaction_audio: UiAudio
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
@@ -140,6 +146,8 @@ var bike_shown := false
 
 
 func _ready() -> void:
+	interaction_audio = UiAudio.new()
+	add_child(interaction_audio)
 	_style_summary()
 	# мини-карта в правом верхнем углу, под надписями (как вторым узлом после панели сведений)
 	minimap = LocalMap.new()
@@ -253,8 +261,9 @@ func _ready() -> void:
 	_repair.set_anchors_preset(Control.PRESET_CENTER)
 	_repair.offset_left = -RepairArc.DIAMETER * 0.5
 	_repair.offset_right = RepairArc.DIAMETER * 0.5
-	_repair.offset_top = 56
-	_repair.offset_bottom = 56 + RepairArc.DIAMETER
+	_repair.offset_top = 66
+	_repair.offset_bottom = 66 + RepairArc.DIAMETER
+	_repair.pivot_offset = Vector2.ONE * (RepairArc.DIAMETER * 0.5)
 	_repair.hide()
 	add_child(_repair)
 	_summary_switch = PanelContainer.new()
@@ -419,6 +428,8 @@ func clear_world() -> void:
 	_toast_hidden_for = 0.0
 	$Toast.modulate.a = 0.0
 	set_hints([], [])
+	note_interaction_target("")
+	_repair.reset()
 	set_photo_mode(false)
 	big_map.visible = false
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -981,16 +992,19 @@ func _apply_reveal() -> void:
 	tracker.self_modulate.a = tracker_alpha
 	_tracker_content.modulate.a = tracker_alpha
 	_layout_left_column()
-	var urgent: bool = _hint_urgent and not _photo_mode and not _overlay_open()
+	var overlay := _overlay_open()
+	var urgent: bool = _hint_urgent and not _photo_mode and not overlay
 	hint.visible = (alpha > 0.0 or urgent) and hint.get_child_count() > 0
 	hint.modulate.a = 1.0 if urgent else alpha
-	prompt.visible = is_visible_in_tree() and not _photo_mode and not _overlay_open() \
+	prompt.visible = is_visible_in_tree() and not _photo_mode and not overlay \
 		and (not _summary_blocked or _hint_urgent) and prompt.get_child_count() > 0
 	_reticle.visible = alpha > 0.0 or prompt.visible
 	_reticle.modulate.a = 1.0 if prompt.visible else alpha
-	if _reticle_on_target != prompt.visible:
-		_reticle_on_target = prompt.visible
-		_reticle.queue_redraw()
+	var aimed := prompt.visible and _prompt_aimed
+	if _reticle_on_target != aimed:
+		_reticle_on_target = aimed
+		_animate_reticle()
+	_repair.self_modulate.a = 0.0 if _photo_mode or overlay else 1.0
 	var show_switch := false
 	if allowed and (view_mode == View.HIDDEN or _summary_hint_left > 0.0):
 		var key := controls.label(&"show_hud")
@@ -1006,24 +1020,59 @@ func _apply_reveal() -> void:
 	_summary_switch.visible = show_switch
 
 
+func note_interaction_target(id: String) -> void:
+	if id == _aim_id:
+		return
+	var switching := not _aim_id.is_empty()
+	_aim_id = id
+	if id.is_empty() or not _reticle_on_target:
+		return
+	interaction_audio.play(&"reticle_target_lock")
+	if switching:
+		_reticle_open = minf(_reticle_open, 0.72)
+		_animate_reticle()
+
+
+func deny_placement() -> void:
+	interaction_audio.play(&"error_deny")
+	UiAudio.shake(prompt, 5.0)
+
+
+func _animate_reticle() -> void:
+	if _reticle_tween != null and _reticle_tween.is_valid():
+		_reticle_tween.kill()
+	_reticle_tween = _reticle.create_tween()
+	var end := 1.0 if _reticle_on_target else 0.0
+	_reticle_tween.tween_method(_set_reticle_open, _reticle_open, end, 0.11) \
+		.set_trans(Tween.TRANS_BACK if _reticle_on_target else Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+func _set_reticle_open(amount: float) -> void:
+	_reticle_open = amount
+	_reticle.queue_redraw()
+
+
 func _draw_reticle() -> void:
 	var center := _reticle.size * 0.5
-	if not _reticle_on_target:
-		_reticle.draw_circle(center, 3.2, Color(HudStyle.SURFACE, 0.85), true, -1, true)
-		_reticle.draw_circle(center, 1.6, HudStyle.CREAM, true, -1, true)
+	var corners_alpha := clampf(_reticle_open, 0.0, 1.0)
+	if corners_alpha < 1.0:
+		_reticle.draw_circle(center, 3.2, Color(HudStyle.SURFACE, 0.85 * (1.0 - corners_alpha)), true, -1, true)
+		_reticle.draw_circle(center, 1.6, Color(HudStyle.CREAM, 1.0 - corners_alpha), true, -1, true)
+	if corners_alpha <= 0.0:
 		return
 	for x: float in [-1.0, 1.0]:
 		for y: float in [-1.0, 1.0]:
-			var corner := center + Vector2(x, y) * 8.0
-			var points := PackedVector2Array([corner - Vector2(x * 4, 0), corner, corner - Vector2(0, y * 4)])
-			_reticle.draw_polyline(points, HudStyle.SURFACE, 4.0, true)
-			_reticle.draw_polyline(points, HudStyle.CREAM, 1.5, true)
+			var corner := center + Vector2(x, y) * lerpf(2.0, 8.0, _reticle_open)
+			var arm := 4.0 * corners_alpha
+			var points := PackedVector2Array([corner - Vector2(x * arm, 0), corner, corner - Vector2(0, y * arm)])
+			_reticle.draw_polyline(points, Color(HudStyle.SURFACE, corners_alpha), 4.0, true)
+			_reticle.draw_polyline(points, Color(HudStyle.CREAM, corners_alpha), 1.5, true)
 
 
 ## Подсказки внизу и у прицела — чипы [клавиша] действие (пустой список — скрыты).
 ## urgent — нижние видно и без Tab (падение: как восстановиться)
-func set_hints(bottom: Array, near: Array, urgent := false) -> void:
-	if _hint_items == bottom and _prompt_items == near and _hint_urgent == urgent:
+func set_hints(bottom: Array, near: Array, urgent := false, aimed := true) -> void:
+	if _hint_items == bottom and _prompt_items == near and _hint_urgent == urgent and _prompt_aimed == aimed:
 		return
 	var urgency_changed := _hint_urgent != urgent
 	if _hint_items != bottom or urgency_changed:
@@ -1033,6 +1082,7 @@ func set_hints(bottom: Array, near: Array, urgent := false) -> void:
 		_prompt_items = near.duplicate()
 		_fill_chips(prompt, near, _warning_style if urgent else _prompt_style)
 	_hint_urgent = urgent
+	_prompt_aimed = aimed
 	_apply_reveal()
 
 
@@ -1498,28 +1548,100 @@ class Compass extends Control:
 		draw_texture_rect(icon, Rect2(at - Vector2.ONE * 6.5, Vector2.ONE * 13.0), false, tint)
 
 
-## Ремонт: доля удержания 0..1 (кольцо под прицелом; 0 — скрыто)
+func begin_repair() -> void:
+	_repair.begin()
+
+
+## Ремонт: доля удержания 0..1.
 func set_repair(value: float) -> void:
 	_repair.set_value(value)
+
+
+func pulse_repair(pitch: float) -> void:
+	interaction_audio.play(&"repair_work", pitch)
+	_repair.pulse()
+
+
+func cancel_repair() -> void:
+	interaction_audio.play(&"repair_reset")
+	_repair.cancel()
+
+
+func finish_repair() -> void:
+	interaction_audio.play(&"repair_done")
+	_repair.finish()
 
 
 ## 18.11.2026: кольцо ремонта — растёт, пока игрок удерживает «взаимодействие» у сломанного объекта задания
 class RepairArc extends Control:
 	const DIAMETER := 64.0
 	var value := 0.0
+	var _flash := 0.0
+	var _motion: Tween
+
+	func begin() -> void:
+		reset()
+		scale = Vector2.ONE * 0.88
+		show()
+		_motion = create_tween()
+		_motion.tween_property(self, "scale", Vector2.ONE, 0.10).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 	func set_value(v: float) -> void:
 		if is_equal_approx(v, value):
 			return
 		value = v
-		visible = v > 0.001
+		queue_redraw()
+
+	func pulse() -> void:
+		_replace_motion()
+		_motion.tween_property(self, "scale", Vector2.ONE * 1.02, 0.055)
+		_motion.tween_property(self, "scale", Vector2.ONE * 0.98, 0.065)
+		_motion.tween_property(self, "scale", Vector2.ONE, 0.075)
+
+	func cancel() -> void:
+		_replace_motion()
+		_motion.set_parallel(true)
+		_motion.tween_method(set_value, value, 0.0, 0.18).set_ease(Tween.EASE_OUT)
+		_motion.tween_property(self, "modulate:a", 0.0, 0.18)
+		_motion.chain().tween_callback(_hide_arc)
+
+	func finish() -> void:
+		set_value(1.0)
+		scale = Vector2.ONE
+		_replace_motion()
+		_motion.set_parallel(true)
+		_motion.tween_property(self, "scale", Vector2.ONE * 1.18, 0.26).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		_motion.tween_method(_set_flash, 0.0, 1.0, 0.07)
+		_motion.tween_property(self, "modulate:a", 0.0, 0.20).set_delay(0.06)
+		_motion.chain().tween_callback(_hide_arc)
+
+	func reset() -> void:
+		if _motion != null and _motion.is_valid():
+			_motion.kill()
+		_hide_arc()
+
+	func _replace_motion() -> void:
+		if _motion != null and _motion.is_valid():
+			_motion.kill()
+		_motion = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	func _hide_arc() -> void:
+		hide()
+		scale = Vector2.ONE
+		modulate.a = 1.0
+		value = 0.0
+		_flash = 0.0
+		_motion = null
+		queue_redraw()
+
+	func _set_flash(amount: float) -> void:
+		_flash = amount
 		queue_redraw()
 
 	func _draw() -> void:
-		if value <= 0.001:
-			return
 		var c := size * 0.5
 		HudStyle.dial_face(self, c, DIAMETER * 0.5 - 2.0, 1.0)
 		draw_arc(c, 22.0, 0.0, TAU, 48, Color(HudStyle.BORDER, 0.65), 4.0, true)
-		draw_arc(c, 22.0, -PI * 0.5, -PI * 0.5 + TAU * value, 48, HudStyle.MINT, 4.0, true)
+		if value > 0.0:
+			draw_arc(c, 22.0, -PI * 0.5, -PI * 0.5 + TAU * value, 48, HudStyle.MINT.lerp(Color.WHITE, _flash), 4.0, true)
 		HudStyle.centered(self, c + Vector2(0, 4), "ремонт", 11, HudStyle.MUTED)

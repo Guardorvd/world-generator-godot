@@ -52,14 +52,16 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var outer := Thread.new()
 	var forest_task := -1
 	var image_tasks: Array[int] = []
-	var water_task := -1
-	var abort := func() -> WorldLoader:
+	var abort := func(pending_forest := -1, pending_water := -1) -> WorldLoader:
 		if side.is_started(): side.wait_to_finish()
 		if outer.is_started(): outer.wait_to_finish()
-		if forest_task >= 0: WorkerThreadPool.wait_for_task_completion(forest_task)
+		if pending_forest >= 0: WorkerThreadPool.wait_for_task_completion(pending_forest)
 		for task_id: int in image_tasks:
 			WorkerThreadPool.wait_for_task_completion(task_id)
-		if water_task >= 0: WorkerThreadPool.wait_for_task_completion(water_task)
+		if pending_water >= 0: WorkerThreadPool.wait_for_task_completion(pending_water)
+		if r.chunk_source != null:
+			r.chunk_source.close()
+			r.chunk_source = null
 		r.cancelled = true
 		r.world = null
 		return r
@@ -169,7 +171,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
 	r.timings.merge(r._prepare_times)
 	if is_cancelled.call():
-		return abort.call()
+		return abort.call(forest_task)
 	var plan_errors := StageTrailPlan.consistency_errors(r.world)
 	if not plan_errors.is_empty():
 		if forest_task >= 0: WorkerThreadPool.wait_for_task_completion(forest_task)
@@ -196,7 +198,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		image_tasks.append(WorkerThreadPool.add_task(map_job, true, "Карта"))
 		image_tasks.append(WorkerThreadPool.add_task(texture_job, true, "Текстура рельефа"))
 	if is_cancelled.call():
-		return abort.call()
+		return abort.call(forest_task)
 	t = Time.get_ticks_usec()
 	# Сначала готовая поверхность, затем геометрия земли и воды.
 	var keep_monolith := not services.cache.enabled
@@ -211,7 +213,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	for message: String in r.trail.errors:
 		push_warning("Трасса стартовой области: " + message)
 	if is_cancelled.call():
-		return abort.call()
+		return abort.call(forest_task)
 	if not r.surface_hit:
 		var water_times := {}
 		var water_job := func() -> void:
@@ -222,19 +224,22 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 			for arrays: Array in r.water_arrays:
 				r.water_chunks.append(WaterBuilder.partition_arrays(arrays))
 			water_times.partition_water_ms = (Time.get_ticks_usec() - water_started) / 1000.0
-		water_task = WorkerThreadPool.add_task(water_job, true, "Геометрия воды")
+		var water_task := WorkerThreadPool.add_task(water_job, true, "Геометрия воды")
 		t = Time.get_ticks_usec()
 		if keep_monolith:
 			r.terrain_arrays = TerrainBuilder.build_arrays(r.world, r.heights)
 			r.timings.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+			if is_cancelled.call():
+				return abort.call(forest_task, water_task)
 		t = Time.get_ticks_usec()
 		r.terrain_chunks = PlanTerrain.partition(r.terrain_arrays) if keep_monolith else TerrainBuilder.build_chunks(r.world, r.heights)
 		r.timings.partition_ms = (Time.get_ticks_usec() - t) / 1000.0
 		t = Time.get_ticks_usec()
 		WorkerThreadPool.wait_for_task_completion(water_task)
-		water_task = -1
 		r.timings.water_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 		r.timings.merge(water_times)
+		if is_cancelled.call():
+			return abort.call(forest_task)
 	t = Time.get_ticks_usec()
 	if on_progress.is_valid() and image_tasks.any(func(task: int) -> bool: return not WorkerThreadPool.is_task_completed(task)):
 		on_progress.call(0.93, "Текстура рельефа и карта")
@@ -267,13 +272,19 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		return r
 	if view.is_empty() and services.cache.enabled:
 		services.cache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
+	if is_cancelled.call():
+		return abort.call()
 	if services.cache.enabled and not r.surface_hit:
 		var planned := {}
 		var queued_at := Time.get_ticks_usec()
 		services.cache.save_surface(seed_text, size, {heights = Surface.capture(r.heights, "final"), trail = r.trail}, r.terrain_chunks, r.water_chunks, planned)
 		r._pending_chunk_refs = [planned.chunks, planned.water_chunks[0], planned.water_chunks[1]]
 		r.timings.surface_write_queue_ms = (Time.get_ticks_usec() - queued_at) / 1000.0
+	if is_cancelled.call():
+		return abort.call()
 	if services.cache.enabled: r.prepare_streaming(start_at)
+	if is_cancelled.call():
+		return abort.call()
 	r.timings.cache_io = services.cache.take_io_timings()
 	r.timings.profile_origin = "stored_generation" if r.from_cache else "current_generation"
 	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0

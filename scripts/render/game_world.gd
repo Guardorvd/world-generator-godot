@@ -55,6 +55,7 @@ var _speed_rush: float:
 var opening_place := {}
 var _route_revision := -1
 var _opening := false
+var startup_input_locked := false
 var _opening_time := 0.0
 var _opening_camera := Vector3.ZERO
 var _opening_target := Vector3.ZERO
@@ -121,7 +122,10 @@ var repairs: Repairables       # что в мире починено (лавки
 var repair_layer: RepairLayer  # модели починяемого: сломанное и причалы; отдаёт коробки наведения
 var _plaques: Array = []         # таблички обелисков: {id, name, form, size, at} (SettlementsBuilder); чтение, зона съёмки
 var _seat_id := ""             # лавка, на которой сидит игрок (камера ниже, ходьба заперта)
-var _fix_progress := 0.0       # 0..1: удержание «взаимодействия» у сломанного объекта задания
+const REPAIR_TICK_SECONDS := 0.45
+const REPAIR_TIME_EPSILON := 0.000001
+var _fix_target := ""
+var _fix_elapsed := 0.0
 var paused := false
 var show_map := false
 var _hints_key := []  # от чего зависели последние подсказки (_update_hints)
@@ -264,6 +268,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	place_names.setup($Settlements, heights)
 	photo = PhotoCamera.new()
 	photo.controls = services.controls
+	photo.feedback = hud.interaction_audio
 	add_child(photo)
 	photo.anchors = _photo_anchors()
 	_plaques = built.plaques
@@ -690,6 +695,8 @@ func _garland_huts() -> Array[Vector3]:
 
 
 func capture_mouse() -> void:
+	if startup_input_locked:
+		return
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_captured_at = Time.get_ticks_msec()
 
@@ -708,6 +715,8 @@ func sync_mouse_mode() -> void:
 
 func set_paused(p: bool) -> void:
 	if p:
+		_cancel_repair()
+		if hud != null: hud.note_interaction_target("")
 		services.controls.release_motion()
 		if bike != null: services.controls.read_bike_body(bike, false)
 		_cancel_bike_placement()
@@ -848,7 +857,7 @@ func _tick_paused_preview(delta: float) -> void:
 
 
 func look(dx: float, dy: float) -> void:
-	if _opening:
+	if startup_input_locked or _opening:
 		return
 	var k := GameConfig.MOUSE * services.settings.mouse * (photo.look_scale() if photo.active else 1.0)
 	yaw -= dx * k
@@ -1129,6 +1138,7 @@ func toggle_bike_placement() -> bool:
 		bike_placement = BikePlacement.new()
 		add_child(bike_placement)
 	bike_placement.begin(world, heights, Vector3(player.x, player.feet, player.z), yaw)
+	_cancel_repair()
 	if is_inside_tree(): capture_mouse()
 	player.vx = 0.0
 	player.vz = 0.0
@@ -1151,7 +1161,9 @@ func confirm_bike_placement() -> bool:
 		return false
 	_update_bike_placement(0.0)
 	if not bike_placement.confirm(bike):
-		if hud != null: _update_hints()
+		if hud != null:
+			_update_hints()
+			hud.deny_placement()
 		return false
 	# Игрок остаётся на месте пешком; освобождаем только застрявшую/упавшую раму.
 	player.vx = 0
@@ -1161,17 +1173,22 @@ func confirm_bike_placement() -> bool:
 	_rescue_input_until = time + 0.2
 	_target = {}
 	_snap()
+	bike_view.play_placement_appearance()
 	bike_view.draw(1.0)
+	audio.bike_placed()
 	if hud != null: hud.toast_now("Велосипед поставлен. Подойдите и нажмите %s" % services.controls.label("interact"))
 	return true
 
 ## 14.0: подсказки показывают кнопки того, чем играют сейчас (Controls)
 func _input(event: InputEvent) -> void:
-	services.controls.note(event)
+	if not startup_input_locked:
+		services.controls.note(event)
+		if not _fix_target.is_empty() and event.is_action_released("interact"):
+			_cancel_repair()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_echo() or paused:
+	if startup_input_locked or event.is_echo() or paused:
 		return
 	if _placing_bike():
 		if event.is_action_pressed("recover_bike") or event.is_action_pressed("pause") or event.is_action_pressed("back") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT):
@@ -1351,6 +1368,7 @@ func _apply_render_clock(alpha: float) -> void:
 
 func _physics_process(dt: float) -> void:
 	if player == null or paused or travel_active() or _settlement_open():
+		_cancel_repair()
 		return
 	if _placing_bike():
 		_store_prev()
@@ -1528,6 +1546,7 @@ func _light_night(pos: Vector3, t: float) -> void:
 
 func _process(delta: float) -> void:
 	if player == null or travel_active():
+		if hud != null: hud.note_interaction_target("")
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
 	hud.lock_hint.visible = (not paused and not _opening and not has_cursor_overlay() and not photo.active
@@ -1543,7 +1562,7 @@ func _process(delta: float) -> void:
 	var summary := hud.summary_visible()
 	if not summary:
 		info_timer = 0.0
-	if not show_map and not _settlement_open() and not _journal_open() and not _plaque_open():
+	if not startup_input_locked and not show_map and not _settlement_open() and not _journal_open() and not _plaque_open():
 		var stick := services.controls.look_delta(delta)
 		if stick != Vector2.ZERO:
 			look(stick.x, stick.y)
@@ -1588,6 +1607,11 @@ func _process(delta: float) -> void:
 	photo.update(camera, delta)
 	_target = _aim()
 	_update_hints()
+	var aim_kind: String = _target.get("kind", "")
+	var aim_id: String = _target.get("id", aim_kind)
+	if aim_kind == "board":
+		aim_id = WorldData.place_id("settlement", _target.place.x, _target.place.y)
+	hud.note_interaction_target(aim_id)
 	t0 = _tick_mark("frame_view", t0)
 	_apply_render_clock(alpha)
 	t0 = _tick_mark("frame_day", t0)
@@ -1648,7 +1672,7 @@ func _finish_opening() -> void:
 			_opening_caption.queue_free()
 	# Тот же велосипед, скорость и камера: никаких переносов при передаче управления.
 	_rescue_input_until = time + 0.2
-	hud.visible = not paused
+	hud.visible = not paused and not startup_input_locked
 	_update_camera(1.0, 0.0)
 	_opening_welcome()
 
@@ -1666,7 +1690,7 @@ func _opening_safe_camera(target: Vector3, desired: Vector3, feet: float) -> Vec
 
 
 func _draw_opening(alpha: float) -> void:
-	if not is_instance_valid(_opening_caption):
+	if not startup_input_locked and not is_instance_valid(_opening_caption):
 		var layer := CanvasLayer.new()
 		add_child(layer)
 		_opening_caption = PanelContainer.new()
@@ -1750,7 +1774,7 @@ func _update_hints() -> void:
 		var confirm_key: String = k.call("jump") if services.controls.joypad else "ЛКМ / " + k.call("interact")
 		var cancel_key: String = k.call("back") if services.controls.joypad else "ПКМ / " + k.call("recover_bike") + " / " + k.call("pause")
 		var help := [[cancel_key, "Отмена"], ["Левый стик", "Поворот и расстояние"]] if services.controls.joypad else [[cancel_key, "Отмена"], ["A/D / колесо", "Поворот"], ["W/S", "Расстояние"]]
-		hud.set_hints(help, [[confirm_key, bike_placement.reason]], true)
+		hud.set_hints(help, [[confirm_key, bike_placement.reason]], true, false)
 		return
 	if _opening or show_map or _settlement_open() or photo.active:
 		hud.set_hints([], [])
@@ -1779,7 +1803,7 @@ func _update_hints() -> void:
 		hud.set_hints(hints, near)
 		return
 	var photo_key: String = k.call("photo") if services.controls.joypad else "ПКМ"
-	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], near)
+	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], near, false, _seat_id.is_empty())
 
 
 func _update_bag_label() -> void:
@@ -1801,7 +1825,8 @@ func _settlement_open() -> bool:
 ## Берутся только предметы рядом: велосипед, на который можно сесть, доски не дальше REACH от глаз.
 ## Подсказку взаимодействия показывают только для выбранного.
 func _aim() -> Dictionary:
-	if player == null or paused or show_map or crash.active() or _settlement_open() or photo.active or _placing_bike():
+	if player == null or paused or show_map or _opening or startup_input_locked or not _seat_id.is_empty() \
+			or crash.active() or _settlement_open() or _journal_open() or _plaque_open() or photo.active or _placing_bike():
 		return {}
 	var from := camera.global_position
 	var dir := -camera.global_basis.z
@@ -1936,24 +1961,53 @@ func _stand_up() -> void:
 ## 18.11.2026: чинить можно и без задания с доски. Если объект — шаг активного «Ремонта», задание засчитано как раньше;
 ## иначе ближайшее поселение ждёт игрока с благодарностью (Quests.repaired_on_way, засчитывается в Quests.thank)
 func _tick_repair(dt: float) -> void:
-	var active: bool = _target.get("kind") == "repair" and not bike.riding and _seat_id == "" and not show_map \
-		and not _journal_open() and not photo.active and Input.is_action_pressed("interact")
-	if active:
-		_fix_progress = minf(1.0, _fix_progress + dt / Repairables.HOLD_TIME)
-		if _fix_progress >= 1.0:
-			_fix_progress = 0.0
-			var id: String = _target.id
-			repair_layer.repair(id)
-			var text := quests.repaired(id)
-			if text != "":
-				_quest_progress(text)
-			else:
-				var place := world.place(id)
-				if not place.is_empty():
-					hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)), &"quest")
-	else:
-		_fix_progress = maxf(0.0, _fix_progress - dt * 2.0)
-	hud.set_repair(_fix_progress)
+	if _target.get("kind") != "repair" or not Input.is_action_pressed("interact") or bike.riding \
+			or _seat_id != "" or show_map or _journal_open() or _plaque_open() or photo.active or crash.active():
+		_cancel_repair()
+		return
+	var id: String = _target.id
+	if not repair_layer.repairs.is_broken(id):
+		_cancel_repair()
+		return
+	if id != _fix_target:
+		_cancel_repair()
+		_fix_target = id
+		hud.begin_repair()
+	var previous_tick := floori((_fix_elapsed + REPAIR_TIME_EPSILON) / REPAIR_TICK_SECONDS)
+	_fix_elapsed += dt
+	if _fix_elapsed >= Repairables.HOLD_TIME - REPAIR_TIME_EPSILON:
+		_complete_repair(id)
+		return
+	hud.set_repair(_fix_elapsed / Repairables.HOLD_TIME)
+	var work_tick := floori((_fix_elapsed + REPAIR_TIME_EPSILON) / REPAIR_TICK_SECONDS)
+	if work_tick > previous_tick:
+		var last_tick := floorf(Repairables.HOLD_TIME / REPAIR_TICK_SECONDS)
+		var work_pitch := remap(work_tick, 1.0, last_tick, 0.9, 1.25)
+		hud.pulse_repair(work_pitch)
+		services.controls.rumble(0.12, 0.0, 0.055)
+
+
+func _cancel_repair() -> void:
+	if _fix_target.is_empty():
+		return
+	_fix_target = ""
+	_fix_elapsed = 0.0
+	hud.cancel_repair()
+
+
+func _complete_repair(id: String) -> void:
+	_fix_target = ""
+	_fix_elapsed = 0.0
+	repair_layer.repair(id)
+	hud.finish_repair()
+	services.controls.rumble(0.35, 0.5, 0.12)
+	var text := quests.repaired(id)
+	if not text.is_empty():
+		_quest_progress(text)
+		return
+	var place := world.place(id)
+	if not place.is_empty():
+		hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)), &"quest")
 
 
 ## Поселение, где отблагодарят за ремонт по пути: ближайшее к месту на открытой земле (InteractionService.target) или пусто

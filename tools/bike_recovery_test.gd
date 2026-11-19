@@ -142,7 +142,8 @@ func check_navigation() -> void:
 	line.update_line(Vector3(100,100,90),0.3,false)
 	check(not line.visible, "Map/photo/placement can hide navigation")
 	line.set_goal({},Vector2.ZERO)
-	check(line.path.is_empty() and line.mesh.get_surface_count()==0, "Clearing a goal immediately clears its geometry")
+	check(line.path.is_empty() and (line.mesh == null or line.mesh.get_surface_count() == 0),
+		"Clearing a goal immediately clears its geometry")
 	line.set_goal({kind="lake",x=12.0,y=12.0,src={sx=5.0,sy=5.0}},Vector2(20,120))
 	check(line._target == Vector2(20,20), "Lake goal targets its bank")
 	line.free()
@@ -213,6 +214,15 @@ func check_placement() -> void:
 	h.flooded=true
 	game._update_bike_placement(0)
 	check(not preview.valid and not game.confirm_bike_placement() and game.bike.x==180, "Deep water rejects preview and confirmation without losing the bike")
+	check(hud.interaction_audio.play_counts.get(&"error_deny", 0) == 1 and not hud._reticle_on_target,
+		"Rejected placement plays denial and its prompt does not acquire a target")
+	if DisplayServer.get_name() != "headless":
+		var base_x := hud.prompt.position.x
+		var shake := hud.prompt.get_meta(&"_shake_tween") as Tween
+		shake.custom_step(0.03)
+		check(is_equal_approx(hud.prompt.position.x, base_x + 5.0), "Rejected placement shakes the prompt by 5 px")
+		shake.custom_step(0.151)
+		check(is_equal_approx(hud.prompt.position.x, base_x), "Rejected placement returns the prompt after 180 ms")
 	if "--capture" in OS.get_cmdline_user_args(): await capture(game,"blocked")
 	h.flooded=false
 	h.roof=101
@@ -226,6 +236,15 @@ func check_placement() -> void:
 	game._update_bike_placement(0)
 	if "--capture" in OS.get_cmdline_user_args(): await capture(game,"valid")
 	check(game.confirm_bike_placement(),"Confirmation places the chosen preview")
+	check(is_equal_approx(game.audio._land.volume_db, -14.0) and game.bike_view._placement_lift > 0.0,
+		"Confirmation sets the contact sound and starts the visual settle")
+	if RenderingServer.get_current_rendering_method() == "forward_plus":
+		check(not game.bike_view._placement_meshes.is_empty() and game.bike_view._placement_meshes[0].transparency > 0.0,
+			"Forward+ reveals the real frame from partial transparency")
+	game.bike_view._placement_tween.custom_step(0.16)
+	game.bike_view.draw(1.0)
+	check(is_zero_approx(game.bike_view._placement_lift) and game.bike_view._placement_tween == null,
+		"Visual effect settles without affecting bike state")
 	check(game.bike==same_bike and not game.bike.fallen and not game.bike.riding and game.bike_view.lamp_on(),"Same bike and lamp survive placement with motion/fallen state cleared")
 	check(Vector3(game.player.x,game.player.feet,game.player.z)==player_at,"Placement never teleports the player")
 	game.player.x=game.bike.x+0.9

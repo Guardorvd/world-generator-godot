@@ -146,6 +146,9 @@ var _skin_mats: Array[ShaderMaterial] = []
 var _rear_mechanics: Node3D
 var _wind := 0.0
 var _speed := 0.0
+var _placement_lift := 0.0
+var _placement_tween: Tween
+var _placement_meshes: Array[GeometryInstance3D] = []
 
 @onready var rider: CyclistRig = get_node_or_null("Rider") as CyclistRig
 @onready var rear_wheel: Node3D = get_node_or_null("RearWheel") as Node3D
@@ -604,6 +607,11 @@ static func _spring_step(pos: float, vel: float, goal: float, omega: float, dt: 
 func snap(b: BikeRide) -> void:
 	if not _view_ready:
 		return
+	if _placement_tween != null:
+		_placement_tween.kill()
+		_set_placement_appearance(1.0)
+		_placement_meshes.clear()
+		_placement_tween = null
 	# Не переносим ускорение и удар через посадку, спешивание или телепорт.
 	_has_state = false
 	_landing = 0.0
@@ -648,6 +656,30 @@ func snap(b: BikeRide) -> void:
 		_prev[i] = _cur[i]
 
 
+func play_placement_appearance() -> void:
+	if not _view_ready:
+		return
+	# Прозрачность мешей поддерживает Forward+. Небольшая посадка рамы видна на любом рендерере.
+	if RenderingServer.get_current_rendering_method() == "forward_plus":
+		for mesh: GeometryInstance3D in find_children("*", "MeshInstance3D", true, false):
+			if not rider.is_ancestor_of(mesh) and is_zero_approx(mesh.transparency):
+				_placement_meshes.append(mesh)
+	_set_placement_appearance(0.0)
+	_placement_tween = create_tween()
+	_placement_tween.tween_method(_set_placement_appearance, 0.0, 1.0, 0.15) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_placement_tween.tween_callback(func() -> void:
+		_placement_meshes.clear()
+		_placement_tween = null)
+
+
+func _set_placement_appearance(amount: float) -> void:
+	_placement_lift = 0.065 * (1.0 - amount)
+	for mesh: GeometryInstance3D in _placement_meshes:
+		if is_instance_valid(mesh):
+			mesh.transparency = 0.55 * (1.0 - amount)
+
+
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
 func draw(alpha: float, allow_watch := true) -> void:
 	if not _has_state:
@@ -663,7 +695,7 @@ func draw(alpha: float, allow_watch := true) -> void:
 		var angular := i == S_HEADING or i == S_WHEEL or i == S_CRANK
 		_mix[i] = lerp_angle(_prev[i], _cur[i], alpha) if angular else lerpf(_prev[i], _cur[i], alpha)
 	# рама и седок опускаются на ход подвески, колёса остаются на земле
-	position = Vector3(_mix[S_X], _mix[S_BODY_Y], _mix[S_Z])
+	position = Vector3(_mix[S_X], _mix[S_BODY_Y] + _placement_lift, _mix[S_Z])
 	# 12.3: стоя седок раскачивает велосипед под собой в такт педалям (только вид)
 	var stop_amount := smoothstep(0.0, 1.0, absf(_mix[S_STOP]))
 	var stop_side := -1.0 if _mix[S_STOP] < 0.0 else 1.0

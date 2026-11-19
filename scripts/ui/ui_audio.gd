@@ -12,6 +12,11 @@ const SOUNDS := {
 	&"confirm": {path = "res://resources/sounds/ui_confirm.wav", db = -12.0},
 	&"error_deny": {path = "res://resources/sounds/ui_error_deny.wav", db = -12.0},
 	&"volume_tick": {path = "res://resources/sounds/ui_volume_tick.wav", db = -10.0},
+	&"reticle_target_lock": {path = "res://resources/sounds/ui_hover.wav", db = -22.0},
+	&"photo_focus_lock": {path = "res://resources/sounds/ui_volume_tick.wav", db = -18.0},
+	&"repair_work": {path = "res://resources/sounds/step_wood_1.wav", db = -19.0},
+	&"repair_reset": {path = "res://resources/sounds/ui_panel_close.wav", db = -16.0},
+	&"repair_done": {path = "res://resources/sounds/step_wood_3.wav", db = -8.0},
 }
 
 var suppress_focus_sound := false
@@ -45,7 +50,7 @@ func play(kind: StringName, pitch := 1.0) -> void:
 	if DisplayServer.get_name() == "headless" or AudioServer.get_driver_name() == "Dummy":
 		return
 	var spec: Dictionary = SOUNDS[kind]
-	var stream := _stream_for(kind, str(spec.path))
+	var stream := _stream_for(spec.path)
 	if stream == null or _players.is_empty():
 		return
 	var player := _next_player()
@@ -106,15 +111,20 @@ static func shake(control: Control, amplitude := 4.0) -> void:
 		return
 	var tween := control.create_tween()
 	control.set_meta(&"_shake_tween", tween)
-	tween.tween_property(control, "position:x", base_x + amplitude, 0.03).set_trans(Tween.TRANS_SINE)
-	tween.tween_property(control, "position:x", base_x - amplitude, 0.04).set_trans(Tween.TRANS_SINE)
-	tween.tween_property(control, "position:x", base_x + amplitude * 0.75, 0.04).set_trans(Tween.TRANS_SINE)
-	tween.tween_property(control, "position:x", base_x - amplitude * 0.5, 0.035).set_trans(Tween.TRANS_SINE)
-	tween.tween_property(control, "position:x", base_x, 0.035).set_trans(Tween.TRANS_SINE)
+	tween_shake(tween, func(offset: float) -> void: control.position.x = base_x + offset, amplitude)
 	tween.tween_callback(func() -> void:
 		if is_instance_valid(control):
 			control.remove_meta(&"_shake_base_x")
 			control.remove_meta(&"_shake_tween"))
+
+
+## Один рисунок тряски для Control и подсказок, которые рисуются вручную.
+static func tween_shake(tween: Tween, apply: Callable, amplitude: float) -> void:
+	tween.tween_method(apply, 0.0, amplitude, 0.03).set_trans(Tween.TRANS_SINE)
+	tween.tween_method(apply, amplitude, -amplitude, 0.04).set_trans(Tween.TRANS_SINE)
+	tween.tween_method(apply, -amplitude, amplitude * 0.75, 0.04).set_trans(Tween.TRANS_SINE)
+	tween.tween_method(apply, amplitude * 0.75, -amplitude * 0.5, 0.035).set_trans(Tween.TRANS_SINE)
+	tween.tween_method(apply, -amplitude * 0.5, 0.0, 0.035).set_trans(Tween.TRANS_SINE)
 
 
 static func pulse_confirm(button: Control) -> void:
@@ -139,11 +149,11 @@ static func pulse_confirm(button: Control) -> void:
 			button.remove_meta(&"_pulse_tween"))
 
 
-func _stream_for(kind: StringName, path: String) -> AudioStream:
-	if _streams.has(kind):
-		return _streams[kind]
+func _stream_for(path: String) -> AudioStream:
+	if _streams.has(path):
+		return _streams[path]
 	var stream: AudioStream = load(path) if ResourceLoader.exists(path) else null
-	_streams[kind] = stream
+	_streams[path] = stream
 	return stream
 
 

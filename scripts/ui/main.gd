@@ -39,7 +39,13 @@ class CancelFlag extends RefCounted:
 		var v := _cancelled
 		_mutex.unlock()
 		return v
+
+
 const LIVE_WARM_START_DELAY := 0.18
+const LOAD_ENTER_SECONDS := 0.18
+const LOAD_STEP_SECONDS := 0.12
+const LOAD_DISSOLVE_SECONDS := 0.28
+const LOAD_WARMUP_FRAMES := 30
 # Заставка запуска: цвет совпадает с application/boot_splash/bg_color, меню проявляется уже с живым фоном.
 const STARTUP_COVER_COLOR := Color(0.043, 0.051, 0.059)
 const STARTUP_COVER_LIMIT := 6.0
@@ -53,7 +59,6 @@ var busy := false
 var gen_thread: Thread
 var _load_started_ms := 0
 var _load_elapsed := -1
-var _load_label := ""
 var _settings_from := "menu"   # куда вернуться из настроек
 var _seed_tab := "recent"      # вкладка списка миров: recent, favorites, recommended
 var _previews := {}            # зерно -> превью карты из кэша (ImageTexture) или null
@@ -109,6 +114,9 @@ var _volume_tick_ms := 0
 @onready var seed_edit: LineEdit = %SeedEdit
 @onready var bar: ProgressBar = %Progress
 @onready var load_step: Label = %Step
+@onready var load_previous_step: Label = %PreviousStep
+@onready var load_elapsed: Label = %LoadElapsed
+@onready var cancel_load_button: Button = %CancelLoad
 @onready var screens := {back = %Back, menu = %Menu, new_world = %NewWorld, all_worlds = %AllWorlds,
 	loading = %Loading, pause = %Pause, settings = %Settings}
 
@@ -273,6 +281,9 @@ func _focus_screen_default(screen: String) -> void:
 			var play: Button = %PlaySelected
 			var target: Control = _tab_button(_seed_tab) if play.disabled else play
 			_grab_focus_quiet(target)
+		"loading":
+			if not cancel_load_button.disabled:
+				_grab_focus_quiet(cancel_load_button)
 		"pause":
 			_fill_controls()
 			_grab_focus_quiet(%Resume)
@@ -294,6 +305,10 @@ func _show(screen: String, opts := {}) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if busy and not event.is_echo() and _is_back_press(event):
+		_cancel_loading(false)
+		get_viewport().set_input_as_handled()
+		return
 	if _is_screen("settings") and game == null:
 		GameContext.scope.controls.note(event)
 	if _confirm != null or event.is_echo():
@@ -317,18 +332,10 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_echo() or trail_lab != null:
-		return
-	var button := event as InputEventJoypadButton
-	var pad_back := (button != null and button.pressed and button.button_index == JOY_BUTTON_B) or event.is_action_pressed("back")
-	if not (pad_back or event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")):
+	if event.is_echo() or trail_lab != null or not _is_back_press(event):
 		return
 	if _confirm != null:
 		_cancel_confirm()
-		get_viewport().set_input_as_handled()
-		return
-	if busy and _is_screen("loading"):
-		_cancel_loading(false)
 		get_viewport().set_input_as_handled()
 		return
 	if _is_screen("settings"):
@@ -349,6 +356,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if game == null and (_is_screen("new_world") or _is_screen("all_worlds")):
 		_return_to_menu_screen()
 		get_viewport().set_input_as_handled()
+
+
+static func _is_back_press(event: InputEvent) -> bool:
+	var button := event as InputEventJoypadButton
+	return (button != null and button.pressed and button.button_index == JOY_BUTTON_B) \
+		or event.is_action_pressed("back") or event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")
 
 
 func _open_new_world() -> void:
@@ -1371,11 +1384,20 @@ func _process(delta: float) -> void:
 		if _auto_save_task == -1 and (_save_elapsed >= 60.0 or hud.map_place_count() != _saved_discoveries):
 			_queue_auto_save()
 	if busy:
-		bar.value = lerpf(bar.value, _progress_target, Util.damp(8.0, delta))
-		var seconds := (Time.get_ticks_msec() - _load_started_ms) / 1000
-		if seconds != _load_elapsed and (_load_step_tween == null or not _load_step_tween.is_valid()):
-			_load_elapsed = seconds
-			load_step.text = "%s\nПрошло: %d:%02d" % [_load_label, seconds / 60, seconds % 60]
+		_tick_loading(delta)
+
+
+func _tick_loading(delta: float) -> void:
+	var progress := lerpf(bar.value, _progress_target, Util.damp(8.0, delta))
+	bar.value = _progress_target if absf(progress - _progress_target) < 0.001 else progress
+	var seconds := (Time.get_ticks_msec() - _load_started_ms) / 1000
+	if seconds != _load_elapsed:
+		_load_elapsed = seconds
+		load_elapsed.text = "Прошло %d:%02d" % [seconds / 60, seconds % 60]
+	if gen_thread != null and not gen_thread.is_alive():
+		var loaded := gen_thread.wait_to_finish() as WorldLoader
+		gen_thread = null
+		_on_world_ready(loaded)
 
 
 # ---------- Старт игры ----------
@@ -1464,32 +1486,33 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 			_message("Резервная копия", "Основное сохранение повреждено. Загружается предыдущая исправная копия.")
 	busy = true
 	_progress_target = 0.0
+	bar.value = 0.0
 	_load_cancel_requested = false
 	_load_quit_requested = false
 	_load_cancel_flag = CancelFlag.new()
 	_load_started_ms = Time.get_ticks_msec()
+	_load_elapsed = 0
+	load_elapsed.text = "Прошло 0:00"
 	_free_game()
 	hud.visible = false
-	_load_label = ""
-	_set_progress(0.0, "Подготовка")
-	var cancel_btn := get_node_or_null("%CancelLoad") as Button
-	if cancel_btn != null:
-		cancel_btn.visible = true
-		cancel_btn.disabled = false
-		cancel_btn.text = "Отменить"
+	_set_progress(0.0, "Подготовка", true)
+	cancel_load_button.disabled = false
 	%LoadPreview.texture = _preview_tex(seed_text)
 	%LoadPreview.visible = %LoadPreview.texture != null
 	%LoadPlaceholder.visible = not %LoadPreview.visible
 	%LoadPlaceholder.text = seed_text
 	%Title.text = "Мир «%s»" % seed_text
 	%Title.tooltip_text = %Title.text
-	_show("loading", {enter_duration = 0.18, exit_duration = 0.14})
+	_show("loading", {enter_duration = LOAD_ENTER_SECONDS})
 	gen_thread = Thread.new()
 	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
-	gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec(), _load_cancel_flag))
+	var err := gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec(), _load_cancel_flag))
+	if err != OK:
+		gen_thread = null
+		_finish_load("Мир не подготовлен", "Не удалось запустить поток загрузки (%s)." % error_string(err))
 
 
-func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int, cancel_flag: CancelFlag) -> void:
+func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int, cancel_flag: CancelFlag) -> WorldLoader:
 	var entered_us := Time.get_ticks_usec()
 	var cache := GameContext.scope.cache
 	if cache.enabled and not cancel_flag.is_cancelled():
@@ -1497,31 +1520,37 @@ func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundle
 		if allow_bundled and not QuickTrails.active() and size == WorldGenerator.START_SIZE and not cancel_flag.is_cancelled():
 			cache.install_bundled(WorldCache.BUNDLED, seed_text)
 	if cancel_flag.is_cancelled():
-		var aborted := WorldLoader.new()
-		aborted.cancelled = true
-		_on_world_ready.call_deferred(aborted, cancel_flag)
-		return
+		return null
 	var before_loader_us := Time.get_ticks_usec()
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
-		_set_progress.call_deferred(p, label), null, start_at, cancel_flag.is_cancelled)
+		_report_load_progress.call_deferred(p, label, cancel_flag), null, start_at, cancel_flag.is_cancelled)
 	if loaded == null:
-		# ошибка скрипта оборвала загрузку: вернуть меню, а не держать экран загрузки вечно
-		_on_world_failed.call_deferred(cancel_flag)
-		return
+		return null
 	var ready_us := Time.get_ticks_usec()
 	loaded.timings.thread_dispatch_ms = (entered_us - dispatched_us) / 1000.0
 	loaded.timings.before_loader_ms = (before_loader_us - entered_us) / 1000.0
 	loaded.timings.loader_call_ms = (ready_us - before_loader_us) / 1000.0
 	loaded.timings.ready_queued_us = ready_us
-	_on_world_ready.call_deferred(loaded, cancel_flag)
+	return loaded
 
 
-func _on_world_failed(cancel_flag: CancelFlag = null) -> void:
-	if gen_thread != null and gen_thread.is_started():
-		gen_thread.wait_to_finish()
+func _report_load_progress(p: float, label: String, cancel_flag: CancelFlag) -> void:
+	if gen_thread != null and cancel_flag == _load_cancel_flag and not _load_cancel_requested:
+		_set_progress(p, label)
+
+
+func _finish_load(error_title := "", error_detail := "") -> void:
+	if game != null:
+		_free_game()
+	hud.hide()
+	_pending_save = {}
+	if _load_quit_requested and GameContext.scope.cache.has_pending_writes():
+		_set_progress(bar.value, "Сохранение кэша перед выходом…", true)
+		while GameContext.scope.cache.has_pending_writes():
+			await get_tree().process_frame
 	busy = false
 	var want_quit := _load_quit_requested
-	var was_cancelled := _load_cancel_requested or (cancel_flag != null and cancel_flag.is_cancelled())
+	var was_cancelled := _load_cancel_requested
 	_load_cancel_requested = false
 	_load_quit_requested = false
 	_load_cancel_flag = null
@@ -1529,8 +1558,8 @@ func _on_world_failed(cancel_flag: CancelFlag = null) -> void:
 		_exit_game()
 		return
 	_show("menu")
-	if not was_cancelled:
-		_message("Мир не подготовлен", "Генерация прервалась с ошибкой. Подробности в журнале godot.log.")
+	if not was_cancelled and not error_title.is_empty():
+		_message(error_title, error_detail)
 
 
 func _on_cancel_load_pressed() -> void:
@@ -1538,139 +1567,115 @@ func _on_cancel_load_pressed() -> void:
 
 
 func _cancel_loading(quit_after: bool) -> void:
-	if not busy:
+	if not busy or (_load_cancel_requested and (not quit_after or _load_quit_requested)):
 		return
-	if quit_after:
-		_load_quit_requested = true
-	else:
-		_load_cancel_requested = true
+	var first_request := not _load_cancel_requested
+	_load_cancel_requested = true
+	_load_quit_requested = quit_after
 	if _load_cancel_flag != null:
 		_load_cancel_flag.cancel()
-	var cancel_btn := get_node_or_null("%CancelLoad") as Button
-	if cancel_btn != null:
-		cancel_btn.disabled = true
-		cancel_btn.text = "Ожидание остановки потока…"
-	_set_progress(_progress_target, "Завершение загрузки перед выходом…\nОжидание остановки потока" if _load_quit_requested else "Отмена загрузки…\nОжидание завершения текущего этапа")
-	_play_ui(&"panel_close")
+	cancel_load_button.disabled = true
+	if not _is_screen("loading"):
+		_show("loading", {instant = true})
+	var label := "Выход после завершения текущего этапа…" if quit_after else "Отмена после завершения текущего этапа…"
+	_set_progress(bar.value, label, true)
+	if first_request:
+		_play_ui(&"panel_close")
 
 
-func _set_progress(p: float, label: String) -> void:
+func _set_progress(p: float, label: String, instant := false) -> void:
 	_progress_target = clampf(p, 0.0, 1.0)
-	if not busy or p <= 0.0:
-		bar.value = _progress_target
-	var changed := label != _load_label
-	_load_label = label
-	_load_elapsed = -1
-	if not changed:
+	if label == load_step.text and not instant:
 		return
 	if _load_step_tween != null and _load_step_tween.is_valid():
 		_load_step_tween.kill()
-		_load_step_tween = null
-	if not busy or not %Loading.visible or DisplayServer.get_name() == "headless" or not is_processing():
+	_load_step_tween = null
+	if instant or not %Loading.visible or not _ui_stack.should_animate():
+		load_previous_step.hide()
 		load_step.modulate.a = 1.0
 		load_step.text = label
 		return
+	# При быстрой смене этапов оставляем наиболее читаемую подпись предыдущего перехода.
+	if not load_previous_step.visible or load_step.modulate.a >= load_previous_step.modulate.a:
+		load_previous_step.text = load_step.text
+		load_previous_step.modulate.a = load_step.modulate.a
+	load_previous_step.show()
+	load_step.text = label
+	load_step.modulate.a = 1.0 - load_previous_step.modulate.a
 	_load_step_tween = create_tween()
-	_load_step_tween.tween_property(load_step, "modulate:a", 0.0, 0.06).set_trans(Tween.TRANS_SINE)
-	_load_step_tween.tween_callback(func() -> void:
-		var sec := (Time.get_ticks_msec() - _load_started_ms) / 1000
-		_load_elapsed = sec
-		load_step.text = "%s\nПрошло: %d:%02d" % [_load_label, sec / 60, sec % 60])
-	_load_step_tween.tween_property(load_step, "modulate:a", 1.0, 0.06).set_trans(Tween.TRANS_SINE)
-	_load_step_tween.tween_callback(func() -> void:
+	_load_step_tween.set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_load_step_tween.tween_property(load_previous_step, "modulate:a", 0.0, LOAD_STEP_SECONDS)
+	_load_step_tween.tween_property(load_step, "modulate:a", 1.0, LOAD_STEP_SECONDS)
+	_load_step_tween.chain().tween_callback(func() -> void:
+		load_previous_step.hide()
 		_load_step_tween = null)
 
 
-func _on_world_ready(loaded: WorldLoader, cancel_flag: CancelFlag = null) -> void:
+func _on_world_ready(loaded: WorldLoader) -> void:
+	if _load_cancel_requested or (loaded != null and loaded.cancelled):
+		_finish_load()
+		return
+	if loaded == null:
+		_finish_load("Мир не подготовлен", "Генерация прервалась с ошибкой. Подробности в журнале Godot.")
+		return
 	loaded.timings.ready_queue_ms = (Time.get_ticks_usec() - int(loaded.timings.get("ready_queued_us", Time.get_ticks_usec()))) / 1000.0
 	loaded.timings.erase("ready_queued_us")
-	if gen_thread != null and gen_thread.is_started():
-		gen_thread.wait_to_finish()
-	if loaded.cancelled or _load_cancel_requested or _load_quit_requested or (cancel_flag != null and cancel_flag.is_cancelled()):
-		busy = false
-		var want_quit := _load_quit_requested
-		_load_cancel_requested = false
-		_load_quit_requested = false
-		_load_cancel_flag = null
-		if want_quit:
-			_exit_game()
-		else:
-			_show("menu", {sound = &"panel_close"})
-		return
 	if not loaded.error.is_empty():
-		busy = false
-		_load_cancel_flag = null
-		_show("menu")
-		_message("Мир не подготовлен", loaded.error)
+		_finish_load("Мир не подготовлен", loaded.error)
 		return
-	if not _pending_save.is_empty() and not load(GAME_SCRIPT).can_restore(_pending_save, loaded.world):
-		busy = false
-		_load_cancel_flag = null
-		_show("menu")
-		_message("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Нажмите «Создать заново», чтобы пересоздать этот мир и начать новое путешествие.")
-		return
-	# GameWorld.start идёт в главном потоке: подпись должна успеть показаться до него
+	# Даём подписи проявиться перед синхронным созданием сцены.
 	_set_progress(0.97, "Окружение вокруг игрока")
 	var phase_started := Time.get_ticks_usec()
 	await get_tree().process_frame
-	if _load_cancel_requested or _load_quit_requested or (cancel_flag != null and cancel_flag.is_cancelled()):
-		busy = false
-		var want_quit := _load_quit_requested
-		_load_cancel_requested = false
-		_load_quit_requested = false
-		_load_cancel_flag = null
-		if want_quit:
-			_exit_game()
-		else:
-			_show("menu", {sound = &"panel_close"})
+	while _load_step_tween != null and not _load_cancel_requested:
+		await get_tree().process_frame
+	if _load_cancel_requested:
+		_finish_load()
+		return
+	if not _pending_save.is_empty() and not load(GAME_SCRIPT).can_restore(_pending_save, loaded.world):
+		_finish_load("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Нажмите «Создать заново», чтобы пересоздать этот мир и начать новое путешествие.")
 		return
 	loaded.timings.ready_frame_wait_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	phase_started = Time.get_ticks_usec()
 	game = (load(GAME_SCENE) as PackedScene).instantiate()
+	game.startup_input_locked = true
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)
 	loaded.timings.game_scene_create_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	phase_started = Time.get_ticks_usec()
 	game.start(loaded, hud, _pending_save)
 	if not loaded.error.is_empty():
-		_free_game()
-		hud.visible = false
-		busy = false
-		_load_cancel_flag = null
-		_show("menu")
-		_message("Мир не подготовлен", loaded.error)
+		_finish_load("Мир не подготовлен", loaded.error)
 		return
+	game.set_physics_process(false)
 	loaded.timings.game_start_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
-	_set_progress(1.0, "Готово")
-	var cancel_btn := get_node_or_null("%CancelLoad") as Button
-	if cancel_btn != null:
-		cancel_btn.visible = false
-	# 15.1: первые кадры мира собирают шейдеры и буферы (стресс-тест: кадры 47–67 мс и прогрев до 260 мс у точки
-	# появления) — пусть это идёт под заставкой загрузки, а не на глазах игрока. Инструменты (main не главная сцена)
-	# берут мир сразу, как раньше.
+	# Рендер и стриминг работают под заставкой, физика ждёт начала перехода.
+	_set_progress(0.99, "Прогрев 3D-сцены")
 	phase_started = Time.get_ticks_usec()
-	for i in 30 if _progress_enabled else 0:
+	var warmup_frames := LOAD_WARMUP_FRAMES if _progress_enabled and DisplayServer.get_name() != "headless" else 0
+	for i in warmup_frames:
 		await get_tree().process_frame
-		if game == null or _load_cancel_requested or _load_quit_requested or Time.get_ticks_usec() - phase_started > 400000:
+		if game == null or _load_cancel_requested or get_window().mode == Window.MODE_MINIMIZED:
 			break
 	loaded.timings.first_frames_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
-	if _load_cancel_requested or _load_quit_requested or (cancel_flag != null and cancel_flag.is_cancelled()):
-		_free_game()
-		hud.visible = false
-		busy = false
-		var want_quit := _load_quit_requested
-		_load_cancel_requested = false
-		_load_quit_requested = false
-		_load_cancel_flag = null
-		if want_quit:
-			_exit_game()
-		else:
-			_show("menu", {sound = &"panel_close"})
+	if _load_cancel_requested or game == null:
+		_finish_load()
 		return
-	if game == null:
-		busy = false
-		_load_cancel_flag = null
+	_set_progress(1.0, "Готово")
+	hud.set_map_visible(false)
+	if _progress_enabled or _ui_stack.force_animate_in_headless:
+		_active_screen = ""
+		# Пролёт начинается вместе с проявлением мира. Для сохранений стоим до передачи управления.
+		game.set_physics_process(game.opening_active())
+		var dissolve := _ui_stack.dissolve_to_world(%Back, %Loading, LOAD_DISSOLVE_SECONDS)
+		while dissolve != null and dissolve.is_running() and not _load_cancel_requested and game != null:
+			await get_tree().process_frame
+	else:
+		_show("", {instant = true})
+	if _load_cancel_requested or game == null:
+		_finish_load()
 		return
+	_set_backdrop_mode("")
 	_save_elapsed = 0.0
 	_saved_discoveries = hud.map_place_count()
 	game.quests.changed.connect(func() -> void: _save_elapsed = 60.0)
@@ -1678,20 +1683,14 @@ func _on_world_ready(loaded: WorldLoader, cancel_flag: CancelFlag = null) -> voi
 	if _pending_save.is_empty():
 		_save_current()
 	loaded.timings.initial_save_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	_pending_save = {}
+	bar.value = 1.0
 	busy = false
 	_load_cancel_flag = null
-	_load_cancel_requested = false
-	_load_quit_requested = false
-	hud.set_map_visible(false)
-	var show_hud: bool = not game.opening_active()
-	if _ui_stack != null and _progress_enabled and DisplayServer.get_name() != "headless":
-		_fade_hud(show_hud, 0.22)
-		_active_screen = ""
-		_ui_stack.dissolve_to_world(%Back, %Loading, 0.28)
-		_set_backdrop_mode("")
-	else:
-		_fade_hud(show_hud, 0.0)
-		_show("", {instant = true})
+	game.startup_input_locked = false
+	game.set_physics_process(true)
+	game.sync_mouse_mode()
+	_fade_hud(not game.opening_active(), 0.22 if _progress_enabled else 0.0)
 	loaded.timings.published_us = Time.get_ticks_usec()
 
 
@@ -1736,7 +1735,7 @@ func _fade_hud(show_hud: bool, duration: float) -> void:
 
 
 func _toggle_pause() -> void:
-	if game == null:
+	if game == null or busy:
 		return
 	if _is_screen("settings"):
 		if display_options != null and display_options.close_open_popup():

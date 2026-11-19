@@ -49,8 +49,14 @@ func run() -> void:
 	check(photo.reads == 1 and photo.shots.size() == 1 and photo._busy and photo._cooldown > 0,
 		"снимок сохраняется, перезарядка начинается без корутины")
 	photo.shoot()
-	check(photo.reads == 1 and not RenderingServer.frame_post_draw.is_connected(photo._capture_frame),
-		"перезарядка запрещает повторную съёмку")
+	check(photo.reads == 1 and not RenderingServer.frame_post_draw.is_connected(photo._capture_frame)
+		and photo.feedback.play_counts.get(&"error_deny", 0) == 1,
+		"перезарядка даёт отказ и не запускает повторную съёмку")
+	photo._deny_tween.custom_step(0.03)
+	check(is_equal_approx(photo._prompt_offset, 5.0), "при отказе подсказка сдвигается на 5 px")
+	photo._deny_tween.custom_step(0.15)
+	check(is_zero_approx(photo._prompt_offset), "через 180 мс подсказка возвращается на место")
+	await check_plaque_lock(photo)
 	photo._process(PhotoCamera.SHUTTER_COOLDOWN)
 	check(not photo._busy, "перезарядка завершается в _process")
 	photo.shoot()
@@ -82,3 +88,22 @@ func run() -> void:
 	await process_frame
 	print("photo_lifecycle_test: %d failures" % fails)
 	quit(1 if fails else 0)
+
+
+func check_plaque_lock(photo: TestPhoto) -> void:
+	var camera := Camera3D.new()
+	root.add_child(camera)
+	await process_frame
+	photo.plaques = [{id = "plaque", name = "Обелиск", at = Transform3D(Basis.IDENTITY, Vector3(0, 0, -3)), size = Vector2(0.6, 0.4)}]
+	photo._track_plaques(camera)
+	photo._track_plaques(camera)
+	check(photo.plaque_view.get("state") == "ok" and photo.feedback.play_counts.get(&"photo_focus_lock", 0) == 1,
+		"зелёная рамка даёт один тик захвата")
+	camera.position.z = 4.0
+	photo._track_plaques(camera)
+	check(photo.plaque_view.get("state") == "far" and photo.feedback.play_counts.get(&"photo_focus_lock", 0) == 1,
+		"выход за дистанцию фокуса не играет тик")
+	camera.position.z = 0.0
+	photo._track_plaques(camera)
+	check(photo.feedback.play_counts.get(&"photo_focus_lock", 0) == 2, "повторный захват таблички снова слышен")
+	camera.queue_free()

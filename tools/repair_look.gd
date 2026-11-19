@@ -11,6 +11,20 @@ const Fixture := preload("res://tools/trail_world_network_test.gd") # общий
 const TILE := GameConfig.TILE
 const DT := 1.0 / 60.0
 const CENTER := Vector2(96.5, 96.5)
+const UiAudio := preload("res://scripts/ui/ui_audio.gd")
+
+class TestControls extends Controls:
+	var pulses: Array[Vector3] = []
+	func rumble(weak: float, strong: float, seconds: float) -> void:
+		pulses.append(Vector3(weak, strong, seconds))
+
+
+class TestAudio extends UiAudio:
+	var pitches: Array[float] = []
+	func play(kind: StringName, pitch := 1.0) -> void:
+		if kind == &"repair_work":
+			pitches.append(pitch)
+		super(kind, pitch)
 
 var out := ""
 var failures := 0
@@ -125,7 +139,7 @@ func run() -> void:
 	if shots:
 		await _shots(parent, "broken", [pier_at, bench_whole, bench_broken, Vector2(cairn_whole.x, cairn_whole.y), Vector2(cairn_broken.x, cairn_broken.y)])
 	var before: Node = layer._nodes[bench_id]
-	layer.repair(bench_id)
+	_check_repair_hold(bench_id, pier_id)
 	layer.repair(pier_id)
 	layer.repair(cairn_id)
 	check(not repairs.is_broken(bench_id) and layer._nodes.get(bench_id) != before and not repairs.is_broken(pier_id) and not repairs.is_broken(cairn_id), "после ремонта состояние сменилось, модели пересобраны")
@@ -140,6 +154,107 @@ func run() -> void:
 		await _shots(parent, "fixed", [pier_at, bench_whole, bench_broken, Vector2(cairn_whole.x, cairn_whole.y), Vector2(cairn_broken.x, cairn_broken.y)])
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
+
+
+func _check_repair_hold(bench_id: String, other_id: String) -> void:
+	var shell: Node = load("res://scenes/main.tscn").instantiate()
+	shell.set_script(null)
+	root.add_child(shell)
+	var hud := shell.get_node("%Hud") as Hud
+	hud.world = w
+	hud.show()
+	var sounds := TestAudio.new()
+	hud.add_child(sounds)
+	hud.interaction_audio = sounds
+	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
+	root.add_child(game)
+	game.set_process(false)
+	game.set_physics_process(false)
+	game.services = ServiceScope.new()
+	var pad := TestControls.new()
+	game.services.controls = pad
+	game.world = w
+	game.heights = h
+	game.hud = hud
+	game.player = PlayerState.new()
+	game.bike = BikeRide.new()
+	game.crash = BikeCrash.new()
+	game.add_child(game.crash)
+	game.photo = GameWorld.PhotoCamera.new()
+	game.add_child(game.photo)
+	game.quests = GameWorld.Quests.new()
+	game.repair_layer = layer
+
+	var center: Vector3 = layer._specs[bench_id].box.at.origin
+	var eye := center + Vector3(0, 0.45, 2.0)
+	game.player.x = eye.x
+	game.player.z = eye.z
+	game.player.feet = eye.y - GameConfig.EYE
+	game.camera.position = eye
+	game.camera.look_at(center)
+	var bench := game._aim()
+	check(bench.get("id") == bench_id, "прицел захватывает сломанную лавку")
+	game._target = bench
+	game._update_hints()
+	hud.note_interaction_target(bench_id)
+	hud.note_interaction_target(bench_id)
+	hud._reticle_tween.custom_step(0.065)
+	check(sounds.play_counts.get(&"reticle_target_lock", 0) == 1 and hud._reticle_open > 1.0,
+		"прицел раскрывается с EaseOutBack и одним звуком на объект")
+	hud._reticle_tween.custom_step(0.045)
+	check(is_equal_approx(hud._reticle_open, 1.0), "уголки приходят на место за 110 мс")
+
+	Input.action_press("interact")
+	game._tick_repair(DT)
+	var arc := hud._repair
+	check(arc.visible and is_equal_approx(arc.scale.x, 0.88), "дуга появляется в масштабе 0.88")
+	arc._motion.custom_step(0.10)
+	for i in 26:
+		game._tick_repair(DT)
+	check(sounds.pitches == [0.9] and pad.pulses.size() == 1 and is_equal_approx(pad.pulses[0].x, 0.12),
+		"ровно на 0.45 с звучит первая отметка и идёт лёгкий импульс")
+	arc._motion.custom_step(0.055)
+	check(is_equal_approx(arc.scale.x, 1.02), "дуга откликается микропульсацией")
+	Input.action_release("interact")
+	game._tick_repair(DT)
+	var released_value := arc.value
+	arc._motion.custom_step(0.09)
+	check(sounds.play_counts.get(&"repair_reset", 0) == 1 and arc.value < released_value
+		and arc.modulate.a < 1.0 and arc.visible, "отпускание запускает спад дуги и звук сброса")
+	arc._motion.custom_step(0.091)
+	check(not arc.visible and repairs.is_broken(bench_id), "через 180 мс дуга скрыта, лавка ещё сломана")
+
+	Input.action_press("interact")
+	game._tick_repair(1.5)
+	game._target = {kind = "repair", id = other_id}
+	game._tick_repair(DT)
+	check(game._fix_target == other_id and is_equal_approx(game._fix_elapsed, DT),
+		"перевод взгляда на другой объект не переносит удержание")
+	game._target = {}
+	game._tick_repair(DT)
+	check(game._fix_target.is_empty() and sounds.play_counts.get(&"repair_reset", 0) == 3,
+		"потеря цели сбрасывает удержание при нажатой кнопке")
+
+	sounds.pitches.clear()
+	pad.pulses.clear()
+	game._target = bench
+	for i in 239:
+		game._tick_repair(DT)
+	check(repairs.is_broken(bench_id) and sounds.pitches.size() == 8 and pad.pulses.size() == 8
+		and is_equal_approx(sounds.pitches.front(), 0.9) and is_equal_approx(sounds.pitches.back(), 1.25),
+		"до 4 с идут восемь повышающихся отметок, объект ещё сломан")
+	game._tick_repair(DT)
+	game._tick_repair(DT) # Наведение ещё не обновилось, но завершение должно быть однократным.
+	Input.action_release("interact")
+	check(not repairs.is_broken(bench_id) and sounds.play_counts.get(&"repair_done", 0) == 1
+		and pad.pulses.size() == 9 and pad.pulses.back().is_equal_approx(Vector3(0.35, 0.5, 0.12))
+		and arc.visible and is_equal_approx(arc.value, 1.0), "на 4 с смена модели, полная дуга, стук и тяжёлый импульс")
+	arc._motion.custom_step(0.08)
+	check(is_equal_approx(arc._flash, 1.0) and arc.scale.x > 1.0, "после ремонта дуга белеет и расширяется")
+	arc._motion.custom_step(0.181)
+	check(not arc.visible, "вспышка длится 260 мс")
+	game.queue_free()
+	shell.queue_free()
 
 
 ## Выйти по причалу от суши до конца и вернуться: с настила не упасть (ноги на отметке), вода по бокам не пускает
