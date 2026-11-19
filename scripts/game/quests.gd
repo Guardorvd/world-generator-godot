@@ -37,6 +37,8 @@ const KINDS := {
 ## Вернуть вид на доску — добавить его сюда (снимок, летопись, посещение и обход включаются вместе).
 const OFFERED := ["supplies", "fragile", "repair", "obelisks", "beacons", "paint"]
 const SIGHT_KINDS := ["photo", "chronicle", "visit", "tour"]
+## 19.11.2026: на доске не больше трёх листков. Отбор — board_pick: разные виды, взятое с этой доски остаётся
+const BOARD_OFFERS := 3
 ## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
 const CARGO_KINDS := ["delivery", "fragile", "supplies", "beacons", "paint"]
 ## Шаги. reach — дойти до места; pickup — взять сумку у доски (E); carry — довезти сумку;
@@ -281,6 +283,37 @@ static func _role(place: Dictionary) -> String:
 
 static func _id(kind: String, here: Dictionary, target: Dictionary) -> String:
 	return "%s:%s>%s" % [kind, here.key, target.key]
+
+
+## Три листка доски из предложений offers (порядок offers сохраняется). Взятое задание (active_id) остаётся,
+## остальные — разных видов в порядке, устойчивом для доски giver и счёта done (другая доска — другой набор,
+## после выполненного задания набор меняется). Виды повторяются, только если разных меньше трёх
+static func board_pick(offers: Array, giver: String, done_count: int, active_id := "") -> Array:
+	if offers.size() <= BOARD_OFFERS:
+		return offers
+	var order := range(offers.size())
+	order.sort_custom(func(a: int, b: int) -> bool:
+		var qa: QuestData = offers[a]
+		var qb: QuestData = offers[b]
+		if (qa.id == active_id) != (qb.id == active_id):
+			return qa.id == active_id
+		return hash("%s|%d|%s" % [giver, done_count, qa.id]) < hash("%s|%d|%s" % [giver, done_count, qb.id]))
+	var chosen: Array[int] = []
+	var kinds := {}
+	for pass_i in 2:
+		for i: int in order:
+			if chosen.size() >= BOARD_OFFERS:
+				break
+			var q: QuestData = offers[i]
+			if i in chosen or (pass_i == 0 and kinds.has(q.kind)):
+				continue
+			chosen.append(i)
+			kinds[q.kind] = true
+	chosen.sort()
+	var out: Array = []
+	for i: int in chosen:
+		out.append(offers[i])
+	return out
 
 
 func _offers_field(kind: String, giver: String, route: Callable) -> bool:

@@ -58,7 +58,14 @@ static func _ray_box(o: Vector3, d: Vector3, half: Vector3) -> float:
 
 
 
+## Листки доски village: не больше Quests.BOARD_OFFERS из всех предложений (offers_all)
 func offers(village: Variant, catalog: Variant = null) -> Array:
+	var here_key := WorldData.place_id("settlement", village.x, village.y)
+	return Quests.board_pick(offers_all(village, catalog), here_key, quests.done, quests.active.id) # 19.11.2026
+
+
+## Все предложения доски village (Quests.offers) — до отбора трёх листков
+func offers_all(village: Variant, catalog: Variant = null) -> Array:
 	var here := target(world.place(WorldData.place_id("settlement", village.x, village.y)))
 	var neighbors: Array = []
 	for r: Dictionary in world.routes(here.id):

@@ -129,7 +129,7 @@ func _offers(quests: Quests) -> Array:
 	board.heights = heights
 	board.visited = {}
 	board.is_broken = _broken
-	return board.offers(world.settlements[0], places)
+	return board.offers_all(world.settlements[0], places)
 
 
 ## Сломанные объекты стенда: лавка — всегда, остальные по хешу мира (сид 0)
@@ -526,6 +526,83 @@ func _paint_look() -> void:
 	vegetation.free()
 
 
+static func home_key(home: Variant) -> String:
+	return WorldData.place_id("settlement", home.x, home.y)
+
+
+## 19.11.2026: щит доски в мире (BoardDisplay): рисуется в текстуру один раз, потом ничего не делает каждый кадр
+func _board_in_world(home: SettlementData, quests: Quests, picked: Array) -> void:
+	hud.settlement_panel.hide()
+	hud.visible = false
+	var at := Transform3D(Basis.IDENTITY, Vector3(30.0, 0.0, 0.0))
+	var panel := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(1.8, 0.95, 0.13)
+	panel.mesh = box
+	var wood := StandardMaterial3D.new()
+	wood.albedo_color = Color(0.25, 0.17, 0.11)
+	panel.material_override = wood
+	var face := at.translated_local(Vector3.UP * 1.35)
+	panel.transform = face
+	root.add_child(panel)
+	var label := Label3D.new()
+	label.text = "МАРШРУТЫ"
+	label.transform = face.translated_local(Vector3(0, 0, 0.08))
+	root.add_child(label)
+	var display := preload("res://scripts/render/board_display.gd").new()
+	root.add_child(display)
+	var offers_calls := [0]
+	display.setup(world, quests, hud.map_data, func() -> Array: return [{at = face, place = home, label = label}],
+		func(_place: Variant) -> Array:
+			offers_calls[0] += 1
+			return picked,
+		func(place: Variant) -> Array: return hud.board_places(place))
+	var cam := camera.global_transform
+	camera.look_at_from_position(face * Vector3(0.0, 0.05, 2.1), face.origin, Vector3.UP)
+	var far_eye := face * Vector3(0.0, 0.0, 60.0)
+	display.tick(far_eye)
+	_check(display.builds == 0 and not display._quad.visible and display.live_work() == 0, "дальняя доска: щита с заданиями нет, работы нет")
+	var eye := face * Vector3(0.0, 0.0, 2.0)
+	display._next_check_ms = 0  # проверка раз в CHECK_S — в стенде без ожидания
+	var t0 := Time.get_ticks_usec()
+	display.tick(eye)
+	print("BOARD_BUILD_MS=%.2f" % ((Time.get_ticks_usec() - t0) / 1000.0))
+	_check(display.builds == 1 and not label.visible, "у доски щит нарисован, надпись «МАРШРУТЫ» спрятана")
+	var worst := 0.0
+	var frames := 0
+	for i in 60:
+		if not display._steps.is_empty():
+			var t1 := Time.get_ticks_usec()
+			display._process(0.0)
+			worst = maxf(worst, (Time.get_ticks_usec() - t1) / 1000.0)
+		await process_frame
+		frames += 1
+		if display.live_work() == 0:
+			break
+	print("BOARD_STEP_MAX_MS=%.2f BOARD_FRAMES=%d" % [worst, frames])
+	await _shot("quest_board_world")
+	_check(display.live_work() == 0 and display._viewport.process_mode == Node.PROCESS_MODE_DISABLED,
+		"готовый щит: ни обработки, ни перерисовки вьюпорта")
+	display._next_check_ms = 0
+	display.tick(eye)
+	_check(display.builds == 1 and offers_calls[0] == 1, "повторная проверка у той же доски ничего не пересобирает")
+	quests.changed.emit()
+	display.tick(eye)  # invalidate() сбрасывает ожидание проверки
+	_check(display.builds == 2, "задания изменились — щит перерисован один раз")
+	for i in 60:
+		await process_frame
+		if display.live_work() == 0:
+			break
+	display._next_check_ms = 0
+	display.tick(far_eye)
+	_check(label.visible and not display._quad.visible, "отъехал — щит погас, надпись вернулась")
+	display.queue_free()
+	panel.queue_free()
+	label.queue_free()
+	camera.global_transform = cam
+	hud.visible = true
+
+
 func _shot(name: String) -> void:
 	await process_frame
 	await process_frame
@@ -600,7 +677,15 @@ func _run() -> void:
 	var pins := hud.board_places(home)
 	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	var buttons: Array[Node] = hud.settlement_panel.find_children("*", "Button", true, false)
-	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 7, "на доске семь кнопок «Взять»")
+	# 19.11.2026: листков не больше трёх (Quests.BOARD_OFFERS) + карточка серии обелисков
+	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == Quests.BOARD_OFFERS + 1, "на доске три листка и серия обелисков")
+	var picked := Quests.board_pick(offers, home_key(home), 0)
+	var kinds := {}
+	for q: QuestData in picked:
+		kinds[q.kind] = true
+	_check(picked.size() == Quests.BOARD_OFFERS and kinds.size() == Quests.BOARD_OFFERS and Quests.board_pick(offers, home_key(home), 0) == picked,
+		"отбор доски: три задания разных видов, устойчиво")
+	_check(Quests.board_pick(offers, home_key(home), 0, offers[6].id).has(offers[6]), "взятое задание остаётся среди листков")
 	_check(pins.size() == 3 and pins[1].name == "Колодец" and pins[2].name == "Тихое", "на доске два ближайших места")
 	var travels := []
 	hud.settlement_panel.travel_requested.connect(hud.ask_travel)
@@ -612,6 +697,7 @@ func _run() -> void:
 	_check(travels == [_place("Тихое").key], "подтверждение передаёт выбранное место")
 	await _shot("quest_board")
 	_check(hud.get_global_rect().encloses(hud.settlement_panel.get_global_rect()), "доска помещается на экране 720 px")
+	await _board_in_world(home, quests, picked)
 	# взять маяки кнопкой: текущее задание со шагами и «Отказаться»
 	var accepted := []
 	hud.settlement_panel.quest_accepted.connect(func(q: QuestData) -> void: accepted.append(q))

@@ -14,6 +14,8 @@ const MapData = preload("res://scripts/ui/local_map_data.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const MUTED := HudStyle.MUTED
 const CARD_W := 270.0
+const QuestNotice = preload("res://scripts/ui/quest_notice.gd")
+const NOTICE_SIZE := Vector2(340, 226)
 
 var _box: VBoxContainer
 var _drop_button: Button
@@ -150,7 +152,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	bicycle.disabled = bicycle_near
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.y = 202
+	scroll.custom_minimum_size.y = 270  # заголовок и листки объявлений целиком
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.follow_focus = true
 	_box.add_child(scroll)
@@ -245,27 +247,14 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var thanks: int = quests.by_giver.get(here, 0)
 	_label("Задания поселения «%s»%s" % [settlement.name, " · выполнено для него: %d" % thanks if thanks > 0 else ""], 14, page, MUTED)
-	var cards := GridContainer.new()
-	cards.columns = mini(4, offers.size())
-	cards.add_theme_constant_override("h_separation", 8)
-	cards.add_theme_constant_override("v_separation", 8)
-	page.add_child(cards)
-	for q: QuestData in offers:
-		var card := _card(cards, Quests.KINDS[q.kind].color, false)
-		var head := HBoxContainer.new()
-		card.add_child(head)
-		var kind: Dictionary = Quests.KINDS[q.kind]
-		var title := _titled(q, 16, head)
-		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		title.clip_text = true
-		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
-		take.custom_minimum_size = Vector2(96, 44)
-		take.tooltip_text = "Взять задание: %s" % kind.title.to_lower()
-		var length := Util.distance_text(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
-		_label("%s · %s · шагов: %d" % [kind.title, length, q.steps.size()], 13, card, kind.color)
-		_label(q.text, 13, card, MUTED, CARD_W)
-
+	# 19.11.2026: задания — листки объявлений на доске (QuestNotice), не больше Quests.BOARD_OFFERS
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 24)
+	page.add_child(row)
+	for q: QuestData in offers.slice(0, Quests.BOARD_OFFERS):
+		var distance := center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE
+		row.add_child(QuestNotice.build(q, NOTICE_SIZE, 1.0, func() -> void: quest_accepted.emit(q), "", distance))
 
 func _reset_drop_confirmation() -> void:
 	_drop_generation += 1

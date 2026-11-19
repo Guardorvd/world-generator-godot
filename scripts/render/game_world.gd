@@ -37,6 +37,8 @@ const PaintLayer = preload("res://scripts/render/paint_layer.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BikePlacement = preload("res://scripts/render/bike_placement.gd")
 const HudStyle := preload("res://scripts/ui/hud_style.gd")
+const BoardDisplay = preload("res://scripts/render/board_display.gd")
+var board_display: BoardDisplay  # щит ближней доски с картой и заданиями
 var bike_placement: BikePlacement
 var place_names: PlaceNames
 var photo: PhotoCamera
@@ -528,6 +530,14 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		return {explored = hud.map_journal.explored_cells(Quests.EXPLORED_CELL), from = hud.map_journal.came_from(Vector2(player.x, player.z))}
 	interaction_service.message.connect(hud.toast_now)
 	interaction_service.close_requested.connect(_close_settlement)
+	# 19.11.2026: на щите ближней доски — карта и листки заданий (рисуются в текстуру один раз)
+	board_display = BoardDisplay.new()
+	board_display.name = "BoardDisplay"
+	add_child(board_display)
+	board_display.setup(world, quests, hud.map_data,
+		func() -> Array: return _boards + (regions.boards if regions != null else []),
+		func(place: Variant) -> Array: return _offers(place),
+		func(place: Variant) -> Array: return hud.board_places(place))
 	bike_controller.message.connect(hud.toast.bind(&"warning"))
 	bike_controller.mount_changed.connect(_bike_mount_changed)
 	bike_controller.recovered.connect(func() -> void:
@@ -1556,6 +1566,8 @@ func _process(delta: float) -> void:
 		return
 	if _live_veg_dirty:
 		_tick_live_vegetation()
+	if board_display != null:
+		board_display.tick(Vector3(player.x, player.feet + GameConfig.EYE, player.z))
 	var t0 := Time.get_ticks_usec()
 	tick_us.frames = tick_us.get("frames", 0) + 1
 	hud.set_summary_blocked(_opening or crash.active() or _placing_bike())

@@ -136,7 +136,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield, regional_p
 			batch.add_detail(details_lib.bench, bench, Color.html("#755337"), opaque_mat)
 		var board: Transform3D = yard.board
 		var face := _add_board_label(parent, board)
-		boards.append({at = face, place = s})
+		boards.append({at = face, place = s, label = parent.get_child(-1)}) # label — надпись «МАРШРУТЫ» (BoardDisplay прячет её под щитом с заданиями)
 		var board_tint := SettlementModels.cell_tints(style, 0, false)
 		for side: float in [-0.7, 0.7]:
 			batch.add_lod(board_post, board.translated_local(Vector3(side, 0.9, 0)), [opaque_mat], 0, board_tint, false)
@@ -702,7 +702,7 @@ static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield, co
 				batch.add(bench_leg, bench.translated_local(Vector3(leg, 0.23, 0)), house.timber)
 		var board: Transform3D = yard.board
 		var face := _add_board_label(parent, board)
-		boards.append({at = face, place = s})
+		boards.append({at = face, place = s, label = parent.get_child(-1)}) # label — надпись «МАРШРУТЫ» (BoardDisplay прячет её под щитом с заданиями)
 		for side: float in [-0.7, 0.7]:
 			batch.add(board_post, board.translated_local(Vector3(side, 0.9, 0)), house.timber)
 		batch.add(board_mesh, face, door_m)
