@@ -90,6 +90,9 @@ const GRASS_GROW := 0.35
 ## 14.11.2026: дернина — ближний плотный ковёр мелкой травы — отдельный слой со своим конвейером: GroundCarpet.
 const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
+## 19.11.2026: тень подлеска (подрост, молодые деревья, сосенки, лещина) — только ближе этого к игроку, м
+## (шейдер shadow_far: сжимается в последние 15 м). Валежник, пни и валуны отбрасывают тень на всю дальность теней.
+const UNDERSTORY_SHADOW_FAR := 70.0
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
 const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
 ## 11.11.2026: рисунок коры в шейдере ствола — только у деревьев: 1 — пластины и борозды, 2 — берёза, 0 — нет.
@@ -347,6 +350,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
 		if shadows and kind < 0:
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+			mat.set_shader_parameter("shadow_far", UNDERSTORY_SHADOW_FAR)
 		# Один MultiMesh покрывает всю раскладку: её центр не является расстоянием до каждого растения.
 		# Дальность и растворение задаёт общий шейдер, AABB оставляем для отсечения по фрустуму.
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,

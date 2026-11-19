@@ -62,6 +62,11 @@ uniform bool directional_carpet = false;
 // порогов на полосах LOD1_* и LOD2_*: пиксель берёт ровно один уровень, без дыр и двойной листвы.
 // Расстояния — VegetationLayer.LOD_STEPS (там же диапазоны видимости узлов).
 uniform int lod_level = -1;
+// 19.11.2026: тень только вблизи игрока (м; 0 — без ограничения). Подлесок — один MultiMesh на весь круг 300 м и
+// попадал во все 4 каскада теней (~72 % теневых треугольников леса); дальше shadow_far его тень в 6–8 м
+// от растения не различить. В полосе SHADOW_FAR_BAND тень сжимается к основанию, а не исчезает разом.
+uniform float shadow_far = 0.0;
+const float SHADOW_FAR_BAND = 15.0;
 const float LOD1_D = 72.0;
 const float LOD1_BAND = 20.0;
 const float LOD2_D = 165.0;
@@ -154,6 +159,15 @@ void vertex() {
 		float detail_dist = directional_carpet ? carpet_detail_distance(origin.xz - veg_center) : dist;
 		float keep_detail = mix(1.0, detail_keep, smoothstep(detail_full, detail_far, detail_dist));
 		v_fade *= clamp((keep_detail - UV2.x) * 10.0 + 1.0, 0.0, 1.0);
+	}
+	// Проход теней солнца — ортогональная проекция (у камеры игры — перспективная).
+	if (shadow_far > 0.0 && PROJECTION_MATRIX[3][3] > 0.5) {
+		float shadow_keep = 1.0 - smoothstep(shadow_far - SHADOW_FAR_BAND, shadow_far, dist);
+		if (shadow_keep <= 0.0) {
+			v_fade = 0.0;
+		} else {
+			VERTEX *= shadow_keep;
+		}
 	}
 	// Скрытый LOD не тратит вычисления на ветер, цвет и облака.
 	if (v_fade <= 0.0 || lod_hidden) {

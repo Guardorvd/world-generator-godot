@@ -878,6 +878,9 @@ func _group_world() -> void:
 		] + _shadow_parts(sun, game, relight) + [
 			["msaa", "сглаживание MSAA", func() -> void: root.msaa_3d = Viewport.MSAA_DISABLED, func() -> void: root.msaa_3d = msaa],
 			# 19.11: умолчание 4x → 2x; при базе 2x строка ничего не меняет
+			# 19.11: тень подлеска только ближе 70 м (shadow_far); отрицательный выигрыш — во что обходилась вся дальность
+			["under_shadow_far", "тень подлеска только ближе 70 м (вся дальность теней)", _under_shadow_far.bind(game.vegetation, 0.0),
+				_under_shadow_far.bind(game.vegetation, VegetationLayer.UNDERSTORY_SHADOW_FAR)],
 			["msaa2", "MSAA 4x (2x вместо него)", func() -> void: root.msaa_3d = Viewport.MSAA_2X, func() -> void: root.msaa_3d = msaa],
 			["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
 			["vegetation", "ближняя растительность", _show.bind([game.vegetation], false), _show.bind([game.vegetation], true)],
@@ -892,6 +895,13 @@ func _group_world() -> void:
 			["flora_low", "качество растительности выше низкого", func() -> void: _veg_level(game.vegetation, -1, 0), func() -> void: _veg_level(game.vegetation, -1, settings.flora)],
 			["all_low", "все настройки выше минимума", low, high],
 		], step, game.vegetation)
+		if "--shots" in args:
+			_under_shadow_far(game.vegetation, 0.0)
+			await _settle(game.vegetation, step)
+			await _shot("forest_under_shadow_all", relight)
+			_under_shadow_far(game.vegetation, VegetationLayer.UNDERSTORY_SHADOW_FAR)
+			await _settle(game.vegetation, step)
+			await _shot("forest_under_shadow_near", relight)
 		for h: Array in [[6.5, "dawn", "рассвет"], [23.0, "night", "ночь"]]:
 			hour = h[0]
 			await _case("world.hour_" + h[1], "Мир: тот же вид, " + h[2], TOGGLE, step)
@@ -1174,6 +1184,13 @@ func _veg_tris(layer: VegetationLayer, view: String) -> void:
 	print("VEG_TRIS %s всего %d в дальности (вид: узлов, экземпляров, треугольников)" % [view, total])
 	for k: String in keys.slice(0, 40):
 		print("VEG_TRIS  %-34s %5d %8d %9d" % [k, rows[k][0], rows[k][1], rows[k][2]])
+
+
+## Подлесок с тенью (не валежник и камни: у них base от Floor.FIRST) — тот же отбор, что в VegetationLayer
+func _under_shadow_far(layer: VegetationLayer, far: float) -> void:
+	for u: Dictionary in layer.understory:
+		if u.base < _UNDER_NAMES.size() and u.node.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			(u.node.material_override as ShaderMaterial).set_shader_parameter("shadow_far", far)
 
 
 func _show_carpet(layer: VegetationLayer, on: bool) -> void:
