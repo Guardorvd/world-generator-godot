@@ -23,6 +23,9 @@ const PICK := 17.0
 const MIN_SCALE := 0.06
 const MAX_SCALE := 2.2
 const STROKE_SETTLE_USEC := 120000
+const PAD_DEADZONE := 0.2
+const PAD_PAN := 620.0      # пикс/с при полном отклонении стика
+const PAD_ZOOM := 2.6       # во сколько раз за секунду меняется масштаб при полном отклонении
 const FOG_CELL := 16.0     # м на пиксель маски исследованного
 const FOG_TRACK := 260.0   # м открыто вокруг пройденного пути
 const FOG_PLACE := 160.0   # м открыто вокруг открытого места
@@ -40,6 +43,10 @@ var quest := Vector2.INF
 var quest_color := Color.WHITE
 var quest_kind := ""
 var move_hint := ""
+## 19.11.2026: управление личной картой без мыши (геймпад, клавиатура). Ставит Hud; null — только мышь (доска)
+var controls: Controls
+var input_blocked := Callable()  # true — поверх карты вопрос (перемещение), стики заняты им
+var _pad_cross := false          # прицел в центре нарисован (геймпад): метка и выбор места — по нему
 var _data: Data
 var _base: Control
 var _tiles: Control
@@ -251,7 +258,8 @@ func _visibility_changed() -> void:
 		_dragged = false
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_pad_navigate(delta)
 	if _data != null and (_base_dirty or _data.pending):
 		_refresh_base()
 	if _stroke_redraw_at != 0 and Time.get_ticks_usec() >= _stroke_redraw_at:
@@ -417,9 +425,7 @@ func _map_button(event: InputEventMouseButton) -> void:
 		elif not event.pressed and button == _button and _pressed.is_finite():
 			if not _dragged:
 				if button == MOUSE_BUTTON_MIDDLE and not park and player.is_finite():
-					_center = player
-					_update_base()
-					refresh_overlay()
+					center_on_player()
 				elif button == MOUSE_BUTTON_LEFT:
 					var place := _pick(event.position)
 					if not place.is_empty():
@@ -430,6 +436,65 @@ func _map_button(event: InputEventMouseButton) -> void:
 			_button = MOUSE_BUTTON_NONE
 			_dragged = false
 	accept_event()
+
+
+## Левый стик / WASD / стрелки — обзор, правый стик по вертикали — масштаб к центру экрана.
+## Курок газа (тоже «вперёд» в действиях) намеренно не двигает карту: с ним её открывают на ходу.
+func _pad_navigate(delta: float) -> void:
+	var cross := controls != null and controls.joypad and not park
+	if cross != _pad_cross:
+		_pad_cross = cross
+		_legend.queue_redraw()
+	if controls == null or park or _data == null or (input_blocked.is_valid() and input_blocked.call()):
+		return
+	var pan := Vector2.ZERO
+	var zoom := 0.0
+	for pad in Input.get_connected_joypads():
+		var stick := Vector2(Input.get_joy_axis(pad, JOY_AXIS_LEFT_X), Input.get_joy_axis(pad, JOY_AXIS_LEFT_Y))
+		if stick.length() > PAD_DEADZONE:
+			pan += stick * inverse_lerp(PAD_DEADZONE, 1.0, minf(stick.length(), 1.0)) / stick.length()
+		var right := -Input.get_joy_axis(pad, JOY_AXIS_RIGHT_Y)
+		if absf(right) > PAD_DEADZONE:
+			zoom += signf(right) * inverse_lerp(PAD_DEADZONE, 1.0, minf(absf(right), 1.0))
+	if get_viewport().gui_get_focus_owner() == null:
+		pan += Vector2(float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT))
+				- float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)),
+			float(Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN))
+				- float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)))
+	pan = pan.limit_length(1.0)
+	if pan != Vector2.ZERO:
+		_center = (_center + pan * PAD_PAN * delta / _scale).clamp(_bounds.position, _bounds.end)
+		_update_base()
+		refresh_overlay()
+	if zoom != 0.0:
+		_zoom_at(size * 0.5, pow(PAD_ZOOM, clampf(zoom, -1.0, 1.0) * delta))
+
+
+## Действие игрока над личной картой (из GameWorld): «прыжок» — к себе, «взаимодействие» — выбрать место
+## или поставить метку под прицелом (геймпад) или под курсором. true — событие обработано.
+func map_action(event: InputEvent) -> bool:
+	if park or _data == null or not is_visible_in_tree():
+		return false
+	if event.is_action_pressed("jump"):
+		center_on_player()
+		return true
+	if event.is_action_pressed("interact"):
+		var at := size * 0.5 if _pad_cross else get_local_mouse_position()
+		var place := _pick(at)
+		if not place.is_empty():
+			place_selected.emit(place)
+		else:
+			marker_requested.emit(screen_to_world(at) / TILE)
+		return true
+	return false
+
+
+func center_on_player() -> void:
+	if park or not player.is_finite():
+		return
+	_center = player
+	_update_base()
+	refresh_overlay()
 
 
 func _zoom_at(at: Vector2, factor: float) -> void:
@@ -650,7 +715,8 @@ func _draw_legend() -> void:
 	if _data == null:
 		return
 	var color := Paint.PARK_INK if _styled() else Paint.INK
-	var north := Vector2(size.x - (26.0 if park else 87.0), 28.0)
+	# у личной карты правый верхний угол занят кнопками «К себе» и «×» — стрелка севера под ними
+	var north := Vector2(size.x - 26.0, 28.0) if park else Vector2(size.x - 38.0, 84.0)
 	_legend.draw_colored_polygon(PackedVector2Array([north + Vector2(0, -8), north + Vector2(5, 7),
 		north + Vector2(0, 4), north + Vector2(-5, 7)]), color)
 	Paint.text(_legend, north + Vector2(0, 23), "С", color, 12)
@@ -671,3 +737,43 @@ func _draw_legend() -> void:
 		Paint.text(_legend, Vector2(121, 63), "Трек · %s" % Util.distance_text(journal.distance), Paint.TRACE, 15, font)
 		Paint.text(_legend, Vector2(121, 85), "Открыто мест · %d" % places.size(), color, 14, font)
 		Paint.text(_legend, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 13)
+		_draw_key(color, font)
+	if _pad_cross:
+		# прицел геймпада: метка и выбор места — под ним
+		var c := size * 0.5
+		for d: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
+			_legend.draw_line(c + d * 5.0, c + d * 13.0, Color("#fffaf0"), 4.0, true)
+			_legend.draw_line(c + d * 5.0, c + d * 13.0, color, 1.8, true)
+
+
+## 19.11.2026: условные знаки личной карты — правый нижний угол, теми же штрихами и значками, что на карте
+func _draw_key(color: Color, font: Font) -> void:
+	var rows := [["Мой трек", "track"], ["Дорога", Paint.PAPER_STROKES[2]], ["Тропа", Paint.PAPER_STROKES[1]],
+		["Велотрасса", Paint.PAPER_STROKES[3]], ["Цель", "goal"]]
+	if quest.is_finite():
+		rows.append(["Задание", "quest"])
+	var box := Rect2(size.x - 172.0, size.y - 22.0 - rows.size() * 21.0 - 14.0, 156.0, rows.size() * 21.0 + 14.0)
+	if box.position.y < 120.0:
+		return
+	_legend.draw_rect(box, Color("#f2e7cd"))
+	_legend.draw_rect(box, Color("#aca17e"), false, 1.5)
+	for i in rows.size():
+		var y := box.position.y + 17.0 + i * 21.0
+		var a := Vector2(box.position.x + 12.0, y)
+		var b := a + Vector2(30.0, 0.0)
+		var sample: Variant = rows[i][1]
+		if sample is Array:
+			_legend.draw_line(a, b, sample[0], sample[2], true)
+			_legend.draw_line(a, b, sample[1], sample[3], true)
+		elif sample == "track":
+			_legend.draw_line(a, b, Color("#fffaff"), 5.5, true)
+			_legend.draw_line(a, b, Paint.TRACE, 3.1, true)
+		else:
+			var at := (a + b) * 0.5
+			var tint: Color = HudStyle.AMBER if sample == "goal" else quest_color
+			_legend.draw_circle(at, 8.5, HudStyle.SURFACE, true, -1.0, true)
+			_legend.draw_arc(at, 8.5, 0.0, TAU, 20, Color("#cc822c") if sample == "goal" else quest_color, 1.6, true)
+			var icon := UiIcons.map_icon("goal") if sample == "goal" else UiIcons.quest_small(quest_kind)
+			_legend.draw_texture_rect(icon, Rect2(at - Vector2.ONE * 5.5, Vector2.ONE * 11.0), false, tint)
+		_legend.draw_string(font if font != null else ThemeDB.fallback_font, Vector2(b.x + 12.0, y + 5.0), rows[i][0],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)

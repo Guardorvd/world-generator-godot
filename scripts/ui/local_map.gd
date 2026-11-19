@@ -37,6 +37,7 @@ var _legend: Control
 var _face: TextureRect
 var _mask: ShaderMaterial
 var _marks: Control
+var _label_taken: Array[Rect2] = []  # 19.11.2026: занятые места подписей на верхнем слое (сброс при перерисовке)
 var _data: MapData
 var _position := Vector2.INF
 var _anchor := Vector2.INF
@@ -372,6 +373,10 @@ func _visible_settlements() -> Array[Dictionary]:
 
 func _draw_marks() -> void:
 	if _data != null and _position.is_finite():
+		# 19.11.2026: занятые места для подписей расстояний у ободка — «С», линейка, подпись деревни, соседняя подпись
+		var half := SCALE_M * PIXELS_PER_METER * 0.5
+		_label_taken = [Rect2(CENTER.x - 13.0, 3.0, 26.0, 27.0),
+			Rect2(CENTER.x - half - 6.0, VIEW_SIZE - 33.0, half * 2.0 + 12.0, 22.0)]
 		_draw_label()
 		_draw_markers()
 
@@ -395,6 +400,7 @@ func _draw_label() -> void:
 	var half := _text_width(label.title, 12) * 0.5
 	if _fits(at + Vector2(-half, -10), 7.0) and _fits(at + Vector2(half, -10), 7.0) and at.y > 35.0 and at.y < VIEW_SIZE - 36.0:
 		_text(label.title, at, 12)
+		_label_taken.append(Rect2(at.x - half, at.y - 12.0, half * 2.0, 15.0))
 
 
 func _draw_markers() -> void:
@@ -441,8 +447,18 @@ func _rim(target: Vector2, color: Color, kind: String, distance: bool) -> void:
 			_draw_badge(_marks, at, color, Color.WHITE, UiIcons.map_icon("bike"), Color.WHITE, 6.8, 10.5)
 	if distance:
 		var label := Util.distance_text(_position.distance_to(target))
-		var inward := at - dir * (19.5 + absf(dir.x) * _text_width(label, 11) * 0.5)
-		_text(label, inward + Vector2(0.0, 4.0), 11)
+		var width := _text_width(label, 11)
+		var inward := at - dir * (19.5 + absf(dir.x) * width * 0.5)
+		# внутрь круга; если там «С», линейка, подпись деревни или соседнее расстояние — вбок вдоль ободка
+		var shift := width * 0.5 + 16.0
+		var chosen := inward
+		for candidate: Vector2 in [inward, inward + side * shift, inward - side * shift, inward - dir * 16.0]:
+			var rect := Rect2(candidate + Vector2(-width * 0.5, -7.0), Vector2(width, 14.0))
+			if _fits(candidate, width * 0.5 + 4.0) and not _label_taken.any(func(r: Rect2) -> bool: return r.intersects(rect)):
+				chosen = candidate
+				break
+		_label_taken.append(Rect2(chosen + Vector2(-width * 0.5, -7.0), Vector2(width, 14.0)))
+		_text(label, chosen + Vector2(0.0, 4.0), 11)
 
 
 func _draw_legend() -> void:

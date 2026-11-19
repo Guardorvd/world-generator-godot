@@ -1106,6 +1106,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_finish_opening()
 		get_viewport().set_input_as_handled()
 		return
+	# 19.11.2026: на открытой личной карте «прыжок» — к себе, «взаимодействие» — цель или метка (геймпад и клавиатура)
+	if show_map and hud.big_map.map_action(event):
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("back"):
 		# B на геймпаде закрывает карту и убирает фотоаппарат, как Esc, но паузу не ставит
 		if show_map:

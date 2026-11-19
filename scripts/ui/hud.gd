@@ -62,6 +62,8 @@ var _tracker_count: Label
 var _tracker_step: Label
 var _tracker_note: Label
 var _tracker_note_row: HBoxContainer
+var _tracker_note_icon: TextureRect
+var _tracker_compact := -1  # 19.11.2026: 1 — лёгкий вид (значок, шаг, полоска), 0 — полный, -1 — не применено
 var _tracker_progress: Control
 var _tracker_head: HBoxContainer
 var _tracker_series: Label  # вторая строка счётчика: «Летопись обелисков: 2 из 5» (серия идёт параллельно заданию)
@@ -84,6 +86,7 @@ var _reticle_on_target := false
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
+var _map_hint_pad := -1  # для какого устройства написана подсказка под картой (1 — геймпад)
 var _repair: RepairArc  # 18.11.2026: кольцо удержания «взаимодействия» при ремонте
 var _ride: RideDial  # 18.11.2026: прибор движения слева внизу — скорость, дуга сил (14.2) и тормоза в одном круге
 var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
@@ -161,12 +164,30 @@ func _ready() -> void:
 	big_map.set_anchors_preset(Control.PRESET_FULL_RECT)
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.visible = false
+	big_map.controls = controls
+	big_map.input_blocked = func() -> bool: return _travel_dialog != null
 	add_child(big_map)
+	# 19.11.2026: «К себе» кнопкой — средняя кнопка мыши неудобна на тачпаде
+	var to_me := Button.new()
+	to_me.text = "К себе"
+	to_me.custom_minimum_size = Vector2(0, 44)
+	to_me.theme = HudStyle.theme()
+	to_me.focus_mode = Control.FOCUS_NONE
+	to_me.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	to_me.tooltip_text = "Показать, где вы сейчас"
+	to_me.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	to_me.offset_left = -150
+	to_me.offset_right = -68
+	to_me.offset_top = 12
+	to_me.offset_bottom = 56
+	to_me.pressed.connect(big_map.center_on_player)
+	big_map.add_child(to_me)
 	var close_map := Button.new()
 	close_map.icon = UiIcons.CLOSE
 	close_map.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	close_map.custom_minimum_size = Vector2(44, 44)
 	close_map.theme = HudStyle.theme()
+	close_map.focus_mode = Control.FOCUS_NONE
 	close_map.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	close_map.tooltip_text = "Закрыть карту"
 	close_map.accessibility_name = "Закрыть карту"
@@ -205,6 +226,17 @@ func _ready() -> void:
 	_ride.hide()
 	add_child(_ride)
 	move_child(_ride, big_map.get_index())
+	var brake_alert := RideDial.BrakeAlert.new()
+	brake_alert.dial = _ride
+	brake_alert.set_anchors_preset(Control.PRESET_CENTER)
+	brake_alert.offset_left = -RideDial.BrakeAlert.SIZE.x * 0.5
+	brake_alert.offset_right = RideDial.BrakeAlert.SIZE.x * 0.5
+	brake_alert.offset_top = 66
+	brake_alert.offset_bottom = 66 + RideDial.BrakeAlert.SIZE.y
+	brake_alert.hide()
+	add_child(brake_alert)
+	move_child(brake_alert, big_map.get_index())
+	_ride.alert = brake_alert
 	_repair = RepairArc.new()
 	_repair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_repair.set_anchors_preset(Control.PRESET_CENTER)
@@ -273,10 +305,13 @@ func _style_summary() -> void:
 	_surface.hide()
 	_info_panel.resized.connect(_place_toast)
 
-	_hint_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 8, Vector2(7, 4))
+	# 19.11.2026: нижние подсказки — одна полупрозрачная пилюля без рамки, клавиша — заливкой без своей рамки
+	_hint_style = HudStyle.panel(Color(HudStyle.SURFACE, 0.82), HudStyle.BORDER, 8, Vector2(7, 4))
+	_hint_style.set_border_width_all(0)
 	_prompt_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.MINT, 10, Vector2(8, 5))
 	_warning_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.AMBER, 8, Vector2(8, 5))
 	_key_style = HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 5, Vector2(6, 2), false)
+	_key_style.set_border_width_all(0)
 	lock_hint.add_theme_stylebox_override("panel", _hint_style)
 	HudStyle.label($LockHint/Text, 13, HudStyle.MUTED)
 	_reticle.draw.connect(_draw_reticle)
@@ -380,7 +415,8 @@ func set_map_visible(v: bool) -> void:
 	big_map.hover = {}
 	_apply_reveal()
 	if v:
-		big_map.move_hint = "Колесо · масштаб     Перетащить · обзор     СКМ · к себе     Ctrl+ЛКМ · метка     %s · путешествие" % controls.label(&"journal")
+		_map_hint_pad = -1
+		_sync_map_hint()
 		sync_map_places()
 		big_map.set_player(Vector2(px, pz), yaw)
 
@@ -407,6 +443,19 @@ func ask_travel(place: Dictionary) -> void:
 	dialog.canceled.connect(_close_travel)
 	dialog.popup_centered(Vector2i(440, 0))
 	dialog.get_cancel_button().grab_focus()
+
+
+## 19.11.2026: подсказка под картой — под то устройство, с которого играют сейчас
+func _sync_map_hint() -> void:
+	if _map_hint_pad == int(controls.joypad):
+		return
+	_map_hint_pad = int(controls.joypad)
+	var k := controls.label
+	if controls.joypad:
+		big_map.move_hint = "Левый стик · обзор     Правый стик · масштаб     %s · к себе     %s · цель или метка     %s · путешествие     %s · закрыть" 			% [k.call(&"jump"), k.call(&"interact"), k.call(&"journal"), k.call(&"back")]
+	else:
+		big_map.move_hint = "Колесо · масштаб     Перетащить или WASD · обзор     %s · к себе     Ctrl+ЛКМ или %s · метка     %s · путешествие" 			% [k.call(&"jump"), k.call(&"interact"), k.call(&"journal")]
+	big_map.refresh_overlay()
 
 
 func _close_travel() -> void:
@@ -729,7 +778,8 @@ func _build_tracker() -> PanelContainer:
 	_tracker_note_row = HBoxContainer.new()
 	_tracker_note_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tracker_note_row.add_theme_constant_override("separation", 6)
-	_tracker_note_row.add_child(UiIcons.rect(UiIcons.BAG, 14, HudStyle.AMBER))
+	_tracker_note_icon = UiIcons.rect(UiIcons.BAG, 14, HudStyle.AMBER)
+	_tracker_note_row.add_child(_tracker_note_icon)
 	_tracker_note = _tracker_label(_tracker_note_row, 12, HudStyle.AMBER)
 	_tracker_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tracker_note_row.hide()
@@ -804,7 +854,12 @@ func update_tracker() -> void:
 		_step_count = q.steps.size()
 		_step_index = q.step
 		if quests.cargo:
-			note = "сумка за спиной"
+			# 19.11.2026: хрупкий груз — предупреждение (видно и в лёгком виде), обычная сумка — пометка
+			var fragile: bool = q.kind == "fragile"
+			note = "Хрупкий груз · не падайте" if fragile else "сумка за спиной"
+			_tracker_note_icon.texture = UiIcons.ALERT if fragile else UiIcons.BAG
+			_tracker_note_icon.modulate = HudStyle.AMBER if fragile else HudStyle.MUTED
+			_tracker_note.add_theme_color_override("font_color", HudStyle.AMBER if fragile else HudStyle.MUTED)
 		_tracker_kind.add_theme_color_override("font_color", quest_color())
 	var series := quests.series_progress() if quests != null else Vector2i.ZERO
 	var side := PackedStringArray()
@@ -822,7 +877,19 @@ func update_tracker() -> void:
 	_set_optional_text(_tracker_note, note)
 	_tracker_note_row.visible = _tracker_note.visible
 	_tracker_progress.queue_redraw()
+	_tracker_compact = -1
 	_apply_reveal()
+
+
+## 19.11.2026: в лёгком виде у трекера остаются вид задания, шаг и полоска шагов (и хрупкий груз);
+## название, серия обелисков и благодарности — в полной сводке
+func _set_tracker_compact(compact: bool) -> void:
+	if _tracker_compact == int(compact):
+		return
+	_tracker_compact = int(compact)
+	_tracker_title.visible = not compact and not _tracker_title.text.is_empty()
+	_tracker_series.visible = not compact and not _tracker_series.text.is_empty()
+	_tracker_note_row.visible = not _tracker_note.text.is_empty() 		and (not compact or _tracker_note.text.begins_with("Хрупкий"))
 
 
 ## Курс на точку (x, z в метрах) от игрока — в тех же единицах, что yaw: 0 — север, PI/2 — запад
@@ -870,10 +937,18 @@ func _apply_reveal() -> void:
 	_info_panel.visible = alpha > 0.0 and not info.text.is_empty()
 	_info_panel.modulate.a = alpha
 	_place_toast()
-	tracker.visible = alpha > 0.0 and not (_tracker_title.text.is_empty() and _tracker_series.text.is_empty())
+	var quest_on := not _tracker_title.text.is_empty()
+	var tracker_alpha := maxf(alpha, map_alpha if quest_on else 0.0)
+	tracker.visible = tracker_alpha > 0.0 and (quest_on or (alpha > 0.0 and not _tracker_series.text.is_empty()))
+	if tracker.visible:
+		_set_tracker_compact(alpha < 0.5)
+		# карточка сама не сжимается, когда строки прячутся или короче переносятся; ширина задана отступами
+		var tracker_height := tracker.get_combined_minimum_size().y
+		if tracker.size.y > tracker_height + 0.5:
+			tracker.size = Vector2(tracker.size.x, tracker_height)
 	# modulate оставлен вспышке задания. Для затухания используем родительский цвет панели и её строк.
-	tracker.self_modulate.a = alpha
-	_tracker_content.modulate.a = alpha
+	tracker.self_modulate.a = tracker_alpha
+	_tracker_content.modulate.a = tracker_alpha
 	var urgent: bool = _hint_urgent and not _photo_mode and not big_map.visible and not settlement_panel.visible
 	hint.visible = (alpha > 0.0 or urgent) and hint.get_child_count() > 0
 	hint.modulate.a = 1.0 if urgent else alpha
@@ -1089,6 +1164,8 @@ func _process(delta: float) -> void:
 	_light = move_toward(_light, 1.0 if view_mode == View.LIGHT else 0.0, delta / SUMMARY_FADE)
 	if _summary_allowed() and view_mode != View.HIDDEN:
 		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
+	if big_map.visible:
+		_sync_map_hint()
 	_apply_reveal()
 	var obscured: bool = not is_visible_in_tree() or big_map.visible or settlement_panel.visible
 	$Toast.visible = not obscured and _toast_left > 0.0

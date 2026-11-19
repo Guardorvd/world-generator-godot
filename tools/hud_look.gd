@@ -341,6 +341,19 @@ func _run() -> void:
 	_check(hud.big_map._fog != null and hud.big_map._fog.get_pixelv(Vector2i(Vector2(512, 512) / hud.big_map.FOG_CELL)).a < 0.1
 		and hud.big_map._fog.get_pixel(0, 0).a > 0.9, "личная карта: у пути открыто, вдали бумага")
 	await _shot("hud_big_map")
+	# 19.11.2026: «прыжок» на открытой карте возвращает обзор к игроку (геймпад и клавиатура без СКМ)
+	hud.big_map._center += Vector2(300, 200)
+	var jump := InputEventAction.new()
+	jump.action = &"jump"
+	jump.pressed = true
+	_check(hud.big_map.map_action(jump) and hud.big_map._center.is_equal_approx(hud.big_map.player.clamp(hud.big_map._bounds.position, hud.big_map._bounds.end)),
+		"карта: «прыжок» — к себе")
+	hud.big_map.controls.joypad = true
+	await process_frame
+	await process_frame
+	_check(hud.big_map._pad_cross and hud.big_map.move_hint.begins_with("Левый стик"), "карта с геймпада: прицел и подсказка под геймпад")
+	await _shot("hud_big_map_pad")
+	hud.big_map.controls.joypad = false
 	if hud.big_map._data.atlas_texture != null:
 		var road_mesh: ArrayMesh = hud.big_map._data.atlas_strokes[hud.big_map.Data.Line.ROAD]
 		_check(road_mesh != null and road_mesh.surface_get_array_index_len(0) > 0,

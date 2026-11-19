@@ -3,7 +3,7 @@ extends Control
 ## В середине — скорость на велосипеде (км/ч) или запас сил пешком; слева — дуга сил, растёт снизу вверх;
 ## справа — дуга нажатия тормоза, появляется только при торможении. Поведение дуг перенесено без изменений:
 ## засечка Stamina.RECOVERED, белый шлейф траты, пульс ниже LOW, warning для затемнения краёв, ореол наката;
-## тормоз: опасность (risk) и потеря сцепления (skid) с подписью справа от прибора.
+## тормоз: опасность (risk) и потеря сцепления (skid); подпись о них — BrakeAlert под прицелом (19.11.2026).
 ## Видимость задаёт Hud (сводка, срочность); прибор только считает свои альфы и рисует.
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
@@ -18,7 +18,6 @@ const STAMINA_SPAN := deg_to_rad(110.0)
 const BRAKE_FROM := deg_to_rad(55.0)       # справа: снизу (55°) вверх (−55°)
 const BRAKE_SPAN := deg_to_rad(-110.0)
 const MIN_SPEED := 1.0          # м/с: ниже тормоз не показывается
-const CAPTION := Vector2(174.0, 24.0)
 
 # силы
 var value := 1.0
@@ -38,7 +37,7 @@ var risk := 0.0
 var skid := 0.0
 var brake_alpha := 0.0
 var _ride_alpha := 0.0
-var _warning_box := HudStyle.panel(HudStyle.SURFACE, HudStyle.AMBER, 8, Vector2.ZERO)
+var alert: BrakeAlert  # подпись об опасном торможении под прицелом (ставит Hud)
 var _t := 0.0
 var _drawn := false
 
@@ -104,6 +103,8 @@ func _redraw() -> void:
 	if shown or _drawn:
 		queue_redraw()
 	_drawn = shown
+	if alert != null:
+		alert.sync()
 
 
 func _arc(from: float, span: float, a: float, b: float, width: float, color: Color) -> void:
@@ -169,8 +170,36 @@ func _draw_brake(c: Vector2, a: float) -> void:
 	_arc(BRAKE_FROM, BRAKE_SPAN, 0.0, 1.0, WIDTH, Color(HudStyle.BORDER, 0.65 * a))
 	# дуга справа идёт против часовой: от 0 к 1 — снизу вверх
 	draw_arc(c, R, BRAKE_FROM, BRAKE_FROM + BRAKE_SPAN * pressure, 32, color, WIDTH, true)
-	if danger or slipping:
-		var box := Rect2(Vector2(DIAMETER + 8.0, c.y - CAPTION.y * 0.5), CAPTION)
-		draw_style_box(_warning_box, box)
-		draw_texture_rect(UiIcons.ALERT, Rect2(Vector2(box.position.x + 8.0, box.get_center().y - 7.0), Vector2(14.0, 14.0)), false, Color(color, a))
+	# 19.11.2026: подпись «Отпустите тормоз» / «Потеря сцепления» — не здесь, а под прицелом (BrakeAlert):
+	# на спуске взгляд в центре кадра, а не в левом нижнем углу
+
+
+## 19.11.2026: предупреждение о торможении у центра экрана — короткая плашка под прицелом.
+## Состояние берёт из прибора: перерисовывается только когда видна или только что погасла.
+class BrakeAlert extends Control:
+	const SIZE := Vector2(184.0, 26.0)
+	var dial  # прибор движения (ride_dial.gd)
+	var _box := HudStyle.panel(Color(HudStyle.SURFACE, 0.86), HudStyle.AMBER, 8, Vector2.ZERO)
+	var _shown := false
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func sync() -> void:
+		var on: bool = dial.brake_urgent()
+		if on or _shown:
+			queue_redraw()
+		_shown = on
+		visible = on
+
+	func _draw() -> void:
+		if not dial.brake_urgent():
+			return
+		var danger: bool = dial.risk > 0.65
+		var color := HudStyle.RED if danger else HudStyle.AMBER
+		var a: float = dial.brake_alpha * (0.75 + 0.25 * sin(dial._t * 8.0) if danger else 1.0)
+		var box := Rect2((size - SIZE) * 0.5, SIZE)
+		_box.border_color = Color(color, 0.9)
+		draw_style_box(_box, box)
+		draw_texture_rect(UiIcons.ALERT, Rect2(Vector2(box.position.x + 9.0, box.get_center().y - 7.0), Vector2(14.0, 14.0)), false, Color(color, a))
 		HudStyle.centered(self, box.get_center() + Vector2(9, 5), "Отпустите тормоз" if danger else "Потеря сцепления", 13, Color(color, a))
