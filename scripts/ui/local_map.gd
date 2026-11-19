@@ -304,7 +304,7 @@ func _draw_places(taken: Array[Vector2]) -> void:
 	for place: Dictionary in _places:
 		var at := _to_canvas(place.at)
 		if area.has_point(at):
-			near.append([at.distance_squared_to(MAP_CENTER), at, place.kind])
+			near.append([at.distance_squared_to(MAP_CENTER), at, place.kind, place.get("icon", place.kind)])
 	near.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 	var shown := 0
 	for item: Array in near:
@@ -315,7 +315,7 @@ func _draw_places(taken: Array[Vector2]) -> void:
 		shown += 1
 		var kind := str(item[2])
 		var bg := Color("#866038") if kind == "peak" else (Color("#2f6d8c") if kind == "lake" else Color("#316760"))
-		_draw_badge(_places_canvas, at, bg, Color.WHITE, UiIcons.map_icon(kind))
+		_draw_badge(_places_canvas, at, bg, Color.WHITE, UiIcons.map_icon(str(item[3])))
 
 
 ## Маршрут: дорожная часть пути идёт по тем же точкам участков, что и линии дорог подложки (граф навигации — вершины

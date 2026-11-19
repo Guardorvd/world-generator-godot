@@ -55,10 +55,10 @@ func _ready() -> void:
 	add_theme_stylebox_override("panel", background)
 	var margin := MarginContainer.new()
 	for edge in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + edge, 20 if edge in ["left", "right"] else 12)
+		margin.add_theme_constant_override("margin_" + edge, 24 if edge in ["left", "right"] else 16)
 	add_child(margin)
 	_box = VBoxContainer.new()
-	_box.add_theme_constant_override("separation", 10)
+	_box.add_theme_constant_override("separation", 8)
 	margin.add_child(_box)
 	_build_header()
 	_build_map()
@@ -199,7 +199,7 @@ func _build_map() -> void:
 	_box.add_child(_map_page)
 	_map_row = BoxContainer.new()
 	_map_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_map_row.add_theme_constant_override("separation", 10)
+	_map_row.add_theme_constant_override("separation", 8)
 	_map_page.add_child(_map_row)
 	map_view = Atlas.new()
 	map_view.paper = true
@@ -212,7 +212,7 @@ func _build_map() -> void:
 	map_view.photo_thumbnail_requested.connect(_queue_photo)
 
 	_dock = PanelContainer.new()
-	_dock.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(12, 10), false))
+	_dock.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(12, 12), false))
 	_map_row.add_child(_dock)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -223,7 +223,7 @@ func _build_map() -> void:
 	dock_content.add_theme_constant_override("separation", 8)
 	scroll.add_child(dock_content)
 	_details = BoxContainer.new()
-	_details.add_theme_constant_override("separation", 10)
+	_details.add_theme_constant_override("separation", 8)
 	dock_content.add_child(_details)
 	var inspector := VBoxContainer.new()
 	inspector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -240,14 +240,14 @@ func _build_map() -> void:
 	_details.add_child(objective)
 	_label("Текущее задание", 13, objective, HudStyle.MINT)
 	_checklist = VBoxContainer.new()
-	_checklist.add_theme_constant_override("separation", 5)
+	_checklist.add_theme_constant_override("separation", 4)
 	objective.add_child(_checklist)
 	_path_page = VBoxContainer.new()
-	_path_page.add_theme_constant_override("separation", 5)
+	_path_page.add_theme_constant_override("separation", 4)
 	dock_content.add_child(_path_page)
 
 	var footer := HBoxContainer.new()
-	footer.add_theme_constant_override("separation", 10)
+	footer.add_theme_constant_override("separation", 8)
 	_map_page.add_child(footer)
 	_map_hint = _label("", 13, footer, MUTED)
 	_map_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -395,7 +395,7 @@ func _fill_album(data: Dictionary) -> void:
 	var pages: Array = data.get("pages", [])
 	var groups: Array = data.get("groups", [])
 	var nav_bar := HFlowContainer.new()
-	nav_bar.add_theme_constant_override("separation", 6)
+	nav_bar.add_theme_constant_override("separation", 8)
 	_album_page.add_child(nav_bar)
 
 	var total_all := pages.size()
@@ -503,7 +503,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		var pad := MarginContainer.new()
 		pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		for edge in ["left", "right", "top", "bottom"]:
-			pad.add_theme_constant_override("margin_" + edge, 7)
+			pad.add_theme_constant_override("margin_" + edge, 8)
 		pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		btn.add_child(pad)
 		pad.add_child(column)
@@ -512,7 +512,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		var panel := PanelContainer.new()
 		panel.custom_minimum_size = CARD
 		panel.clip_contents = true
-		panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE.lerp(HudStyle.RECESS, 0.4), HudStyle.BORDER, 8, Vector2(7, 7), false))
+		panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE.lerp(HudStyle.RECESS, 0.4), HudStyle.BORDER, 8, Vector2(8, 8), false))
 		panel.add_child(column)
 		root_ctrl = panel
 
@@ -541,7 +541,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		if not date_text.is_empty():
 			var dbadge := PanelContainer.new()
 			dbadge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			dbadge.add_theme_stylebox_override("panel", HudStyle.panel(Color(HudStyle.SURFACE, 0.84), Color(HudStyle.BORDER, 0.7), 4, Vector2(5, 1), false))
+			dbadge.add_theme_stylebox_override("panel", HudStyle.panel(Color(HudStyle.SURFACE, 0.84), Color(HudStyle.BORDER, 0.7), 4, Vector2(4, 4), false))
 			dbadge.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 			dbadge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 			dbadge.grow_vertical = Control.GROW_DIRECTION_BEGIN
@@ -555,7 +555,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		if page.get("text", "") != "":
 			var tbadge := PanelContainer.new()
 			tbadge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			tbadge.add_theme_stylebox_override("panel", HudStyle.panel(Color(HudStyle.SURFACE, 0.84), Color(HudStyle.MINT, 0.7), 4, Vector2(5, 1), false))
+			tbadge.add_theme_stylebox_override("panel", HudStyle.panel(Color(HudStyle.SURFACE, 0.84), Color(HudStyle.MINT, 0.7), 4, Vector2(4, 4), false))
 			tbadge.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 			tbadge.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 			tbadge.offset_right = -4
@@ -586,7 +586,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 			deleted.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var title_row := HBoxContainer.new()
-	title_row.add_theme_constant_override("separation", 5)
+	title_row.add_theme_constant_override("separation", 4)
 	title_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(title_row)
 	title_row.add_child(UiIcons.rect(UiIcons.album_icon(int(page.group), str(page.key), int(page.get("form", 0))), 13, HudStyle.MINT if done else Color(MUTED, 0.5)))
@@ -662,11 +662,11 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 	backdrop.add_child(modal)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
+	vbox.add_theme_constant_override("separation", 8)
 	modal.add_child(vbox)
 
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
+	head.add_theme_constant_override("separation", 8)
 	vbox.add_child(head)
 	head.add_child(UiIcons.rect(UiIcons.album_icon(int(page.group), str(page.key), int(page.get("form", 0))), 20, HudStyle.MINT))
 	var title := _label(str(page.title), 22, head, HudStyle.CREAM)
@@ -718,14 +718,14 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 
 	if not lore_text.is_empty():
 		var lore_box := PanelContainer.new()
-		lore_box.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(14, 10), false))
+		lore_box.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(16, 12), false))
 		vbox.add_child(lore_box)
 		var lore_lbl := _label(lore_text, 16, lore_box, HudStyle.CREAM)
 		lore_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		lore_lbl.custom_minimum_size.x = 750
 
 	var footer := HBoxContainer.new()
-	footer.add_theme_constant_override("separation", 10)
+	footer.add_theme_constant_override("separation", 8)
 	vbox.add_child(footer)
 	var prev_btn := Button.new()
 	prev_btn.text = "‹ Предыдущий"

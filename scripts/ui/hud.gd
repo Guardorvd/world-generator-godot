@@ -621,7 +621,7 @@ func sync_minimap_places() -> void:
 			continue
 		var place := world.place(id)
 		if not place.is_empty():
-			list.append({at = Vector2(place.x, place.y) * TILE, kind = place.kind})
+			list.append({at = Vector2(place.x, place.y) * TILE, kind = place.kind, icon = UiIcons.map_place_icon(place)})
 	minimap.set_places(list)
 
 
@@ -1171,6 +1171,7 @@ func set_bike(x: float, z: float, shown: bool) -> void:
 	bike_shown = shown
 	if changed:
 		minimap.set_bike(bike_pos if shown else Vector2.INF)
+		big_map.set_bike(bike_pos if shown else Vector2.INF)
 
 
 ## Пока одно уведомление на экране, следующие ждут в очереди,

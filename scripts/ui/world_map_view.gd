@@ -45,6 +45,7 @@ var journal: Journal
 var hover := {}
 var places: Array = []
 var player := Vector2.INF
+var bike := Vector2.INF
 var heading := 0.0
 var goal := Vector2.INF
 var quest := Vector2.INF
@@ -159,6 +160,7 @@ func set_source(source: Data) -> void:
 	selected_place = {}
 	places = []
 	player = Vector2.INF
+	bike = Vector2.INF
 	goal = Vector2.INF
 	quest = Vector2.INF
 	quest_kind = ""
@@ -251,6 +253,12 @@ func set_player(at: Vector2, yaw: float) -> void:
 	_update_player_arrow()
 	if paper and (at / FOG_CELL).round() != _fog_player_cell:
 		_fog_pending = true
+
+
+func set_bike(at: Vector2) -> void:
+	if bike != at:
+		bike = at
+		refresh_overlay()
 
 
 func _update_player_arrow() -> void:
@@ -656,20 +664,36 @@ func _open_track(points: PackedVector2Array, from: int, to: int, previous: Vecto
 	return previous
 
 
-## Открыть круг radius м вокруг at (метры): три пересекающихся прямоугольника — почти круг, мягкий край даёт фильтрация
+## Круглая маска с мягким краем. Повторные штампы только открывают карту, не закрывая прежние открытия.
 func _open_fog(at: Vector2, radius: float) -> void:
-	if _fog == null:
+	if _fog == null or not at.is_finite():
 		return
 	var c := Vector2i((at / FOG_CELL).round())
-	var r := int(radius / FOG_CELL)
-	var clear := Color(Paint.PARK_PAPER, 0.0)
+	var r := radius / FOG_CELL
+	var extent := ceili(r)
 	var bounds := Rect2i(Vector2i.ZERO, _fog.get_size())
-	if not bounds.grow(r).has_point(c):
+	if not bounds.grow(extent).has_point(c):
 		return
+	var inner := maxf(0.0, r - 2.0)
+	var clear := Color(Paint.PARK_PAPER, 0.0)
+	for dy in range(-extent, extent + 1):
+		var y := c.y + dy
+		if y < 0 or y >= bounds.size.y or absf(dy) >= r:
+			continue
+		var outer_x := floori(sqrt(maxf(0.0, r * r - float(dy * dy))))
+		var inner_x := floori(sqrt(maxf(0.0, inner * inner - float(dy * dy)))) if absf(dy) < inner else -1
+		if inner_x >= 0:
+			_fog.fill_rect(Rect2i(c.x - inner_x, y, inner_x * 2 + 1, 1).intersection(bounds), clear)
+		for dx in range(-outer_x, outer_x + 1):
+			if absi(dx) <= inner_x:
+				continue
+			var x := c.x + dx
+			if x < 0 or x >= bounds.size.x:
+				continue
+			var alpha := smoothstep(inner, r, Vector2(dx, dy).length())
+			if alpha < _fog.get_pixel(x, y).a:
+				_fog.set_pixel(x, y, Color(Paint.PARK_PAPER, alpha))
 	_fog_dirty = true
-	_fog.fill_rect(Rect2i(c - Vector2i(r, r * 7 / 10), Vector2i(r * 2 + 1, r * 14 / 10 + 1)).intersection(bounds), clear)
-	_fog.fill_rect(Rect2i(c - Vector2i(r * 7 / 10, r), Vector2i(r * 14 / 10 + 1, r * 2 + 1)).intersection(bounds), clear)
-	_fog.fill_rect(Rect2i(c - Vector2i(r * 9 / 10, r * 9 / 10), Vector2i(r * 18 / 10 + 1, r * 18 / 10 + 1)).intersection(bounds), clear)
 
 
 func _publish_fog() -> void:
@@ -690,6 +714,11 @@ func _draw_overlay() -> void:
 		_park_grid() # засечки поверх бумаги и подложки, как сетка на печатной карте
 	_draw_pins()
 	if not park:
+		if bike.is_finite():
+			var at := world_to_screen(bike)
+			_overlay.draw_circle(at, 9.0, Color("#fff9e9"), true, -1.0, true)
+			_overlay.draw_circle(at, 7.0, Color("#276582"), true, -1.0, true)
+			_overlay.draw_texture_rect(UiIcons.map_icon("bike"), Rect2(at - Vector2.ONE * 5.5, Vector2.ONE * 11.0), false, Color.WHITE)
 		if goal.is_finite():
 			var at := world_to_screen(goal)
 			_overlay.draw_circle(at, 11.5, Color("#fff9e9"), true, -1.0, true)
@@ -748,7 +777,7 @@ func _draw_pins() -> void:
 			_overlay.draw_circle(at, halo + 4.5, Color(color, 0.28), true, -1.0, true)
 		_overlay.draw_circle(at, halo, Color("#fff9e9"), true, -1.0, true)
 		_overlay.draw_circle(at, radius, color, true, -1.0, true)
-		_overlay.draw_texture_rect(UiIcons.map_icon(kind), Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, Color.WHITE)
+		_overlay.draw_texture_rect(UiIcons.map_icon(UiIcons.map_place_icon(place)), Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, Color.WHITE)
 		if tablet:
 			_draw_status(at, int(place.get("map_status", 0)))
 			var path: String = place.get("map_photo", "")
@@ -821,15 +850,16 @@ func _draw_legend() -> void:
 	if _data == null:
 		return
 	var color := Paint.PARK_INK if _styled() else Paint.INK
+	var font: Font = _park_font if _styled() else ThemeDB.fallback_font
 	var north := Vector2(size.x - 26.0, 28.0) if park or tablet else Vector2(size.x - 38.0, 84.0)
 	_legend.draw_colored_polygon(PackedVector2Array([north + Vector2(0, -8), north + Vector2(5, 7),
 		north + Vector2(0, 4), north + Vector2(-5, 7)]), color)
-	Paint.text(_legend, north + Vector2(0, 23), "С", color, 12)
+	Paint.text(_legend, north + Vector2(0, 23), "С", color, 12, font)
 	var metres := 50.0 if _scale > 0.9 else (100.0 if _scale > 0.4 else (250.0 if _scale > 0.18 else 500.0))
 	var start := Vector2(18, size.y - 16)
 	var end := start + Vector2(metres * _scale, 0)
 	_legend.draw_polyline(PackedVector2Array([start - Vector2(0, 5), start, end, end - Vector2(0, 5)]), color, 1.7, true)
-	Paint.text(_legend, (start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, 12)
+	Paint.text(_legend, (start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, 12, font)
 	if _styled():
 		_legend.draw_rect(Rect2(Vector2.ONE, size - Vector2.ONE * 2), Color("#aca17e"), false, 2.0)
 	if not park and journal != null and not tablet:
@@ -837,11 +867,10 @@ func _draw_legend() -> void:
 		_legend.draw_rect(Rect2(16, 12, 210, 92), panel)
 		if paper:
 			_legend.draw_rect(Rect2(16, 12, 210, 92), Color("#aca17e"), false, 1.5)
-		var font: Font = _park_font if paper else null
 		Paint.text(_legend, Vector2(121, 39), "Карта поездок", color, 22, font)
-		Paint.text(_legend, Vector2(121, 63), "Трек · %s" % Util.distance_text(journal.distance), Paint.TRACE, 15, font)
+		Paint.text(_legend, Vector2(121, 63), "Трек · %s" % Util.distance_text(journal.distance), Paint.TRACE, 14, font)
 		Paint.text(_legend, Vector2(121, 85), "Открыто мест · %d" % places.size(), color, 14, font)
-		Paint.text(_legend, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 13)
+		Paint.text(_legend, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 12, font)
 		_draw_key(color, font)
 	elif tablet:
 		_draw_key(color, _park_font)
@@ -853,34 +882,74 @@ func _draw_legend() -> void:
 			_legend.draw_line(c + d * 5.0, c + d * 13.0, color, 1.8, true)
 
 
-## 19.11.2026: условные знаки личной карты — правый нижний угол, теми же штрихами и значками, что на карте
+## Условные знаки: только известные виды мест, чтобы легенда не раскрывала ещё не найденные объекты.
 func _draw_key(color: Color, font: Font) -> void:
+	# На низкой карте легенда перекрывает ориентиры и центр управления.
+	if size.y < 320.0:
+		return
 	var rows := [["Мой трек", "track"], ["Дорога", Paint.PAPER_STROKES[2]], ["Тропа", Paint.PAPER_STROKES[1]],
-		["Велотрасса", Paint.PAPER_STROKES[3]], ["Цель", "goal"]]
+		["Велотрасса", Paint.PAPER_STROKES[3]], ["Игрок", "player"], ["Цель", "goal"]]
+	if bike.is_finite():
+		rows.append(["Велосипед", "bike"])
 	if quest.is_finite():
 		rows.append(["Задание", "quest"])
-	var box := Rect2(size.x - 172.0, size.y - 22.0 - rows.size() * 21.0 - 14.0, 156.0, rows.size() * 21.0 + 14.0)
-	if box.position.y < 120.0:
+	if tablet:
+		rows.append_array([["Узнано", "revealed"], ["Посещено", "visited"], ["Есть снимок", "photo"], ["Шаг задания", "quest_status"]])
+	var names := {settlement = "Поселение", peak = "Вершина", lake = "Озеро", site = "Место",
+		tower = "Вышка", obelisk = "Обелиск", ruin = "Руины", stones = "Каменный круг",
+		shelter = "Приют", house = "Дом", farm = "Хутор", fishing = "Рыбацкий дом", bench = "Лавка"}
+	var seen := {}
+	for place: Dictionary in places:
+		var icon := UiIcons.map_place_icon(place)
+		if not names.has(icon):
+			icon = "site"
+		if not seen.has(icon):
+			seen[icon] = true
+			rows.append([names[icon], "place:" + icon])
+	var columns := 2 if size.x >= 360.0 else 1
+	var count := ceili(float(rows.size()) / columns)
+	var box := Rect2(size.x - 16.0 - 156.0 * columns, size.y - 36.0 - count * 21.0, 156.0 * columns, count * 21.0 + 14.0)
+	if box.position.y < 110.0 or box.position.x < 8.0:
 		return
 	_legend.draw_rect(box, Color("#f2e7cd"))
 	_legend.draw_rect(box, Color("#aca17e"), false, 1.5)
 	for i in rows.size():
-		var y := box.position.y + 17.0 + i * 21.0
-		var a := Vector2(box.position.x + 12.0, y)
+		var column := i / count
+		var row := i % count
+		var y := box.position.y + 17.0 + row * 21.0
+		var a := Vector2(box.position.x + 12.0 + column * 156.0, y)
 		var b := a + Vector2(30.0, 0.0)
 		var sample: Variant = rows[i][1]
+		var at := (a + b) * 0.5
 		if sample is Array:
 			_legend.draw_line(a, b, sample[0], sample[2], true)
 			_legend.draw_line(a, b, sample[1], sample[3], true)
 		elif sample == "track":
 			_legend.draw_line(a, b, Color("#fffaff"), 5.5, true)
 			_legend.draw_line(a, b, Paint.TRACE, 3.1, true)
+		elif sample == "player":
+			_legend.draw_colored_polygon(PackedVector2Array([at + Vector2(0, -8), at + Vector2(6, 6), at + Vector2(0, 3), at + Vector2(-6, 6)]), Paint.BLUE)
+		elif sample in ["revealed", "visited", "photo", "quest_status"]:
+			if sample == "revealed":
+				_legend.draw_circle(at, 5.0, Color("#fff9e9"), true, -1.0, true)
+				_legend.draw_arc(at, 3.1, 0.0, TAU, 12, Color("#655436"), 1.5, true)
+			elif sample == "quest_status":
+				_legend.draw_circle(at, 7.0, Color("#316760"), true, -1.0, true)
+				_legend.draw_arc(at, 9.0, 0.0, TAU, 24, Color("#7a461a"), 2.0, true)
+			else:
+				_legend.draw_circle(at, 6.0, Color("#fff9e9"), true, -1.0, true)
+				_legend.draw_circle(at, 4.9, Color("#254a3e") if sample == "visited" else Color("#55416e"), true, -1.0, true)
+				_legend.draw_texture_rect(UiIcons.CHECK if sample == "visited" else UiIcons.ALBUM, Rect2(at - Vector2.ONE * 3.5, Vector2.ONE * 7.0), false, Color.WHITE)
+		elif str(sample).begins_with("place:") or sample == "bike":
+			var icon_kind := str(sample).trim_prefix("place:")
+			var pin_kind := icon_kind if icon_kind in ["peak", "lake", "settlement"] else "site"
+			_legend.draw_circle(at, 8.0, Color("#276582") if sample == "bike" else _pin_color(pin_kind), true, -1.0, true)
+			_legend.draw_texture_rect(UiIcons.map_icon(icon_kind), Rect2(at - Vector2.ONE * 5.5, Vector2.ONE * 11.0), false, Color.WHITE)
 		else:
-			var at := (a + b) * 0.5
 			var tint: Color = HudStyle.AMBER if sample == "goal" else quest_color
 			_legend.draw_circle(at, 8.5, HudStyle.SURFACE, true, -1.0, true)
 			_legend.draw_arc(at, 8.5, 0.0, TAU, 20, Color("#cc822c") if sample == "goal" else quest_color, 1.6, true)
 			var icon := UiIcons.map_icon("goal") if sample == "goal" else UiIcons.quest_small(quest_kind)
 			_legend.draw_texture_rect(icon, Rect2(at - Vector2.ONE * 5.5, Vector2.ONE * 11.0), false, tint)
 		_legend.draw_string(font if font != null else ThemeDB.fallback_font, Vector2(b.x + 12.0, y + 5.0), rows[i][0],
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)

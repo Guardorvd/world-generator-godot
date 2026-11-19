@@ -49,7 +49,16 @@ const MAP_SVGS := {
 	home = _MAP_HOME,
 	peak = "<path d=\"M3 19L10 6.5l4.2 6.8 2.6-3.3L21 19z\"/>",
 	lake = "<path d=\"M3 9.5c2-1.8 4-1.8 6 0s4 1.8 6 0 4-1.8 6 0\"/><path d=\"M3 15.5c2-1.8 4-1.8 6 0s4 1.8 6 0 4-1.8 6 0\"/>",
-	site = "<path d=\"M5 20h14\"/><path d=\"M8.5 20L10 9h4l1.5 11\"/><path d=\"M7.5 9h9l-1-4h-7z\"/>",
+	tower = "<path d=\"M5 20h14\"/><path d=\"M8.5 20L10 9h4l1.5 11\"/><path d=\"M7.5 9h9l-1-4h-7z\"/>",
+	site = "<circle cx=\"12\" cy=\"12\" r=\"7\"/><path d=\"M12 9v3m0 3h.01\"/>",
+	obelisk = OBELISK_SVGS[0],
+	ruin = "<path d=\"M4 20V8h4V5h3v4h3V6h3v4h3v10M8 20v-4a4 4 0 0 1 8 0v4\"/>",
+	stones = "<path d=\"M3 18l1-6 3-1 1 7M9 9l1-5h4l1 5M16 18l1-7 3 1 1 6M4 20h16\"/>",
+	shelter = "<path d=\"M2.5 20L12 4l9.5 16zM9 20l3-6 3 6\"/>",
+	house = "<path d=\"M3 11l9-7 9 7M5.5 10v10h13V10M10 20v-6h4v6\"/>",
+	farm = "<path d=\"M4 20V9l4-5h8l4 5v11zM4 9h16M9 20v-7h6v7M9 13l6 7M15 13l-6 7\"/>",
+	fishing = "<path d=\"M3 10l7-6 7 6M5 9v6h10V9M3 20c3-2 5 2 8 0s5 2 8 0M17 13h4v4\"/>",
+	bench = "<path d=\"M4 7h16M4 11h16M3 15h18M6 15v5M18 15v5M5 7v8M19 7v8\"/>",
 	bike = "<circle cx=\"6\" cy=\"16\" r=\"3.5\"/><circle cx=\"18\" cy=\"16\" r=\"3.5\"/><path d=\"M6 16l4.5-6.5h4L18 16M14.5 9.5l1-3h2.5\"/>",
 }
 const QUEST_SMALL_SVGS := {
@@ -138,6 +147,16 @@ static func quest(kind: String) -> Texture2D:
 	if kind == "obelisks":
 		return obelisk(0)
 	return QUESTS.get(kind, QUESTS.visit)
+
+
+## Один выбор метафоры для большой карты и мини-карты; старые записи могут не иметь src.
+static func map_place_icon(place: Dictionary) -> String:
+	var kind := str(place.get("kind", "settlement"))
+	if kind == "site":
+		var src: Variant = place.get("src")
+		if src != null:
+			return str(EntityCodec.value(src, "type", "site"))
+	return kind
 
 
 ## Упрощённый картографический значок (stroke-width 2.4, 28 px) для мелких меток на картах и компасе
