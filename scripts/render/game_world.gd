@@ -946,19 +946,11 @@ func _travel_load(destination: Vector3) -> bool:
 		if not is_inside_tree() or is_queued_for_deletion():
 			_travel_waiting = false
 			return false
-	var source := chunk_source
-	# 15.1: деревья, трава и подлесок места прибытия считаются в той же фоновой задаче (было 8–10 с без кадров)
 	var layer := vegetation
 	var missing := vegetation.travel_begin(at.x, at.y)
-	_travel_task = WorkerThreadPool.add_task(func() -> void:
-		source.finish()
-		source.prewarm([at], NEAR)
-		layer.travel_fill(at.x, at.y, missing), true, "Место прибытия")
-	while not WorkerThreadPool.is_task_completed(_travel_task):
-		await get_tree().process_frame
-		if not is_inside_tree() or is_queued_for_deletion(): return false
-	WorkerThreadPool.wait_for_task_completion(_travel_task)
-	_travel_task = -1
+	# PlanTerrain reads and uploads destination geometry while the vegetation job is running.
+	# Going through ChunkSource's normal read queue also bounds the memory held before upload.
+	_travel_task = WorkerThreadPool.add_task(layer.travel_fill.bind(at.x, at.y, missing), true, "Растительность у места прибытия")
 
 	var layers: Array[PlanTerrain] = [terrain_stream]
 	layers.append_array(_water_streams)
@@ -968,11 +960,14 @@ func _travel_load(destination: Vector3) -> bool:
 	if outer != null:
 		outdoor_keys = outer.arrival_chunks(at)
 		outer.recheck()
-	vegetation.travel_prepare_present()
 	var budget := stream_coordinator.frame_budget
 	while true:
 		await get_tree().process_frame
 		if not is_inside_tree() or is_queued_for_deletion(): return false
+		if _travel_task != -1 and WorkerThreadPool.is_task_completed(_travel_task):
+			WorkerThreadPool.wait_for_task_completion(_travel_task)
+			_travel_task = -1
+			vegetation.travel_prepare_present()
 		budget.deadline_usec = Time.get_ticks_usec() + stream_coordinator.publication_budget_us
 		var uploaded := false
 		var ready := true
@@ -983,11 +978,10 @@ func _travel_load(destination: Vector3) -> bool:
 		if outer != null and not outer.arrival_ready(outdoor_keys):
 			uploaded = outer.update(at.x, at.y, not uploaded, true) or uploaded
 			ready = ready and outer.arrival_ready(outdoor_keys)
-		var finished := ready and not uploaded and vegetation.travel_present(at, budget.deadline_usec)
+		var finished := _travel_task == -1 and ready and not uploaded and vegetation.travel_present(at, budget.deadline_usec)
 		budget.deadline_usec = 0
 		if finished: break
 
-	chunk_source.finish_startup()
 	vegetation.travel_end(at)
 	for layer_stream: PlanTerrain in layers:
 		layer_stream.checked_at = Vector2.INF # штатная очередь выгрузит узлы старого места

@@ -17,6 +17,7 @@ const Paint = preload("res://scripts/ui/map_paint.gd")
 const Journal = preload("res://scripts/game/map_journal.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
+const ATLAS_STROKE := preload("res://resources/atlas_stroke.gdshader")
 const TILE := GameConfig.TILE
 const PICK := 17.0
 const MIN_SCALE := 0.06
@@ -43,6 +44,8 @@ var _data: Data
 var _base: Control
 var _tiles: Control
 var _lines: Control
+var _atlas_clip: Control
+var _atlas_layers: Array[MeshInstance2D] = []
 var _track: Control
 var _track_window := Rect2()
 var _player_arrow: Node2D
@@ -54,7 +57,6 @@ var _min_scale := MIN_SCALE
 var _drawn_scale := -1.0
 var _stroke_scale := 0.2
 var _stroke_redraw_at := 0
-var _line_window := Rect2()
 var _bounds := Rect2()
 var _fit := Rect2()
 var _pressed := Vector2.INF
@@ -90,6 +92,11 @@ func _ready() -> void:
 	_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_lines.draw.connect(_draw_base)
 	_base.add_child(_lines)
+	_atlas_clip = Control.new()
+	_atlas_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_atlas_clip.clip_contents = true
+	_lines.add_child(_atlas_clip)
+	_configure_atlas_strokes()
 	_fog_node = Control.new()
 	_fog_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var fog_material := ShaderMaterial.new()
@@ -150,6 +157,7 @@ func set_source(source: Data) -> void:
 	_fog_dirty = false
 	_fog_places = {}
 	if _base != null:
+		_configure_atlas_strokes()
 		_tiles.queue_redraw()
 		_lines.queue_redraw()
 		_fog_node.queue_redraw()
@@ -157,7 +165,6 @@ func set_source(source: Data) -> void:
 		_update_player_arrow()
 	_drawn_scale = -1.0
 	_stroke_redraw_at = 0
-	_line_window = Rect2()
 	reset_view()
 
 
@@ -237,7 +244,6 @@ func _visibility_changed() -> void:
 		refresh_overlay()
 	elif _data != null:
 		_data.release_view()
-		_line_window = Rect2()
 		_stroke_redraw_at = 0
 		_drawn_scale = -1.0
 		_pressed = Vector2.INF
@@ -285,9 +291,8 @@ func _refresh_base() -> void:
 	var lines_changed := false
 	var baked_atlas := paper and _data.atlas_texture != null
 	if baked_atlas:
-		if not _line_window.has_area() or not _line_window.encloses(frame):
-			_line_window = frame.grow(Data.SPAN * 0.5)
-			lines_changed = _data.update_atlas_lines(_line_window.intersection(_bounds))
+		if _drawn_scale != _scale:
+			_update_atlas_width()
 		if _drawn_scale < 0.0:
 			_tiles.queue_redraw()
 	else:
@@ -318,6 +323,36 @@ func _refresh_base() -> void:
 
 func _world_rect() -> Rect2:
 	return Rect2(_center - size * 0.5 / _scale, size / _scale)
+
+
+func _configure_atlas_strokes() -> void:
+	var ready := paper and _data != null and _data.atlas_texture != null
+	_atlas_clip.visible = ready
+	if not ready:
+		for layer in _atlas_layers:
+			layer.mesh = null
+		return
+	_atlas_clip.size = Vector2(_data.world.W, _data.world.H) * TILE
+	for kind in Paint.PAPER_STROKES.size():
+		for pass_index in 2:
+			var index := kind * 2 + pass_index
+			if index == _atlas_layers.size():
+				var layer := MeshInstance2D.new()
+				var ink := ShaderMaterial.new()
+				ink.shader = ATLAS_STROKE
+				ink.set_shader_parameter("ink", Paint.PAPER_STROKES[kind][pass_index])
+				layer.material = ink
+				_atlas_clip.add_child(layer)
+				_atlas_layers.append(layer)
+			_atlas_layers[index].mesh = _data.atlas_strokes[kind]
+
+
+func _update_atlas_width() -> void:
+	var width := Paint.stroke_scale(_scale)
+	for index in _atlas_layers.size():
+		var ink := _atlas_layers[index].material as ShaderMaterial
+		ink.set_shader_parameter("half_width", Paint.PAPER_STROKES[index / 2][2 + index % 2] * width * 0.5)
+		ink.set_shader_parameter("fringe", 0.65 / _scale)
 
 
 func world_to_screen(at: Vector2) -> Vector2:
@@ -426,7 +461,8 @@ func _draw_tiles() -> void:
 func _draw_base() -> void:
 	if _data == null:
 		return
-	Paint.lines(_lines, _data, _stroke_scale, _styled())
+	if not paper or _data.atlas_texture == null:
+		Paint.lines(_lines, _data, _stroke_scale, _styled())
 	if paper:
 		# за краем стартовой области — чистая бумага: соседние земли на личной карте не показываются
 		var plan := Rect2(Vector2.ZERO, Vector2(_data.world.W, _data.world.H) * TILE)

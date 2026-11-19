@@ -194,7 +194,12 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		for item: Array in keyed:
 			pending.append(item[1])
 	if source != null:
-		if due: source.retain_layer(water_layer, pending)
+		if due:
+			if force or near == INF:
+				source.retain_layer(water_layer, pending)
+			else:
+				source.retain_layer(water_layer, pending.filter(func(key: Vector2i) -> bool:
+					return distance_to_chunk(key, p) <= near))
 		for offset in mini(3, pending.size()):
 			var at: Vector2i = pending[pending.size() - 1 - offset]
 			if not force and near < INF and distance_to_chunk(at, p) > near: break

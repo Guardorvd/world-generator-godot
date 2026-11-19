@@ -341,6 +341,20 @@ func _run() -> void:
 	_check(hud.big_map._fog != null and hud.big_map._fog.get_pixelv(Vector2i(Vector2(512, 512) / hud.big_map.FOG_CELL)).a < 0.1
 		and hud.big_map._fog.get_pixel(0, 0).a > 0.9, "личная карта: у пути открыто, вдали бумага")
 	await _shot("hud_big_map")
+	if hud.big_map._data.atlas_texture != null:
+		var road_mesh: ArrayMesh = hud.big_map._data.atlas_strokes[hud.big_map.Data.Line.ROAD]
+		_check(road_mesh != null and road_mesh.surface_get_array_index_len(0) > 0,
+			"личная карта использует готовый меш дорог")
+		hud.big_map._zoom_at(root.size * 0.5, 1.4)
+		await process_frame
+		await process_frame
+		_check(hud.big_map._atlas_layers[2 * hud.big_map.Data.Line.ROAD].mesh == road_mesh,
+			"масштаб меняет толщину штриха без пересборки меша")
+		hud.set_map_visible(false)
+		hud.set_map_visible(true)
+		await process_frame
+		_check(hud.big_map._atlas_layers[2 * hud.big_map.Data.Line.ROAD].mesh == road_mesh,
+			"повторное открытие использует тот же меш дорог")
 	var close_map: Button = hud.big_map.get_children().filter(func(n: Node) -> bool: return n is Button).back()
 	_check(close_map != null and close_map.icon == Hud.UiIcons.CLOSE and close_map.size.x >= 44.0 and close_map.size.y >= 44.0,
 		"кнопка закрытия карты имеет иконку и размер >= 44x44 px")

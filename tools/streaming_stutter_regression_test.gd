@@ -31,6 +31,7 @@ func run() -> void:
 	_test_pool_and_slices()
 	_test_deadlines()
 	_test_arrival()
+	_test_arrival_read_demand()
 	_test_carpet_publication()
 	print("streaming_stutter: ", checks, " checks, ", failures, " failures")
 	quit(1 if failures else 0)
@@ -189,6 +190,26 @@ func _test_arrival() -> void:
 		"arrival can complete with distant geometry still queued")
 	check(terrain.update(at.x, at.y) and terrain.nodes.size() == 3, "normal streaming resumes the distant queue")
 	terrain.free()
+
+
+func _test_arrival_read_demand() -> void:
+	var mesh := WaterBuilder._arrays(PackedVector3Array([Vector3.ZERO, Vector3.RIGHT, Vector3.FORWARD]), PackedInt32Array([0, 1, 2]))
+	var far := Vector2i(2, 0)
+	var pieces := {Vector2i.ZERO: mesh, Vector2i(1, 0): mesh, far: mesh}
+	var source := MemorySource.new()
+	source.setup(WorldCache.new(), WorldData.new(), Heightfield.new(), 8, [pieces, {}, {}], Budget.new())
+	source.request(-1, far, 0.0)
+	var terrain := PlanTerrain.new()
+	terrain.chunks = pieces
+	terrain.source = source
+	root.add_child(terrain)
+	terrain.update(250.0, 30.0, false, false, 32.0)
+	check(not source._wanted.has(source._id(-1, far)) and not source._active.has(source._id(-1, far)),
+		"arrival reads nearby terrain before queued work from the old location")
+	check(source._active.size() == 2 and source._startup.is_empty(),
+		"arrival uses the bounded read queue with no startup pins")
+	terrain.free()
+	source.close()
 
 
 func _test_carpet_publication() -> void:

@@ -324,31 +324,38 @@ func _draw_route() -> void:
 	if _route.size() < 2 or not _anchor.is_finite():
 		return
 	var area := Rect2(Vector2.ZERO, MAP_CENTER * 2.0).grow(8.0)
-	var road := PackedVector2Array()
-	var off := PackedVector2Array()
+	var roads: Array[PackedVector2Array] = []
+	var run := PackedVector2Array()
 	var a := _to_canvas(_route[0])
 	for i in range(1, _route.size()):
 		var b := _to_canvas(_route[i])
-		if area.intersects(Rect2(a, Vector2.ZERO).expand(b).grow(0.01)):
-			if i > _route_road.x and i <= _route_road.y:
-				road.append(a)
-				road.append(b)
-			else:
-				off.append(a)
-				off.append(b)
+		if a == b:
+			continue
+		var visible_segment := area.intersects(Rect2(a, Vector2.ZERO).expand(b).grow(0.01))
+		var on_road := i > _route_road.x and i <= _route_road.y
+		if visible_segment and on_road:
+			if run.is_empty():
+				run.append(a)
+			run.append(b)
+		else:
+			if not run.is_empty():
+				roads.append(run)
+				run = PackedVector2Array()
+			if visible_segment:
+				_route_canvas.draw_dashed_line(a, b, ROUTE_EDGE, 2.0, 4.0, true, true)
 		a = b
-	for i in range(0, off.size(), 2):
-		_route_canvas.draw_dashed_line(off[i], off[i + 1], ROUTE_EDGE, 2.0, 4.0, true, true)
-	if road.is_empty():
-		return
-	var outer := 6.0
-	var inner := 4.0
-	_route_canvas.draw_multiline(road, ROUTE_EDGE, outer, true)
-	for i in range(0, road.size(), 2):
-		_route_canvas.draw_circle(road[i], outer * 0.5, ROUTE_EDGE, true, -1.0, true)
-	_route_canvas.draw_multiline(road, ROUTE, inner, true)
-	for i in range(0, road.size(), 2):
-		_route_canvas.draw_circle(road[i], inner * 0.5, ROUTE, true, -1.0, true)
+	if not run.is_empty():
+		roads.append(run)
+	_draw_road_runs(roads, ROUTE_EDGE, 6.0)
+	_draw_road_runs(roads, ROUTE, 4.0)
+
+
+func _draw_road_runs(roads: Array[PackedVector2Array], color: Color, width: float) -> void:
+	# The polyline joins dense route points in one command. Only the ends need round caps.
+	for run in roads:
+		_route_canvas.draw_polyline(run, color, width, true)
+		_route_canvas.draw_circle(run[0], width * 0.5, color, true, -1.0, true)
+		_route_canvas.draw_circle(run[-1], width * 0.5, color, true, -1.0, true)
 
 
 ## Поселения подложки на открытой земле

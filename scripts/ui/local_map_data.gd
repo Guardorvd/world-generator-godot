@@ -20,6 +20,7 @@ enum Line { RIVER, TRAIL, ROAD, BIKE_TRAIL }
 
 var world: WorldData
 var atlas_texture: ImageTexture
+var atlas_strokes: Array[ArrayMesh] = []
 var tiles := {}
 var strokes: Array[PackedVector2Array] = [PackedVector2Array(), PackedVector2Array(), PackedVector2Array(), PackedVector2Array()]
 var settlements: Array[Dictionary] = []
@@ -54,6 +55,7 @@ func _init(w: WorldData, source = null) -> void:
 	_base_heights = w.h
 	if source != null:
 		atlas_texture = source.atlas_texture
+		atlas_strokes = source.atlas_strokes
 		_base_bins = source._base_bins
 		_base_textures = source._base_textures
 		_region_images = source._region_images
@@ -69,20 +71,63 @@ func _init(w: WorldData, source = null) -> void:
 
 
 func prepare_atlas() -> void:
+	if atlas_texture != null:
+		return
 	var painter := Grid.fast_grid()
 	if painter == null or world.W <= 0 or world.H <= 0:
 		return
 	var rgb: PackedByteArray = painter.PaintAtlas(world.W * world.H, _base_biomes, _base_lakes, _palette_bytes())
 	atlas_texture = ImageTexture.create_from_image(Image.create_from_data(world.W, world.H, false, Image.FORMAT_RGB8, rgb))
+	# The atlas shows the complete plan. It keeps these meshes when closed or zoomed.
+	_collect_features(_bin_rect(Rect2(Vector2.ZERO, Vector2(world.W, world.H) * TILE)))
+	for paths in strokes:
+		atlas_strokes.append(_atlas_mesh(paths))
+	for nodes in strokes:
+		nodes.clear()
+	settlements.clear()
 
 
-func update_atlas_lines(view: Rect2) -> bool:
-	var bins := _bin_rect(view.grow(8.0))
-	if bins == _visible_bins:
-		return false
-	_visible_bins = bins
-	_collect_features(bins)
-	return true
+static func _atlas_mesh(lines: PackedVector2Array) -> ArrayMesh:
+	if lines.is_empty():
+		return null
+	var vertices := PackedVector2Array()
+	var uv := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var count := lines.size() / 2
+	vertices.resize(count * 4)
+	uv.resize(count * 4)
+	indices.resize(count * 6)
+	for i in count:
+		var a := lines[i * 2]
+		var b := lines[i * 2 + 1]
+		var normal_angle := (b - a).orthogonal().angle()
+		var v := i * 4
+		vertices[v] = a
+		vertices[v + 1] = a
+		vertices[v + 2] = b
+		vertices[v + 3] = b
+		var left := Vector2(normal_angle, -1.0)
+		var right := Vector2(normal_angle, 1.0)
+		uv[v] = left
+		uv[v + 1] = right
+		uv[v + 2] = left
+		uv[v + 3] = right
+		var t := i * 6
+		indices[t] = v
+		indices[t + 1] = v + 1
+		indices[t + 2] = v + 2
+		indices[t + 3] = v + 1
+		indices[t + 4] = v + 3
+		indices[t + 5] = v + 2
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_TEX_UV] = uv
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh.custom_aabb = mesh.get_aabb().grow(40.0) # include the shader-expanded edges when culling
+	return mesh
 
 
 func outer_changed() -> bool:

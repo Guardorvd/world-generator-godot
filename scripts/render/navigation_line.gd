@@ -6,6 +6,7 @@ const Roads = preload("res://scripts/game/road_navigation.gd")
 const REACH := 70.0
 const SEARCH_BLOCK := 32
 const REDRAW_STEP := 0.4
+const AVOID_MS := 6000 # recheck a locally blocked edge after the obstacle snapshot has had time to change
 const PIECE := 0.75     # длина кусочка штриха, м; штрих — DASH кусочков, пауза — столько же
 const DASH := 2
 const HALF := 0.14      # полуширина штриха, м
@@ -60,6 +61,7 @@ var timings_us := {}
 var _ledger_version := -1
 var _region_key_hash := 0
 var _outer_trails := 0
+var _blocked_edges := {}
 
 func _network_revision() -> Vector4i:
 	var outer_trails := 0
@@ -85,6 +87,7 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	_ledger_version = -1
 	_region_key_hash = 0
 	_goal = {}
+	_blocked_edges.clear()
 	path.clear()
 	status = ""
 	mesh = null
@@ -102,6 +105,7 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_request = {}
 	if _search_roads != null: _search_roads.cancelled = true
 	_goal = goal
+	_blocked_edges.clear()
 	path.clear()
 	route_revision += 1
 	mesh = null
@@ -128,12 +132,11 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_rebuild(at, feet)
 
 
-func _rebuild(at: Vector2, feet := INF, recheck_graph := false) -> void:
+func _rebuild(at: Vector2, feet := INF) -> void:
 	if background_search:
-		_request_search(at, feet, recheck_graph)
+		_request_search(at, feet)
 		return
-	if recheck_graph: roads.build(_world, _heights)
-	path = roads.route_to(at, _target, feet)
+	path = roads.route_to(at, _target, feet, _avoidances())
 	_last_here = at
 	_accept_path()
 
@@ -203,6 +206,7 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 		if background_search:
 			_request_search(here, at.y)
 			return
+		_blocked_edges.clear()
 		roads.build(_world, _heights)
 		_revision = _network_revision()
 		_rebuild(here, at.y)
@@ -306,8 +310,10 @@ func _publish_paint(geometry: Dictionary, here: Vector2, feet: float) -> void:
 		mesh = null
 		_painted_at = Vector3.INF
 		if _reroute_timer <= 0.0:
-			var i: int = geometry.blocked
-			_rebuild(here, feet, i > _road_first and i <= _road_last)
+			var edge_index: int = geometry.blocked - _road_first - 1
+			if edge_index >= 0 and edge_index < roads.road_edges.size():
+				_blocked_edges[roads.road_edges[edge_index]] = Time.get_ticks_msec() + AVOID_MS
+			_rebuild(here, feet)
 		return
 	if geometry.vertices.is_empty():
 		mesh = null
@@ -517,20 +523,32 @@ func _ahead(s: float, dist: float) -> Vector2:
 	return path[i - 1].lerp(path[i], t)
 
 ## Only one worker exists. A newer goal/revision supersedes its result without blocking a frame.
-func _request_search(at: Vector2, feet: float, recheck_graph := false) -> void:
+func _request_search(at: Vector2, feet: float) -> void:
 	var revision := _network_revision()
 	if _search_task != -1 and _search_serial == _serial and _search_revision == revision: return
-	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial, recheck_graph=recheck_graph}
+	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial}
 	if _search_task != -1:
 		_search_roads.cancelled = true
 		return
 	_start_search()
 
+
+func _avoidances() -> Dictionary:
+	var now := Time.get_ticks_msec()
+	for edge: Vector2i in _blocked_edges.keys():
+		if _blocked_edges[edge] <= now:
+			_blocked_edges.erase(edge)
+	return _blocked_edges.duplicate()
+
+
 func _start_search() -> void:
 	var started := Time.get_ticks_usec()
 	var request := _request
 	_request = {}
-	var reuse: bool = roads != null and _revision == request.revision and not request.recheck_graph
+	var reuse: bool = roads != null and _revision == request.revision
+	if not reuse:
+		_blocked_edges.clear() # edge IDs belong to one graph revision
+	var avoid := _avoidances()
 	var h := Snapshot.capture(_heights, not reuse)
 	var search := Roads.new()
 	_search_roads = search
@@ -552,7 +570,7 @@ func _start_search() -> void:
 	_search_out = out
 	_search_task = WorkerThreadPool.add_task(func() -> void:
 		if not reuse: search.build(search._world, search._heights)
-		var found := search.route_to(request.at, request.target, request.feet) if not search.cancelled else PackedVector2Array()
+		var found := search.route_to(request.at, request.target, request.feet, avoid) if not search.cancelled else PackedVector2Array()
 		out.path = found
 		out.index = _path_index(found)
 		search._heights = null

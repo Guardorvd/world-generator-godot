@@ -23,6 +23,7 @@ func check(ok: bool, message: String) -> void:
 	if not ok: failures += 1
 func run() -> void:
 	topology()
+	blocked_road_edge()
 	overpass()
 	diagonal_bridge()
 	var h := Fixture.build(Fixture.definitions())
@@ -136,6 +137,29 @@ func run() -> void:
 
 func _road(axis: Array) -> Dictionary:
 	return {kind = "road", pts = axis.map(func(p: Vector2) -> Dictionary: return {x = p.x, y = p.y, w = 0.9})}
+
+
+func blocked_road_edge() -> void:
+	var world := RoadFixture.world()
+	var first := Vector2(10, 20)
+	var last := Vector2(70, 20)
+	world.trails = [
+		_road([first, Vector2(25, 14), Vector2(55, 14), last]),
+		_road([first, Vector2(25, 28), Vector2(55, 28), last]),
+	]
+	var nav := Roads.new()
+	nav.build(world)
+	nav.route_to(first * 4.0, last * 4.0)
+	check(not nav.road_edges.is_empty(), "computed road path retains its physical graph edges")
+	if nav.road_edges.is_empty():
+		return
+	var original := nav.road_edges.duplicate()
+	var blocked: Vector2i = original[original.size() / 2]
+	nav.route_to(first * 4.0, last * 4.0, INF, {blocked: true})
+	check(not nav.road_edges.is_empty() and not nav.road_edges.has(blocked),
+		"a temporary obstruction reroutes on the existing network")
+	nav.route_to(first * 4.0, last * 4.0)
+	check(nav.road_edges == original, "the original edge can be used again after the obstruction expires")
 
 
 func topology() -> void:

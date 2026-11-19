@@ -16,17 +16,30 @@ static func tiles(canvas: CanvasItem, data: Data, park: bool) -> void:
 		canvas.draw_texture_rect(data.tiles[key].texture, Rect2(Vector2(key) * span, span), false, tint)
 
 
+const PAPER_STROKES := [
+	[Color("#799999"), Color("#91afac"), 3.5, 2.3],
+	[Color("#938259"), Color("#f3dfae"), 2.7, 1.5],
+	[Color("#9d7850"), Color("#fff1ca"), 5.6, 3.8],
+	[Color("#f6edd0"), Color("#536c48"), 3.5, 1.8],
+]
+const LOCAL_STROKES := [
+	[Color("#85bfdc"), Data.WATER, 3.5, 2.3],
+	[Color("#b5a582"), Color("#fbf4e6"), 2.7, 1.5],
+	[Color("#bcaa8f"), Color("#fffdf7"), 5.6, 3.8],
+	[Color("#f2fbf3"), Color("#458775"), 3.5, 1.8],
+]
+
+
+static func stroke_scale(screen_scale: float) -> float:
+	return clampf(sqrt(screen_scale / 0.58), 0.34, 1.0) / screen_scale
+
+
 static func lines(canvas: CanvasItem, data: Data, screen_scale: float, park: bool) -> void:
-	var layers := data.strokes
-	var width := clampf(sqrt(screen_scale / 0.58), 0.34, 1.0) / screen_scale
-	_stroke(canvas, layers[Data.Line.RIVER], Color("#799999") if park else Color("#85bfdc"),
-		Color("#91afac") if park else Data.WATER, 3.5 * width, 2.3 * width)
-	_stroke(canvas, layers[Data.Line.TRAIL], Color("#938259") if park else Color("#b5a582"),
-		Color("#f3dfae") if park else Color("#fbf4e6"), 2.7 * width, 1.5 * width)
-	_stroke(canvas, layers[Data.Line.ROAD], Color("#9d7850") if park else Color("#bcaa8f"),
-		Color("#fff1ca") if park else Color("#fffdf7"), 5.6 * width, 3.8 * width)
-	_stroke(canvas, layers[Data.Line.BIKE_TRAIL], Color("#f6edd0") if park else Color("#f2fbf3"),
-		Color("#536c48") if park else Color("#458775"), 3.5 * width, 1.8 * width)
+	var styles := PAPER_STROKES if park else LOCAL_STROKES
+	var width := stroke_scale(screen_scale)
+	for kind in styles.size():
+		var style: Array = styles[kind]
+		_stroke(canvas, data.strokes[kind], style[0], style[1], style[2] * width, style[3] * width)
 
 
 static func _stroke(canvas: CanvasItem, lines: PackedVector2Array, edge: Color, fill: Color, outer: float, inner: float) -> void:

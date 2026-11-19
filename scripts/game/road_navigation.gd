@@ -11,6 +11,7 @@ var links := {}
 var levels := {}
 var searches := 0
 var road_route: Array[Dictionary] = [] # directed intervals of physical sections
+var road_edges: Array[Vector2i] = [] # one graph edge per pair of points on the road portion
 var road_first := 0
 var road_last := -1
 var complete := false
@@ -125,9 +126,10 @@ func nearest(at: Vector2) -> int:
 			distance = d
 	return best
 
-func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
+func route_to(from: Vector2, to: Vector2, feet := INF, avoided_edges := {}) -> PackedVector2Array:
 	searches += 1
 	road_route.clear()
+	road_edges.clear()
 	road_first = 0
 	road_last = -1
 	complete = false
@@ -170,6 +172,8 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 		var id := int(item.y)
 		if item.x > float(cost[id]) + 0.001: continue
 		for next: int in links[id]:
+			if not avoided_edges.is_empty() and avoided_edges.has(_edge_key(id, next)):
+				continue
 			var distance: float = cost[id] + points[id].distance_to(points[next])
 			if not cost.has(next) or distance < float(cost[next]):
 				cost[next] = distance
@@ -207,6 +211,7 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 	road_first = out.size() - 1
 	for n in range(1, chain.size()):
 		out.append(points[chain[n]])
+		road_edges.append(_edge_key(chain[n - 1], chain[n]))
 		_append_interval(chain[n - 1], chain[n])
 	road_last = out.size() - 1
 	out.append_array(finish.slice(1))
