@@ -246,19 +246,18 @@ func _test_carpet_publication() -> void:
 		and near_stones[Mesh.ARRAY_TEX_UV2].slice(0, shared) == far_stones[Mesh.ARRAY_TEX_UV2],
 		"road gravel changes LOD only after the discarded stones have dissolved")
 	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 3.0, false)
-	# 19.11.2026: квадрат в пределах видимости выкладывается каждый кадр — без доли общего срока и после него
-	# (прежде ковёр в такие кадры не выкладывал ничего и на скорости отставал от игрока)
-	check(carpet.update(Vector2.ZERO, 0.01, 1, true, false, 0, 5.0) and carpet.count == 3 and carpet.layers[0].nodes.has(Vector2i.ZERO),
-		"without an upload grant the nearest visible carpet sector is still published")
-	check(carpet.update(Vector2.ZERO, 0.01, 1, true, true, Time.get_ticks_usec() - 1, 5.0) and carpet.count == 6,
-		"after the common deadline exactly one more visible sector is published")
-	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false, 0, 5.0) and carpet.count == 6,
-		"sectors beyond the visible carpet range wait for a budget grant")
+	# 19.11.2026: у ковра своя доля кадра (GroundCarpet.UPLOAD_US): он выкладывается и без доли общего срока, и после
+	# него, и общий срок не занимает (прежде в такие кадры не выкладывалось ничего, и на скорости ковёр отставал)
+	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false, Time.get_ticks_usec() - 1, 5.0) and carpet.layers[0].nodes.has(Vector2i.ZERO)
+		and carpet.count >= 3 and carpet.count <= 3 * Carpet.SECTORS_PER_SLICE and not carpet._out.is_empty(),
+		"carpet publishes a bounded slice of its own without the shared grant and does not consume it")
 	var key := Vector3i.ZERO
 	var history: RefCounted = carpet._shown[key].history
 	check(history.displayed[0][19] == 5.0 and history.displayed[1][19] == 5.0,
 		"both forms start invisible when the delayed upload actually occurs")
-	check(carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty()
+	while carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and not carpet._out.is_empty():
+		pass
+	check(carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty()
 		and carpet.layers[0].nodes.has(Vector2i(Carpet.SECTORS_PER_SLICE, 0)),
 		"the next grant resumes the snapshot without repeating a sector")
 	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 5.1, false)

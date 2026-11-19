@@ -47,13 +47,28 @@ const STEP := 2.5           # на сколько метров сдвигает�
 ## по 8 м — чуть меньше, но втрое больше вызовов отрисовки, по 32 м — почти без отсечения
 const SECTOR := 4
 const MIN_CAPACITY := 64
-const SECTORS_PER_SLICE := 4
-const UPLOAD_US := 900
+## 19.11.2026: было 4 — при сотне изменившихся квадратов на склейку выкладка шла секунды, следующая склейка ждала её,
+## и ковёр отставал всё сильнее. Квадрат выкладывается за десятки мкс; порцию держит срок UPLOAD_US
+const SECTORS_PER_SLICE := 32
+## 19.11.2026: своя доля кадра ковра на выкладку, мс×1000. Не из общего срока StreamFrameBudget и не по очереди с
+## рельефом и деревьями: квадрат стоит ~0,1 мс (замер carpet_ride_probe), за кадр уходит до 15 квадратов, склейка
+## выкладывается за 2–5 кадров. Прежде (900 мкс из общего срока, 4 квадрата, ~раз в 3–6 кадров) выкладка склейки
+## тянулась 1–2 с, следующая склейка ждала её, и на 14 м/с ковёр впереди появлялся в 10–20 м от игрока.
+const UPLOAD_US := 1500
 ## 19.11.2026: обязательная порция. Квадрат, который виден или станет виден до следующей склейки, выкладывается
 ## каждый кадр по одному — без доли общего срока кадра (StreamFrameBudget) и после него. Общий срок делят рельеф,
 ## вода, деревья и области; прежде ковёр получал его примерно раз в шесть кадров, на скорости очередь росла
 ## быстрее, чем выкладывалась, и ковёр появлялся рывками или только после остановки (регрессия 19.11, и раньше
 ## такая же после правок «пиков кадра»). Один квадрат — около 0,1–0,3 мс; дальние квадраты ждут бюджет, как прежде.
+## 19.11.2026: упреждение ковра не длиннее пути за LEAD_MAX_S. Задержка склейки росла (новых плиток больше →
+## склейка дольше → упреждение длиннее → ещё больше плиток) до 2 с и 80 м впереди, и ковёр у игрока не успевал.
+const LEAD_MAX_S := 1.2
+## 19.11.2026: новых плиток за одну склейку не больше JOB_TILES (ближние к пути — первыми), остальные — в следующей
+## склейке сразу же; считаются они группой на BUILD_THREADS потоках пула. Плитка в GDScript стоит ~4,5 мс, на 4 потоках
+## ~1,7 мс (больше потоков — медленнее: потоки GDScript мешают друг другу). Склейка на сотню плиток шла секунду и
+## больше, и всё это время ничего нового не выкладывалось; теперь склейка ~0,1 с при любой скорости.
+const JOB_TILES := 48
+const BUILD_THREADS := 2
 const URGENT_PAD := 6.0     # м за видимой дальностью, ещё обязательные (запас на ход до следующей склейки)
 const KINDS := Models.CARPET_KINDS
 ## Ветер и свет вида: [sway, flutter, sway_speed, ao, glow, base_shade] (см. VegetationLayer._wind_mat) и насколько трава расступается у игрока, м
@@ -95,6 +110,10 @@ var capped := 0              # сколько раз склейка упёрла
 var last_job_ms := 0.0
 var max_job_ms := 0.0
 var tiles_built := 0         # плиток, посчитанных с запуска (замер)
+var job_parts := {}          # 19.11.2026: части последней склейки, мс — очередь пула, новые плитки, публикация (замер)
+var job_parts_max := {}
+var present_us := 0          # замер: время выкладки квадратов на GPU и их число с запуска
+var present_sectors := 0
 
 var _tiles := {}             # Vector2i -> { id, full, rear }
 var _tile_y := {}            # Vector2i -> Vector2(мин. и макс. высота)
@@ -112,6 +131,7 @@ var _reset := false
 var _cuts: Array[Rect2] = []
 var _road_revision := -1
 var _job_started := 0
+var _incomplete := false     # прошлая склейка отложила часть новых плиток: следующая — сразу, без ожидания шага
 var _enabled := true
 
 
@@ -277,18 +297,15 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upl
 		if _last == Vector2.INF or road_revision != _road_revision:
 			_out.clear()
 		else:
-			var until := -1  # без доли общего срока — только обязательный ближний квадрат
-			if may_work and may_upload:
-				until = Time.get_ticks_usec() + UPLOAD_US
-				if deadline_usec > 0:
-					until = mini(until, deadline_usec)
-			var uploaded := _present_next(fade_clock, until, p)
+			# своя доля кадра (UPLOAD_US), независимо от общего срока и очереди групп подгрузки (may_work, may_upload,
+			# deadline_usec больше не ограничивают ковёр); общий срок она не занимает — возвращается false
+			var uploaded := _present_next(fade_clock, Time.get_ticks_usec() + UPLOAD_US, p)
 			if uploaded and _out.is_empty():
 				stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
-			return uploaded
-	var lead := stream.lead()
+			return false
+	var lead := stream.lead().limit_length(stream.velocity.length() * LEAD_MAX_S)
 	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
-			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision and fade_clock < _cleanup_at:
+			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision and fade_clock < _cleanup_at 			and not _incomplete:
 		return false
 	_last_forward = forward
 	_begin(p, lead, road_revision)
@@ -403,6 +420,9 @@ func _begin(p: Vector2, lead: Vector2, road_revision: int) -> void:
 
 ## Фоновая задача: плитки капсулы, недостающие досчитываются, буферы склеиваются из кусков.
 func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immediate: bool) -> void:
+	var job_began := Time.get_ticks_usec()
+	var built_before := tiles_built
+	var build_us := 0
 	var r := reach()
 	var reach_all := r * (EXTRA_REACH.x if directional else 1.0) + MARGIN
 	var coverage_lead := Vector2(lead.dot(forward), forward.cross(lead))
@@ -429,14 +449,39 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 			if visible:
 				need.append([d, i, j, far, directional and offset.dot(forward) < -tile_pad])
 	need.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var missing: Array[Vector2i] = []
+	for entry: Array in need:
+		var key := Vector2i(entry[1], entry[2])
+		if not _tiles.has(key):
+			missing.append(key)
+			if missing.size() >= JOB_TILES and not immediate:
+				break
+	if not missing.is_empty():
+		var build_began := Time.get_ticks_usec()
+		var built: Array = []
+		built.resize(missing.size())
+		var group := WorkerThreadPool.add_group_task(func(index: int) -> void:
+			built[index] = _build_tile(missing[index].x, missing[index].y), missing.size(), BUILD_THREADS, true, "Дернина: плитки")
+		WorkerThreadPool.wait_for_group_task_completion(group)
+		for index in missing.size():
+			var result: Dictionary = built[index]
+			_tile_id += 1
+			_tiles[missing[index]] = {id = _tile_id, full = result.parts, rear = []}
+			_tile_y[missing[index]] = result.y
+			tiles_built += 1
+		build_us += Time.get_ticks_usec() - build_began
 	var outs: Array = []        # слой -> квадрат -> набор плиток
 	for n in KINDS * 2:
 		outs.append({})
 	var total := 0
 	var used := {}
 	var overflow := false
+	_incomplete = false
 	for entry: Array in need:
 		var key := Vector2i(entry[1], entry[2])
+		if not _tiles.has(key):
+			_incomplete = true  # плитка — в следующей склейке
+			continue
 		used[key] = true
 		var tile := _cached_tile(key, entry[4])
 		var parts: Array = tile.rear if entry[4] else tile.full
@@ -473,15 +518,23 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 		if StreamPolicy.distance_to_coverage(Vector2(key.x + 0.5, key.y + 0.5) * TILE, p, lead) > keep_d:
 			_tiles.erase(key)
 			_tile_y.erase(key)
+	var publish_began := Time.get_ticks_usec()
 	_prepare_publication(outs, p, lead, fade_clock, immediate)
+	var ended := Time.get_ticks_usec()
+	job_parts = {queue = (job_began - _job_started) / 1000.0, tiles = tiles_built - built_before, build = build_us / 1000.0,
+		gather = (publish_began - job_began - build_us) / 1000.0, publish = (ended - publish_began) / 1000.0, pairs = _out.size(), need = need.size()}
+	for k: String in job_parts:
+		job_parts_max[k] = maxf(job_parts_max.get(k, 0.0), job_parts[k])
 	last_job_ms = (Time.get_ticks_usec() - _job_started) / 1000.0
 	max_job_ms = maxf(max_job_ms, last_job_ms)
 
 
 func _cached_tile(key: Vector2i, rear: bool) -> Dictionary:
 	if not _tiles.has(key):
+		var result := _build_tile(key.x, key.y)
 		_tile_id += 1
-		_tiles[key] = {id = _tile_id, full = _build_tile(key.x, key.y), rear = []}
+		_tiles[key] = {id = _tile_id, full = result.parts, rear = []}
+		_tile_y[key] = result.y
 		tiles_built += 1
 	var tile: Dictionary = _tiles[key]
 	if rear and tile.rear.is_empty():
@@ -567,6 +620,7 @@ func _present_next(now: float, deadline_usec := 0, urgent_from := Vector2.INF) -
 		if deadline_usec != 0 and (sectors_done >= SECTORS_PER_SLICE or Time.get_ticks_usec() >= deadline_usec):
 			if sectors_done > 0 or not _urgent(_out.back().key, urgent_from):
 				return sectors_done > 0
+		var pair_began := Time.get_ticks_usec()
 		var pair: Dictionary = _out.pop_back()
 		var key: Vector3i = pair.key
 		var sector := Vector2i(key.x, key.y)
@@ -574,6 +628,8 @@ func _present_next(now: float, deadline_usec := 0, urgent_from := Vector2.INF) -
 		for lod in 2:
 			var frame := history.commit(lod, pair.frames[lod], now)
 			_present_sector(key.z * 2 + lod, sector, frame)
+		present_us += Time.get_ticks_usec() - pair_began
+		present_sectors += 1
 		if history.shown[0] + history.shown[1] == 0:
 			_shown.erase(key)
 		else:
@@ -629,16 +685,17 @@ func _present_sector(n: int, sector: Vector2i, frame: Dictionary) -> void:
 
 
 ## Плитка (i, j): куртинки на сетке SUB × SUB с дрожанием, по видам. Пустой массив — травы здесь нет.
-func _build_tile(i: int, j: int) -> Array:
-	var parts := _grass_tile(i, j)
-	var stones := _road_stones(i, j)
-	if stones.is_empty():
-		return parts
-	if parts.is_empty():
-		for kind in KINDS:
-			parts.append(PackedFloat32Array())
-	parts[Models.CARPET_STONES] = stones
-	return parts
+## Возвращает {parts, y — мин. и макс. высота куртинок}. Общего состояния не пишет: плитки считаются параллельно
+func _build_tile(i: int, j: int) -> Dictionary:
+	var ys := [Vector2.ZERO]
+	var parts := _grass_tile(i, j, ys)
+	var stones := _road_stones(i, j, ys)
+	if not stones.is_empty():
+		if parts.is_empty():
+			for kind in KINDS:
+				parts.append(PackedFloat32Array())
+		parts[Models.CARPET_STONES] = stones
+	return {parts = parts, y = ys[0]}
 
 
 ## Размер россыпи в точке полотна (0 — нет): weight — маска полотна, across — поперечная координата (0 — ось, 1 — кромка),
@@ -674,7 +731,7 @@ static func road_stone_tint(surface: int, h: float) -> Color:
 
 
 ## Россыпь камней и комьев плитки (i, j) у дорожного полотна; пусто — полотна здесь нет.
-func _road_stones(i: int, j: int) -> PackedFloat32Array:
+func _road_stones(i: int, j: int, ys: Array) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	var refine = heights.road_refinement
 	if refine == null or stones <= 0.0:
@@ -715,14 +772,12 @@ func _road_stones(i: int, j: int) -> PackedFloat32Array:
 		y_high = maxf(y_high, y)
 	out.resize(n * STRIDE)
 	if n > 0:
-		var tile := Vector2i(i, j)
-		var old: Vector2 = _tile_y.get(tile, Vector2.ZERO)
-		_tile_y[tile] = Vector2(y_low, y_high + 0.7) if old == Vector2.ZERO else Vector2(minf(old.x, y_low), maxf(old.y, y_high + 0.7))
+		var old: Vector2 = ys[0]
+		ys[0] = Vector2(y_low, y_high + 0.7) if old == Vector2.ZERO else Vector2(minf(old.x, y_low), maxf(old.y, y_high + 0.7))
 	return out
 
 
-func _grass_tile(i: int, j: int) -> Array:
-	_tile_y[Vector2i(i, j)] = Vector2.ZERO
+func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var w := world
 	var k := j * w.W + i
 	var bd: Dictionary = Biomes.LIST[w.biome[k]]
@@ -844,7 +899,7 @@ func _grass_tile(i: int, j: int) -> Array:
 		any = any or filled[kind] > 0
 	if not any:
 		return []
-	_tile_y[Vector2i(i, j)] = Vector2(y_low, y_high + 0.7)
+	ys[0] = Vector2(y_low, y_high + 0.7)
 	return parts
 
 
