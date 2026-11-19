@@ -729,17 +729,23 @@ func set_paused(p: bool) -> void:
 	if p:
 		_close_settlement(false)
 	else:
-		_live_veg_dirty = false
-		_live_veg_due_ms = -1
 		_live_veg_pumping = false
 		_live_veg_fade_left = 0.0
 		_apply_lighting_and_fog()
 		_apply_live_fov()
-		var redraw := _apply_vegetation_settings()
+		# 19.11.2026: растительность уже применена на паузе (_tick_paused_preview). Раньше здесь каждый
+		# выход из паузы звал _apply_vegetation_settings: set_carpet ждал фоновую задачу ковра и выбрасывал её
+		# результат даже без изменений — рывок в момент возврата управления. Теперь только недоделанное
+		# изменение, и то в игре без ожидания задач (_tick_live_vegetation)
+		if _live_veg_dirty:
+			_live_veg_due_ms = mini(_live_veg_due_ms, Time.get_ticks_msec())
+			if DisplayServer.get_name() == "headless":
+				_live_veg_dirty = false
+				_live_veg_due_ms = -1
+				if _apply_vegetation_settings() and stream_coordinator.vegetation_update.is_valid():
+					stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 		if ambient != null:
 			ambient.density = GameSettings.PARTICLE_LEVELS[services.settings.particles].density
-		if redraw and DisplayServer.get_name() == "headless" and stream_coordinator.vegetation_update.is_valid():
-			stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	if travel_active():
 		audio.set_paused(true)
 	else:
@@ -799,6 +805,19 @@ func _apply_vegetation_settings() -> bool:
 	redraw = vegetation.set_mid_grass(services.settings.mid_grass) or redraw
 	var carpet_changed := vegetation.set_carpet()
 	return redraw or carpet_changed
+
+
+## Изменение растительности, не успевшее примениться на паузе: в игре — когда фоновые задачи свободны
+## (без ожидания их в кадре); если заняты дольше 1,5 с — всё же сейчас, иначе настройка не применится никогда
+func _tick_live_vegetation() -> void:
+	var now := Time.get_ticks_msec()
+	if vegetation == null or now < _live_veg_due_ms:
+		return
+	if vegetation.busy() and now < _live_veg_due_ms + 1500:
+		return
+	_live_veg_dirty = false
+	_live_veg_due_ms = -1
+	_apply_vegetation_settings() # обычная подгрузка дорисует новое сама (last_fill сброшен)
 
 
 func _tick_paused_preview(delta: float) -> void:
@@ -1516,6 +1535,8 @@ func _process(delta: float) -> void:
 	if paused:
 		_tick_paused_preview(delta)
 		return
+	if _live_veg_dirty:
+		_tick_live_vegetation()
 	var t0 := Time.get_ticks_usec()
 	tick_us.frames = tick_us.get("frames", 0) + 1
 	hud.set_summary_blocked(_opening or crash.active() or _placing_bike())
