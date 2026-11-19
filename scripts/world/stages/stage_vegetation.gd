@@ -54,11 +54,6 @@ const GAP_K := 0.75
 
 
 static func run(w: WorldData, surface: Heightfield = null) -> void:
-	var W := w.W
-	var H := w.H
-	w.CS = WorldData.CHUNK_SIZE
-	w.CW = ceili(float(W) / w.CS)
-	w.CH = ceili(float(H) / w.CS)
 	var bypasses: Array = []
 	if surface != null and surface.road_refinement != null:
 		for gap: Dictionary in surface.road_refinement.gaps:
@@ -80,9 +75,6 @@ static func place_plan(w: WorldData, f: Dictionary) -> void:
 	w.CW = ceili(float(W) / w.CS)
 	w.CH = ceili(float(H) / w.CS)
 	var part_us := Time.get_ticks_usec()
-	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
-	# С 12.2 ряды чанков считаются на всех ядрах (Parallel.bands), каждый в свой список; списки склеиваются
-	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.
 	var huts := ObjStore.collect_huts(w)
 	var massifs := RockMassif.by_chunk(f.massifs, W, H, w.CS)
 	var fast := Grid.fast_grid() if allow_fast else null
@@ -127,6 +119,9 @@ static func _plan_gdscript(w: WorldData, f: Dictionary, massifs: Array[PackedFlo
 	var CH := w.CH
 	var seed_num := w.seed_num
 	var part_us := Time.get_ticks_usec()
+	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
+	# С 12.2 ряды чанков считаются на всех ядрах (Parallel.bands), каждый в свой список; списки склеиваются
+	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.
 	var job := func(c0: int, c1: int) -> ObjStore:
 		var first := c0 * CW
 		var st := ObjStore.new(w, first, (c1 - c0) * CW, huts)
@@ -217,12 +212,15 @@ static func _plan_native(w: WorldData, f: Dictionary, massifs: Array[PackedFloat
 	# Метод объекта, а не лямбда: лямбда статической функции приходит в C# пустой
 	var engine_math := EngineTrig.new()
 	var trig := Callable(engine_math, "at")
-	var got: Dictionary = fast.VegetationPlan(w.seed_num, w.W, w.H, w.CS, w.CW, w.CH,
+	var got: Variant = fast.VegetationPlan(w.seed_num, w.W, w.H, w.CS, w.CW, w.CH,
 		f.biome, f.forest, f.stony, f.elev, f.slope, f.dw, f.temp, f.moist,
 		f.river, f.dist_path, f.village, f.light, f.age_n, f.wood, f.stand, f.glade, f.rock, w.path_mask,
 		_TABLES.water, _TABLES.trees, kinds_start, kinds, _TABLES.tree, PackedFloat64Array(Biomes.CROWN_RADIUS), trunk,
 		world_cover(w.seed_num), GameConfig.TILE, GameConfig.HS, massif_start, massif_data, massif_tor, core_start, core_data,
 		huts, trig)
+	if not (got is Dictionary and got.has("items")):
+		push_error("FastGrid.VegetationPlan не вернул раскладку — растительность плана на GDScript")
+		return false
 	var start: PackedInt32Array = got.start
 	var items: PackedInt32Array = got.items
 	var chunks: Array[PackedInt32Array] = []

@@ -1,6 +1,6 @@
 using System;
 
-// Native copy of RideRoutes cost preparation (ride_routes.gd, _cost_fields). Keep float32 parity.
+// Native copy of RideRoutes cost preparation (ride_routes.gd, cost_fields). Keep float32 parity.
 public partial class FastGrid
 {
 	/// <summary>Клетки, где values[i] &gt;= threshold (1), остальные 0: маска готовой сети по path_mask.</summary>
@@ -13,7 +13,7 @@ public partial class FastGrid
 	}
 
 	/// <summary>
-	/// Стоимости природных маршрутов (копия RideRoutes._cost_fields): cost — местность, у сети и реки дороже;
+	/// Стоимости природных маршрутов (копия RideRoutes.cost_fields): cost — местность, у сети и реки дороже;
 	/// wood — то же, открытая земля (вне wooded[biome]) дороже в openMul; block — самая высокая (hv) клетка каждого
 	/// блока blockSide × blockSide среди клеток положе topSlope, -1 — нет. Порядок обхода — по клеткам, как в GDScript
 	/// (при равной высоте остаётся первая). Возвращает {cost: float[], wood: float[], block: int[]}.
