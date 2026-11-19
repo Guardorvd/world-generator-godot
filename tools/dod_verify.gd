@@ -4,7 +4,9 @@ extends SceneTree
 ## географическую основу («network_game_cache», слои мира и базовый рельеф).
 ## Русла рек (rivers) и меш с метровой сеткой (mesh) — пока есть оба пути. Дорожное полотно RoadBed и метровая сетка
 ## RoadRefinement с 16.11.2026 только на C#: их проверяет tools/road_golden.gd (хеши), здесь они лишь готовят рельеф для mesh.
-##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,rivers,mesh] [--dir <папка кэша>]
+## Выбор стартовой области и океан с сухими ложбинами (relief) — на настоящем рельефе плана 768 нескольких сидов
+## (только этапы relief и ocean, без остальной генерации), --seeds a,b,c — свои сиды.
+##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,relief,rivers,mesh] [--dir <папка кэша>]
 ## Лимит 240 с (watchdog). Код 1 при любом расхождении.
 
 const SEED := "Север-1234"
@@ -42,6 +44,8 @@ func run() -> void:
 		return
 	if wanted("fields"):
 		verify_fields()
+	if wanted("relief"):
+		verify_relief()
 	if (wanted("rivers") or wanted("mesh")) and not verify_saved_world():
 		quit(1)
 		return
@@ -199,3 +203,84 @@ func clone_arrays(source: Array) -> Array:
 	for item: Variant in source:
 		copy.append(item.duplicate() if item != null else null)
 	return copy
+
+
+## Выбор старта (StageRelief._pick_start) и океан (StageOcean.run): GDScript и C# на одном рельефе плана, побайтно
+func verify_relief() -> void:
+	var seeds := _arg("--seeds", "Север-1234,Ущелье,Туман-4821,Янтарь-5150,a1,b2,c3,d4").split(",", false)
+	var slow_pick := 0.0
+	var fast_pick := 0.0
+	var slow_ocean := 0.0
+	var fast_ocean := 0.0
+	for seed_text: String in seeds:
+		var w := WorldData.new()
+		w.W = WorldGenerator.PLAN_SIZE
+		w.H = w.W
+		w.N = w.W * w.H
+		w.seed_text = seed_text
+		w.seed_num = WGRandom.hash_string(seed_text)
+		for name: String in WorldGenerator.NOISE_SLOTS:
+			w.noise[name] = Simplex.new(WorldGenerator.noise_rng(w.seed_num, name))
+		w.scale = float(w.N) / (512 * 512)
+		StageRelief.configure(w)
+		var t := Time.get_ticks_usec()
+		StageRelief.allow_fast_pick = false
+		StageRelief._pick_start(w)
+		slow_pick += (Time.get_ticks_usec() - t) / 1000.0
+		var slow_xy := Vector2(w.macro_x, w.macro_y)
+		w.macro_x = 0
+		w.macro_y = 0
+		t = Time.get_ticks_usec()
+		StageRelief.allow_fast_pick = true
+		StageRelief._pick_start(w)
+		fast_pick += (Time.get_ticks_usec() - t) / 1000.0
+		check(slow_xy == Vector2(w.macro_x, w.macro_y), "%s: старт %s (GDScript %s)" % [seed_text, Vector2(w.macro_x, w.macro_y), slow_xy])
+		# Сами высоты оценки, а не только выбранный сдвиг: выбранный и нулевой сдвиг
+		var probe := [[0.0, 0, w.macro_x, w.macro_y], [0.0, 1, 0.0, 0.0]]
+		check(var_to_bytes(StageRelief._start_raws(w, probe, null)) == var_to_bytes(StageRelief._start_raws(w, probe, Grid.fast_grid())),
+			"%s: сырые высоты оценки старта побайтно" % seed_text)
+		var h0 := StageRelief.height_rect(w, 0, 0, w.W, w.H, true)
+		# Поле рельефа C# (ReliefField, общий с оценкой старта расчёт клетки) против GDScript на куске плана с горами
+		var at := _relief_probe(h0, w.W)
+		Grid.allow_fast = false
+		var slow_rect := StageRelief.height_rect(w, at.x, at.y, 48, 48, true)
+		Grid.allow_fast = true
+		var fast_rect := StageRelief.height_rect(w, at.x, at.y, 48, 48, true)
+		check(slow_rect.to_byte_array() == fast_rect.to_byte_array() and fast_rect == _crop(h0, w.W, at, 48),
+			"%s: рельеф 48×48 у %s: C# == GDScript побайтно" % [seed_text, at])
+		w.h = h0.duplicate()
+		t = Time.get_ticks_usec()
+		StageOcean.allow_fast = false
+		StageOcean.run(w)
+		slow_ocean += (Time.get_ticks_usec() - t) / 1000.0
+		var slow_h := w.h.to_byte_array()
+		var slow_sea := w.ocean
+		var slow_dried: int = w.generation_profile.dried_pocket_cells
+		w.h = h0.duplicate()
+		t = Time.get_ticks_usec()
+		StageOcean.allow_fast = true
+		StageOcean.run(w)
+		fast_ocean += (Time.get_ticks_usec() - t) / 1000.0
+		check(slow_h == w.h.to_byte_array() and slow_sea == w.ocean and slow_dried == w.generation_profile.dried_pocket_cells,
+			"%s: океан и высоты побайтно (осушено %d клеток, океан %d)" % [seed_text, slow_dried, slow_sea.count(1)])
+	StageRelief.allow_fast_pick = true
+	StageOcean.allow_fast = true
+	var n := float(seeds.size())
+	print("выбор старта: GDScript %.0f мс, C# %.1f мс на сид" % [slow_pick / n, fast_pick / n])
+	print("океан: GDScript %.0f мс, C# %.1f мс на сид" % [slow_ocean / n, fast_ocean / n])
+
+
+## Угол куска 48×48 с самой высокой клеткой плана (горы со слоем склонов), не у края
+func _relief_probe(h: PackedFloat32Array, W: int) -> Vector2i:
+	var top := 0
+	for i in h.size():
+		if h[i] > h[top]:
+			top = i
+	return Vector2i(clampi(top % W - 24, 0, W - 48), clampi(top / W - 24, 0, W - 48))
+
+
+func _crop(h: PackedFloat32Array, W: int, at: Vector2i, side: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	for y in side:
+		out.append_array(h.slice((at.y + y) * W + at.x, (at.y + y) * W + at.x + side))
+	return out

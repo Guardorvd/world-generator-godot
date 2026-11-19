@@ -239,80 +239,106 @@ public partial class FastGrid
 		double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
 		void Row(int j)
 		{
-			int y = y0 + j;
 			for (int i = 0; i < W; i++)
-			{
-				int x = x0 + i;
-				double wx = Fbm(warpX, x / 240.0, y / 240.0, 3) * 25.0;
-				double wy = Fbm(warpY, x / 240.0 + 13.1, y / 240.0 - 7.7, 3) * 25.0;
-				double X = x + wx;
-				double Y = y + wy;
-				// С 3.7 мелкие октавы основания затухают внутри массива.
-				double mountainField = Fbm(mask, X / (Massif * mountainScale) + 7.0, Y / (Massif * mountainScale) - 3.0, 2) + mountainBias;
-				double t = Clamp01(mountainField / MaskEdge);
-				double core = t * t * (3.0 - 2.0 * t);
-				double cx = X / 240.0, cy = Y / 240.0, low = 0.0, high = 0.0, amp = 1.0, fr = 1.0, norm = 0.0;
-				for (int o = 0; o < 6; o++)
-				{
-					if (o < 2)
-						low += amp * Noise(cont, cx * fr, cy * fr);
-					else
-						high += amp * Noise(cont, cx * fr, cy * fr);
-					norm += amp;
-					amp *= 0.5;
-					fr *= 2.0;
-				}
-				double detail = 1.0 - 0.85 * core;
-				double c = (low + high * detail) / norm;
-				double fineC = high * detail / norm;
-				double macro = Fbm(cont, (X + mx) / Macro + 91.7, (Y + my) / Macro - 43.1, 2);
-				double lift = macro * MacroAmp;
-				double bas = c + (lift < MacroLift ? lift : MacroLift) + LandBias;
-				t = Clamp01((bas - -0.05) / (0.25 - -0.05));
-				double land = t * t * (3.0 - 2.0 * t);
-				double m = core;
-				t = Clamp01((Fbm(hill, X / Character + 41.9, Y / Character - 66.1, 2) - -0.15) / 0.4);
-				double rough = t * t * (3.0 - 2.0 * t);
-				t = Clamp01((bas - 0.18) / 0.17);
-				double inland = t * t * (3.0 - 2.0 * t);
-				t = Clamp01(1.0 - Math.Abs(Noise(ridge, X / Valley + 5.3, Y / Valley - 9.4)) / ValleyWidth);
-				double valley = t * t * (3.0 - 2.0 * t);
-				double width = 0.1 + 0.4 * foothillSpread * (0.6 + 0.4 * rough);
-				t = Clamp01((mountainField + width) / (MaskEdge * 0.65 + width));
-				double foothills = t * t * (3.0 - 2.0 * t) * (1.0 - core) * foothillSpread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley);
-				t = Clamp01((m - Foothills) / Foothills);
-				m *= rough + (1.0 - rough) * m * m;
-				rough = Math.Max(rough, t * t * (3.0 - 2.0 * t));
-				rough += (1.0 - rough) * foothills;
-				// С GEO 7 мелкие октавы основания вглубь суши слабее; берег прежний.
-				double h = (bas - fineC * (1.0 - InlandDetail) * inland) * 0.55;
-				if (h > SeaRaw)
-					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
-				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
-				if (foothills > 0.0)
-				{
-					double rolling = Fbm(hill, X / footScale + 32.4, Y / footScale - 18.6, 2);
-					hills += (rolling - hills) * foothills;
-					h += foothills * (FoothillLift + 0.08 * rolling) * mountainHeight;
-				}
-				h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough) * (1.0 - m * 0.85);
-				double calm = (1.0 - rough) * (1.0 - m) * (1.0 - m) * (1.0 - foothills);
-			 double shoreT = Clamp01(((h - SeaRaw) - 0.015) / (0.08 - 0.015));
-			 double shoreFade = shoreT * shoreT * (3.0 - 2.0 * shoreT);
-			 h += (hills * 0.025 - valley * 0.008) * calm * shoreFade;
-			 h -= valley * ValleyDepth * rough * inland;
-				if (m > 0.0)
-				{
-					double relief = Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland);
-					double support = ReliefSmooth(0.12, 0.55, relief);
-					h -= Math.Max(0.0, h - SeaRaw) * 0.60 * core * inland * (1.0 - support);
-					h += relief * m * MountainAmp * mountainHeight;
-				}
-				outH[j * W + i] = (float)h;
-			}
+				outH[j * W + i] = (float)BaseAt(warpX, warpY, cont, mask, ridge, hill, x0 + i, y0 + j, mx, my, mountainScale, mountainBias, mountainHeight, foothillSpread, footScale, wide);
 		}
 		RunRows(H, parallel, Row);
 		return outH;
+	}
+
+	/// <summary>
+	/// Сырой макрорельеф в точках (px[k], py[k]) со своим сдвигом шума материков (mx[k], my[k]), в double,
+	/// как StageRelief.raw_at: оценка кандидатов стартовой области (StageRelief._start_raws).
+	/// </summary>
+	public double[] ReliefRawPoints(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double[] mx, double[] my, double[] px, double[] py, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread)
+	{
+		int n = px.Length;
+		var raw = new double[n];
+		double footScale = 100.0 * Math.Max(mountainScale, mountainHeight / HeightPerWidth);
+		double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
+		System.Threading.Tasks.Parallel.For(0, n, k =>
+			raw[k] = BaseAt(warpX, warpY, cont, mask, ridge, hill, px[k], py[k], mx[k], my[k], mountainScale, mountainBias, mountainHeight, foothillSpread, footScale, wide));
+		return raw;
+	}
+
+	/// <summary>fbm(px[k], py[k], oct) в точках: копия Simplex.fbm с усилением 0.5 и лакунарностью 2.</summary>
+	public double[] FbmPoints(int[] perm, double[] px, double[] py, int oct)
+	{
+		var v = new double[px.Length];
+		for (int k = 0; k < v.Length; k++)
+			v[k] = Fbm(perm, px[k], py[k], oct);
+		return v;
+	}
+
+	/// <summary>Макрорельеф одной клетки (копия StageRelief.raw_at); footScale и wide — параметры мира, см. BaseField.</summary>
+	private static double BaseAt(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double x, double y, double mx, double my, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, double footScale, double wide)
+	{
+		double wx = Fbm(warpX, x / 240.0, y / 240.0, 3) * 25.0;
+		double wy = Fbm(warpY, x / 240.0 + 13.1, y / 240.0 - 7.7, 3) * 25.0;
+		double X = x + wx;
+		double Y = y + wy;
+		// С 3.7 мелкие октавы основания затухают внутри массива.
+		double mountainField = Fbm(mask, X / (Massif * mountainScale) + 7.0, Y / (Massif * mountainScale) - 3.0, 2) + mountainBias;
+		double t = Clamp01(mountainField / MaskEdge);
+		double core = t * t * (3.0 - 2.0 * t);
+		double cx = X / 240.0, cy = Y / 240.0, low = 0.0, high = 0.0, amp = 1.0, fr = 1.0, norm = 0.0;
+		for (int o = 0; o < 6; o++)
+		{
+			if (o < 2)
+				low += amp * Noise(cont, cx * fr, cy * fr);
+			else
+				high += amp * Noise(cont, cx * fr, cy * fr);
+			norm += amp;
+			amp *= 0.5;
+			fr *= 2.0;
+		}
+		double detail = 1.0 - 0.85 * core;
+		double c = (low + high * detail) / norm;
+		double fineC = high * detail / norm;
+		double macro = Fbm(cont, (X + mx) / Macro + 91.7, (Y + my) / Macro - 43.1, 2);
+		double lift = macro * MacroAmp;
+		double bas = c + (lift < MacroLift ? lift : MacroLift) + LandBias;
+		t = Clamp01((bas - -0.05) / (0.25 - -0.05));
+		double land = t * t * (3.0 - 2.0 * t);
+		double m = core;
+		t = Clamp01((Fbm(hill, X / Character + 41.9, Y / Character - 66.1, 2) - -0.15) / 0.4);
+		double rough = t * t * (3.0 - 2.0 * t);
+		t = Clamp01((bas - 0.18) / 0.17);
+		double inland = t * t * (3.0 - 2.0 * t);
+		t = Clamp01(1.0 - Math.Abs(Noise(ridge, X / Valley + 5.3, Y / Valley - 9.4)) / ValleyWidth);
+		double valley = t * t * (3.0 - 2.0 * t);
+		double width = 0.1 + 0.4 * foothillSpread * (0.6 + 0.4 * rough);
+		t = Clamp01((mountainField + width) / (MaskEdge * 0.65 + width));
+		double foothills = t * t * (3.0 - 2.0 * t) * (1.0 - core) * foothillSpread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley);
+		t = Clamp01((m - Foothills) / Foothills);
+		m *= rough + (1.0 - rough) * m * m;
+		rough = Math.Max(rough, t * t * (3.0 - 2.0 * t));
+		rough += (1.0 - rough) * foothills;
+		// С GEO 7 мелкие октавы основания вглубь суши слабее; берег прежний.
+		double h = (bas - fineC * (1.0 - InlandDetail) * inland) * 0.55;
+		if (h > SeaRaw)
+			h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
+		double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
+		if (foothills > 0.0)
+		{
+			double rolling = Fbm(hill, X / footScale + 32.4, Y / footScale - 18.6, 2);
+			hills += (rolling - hills) * foothills;
+			h += foothills * (FoothillLift + 0.08 * rolling) * mountainHeight;
+		}
+		h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough) * (1.0 - m * 0.85);
+		double calm = (1.0 - rough) * (1.0 - m) * (1.0 - m) * (1.0 - foothills);
+		double shoreT = Clamp01(((h - SeaRaw) - 0.015) / (0.08 - 0.015));
+		double shoreFade = shoreT * shoreT * (3.0 - 2.0 * shoreT);
+		h += (hills * 0.025 - valley * 0.008) * calm * shoreFade;
+		h -= valley * ValleyDepth * rough * inland;
+		if (m > 0.0)
+		{
+			double relief = Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland);
+			double support = ReliefSmooth(0.12, 0.55, relief);
+			h -= Math.Max(0.0, h - SeaRaw) * 0.60 * core * inland * (1.0 - support);
+			h += relief * m * MountainAmp * mountainHeight;
+		}
+		return h;
 	}
 
 

@@ -54,6 +54,8 @@ const PICK_TRIES := 48
 const START_SIDE := 512
 const PICK_LAND := 0.6
 static var legacy_start := false
+## false — оценка кандидатов старта на GDScript (эталон для tools/dod_verify.gd -- --only relief)
+static var allow_fast_pick := true
 ## Выбор старта с 14.11.2026 (GEO 17), см. docs/MACRO_GEOGRAPHY.md. Оценивается весь игровой план PICK_SIDE
 ## (= WorldGenerator.PLAN_SIZE, постоянный на сид при любом --size), из PICK_CANDIDATES сдвигов по спирали
 ## (первые 48 — прежние) выбирается лучший, а не первый подходящий. Время ограничено: подъём материка
@@ -98,43 +100,93 @@ static func _pick_start(w: WorldData) -> void:
 	if legacy_start:
 		_pick_start_legacy(w)
 		return
-	var n := w.noise
 	var coastal := is_coastal(w.seed_num)
+	var fast := Grid.fast_grid() if allow_fast_pick else null
 	# 1. Подъём материка по плану (сетка 8 × 8) у всех кандидатов: чем выше, тем меньше океана
-	var cands := []
+	var offsets := PackedFloat64Array()
+	var px := PackedFloat64Array()
+	var py := PackedFloat64Array()
 	for k in PICK_CANDIDATES:
 		var a := k * 2.39996323
 		var r := MACRO * 0.6 * sqrt(float(k))
 		var mx := roundf(r * cos(a))
 		var my := roundf(r * sin(a))
-		var lift := 0.0
+		offsets.append_array([mx, my])
 		for sj in 8:
 			for si in 8:
 				var x := floorf((si + 0.5) * PICK_SIDE / 8.0)
 				var y := floorf((sj + 0.5) * PICK_SIDE / 8.0)
-				lift += minf(n.cont.fbm((x + mx) / MACRO + 91.7, (y + my) / MACRO - 43.1, 2) * MACRO_AMP, MACRO_LIFT)
-		cands.append([lift, k, mx, my])
+				px.append((x + mx) / MACRO + 91.7)
+				py.append((y + my) / MACRO - 43.1)
+	var macro: PackedFloat64Array
+	if fast != null:
+		macro = fast.FbmPoints(w.noise.cont.perm, px, py, 2)
+	else:
+		macro.resize(px.size())
+		for p in px.size():
+			macro[p] = w.noise.cont.fbm(px[p], py[p], 2)
+	var cands := []
+	for k in PICK_CANDIDATES:
+		var lift := 0.0
+		for p in range(k * 64, k * 64 + 64):
+			lift += minf(macro[p] * MACRO_AMP, MACRO_LIFT)
+		cands.append([lift, k, offsets[2 * k], offsets[2 * k + 1]])
 	cands.sort_custom(func(p: Array, q: Array) -> bool: return p[0] > q[0] or (p[0] == q[0] and p[1] < q[1]))
 	# 2. Финалисты: обычный мир — самые «материковые»; прибрежный — равномерно по всему ряду подъёма
 	var finalists := []
 	for f in PICK_FINALISTS:
 		finalists.append(cands[roundi(f * (cands.size() - 1) / float(PICK_FINALISTS - 1)) if coastal else f])
-	# Финалисты оцениваются параллельно, у каждой задачи свои копии шумов; выбор — по порядку, как подряд
-	var scores := Parallel.bands(finalists.size(), func(a: int, b: int) -> PackedFloat64Array:
-		var own := {}
-		for key: String in ["warpX", "warpY", "cont", "mask", "ridge", "hill"]:
-			own[key] = w.noise[key].clone()
-		var out := PackedFloat64Array()
-		for f in range(a, b):
-			out.append(_start_score(w, own, finalists[f][2], finalists[f][3], coastal))
-		return out, 1)
+	var raws := _start_raws(w, finalists, fast)
 	var best := INF
 	for f in finalists.size():
-		var score: float = scores[f][0]
+		var score := _start_score(raws[f], coastal)
 		if score < best:
 			best = score
 			w.macro_x = finalists[f][2]
 			w.macro_y = finalists[f][3]
+
+
+## Сырой макрорельеф (raw_at) финалистов на сетке PICK_GRID² плана, по строкам; одна сетка на финалиста.
+## C# — одним вызовом FastGrid.ReliefRawPoints, иначе параллельно, у каждой задачи свои копии шумов
+static func _start_raws(w: WorldData, finalists: Array, fast: Object) -> Array:
+	var G := PICK_GRID
+	var grid := PackedFloat64Array()
+	for sj in G:
+		for si in G:
+			grid.append_array([floorf((si + 0.5) * PICK_SIDE / float(G)), floorf((sj + 0.5) * PICK_SIDE / float(G))])
+	var out := []
+	if fast != null:
+		var px := PackedFloat64Array()
+		var py := PackedFloat64Array()
+		var mx := PackedFloat64Array()
+		var my := PackedFloat64Array()
+		for f in finalists.size():
+			for p in G * G:
+				px.append(grid[2 * p])
+				py.append(grid[2 * p + 1])
+				mx.append(finalists[f][2])
+				my.append(finalists[f][3])
+		var n := w.noise
+		var raw: PackedFloat64Array = fast.ReliefRawPoints(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm,
+			mx, my, px, py, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
+		for f in finalists.size():
+			out.append(raw.slice(f * G * G, (f + 1) * G * G))
+		return out
+	for done: Array in Parallel.bands(finalists.size(), func(a: int, b: int) -> Array:
+		var own := {}
+		for key: String in ["warpX", "warpY", "cont", "mask", "ridge", "hill"]:
+			own[key] = w.noise[key].clone()
+		var part := []
+		for f in range(a, b):
+			var raw := PackedFloat64Array()
+			raw.resize(G * G)
+			for p in G * G:
+				raw[p] = raw_at(own.warpX, own.warpY, own.cont, own.mask, own.ridge, own.hill, grid[2 * p], grid[2 * p + 1],
+					finalists[f][2], finalists[f][3], w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
+			part.append(raw)
+		return part, 1):
+		out.append_array(done)
+	return out
 
 
 ## Сид предпочитает прибрежную карту (своя независимая случайность, общий RNG не расходуется)
@@ -142,23 +194,20 @@ static func is_coastal(seed_num: int) -> bool:
 	return WGRandom.at(seed_num, "relief.coastal").next_float() < COASTAL_SHARE
 
 
-## Оценка сдвига (меньше — лучше) по макрорельефу без слоя склонов на сетке PICK_GRID² плана
-static func _start_score(w: WorldData, n: Dictionary, mx: float, my: float, coastal: bool) -> float:
+## Оценка сдвига (меньше — лучше) по макрорельефу без слоя склонов на сетке PICK_GRID² плана (raws — из _start_raws)
+static func _start_score(raws: PackedFloat64Array, coastal: bool) -> float:
 	var G := PICK_GRID
 	var sea := PackedByteArray()
 	sea.resize(G * G)
 	var heights := PackedFloat32Array()
 	var sea_n := 0
-	for sj in G:
-		for si in G:
-			var x := floorf((si + 0.5) * PICK_SIDE / float(G))
-			var y := floorf((sj + 0.5) * PICK_SIDE / float(G))
-			var raw := raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, x, y, mx, my, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
-			if raw < SEA_RAW:
-				sea[sj * G + si] = 1
-				sea_n += 1
-			else:
-				heights.append(normalize(raw))
+	for i in G * G:
+		var raw := raws[i]
+		if raw < SEA_RAW:
+			sea[i] = 1
+			sea_n += 1
+		else:
+			heights.append(normalize(raw))
 	# Океан, связанный с краем плана; остальное — замкнутые понижения ниже моря посреди суши
 	var open := PackedByteArray()
 	open.resize(G * G)

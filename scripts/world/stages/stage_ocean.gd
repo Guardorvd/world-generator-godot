@@ -13,9 +13,20 @@ const POCKET_DRY := 3000   # клеток (~5 га): меньше — сухая
 const POCKET_RIM := 0.002  # высота дна у края ложбины в единицах WorldData.h (~0,5 м)
 ## false — прежнее поведение (все понижения ниже нуля — море), для сравнения в стендах
 static var dry_pockets := true
+## false — поиск замкнутых понижений на GDScript (эталон для tools/dod_verify.gd -- --only relief)
+static var allow_fast := true
 
 
 static func run(w: WorldData) -> void:
+	var fast := Grid.fast_grid() if allow_fast else null
+	if fast != null:
+		# Копия на C# (FastGrid.OceanPockets): то же побайтно, без цикла GDScript по всем клеткам
+		var got: Dictionary = fast.OceanPockets(w.h, w.W, w.H, POCKET_DRY if dry_pockets else 0, POCKET_RIM)
+		if dry_pockets:
+			w.h = got.h
+			w.generation_profile.dried_pocket_cells = got.dried
+		w.ocean = got.ocean
+		return
 	var N := w.N
 	var W := w.W
 	var h := w.h
