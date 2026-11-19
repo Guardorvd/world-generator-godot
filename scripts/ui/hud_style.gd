@@ -132,6 +132,40 @@ static func bar(value: float, height := 6.0, fill_color := MINT, bg_color := Col
 	return progress
 
 
+## 19.11.2026: лёгкое появление окна поверх игры (доска, «Путешествие», табличка, карта): 0,2 с проявление
+## и масштаб from → 1 от центра. Только вход: закрытие остаётся мгновенным, игра по visible знает, что окно ушло
+static func pop_in(node: Control, from := 0.97, seconds := 0.2) -> void:
+	if not node.is_inside_tree() or DisplayServer.get_name() == "headless":
+		return
+	var old: Variant = node.get_meta(&"pop_tween") if node.has_meta(&"pop_tween") else null
+	if old is Tween and (old as Tween).is_valid():
+		(old as Tween).kill()
+	node.pivot_offset = node.size * 0.5
+	node.scale = Vector2.ONE * from
+	node.modulate.a = 0.0
+	var tw := node.create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(node, "scale", Vector2.ONE, seconds)
+	tw.tween_property(node, "modulate:a", 1.0, seconds * 0.8)
+	node.set_meta(&"pop_tween", tw)
+
+
+## Кратко подсветить элемент цветом (отказ, предупреждение) и, если нужно, дать импульс масштаба
+static func pulse(node: Control, color: Color, grow := 0.0, seconds := 0.4) -> void:
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return
+	var old: Variant = node.get_meta(&"pulse_tween") if node.has_meta(&"pulse_tween") else null
+	if old is Tween and (old as Tween).is_valid():
+		(old as Tween).kill()
+	node.modulate = color
+	var tw := node.create_tween().set_parallel(true)
+	tw.tween_property(node, "modulate", Color.WHITE, seconds).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if grow > 0.0:
+		node.pivot_offset = node.size * 0.5
+		node.scale = Vector2.ONE * (1.0 + grow)
+		tw.tween_property(node, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	node.set_meta(&"pulse_tween", tw)
+
+
 static func chip(text: String, text_color := MUTED, bg := RECESS, border := BORDER) -> PanelContainer:
 	var box := PanelContainer.new()
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE

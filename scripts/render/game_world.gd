@@ -1530,7 +1530,7 @@ func _process(delta: float) -> void:
 	if player == null or travel_active():
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
-	hud.lock_hint.visible = (not paused and not has_cursor_overlay() and not photo.active
+	hud.lock_hint.visible = (not paused and not _opening and not has_cursor_overlay() and not photo.active
 		and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 	if paused:
 		_tick_paused_preview(delta)

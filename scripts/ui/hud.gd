@@ -430,7 +430,10 @@ func set_map_visible(v: bool) -> void:
 		_close_travel()
 	else:
 		big_map.prepare_player_view()
+	var opening := v and not big_map.visible
 	big_map.visible = v
+	if opening:
+		HudStyle.pop_in(big_map, 0.96) # 19.11.2026: карта разворачивается, а не возникает за кадр
 	# Личная карта перехватывает мышь и позволяет ставить цель.
 	big_map.mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
 	big_map.hover = {}

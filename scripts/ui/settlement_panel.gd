@@ -67,6 +67,19 @@ func _button(text: String, action: Callable, parent: Container = null) -> Button
 	return button
 
 
+## 19.11.2026: подпись закрытия по текущему устройству (клавиатура или геймпад), а не постоянное «E / Esc»
+static func _close_keys() -> String:
+	var controls: Controls = GameContext.scope.controls if GameContext.scope != null else null
+	if controls == null:
+		return "E / Esc"
+	var keys := PackedStringArray()
+	for action: StringName in ([&"interact", &"back"] if controls.joypad else [&"interact", &"pause"]):
+		var key := controls.label(action)
+		if not key.is_empty() and not keys.has(key):
+			keys.append(key)
+	return " / ".join(keys) if not keys.is_empty() else "E / Esc"
+
+
 ## Убрать строки и кнопки: кнопки держат места (и записи поселений) прошлого мира
 func clear() -> void:
 	_drop_generation += 1
@@ -81,6 +94,7 @@ func clear() -> void:
 ## places: первый пункт — поселение у доски, остальные — доступные пункты для переноса.
 func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bool, quests: Quests = null,
 		offers: Array = [], source: MapData = null) -> void:
+	var was_open := visible
 	clear()
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 12)
@@ -94,7 +108,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	var title := _label(settlement.name, 26, head, HudStyle.CREAM)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	head.add_child(HudStyle.chip("E / Esc"))
+	head.add_child(HudStyle.chip(_close_keys()))
 	var close := _button("Продолжить путь", func() -> void: closed.emit(), head)
 	close.custom_minimum_size = Vector2(164, 44)
 	close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -109,14 +123,20 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	_box.add_child(board_map)
 	board_map.configure_board(source if source != null else MapData.new(world), destinations)
 	var can_travel := quests == null or not quests.cargo
-	board_map.place_selected.connect(func(place: Dictionary) -> void:
-		if can_travel and place.key != destinations[0].key:
-			travel_requested.emit(place))
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 8)
 	_box.add_child(actions)
+	var travel_note: Label = null
 	if destinations.size() > 1:
-		_label("Переместиться" if can_travel else "С грузом — своим ходом", 15, actions, MUTED)
+		travel_note = _label("Переместиться" if can_travel else "С грузом — своим ходом", 15, actions, MUTED)
+	# 19.11.2026: с грузом щелчок по месту на карте не молчит — подсвечивает, почему нельзя
+	board_map.place_selected.connect(func(place: Dictionary) -> void:
+		if place.key == destinations[0].key:
+			return
+		if can_travel:
+			travel_requested.emit(place)
+		elif travel_note != null:
+			HudStyle.pulse(travel_note, HudStyle.AMBER, 0.0, 0.6))
 	for place: Dictionary in destinations.slice(1):
 		var distance := Atlas.place_at(destinations[0]).distance_to(Atlas.place_at(place))
 		var transfer := _button("%s · %s" % [place.name, Util.distance_text(distance)],
@@ -140,6 +160,8 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	scroll.add_child(quests_box)
 	_quests_page(quests_box, settlement, quests, offers)
 	show()
+	if not was_open:
+		HudStyle.pop_in(self)
 	close.grab_focus()
 
 
@@ -205,6 +227,7 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 				quest_abandoned.emit()
 			else:
 				drop.text = "Точно отказаться? Нажмите ещё раз"
+				HudStyle.pulse(drop, HudStyle.AMBER, 0.04, 0.5) # 19.11.2026: заметно, что нужен второй щелчок
 				_drop_generation += 1
 				_reset_drop_later(drop, _drop_generation))
 	if offers.is_empty():

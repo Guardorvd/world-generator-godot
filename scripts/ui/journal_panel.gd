@@ -94,6 +94,7 @@ func close_lightbox() -> bool:
 ## data: {seed, close_hint, foot, bike, time, alt, photos, quests, places, pages, groups,
 ## active_quest, series, thanks, helped, track}
 func open(data: Dictionary, album_tab := false) -> void:
+	var was_open := visible
 	clear()
 	_build_header(data)
 	_path_page = VBoxContainer.new()
@@ -107,6 +108,8 @@ func open(data: Dictionary, album_tab := false) -> void:
 	_box.add_child(_album_page)
 	_fill_album(data)
 	show()
+	if not was_open:
+		HudStyle.pop_in(self)
 	_select(album_tab)
 	_close.grab_focus()
 
@@ -609,10 +612,14 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 
 
 func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: Control = null, focus_target := "close") -> void:
-	if _lightbox != null:
+	# 19.11.2026: при листании затемнение остаётся, меняется только карточка снимка (прежде пересоздавалось всё окно)
+	var flip := _lightbox != null and is_instance_valid(_lightbox) and _lightbox.get_parent() == self
+	if flip:
+		for old: Node in _lightbox.get_children():
+			_lightbox.remove_child(old)
+			old.queue_free()
+	elif _lightbox != null:
 		if is_instance_valid(_lightbox):
-			if _lightbox.get_parent() == self:
-				remove_child(_lightbox)
 			_lightbox.queue_free()
 		_lightbox = null
 	_lightbox_return_focus = return_to
@@ -622,19 +629,21 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 			idx = i
 			break
 
-	var backdrop := PanelContainer.new()
-	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
-	var bg_style := StyleBoxFlat.new()
-	bg_style.bg_color = Color(0.03, 0.07, 0.06, 0.88)
-	bg_style.set_corner_radius_all(12)
-	bg_style.set_content_margin_all(24)
-	backdrop.add_theme_stylebox_override("panel", bg_style)
-	backdrop.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-			close_lightbox())
-	_lightbox = backdrop
-	add_child(backdrop)
+	if not flip:
+		var shade := PanelContainer.new()
+		shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		shade.mouse_filter = Control.MOUSE_FILTER_STOP
+		var bg_style := StyleBoxFlat.new()
+		bg_style.bg_color = Color(0.03, 0.07, 0.06, 0.88)
+		bg_style.set_corner_radius_all(12)
+		bg_style.set_content_margin_all(24)
+		shade.add_theme_stylebox_override("panel", bg_style)
+		shade.gui_input.connect(func(e: InputEvent) -> void:
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				close_lightbox())
+		_lightbox = shade
+		add_child(shade)
+	var backdrop := _lightbox
 
 	var modal := PanelContainer.new()
 	modal.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -738,6 +747,10 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 	next_btn.focus_neighbor_top = close_btn.get_path()
 	prev_btn.focus_neighbor_right = next_btn.get_path()
 	next_btn.focus_neighbor_left = prev_btn.get_path()
+	if flip and DisplayServer.get_name() != "headless":
+		# листание: новая карточка мягко проявляется на месте прежней
+		modal.modulate.a = 0.35
+		modal.create_tween().tween_property(modal, "modulate:a", 1.0, 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	match focus_target:
 		"prev": prev_btn.grab_focus()
 		"next": next_btn.grab_focus()

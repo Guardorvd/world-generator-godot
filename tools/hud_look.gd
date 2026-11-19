@@ -255,6 +255,14 @@ func _journal_checks() -> void:
 		_check(hud.journal_panel._lightbox != null and hud.journal_panel._lightbox.visible, "клик по карточке открывает лайтбокс")
 		_check(root.get_visible_rect().encloses(hud.journal_panel._lightbox.get_global_rect()), "лайтбокс помещается в 1280×720")
 		await _shot("hud_journal_lightbox")
+		# 19.11.2026: листание меняет карточку, затемнение (само окно) остаётся тем же
+		var shade: Control = hud.journal_panel._lightbox
+		for b: Node in shade.find_children("*", "Button", true, false):
+			if (b as Button).text.begins_with("Следующий") and not (b as Button).disabled:
+				(b as Button).pressed.emit()
+				await process_frame
+				_check(hud.journal_panel._lightbox == shade and shade.get_child_count() == 1, "листание лайтбокса не пересоздаёт окно")
+				break
 		_check(hud.journal_panel.close_lightbox() and hud.journal_panel._lightbox == null, "лайтбокс закрывается")
 	# 19.11.2026: Tab под «Путешествием» не переключает вид сводки вслепую
 	var mode_before: int = hud.view_mode

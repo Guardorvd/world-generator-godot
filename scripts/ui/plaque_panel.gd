@@ -36,6 +36,7 @@ func _ready() -> void:
 ## title — название обелиска, text — описание, hint — подпись под текстом,
 ## meta — необязательные сведения: {form, in_album, series: Vector2i, key_hint}
 func open(title: String, text: String, hint := "", meta := {}) -> void:
+	var was_open := visible
 	clear()
 	var form := clampi(int(meta.get("form", 0)), 0, FORM_NAMES.size() - 1)
 	var series: Vector2i = meta.get("series", Vector2i.ZERO)
@@ -104,6 +105,8 @@ func open(title: String, text: String, hint := "", meta := {}) -> void:
 	footer.add_child(_close)
 
 	show()
+	if not was_open:
+		HudStyle.pop_in(self)
 	_close.grab_focus()
 
 
