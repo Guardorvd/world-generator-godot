@@ -28,6 +28,7 @@ const LEFT_WIDTH := 282.0  # 19.11.2026: ширина левой колонки 
 const TOAST_TIME := 3.5 # сколько сообщение висит на экране (с)
 const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
 const TOAST_QUEUE := 2 # сколько сообщений ждут в очереди, старые отбрасываются (19.11.2026: было 3)
+const TOAST_STALE := 8.0 # 19.11.2026: дольше этого (с) под картой или паузой — некритичное сообщение сгорает
 const TOAST_REPEAT := 20.0 # 19.11.2026: то же сообщение раньше этого срока (с) не повторяется
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
@@ -119,6 +120,7 @@ var _clock_row: HBoxContainer
 @onready var hint: HFlowContainer = $Hint
 @onready var prompt: HBoxContainer = $Prompt
 var _toast_left := 0.0
+var _toast_hidden_for := 0.0 # сколько сообщение или очередь пролежали под окном поверх игры (с)
 var _toast_queue: PackedStringArray = []
 var _toast_kinds: Array[StringName] = []
 var _toast_icon: TextureRect
@@ -382,6 +384,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	_toast_kinds.clear()
 	_toast_seen.clear()
 	_toast_left = 0.0
+	_toast_hidden_for = 0.0
 	$Toast.modulate.a = 0.0
 
 
@@ -413,6 +416,7 @@ func clear_world() -> void:
 	_toast_kinds.clear()
 	_toast_seen.clear()
 	_toast_left = 0.0
+	_toast_hidden_for = 0.0
 	$Toast.modulate.a = 0.0
 	set_hints([], [])
 	set_photo_mode(false)
@@ -844,9 +848,13 @@ func quest_changed() -> void:
 		return
 	if _flash_tween != null and _flash_tween.is_valid():
 		_flash_tween.kill()
-	tracker.modulate = Color(1.12, 1.18, 1.15)
-	_flash_tween = create_tween()
-	_flash_tween.tween_property(tracker, "modulate", Color.WHITE, 0.8)
+	# 19.11.2026: вспышка цветом задания и короткий импульс масштаба; затухание мягкое, а не линейное
+	tracker.modulate = Color.WHITE.lerp(quest_color(), 0.35) * 1.15
+	tracker.pivot_offset = tracker.size * 0.5
+	tracker.scale = Vector2.ONE * 1.03
+	_flash_tween = create_tween().set_parallel(true)
+	_flash_tween.tween_property(tracker, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_flash_tween.tween_property(tracker, "modulate", Color.WHITE, 0.8).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 
 ## Перерисовать счётчик задания (игрок в px, pz)
@@ -931,8 +939,14 @@ func navigation_visible() -> bool:
 
 
 func _summary_allowed() -> bool:
-	return is_visible_in_tree() and not _photo_mode and not big_map.visible \
-		and not settlement_panel.visible and not _summary_blocked
+	return is_visible_in_tree() and not _photo_mode and not _overlay_open() and not _summary_blocked
+
+
+## 19.11.2026: окна поверх игры — карта, доска поселения, «Путешествие», табличка. Под ними сводка, прибор
+## и сообщения не видны, а Tab не переключает вид вслепую (раньше журнал и табличка сюда не входили)
+func _overlay_open() -> bool:
+	return big_map.visible or settlement_panel.visible \
+		or (journal_panel != null and journal_panel.visible) or (plaque_panel != null and plaque_panel.visible)
 
 
 func set_summary_blocked(blocked: bool) -> void:
@@ -964,11 +978,11 @@ func _apply_reveal() -> void:
 	tracker.self_modulate.a = tracker_alpha
 	_tracker_content.modulate.a = tracker_alpha
 	_layout_left_column()
-	var urgent: bool = _hint_urgent and not _photo_mode and not big_map.visible and not settlement_panel.visible
+	var urgent: bool = _hint_urgent and not _photo_mode and not _overlay_open()
 	hint.visible = (alpha > 0.0 or urgent) and hint.get_child_count() > 0
 	hint.modulate.a = 1.0 if urgent else alpha
-	prompt.visible = is_visible_in_tree() and not _photo_mode and not big_map.visible \
-		and not settlement_panel.visible and (not _summary_blocked or _hint_urgent) and prompt.get_child_count() > 0
+	prompt.visible = is_visible_in_tree() and not _photo_mode and not _overlay_open() \
+		and (not _summary_blocked or _hint_urgent) and prompt.get_child_count() > 0
 	_reticle.visible = alpha > 0.0 or prompt.visible
 	_reticle.modulate.a = 1.0 if prompt.visible else alpha
 	if _reticle_on_target != prompt.visible:
@@ -1029,7 +1043,10 @@ func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
 		_vignette_strength = strength
 		var mat: ShaderMaterial = _vignette.material
 		mat.set_shader_parameter("strength", strength)
-		_vignette.visible = _ride.warning > 0.01
+	# 19.11.2026: под окном поверх игры гаснет сразу, а не догорает ~0,2 с поверх карты
+	var vignette_on := _ride.warning > 0.01 and _gauges_allowed()
+	if _vignette.visible != vignette_on:
+		_vignette.visible = vignette_on
 	_show_ride()
 
 
@@ -1040,7 +1057,7 @@ func set_brakes(bike: BikeRide) -> void:
 
 
 func _gauges_allowed() -> bool:
-	return not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
+	return not _photo_mode and not _overlay_open() and not _summary_blocked
 
 
 ## Прибор виден со сводкой; без неё — только когда срочно (силы на исходе, тормоз на грани)
@@ -1101,9 +1118,7 @@ func toast(text: String, kind: StringName = &"info") -> void:
 			return
 		_toast_queue.append(text)
 		_toast_kinds.append(kind)
-		if _toast_queue.size() > TOAST_QUEUE:
-			_toast_queue.resize(TOAST_QUEUE)
-			_toast_kinds.resize(TOAST_QUEUE)
+		_trim_toast_queue()
 		return
 	_show_toast(text, kind)
 
@@ -1122,9 +1137,45 @@ func toast_now(text: String, kind: StringName = &"info") -> void:
 				_toast_kinds.remove_at(queued)
 		_toast_queue.insert(0, text)
 		_toast_kinds.insert(0, kind)
-		if _toast_queue.size() > TOAST_QUEUE:
-			_toast_queue.resize(TOAST_QUEUE)
-			_toast_kinds.resize(TOAST_QUEUE)
+		_trim_toast_queue()
+
+
+## 19.11.2026: переполненная очередь теряет самое неважное (из равных — самое старое), а не последнее пришедшее:
+## прежде resize срезал хвост, и «Задание выполнено» после нескольких открытий мест пропадало
+func _trim_toast_queue() -> void:
+	while _toast_queue.size() > TOAST_QUEUE:
+		var drop := 0
+		for i in _toast_queue.size():
+			if _toast_rank(_toast_kinds[i]) < _toast_rank(_toast_kinds[drop]):
+				drop = i
+		_toast_queue.remove_at(drop)
+		_toast_kinds.remove_at(drop)
+
+
+static func _toast_rank(kind: StringName) -> int:
+	match kind:
+		&"quest", &"warning": return 2
+		&"discovery", &"album": return 1
+	return 0
+
+
+## 19.11.2026: сообщения, пролежавшие под картой или паузой дольше TOAST_STALE, не всплывают после неё:
+## остаются только задания (их итог важен и потом), остальное устарело
+func _drop_stale_toasts() -> void:
+	for i in range(_toast_queue.size() - 1, -1, -1):
+		if _toast_kinds[i] != &"quest":
+			_toast_queue.remove_at(i)
+			_toast_kinds.remove_at(i)
+	if _toast_left > 0.0 and _toast_kind != &"quest":
+		_toast_left = 0.0
+		if _toast_queue.is_empty():
+			$Toast.hide()
+		else:
+			var next := _toast_queue[0]
+			var next_kind: StringName = _toast_kinds[0]
+			_toast_queue.remove_at(0)
+			_toast_kinds.remove_at(0)
+			_show_toast(next, next_kind)
 
 
 ## 19.11.2026: то же сообщение, показанное меньше TOAST_REPEAT секунд назад (или стоящее сейчас на экране), не повторяется.
@@ -1231,15 +1282,24 @@ func _process(delta: float) -> void:
 		_sync_map_hint()
 	# 19.11.2026: сводка раскладывается только когда что-то сдвинулось (проявление, вид, экраны поверх игры);
 	# остальные изменения отмечают _reveal_dirty
-	var flags := int(big_map.visible) | int(settlement_panel.visible) << 1 | int(is_visible_in_tree()) << 2 | int(view_mode) << 3 | int(controls.joypad) << 5
+	var overlay := _overlay_open()
+	var flags := int(overlay) | int(is_visible_in_tree()) << 2 | int(view_mode) << 3 | int(controls.joypad) << 5
 	var key := Vector4(_summary_progress, _light, _summary_hint_left, flags)
 	if _reveal_dirty or key != _reveal_key:
 		_reveal_key = key
 		_reveal_dirty = false
 		_apply_reveal()
-	var obscured: bool = not is_visible_in_tree() or big_map.visible or settlement_panel.visible
+	var obscured: bool = not is_visible_in_tree() or overlay
 	$Toast.visible = not obscured and _toast_left > 0.0
-	if obscured or _toast_left <= 0.0:
+	if obscured:
+		if _toast_left > 0.0 or not _toast_queue.is_empty():
+			_toast_hidden_for += delta
+		return
+	if _toast_hidden_for > 0.0:
+		if _toast_hidden_for >= TOAST_STALE:
+			_drop_stale_toasts()
+		_toast_hidden_for = 0.0
+	if _toast_left <= 0.0:
 		return
 	_toast_left -= delta
 	_toast_time.value = clampf(_toast_left / TOAST_TIME, 0.0, 1.0)

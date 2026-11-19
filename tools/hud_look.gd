@@ -256,8 +256,33 @@ func _journal_checks() -> void:
 		_check(root.get_visible_rect().encloses(hud.journal_panel._lightbox.get_global_rect()), "лайтбокс помещается в 1280×720")
 		await _shot("hud_journal_lightbox")
 		_check(hud.journal_panel.close_lightbox() and hud.journal_panel._lightbox == null, "лайтбокс закрывается")
+	# 19.11.2026: Tab под «Путешествием» не переключает вид сводки вслепую
+	var mode_before: int = hud.view_mode
+	await _tap_hud()
+	_check(hud.view_mode == mode_before and not hud.summary_visible(), "Tab под «Путешествием» не меняет вид сводки")
+	# сообщения: пролежавшее под окном дольше TOAST_STALE некритичное сгорает, задание остаётся
+	hud._toast_queue.clear()
+	hud._toast_kinds.clear()
+	hud._toast_left = 0.0
+	hud.toast("Открыто: проба", &"discovery")
+	hud.toast("Задание: проба", &"quest")
+	hud._toast_hidden_for = Hud.TOAST_STALE + 1.0
 	hud.journal_panel.clear()
 	_check(not hud.journal_panel.visible, "закрытие прячет экран")
+	await process_frame
+	_check(hud.toast_label.text == "Задание: проба" and hud._toast_queue.is_empty(), "устаревшее сообщение не всплывает после окна, задание остаётся")
+	# переполненная очередь теряет неважное, а не последнее пришедшее задание
+	hud._toast_left = Hud.TOAST_TIME
+	hud.toast_label.text = "текущее"
+	hud._toast_queue.clear()
+	hud._toast_kinds.clear()
+	for i in 3:
+		hud.toast("Открыто место %d" % i, &"discovery")
+	hud.toast("Задание выполнено: проба", &"quest")
+	_check(hud._toast_queue.size() == Hud.TOAST_QUEUE and hud._toast_queue.has("Задание выполнено: проба"), "очередь сообщений сохраняет задание при переполнении")
+	hud._toast_queue.clear()
+	hud._toast_kinds.clear()
+	hud._toast_left = 0.0
 	hud.explore = Exploration.new()
 
 
