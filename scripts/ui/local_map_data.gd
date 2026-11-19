@@ -20,6 +20,7 @@ enum Line { RIVER, TRAIL, ROAD, BIKE_TRAIL }
 
 var world: WorldData
 var atlas_texture: ImageTexture
+var atlas_relief: Array[ImageTexture] = []
 var atlas_strokes: Array[ArrayMesh] = []
 var tiles := {}
 var strokes: Array[PackedVector2Array] = [PackedVector2Array(), PackedVector2Array(), PackedVector2Array(), PackedVector2Array()]
@@ -28,6 +29,7 @@ var pending := false
 var feature_revision := 0
 var tile_revision := 0
 var park := false
+var paper_tiles := false
 var _plan_rect: Rect2i
 var _base_biomes: PackedByteArray
 var _base_lakes: PackedByteArray
@@ -55,6 +57,7 @@ func _init(w: WorldData, source = null) -> void:
 	_base_heights = w.h
 	if source != null:
 		atlas_texture = source.atlas_texture
+		atlas_relief = source.atlas_relief
 		atlas_strokes = source.atlas_strokes
 		_base_bins = source._base_bins
 		_base_textures = source._base_textures
@@ -78,6 +81,15 @@ func prepare_atlas() -> void:
 		return
 	var rgb: PackedByteArray = painter.PaintAtlas(world.W * world.H, _base_biomes, _base_lakes, _palette_bytes())
 	atlas_texture = ImageTexture.create_from_image(Image.create_from_data(world.W, world.H, false, Image.FORMAT_RGB8, rgb))
+	var cells := world.W * world.H
+	if _base_heights.size() == cells and _base_biomes.size() == cells:
+		var lakes := _base_lakes
+		lakes.resize(cells)
+		atlas_relief = [
+			_atlas_channel(Image.FORMAT_RF, _base_heights.to_byte_array()),
+			_atlas_channel(Image.FORMAT_R8, _base_biomes),
+			_atlas_channel(Image.FORMAT_R8, lakes),
+		]
 	# The atlas shows the complete plan. It keeps these meshes when closed or zoomed.
 	_collect_features(_bin_rect(Rect2(Vector2.ZERO, Vector2(world.W, world.H) * TILE)))
 	for paths in strokes:
@@ -85,6 +97,10 @@ func prepare_atlas() -> void:
 	for nodes in strokes:
 		nodes.clear()
 	settlements.clear()
+
+
+func _atlas_channel(format: Image.Format, bytes: PackedByteArray) -> ImageTexture:
+	return ImageTexture.create_from_image(Image.create_from_data(world.W, world.H, false, format, bytes))
 
 
 static func _atlas_mesh(lines: PackedVector2Array) -> ArrayMesh:
@@ -229,7 +245,7 @@ func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> int
 	var rect := Rect2i(origin, Vector2i(CELLS, CELLS))
 	var inside := rect.intersects(_plan_rect)
 	var plan_tile := _plan_rect.encloses(rect)
-	var style_key := Vector3i(key.x, key.y, int(park))
+	var style_key := Vector3i(key.x, key.y, int(park or paper_tiles))
 	if plan_tile:
 		if tiles.has(key):
 			return 0
@@ -274,7 +290,7 @@ func _update_tile(key: Vector2i, chunks: Dictionary, regions: Dictionary) -> int
 					at = _base_biomes[i] * 3
 				if i < _base_lakes.size() and _base_lakes[i] != 0:
 					at = water
-				elif park and i < _base_biomes.size() and _base_biomes[i] >= Biomes.BEACH and _base_heights.size() == world.N:
+				elif (park or paper_tiles) and i < _base_biomes.size() and _base_biomes[i] >= Biomes.BEACH and _base_heights.size() == world.N:
 					color = _paper_relief(cell, i, PALETTE[_base_biomes[i]])
 					at = -1
 			elif fields != null and region_rect.has_point(cell):

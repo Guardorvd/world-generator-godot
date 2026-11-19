@@ -17,6 +17,7 @@ const NIGHT_MIN := 0.55       # 1 - sunlight не меньше: достаточ
 const EVENT_MIN := 0.3        # сила явления (DayCycle.events), с которой его видно
 const UP_MIN := 0.12          # взгляд камеры выше горизонта не меньше чем на столько (y единичного вектора)
 const MAX_ALBUM := 128
+const MAX_PLACE_PHOTOS := 256
 ## 18.11.2026: место в рамке закрывает страницу альбома, только если снято вблизи — м от камеры до края места
 ## (PhotoCamera shot.dist). Приближение фотоаппарата расстояние не меняет: с соседнего холма через ×4 не засчитывается
 const ALBUM_REACH := {settlement = 150.0, site = 60.0, peak = 300.0, lake = 150.0}
@@ -30,6 +31,7 @@ var play_s := 0.0
 var max_alt := 0.0   # высшая точка, м (как высота в сводке)
 var photos := 0
 var album := {}      # ключ страницы -> {path, date, place}
+var place_photos := {} # id места -> последний сохранённый снимок вблизи
 
 
 ## Название вида места с большой буквы («Дозорная вышка»)
@@ -142,9 +144,17 @@ func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> Packe
 	return titles
 
 
+func record_place_photo(id: String, path: String) -> void:
+	if id.is_empty() or path.is_empty():
+		return
+	if not place_photos.has(id) and place_photos.size() >= MAX_PLACE_PHOTOS:
+		place_photos.erase(place_photos.keys()[0])
+	place_photos[id] = path
+
+
 func save_state() -> Dictionary:
 	return {revealed = revealed.duplicate(), scanned = scanned.duplicate(), time = play_s,
-		alt = max_alt, photos = photos, album = album.duplicate(true)}
+		alt = max_alt, photos = photos, album = album.duplicate(true), place_photos = place_photos.duplicate()}
 
 
 func restore(state: Dictionary) -> void:
@@ -154,6 +164,7 @@ func restore(state: Dictionary) -> void:
 	max_alt = float(state.get("alt", 0.0))
 	photos = int(state.get("photos", 0))
 	album = state.get("album", {}).duplicate(true)
+	place_photos = state.get("place_photos", {}).duplicate()
 
 
 static func valid_save(state: Variant) -> bool:
@@ -181,4 +192,10 @@ static func valid_save(state: Variant) -> bool:
 		for field: String in ["path", "date", "place"]:
 			if not page.get(field) is String:
 				return false
+	var location_photos: Variant = state.get("place_photos", {})
+	if not location_photos is Dictionary or location_photos.size() > MAX_PLACE_PHOTOS:
+		return false
+	for key: Variant in location_photos:
+		if not key is String or not location_photos[key] is String:
+			return false
 	return true

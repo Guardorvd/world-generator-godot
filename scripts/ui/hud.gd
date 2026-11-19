@@ -50,7 +50,8 @@ var map_preview: Image
 var map_data: MapData
 var map_journal := Journal.new()
 var explore := Exploration.new()  # открытое сверху, счётчики пути и альбом (с 18.11.2026); сохранение — поле "explore"
-var journal_panel  # «Путешествие»: путь и альбом
+const Tablet := preload("res://scripts/ui/journal_panel.gd")
+var journal_panel: Tablet
 var plaque_panel   # табличка обелиска: название и описание
 var minimap: LocalMap
 var controls: Controls = GameContext.scope.controls
@@ -177,53 +178,19 @@ func _ready() -> void:
 	tracker.resized.connect(func() -> void: _reveal_dirty = true)
 	move_child(tracker, compass.get_index() + 1)
 
-	big_map = Atlas.new()
+	journal_panel = Tablet.new()
+	journal_panel.data_provider = journey_data
+	journal_panel.quest_provider = _tablet_quest
+	add_child(journal_panel)
+	big_map = journal_panel.map_view
 	big_map.journal = map_journal
-	big_map.paper = true # 18.11.2026: стиль карты нацпарка, открыто только исследованное
-	big_map.set_anchors_preset(Control.PRESET_FULL_RECT)
-	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	big_map.visible = false
 	big_map.controls = controls
 	big_map.input_blocked = func() -> bool: return _travel_dialog != null
-	add_child(big_map)
-	# 19.11.2026: «К себе» кнопкой — средняя кнопка мыши неудобна на тачпаде
-	var to_me := Button.new()
-	to_me.text = "К себе"
-	to_me.custom_minimum_size = Vector2(0, 44)
-	to_me.theme = HudStyle.theme()
-	to_me.focus_mode = Control.FOCUS_NONE
-	to_me.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	to_me.tooltip_text = "Показать, где вы сейчас"
-	to_me.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	to_me.offset_left = -150
-	to_me.offset_right = -68
-	to_me.offset_top = 12
-	to_me.offset_bottom = 56
-	to_me.pressed.connect(big_map.center_on_player)
-	big_map.add_child(to_me)
-	var close_map := Button.new()
-	close_map.icon = UiIcons.CLOSE
-	close_map.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	close_map.custom_minimum_size = Vector2(44, 44)
-	close_map.theme = HudStyle.theme()
-	close_map.focus_mode = Control.FOCUS_NONE
-	close_map.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	close_map.tooltip_text = "Закрыть карту"
-	close_map.accessibility_name = "Закрыть карту"
-	close_map.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	close_map.offset_left = -60
-	close_map.offset_right = -16
-	close_map.offset_top = 12
-	close_map.offset_bottom = 56
-	close_map.pressed.connect(func() -> void: map_close_requested.emit())
-	big_map.add_child(close_map)
-	big_map.move_child(close_map, -1) # поверх подложки и меток карты
 	big_map.place_selected.connect(_select_map_goal)
 	big_map.marker_requested.connect(func(at: Vector2) -> void: _select_map_goal(marker_goal(at)))
+	journal_panel.closed.connect(func() -> void: map_close_requested.emit())
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
-	journal_panel = preload("res://scripts/ui/journal_panel.gd").new()
-	add_child(journal_panel)
 	plaque_panel = preload("res://scripts/ui/plaque_panel.gd").new()
 	add_child(plaque_panel)
 	_vignette = ColorRect.new()
@@ -244,7 +211,7 @@ func _ready() -> void:
 	_ride.offset_bottom = -18
 	_ride.hide()
 	add_child(_ride)
-	move_child(_ride, big_map.get_index())
+	move_child(_ride, journal_panel.get_index())
 	var brake_alert := RideDial.BrakeAlert.new()
 	brake_alert.dial = _ride
 	brake_alert.set_anchors_preset(Control.PRESET_CENTER)
@@ -254,7 +221,7 @@ func _ready() -> void:
 	brake_alert.offset_bottom = 66 + RideDial.BrakeAlert.SIZE.y
 	brake_alert.hide()
 	add_child(brake_alert)
-	move_child(brake_alert, big_map.get_index())
+	move_child(brake_alert, journal_panel.get_index())
 	_ride.alert = brake_alert
 	_repair = RepairArc.new()
 	_repair.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -431,29 +398,45 @@ func clear_world() -> void:
 	note_interaction_target("")
 	_repair.reset()
 	set_photo_mode(false)
-	big_map.visible = false
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.hover = {}
 
 
 func set_map_visible(v: bool) -> void:
-	if not v:
-		_close_travel()
-	else:
-		big_map.prepare_player_view()
-	var opening := v and not big_map.visible
-	big_map.visible = v
-	if opening:
-		HudStyle.pop_in(big_map, 0.96) # 19.11.2026: карта разворачивается, а не возникает за кадр
-	# Личная карта перехватывает мышь и позволяет ставить цель.
-	big_map.mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
-	big_map.hover = {}
-	_apply_reveal()
 	if v:
-		_map_hint_pad = -1
-		_sync_map_hint()
-		sync_map_places()
+		show_tablet(Tablet.Tab.MAP)
+	else:
+		_close_travel()
+		journal_panel.clear()
+		big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		big_map.hover = {}
+		_apply_reveal()
+
+
+func show_tablet(tab: Tablet.Tab) -> void:
+	var opening := not journal_panel.visible
+	if opening:
+		big_map.prepare_player_view()
+		big_map.mouse_filter = Control.MOUSE_FILTER_STOP
+		big_map.selected_place = {}
+		big_map.hover = {}
+	journal_panel.open_tab(tab, world.seed_text if world != null else "")
+	if opening or tab != Tablet.Tab.ALBUM:
 		big_map.set_player(Vector2(px, pz), yaw)
+		sync_map_places()
+	_map_hint_pad = -1
+	_sync_map_hint()
+	_apply_reveal()
+
+
+func _tablet_quest() -> Dictionary:
+	if quests == null or quests.active.is_empty():
+		return {}
+	var q := quests.active
+	var steps := PackedStringArray()
+	for step: Dictionary in q.steps:
+		steps.append(quests.step_text(step))
+	return {title = q.title, steps = steps, index = q.step}
 
 
 ## Открытые места мира: поселения, вершины и озёра из индекса WorldData (с 8.9 extra).
@@ -487,10 +470,11 @@ func _sync_map_hint() -> void:
 	_map_hint_pad = int(controls.joypad)
 	var k := controls.label
 	if controls.joypad:
-		big_map.move_hint = "Левый стик · обзор     Правый стик · масштаб     %s · к себе     %s · цель или метка     %s · путешествие     %s · закрыть" 			% [k.call(&"jump"), k.call(&"interact"), k.call(&"journal"), k.call(&"back")]
+		big_map.move_hint = "Левый стик · обзор   Правый стик · масштаб   %s · к себе   %s · цель или метка   %s/%s · вкладки" % [
+			k.call(&"jump"), k.call(&"interact"), controls.button(JOY_BUTTON_LEFT_SHOULDER), controls.button(JOY_BUTTON_RIGHT_SHOULDER)]
 	else:
-		big_map.move_hint = "Колесо · масштаб     Перетащить или WASD · обзор     %s · к себе     Ctrl+ЛКМ или %s · метка     %s · путешествие" 			% [k.call(&"jump"), k.call(&"interact"), k.call(&"journal")]
-	big_map.refresh_overlay()
+		big_map.move_hint = "Перетащить или WASD · обзор   Колесо · масштаб   Ctrl+ЛКМ · метка"
+	journal_panel.set_shortcuts(k.call(&"toggle_map"), k.call(&"journal"), big_map.move_hint)
 
 
 func _close_travel() -> void:
@@ -589,15 +573,41 @@ func map_place_count() -> int:
 
 func sync_map_places() -> void:
 	sync_minimap_places()
-	if not big_map.visible or world == null:
+	if not journal_panel.visible or world == null:
 		return
+	var photos := explore.place_photos.duplicate()
+	for key: String in explore.album:
+		var shot: Dictionary = explore.album[key]
+		var id: String = key.trim_prefix("plaque:") if key.begins_with("plaque:") else shot.get("place", "")
+		var path: String = shot.get("path", "")
+		if not id.is_empty() and not photos.has(id) and (key.begins_with("plaque:") or is_open(id)):
+			photos[id] = path
 	var known: Array = []
-	var ids := map_journal.read.merged(visited).merged(explore.revealed).merged(quests.known if quests != null else {}) # те же источники, что в is_open
+	var ids := _map_place_ids().merged(photos)
+	var objective := quest_place()
+	var quest_id: String = objective.get("key", "")
+	if not quest_id.is_empty():
+		ids[quest_id] = true
 	for id: String in ids:
 		var place := world.place(id)
-		if not place.is_empty():
-			known.append(InteractionService.target(place))
+		if place.is_empty():
+			continue
+		var pin := InteractionService.target(place)
+		var status := 0
+		if visited.has(id):
+			status |= Atlas.Status.VISITED
+		if map_journal.read.has(id) or explore.revealed.has(id) or (quests != null and quests.known.has(id)):
+			status |= Atlas.Status.REVEALED
+		if photos.has(id):
+			status |= Atlas.Status.PHOTO
+			pin.map_photo = photos[id]
+		if quest_id == id:
+			status |= Atlas.Status.QUEST
+		pin.map_status = status
+		known.append(pin)
 	big_map.set_places(known)
+	journal_panel.refresh_inspector(big_map.hover)
+	journal_panel.refresh_quest()
 	_sync_map_goal()
 
 
@@ -623,12 +633,16 @@ func _select_map_goal(place: Dictionary) -> void:
 	var same: bool = place.key == goal.get("key")
 	if same and place.kind == "marker":
 		same = Vector2(place.x, place.y).distance_to(Vector2(goal.x, goal.y)) < 4.0
+	if place.kind == "marker":
+		big_map.selected_place = {} if same else place
+		journal_panel.refresh_inspector(big_map.selected_place)
 	set_goal({} if same else place)
 
 
 func _sync_map_goal() -> void:
 	var id: String = goal.get("key", "")
-	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or is_open(id))
+	var visible_pin := journal_panel.visible and big_map.places.any(func(place: Dictionary) -> bool: return place.key == id)
+	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or is_open(id) or visible_pin)
 	big_map.goal = Atlas.place_at(goal) if show_goal else Vector2.INF
 	var objective := quest_place()
 	big_map.quest = Atlas.place_at(objective) if objective.get("kind") in Quests.FIELD_PLACES else Vector2.INF
@@ -853,7 +867,7 @@ func _draw_tracker_progress() -> void:
 ## Новый шаг подсвечивает карточку и обновляет метки на компасе и карте.
 func quest_changed() -> void:
 	update_tracker()
-	sync_minimap_places() # взятое задание называет свои места
+	sync_map_places() # взятое задание называет свои места
 	if is_node_ready():
 		compass.queue_redraw()
 		_sync_minimap_destinations()
@@ -959,7 +973,7 @@ func _summary_allowed() -> bool:
 ## 19.11.2026: окна поверх игры — карта, доска поселения, «Путешествие», табличка. Под ними сводка, прибор
 ## и сообщения не видны, а Tab не переключает вид вслепую (раньше журнал и табличка сюда не входили)
 func _overlay_open() -> bool:
-	return big_map.visible or settlement_panel.visible \
+	return settlement_panel.visible \
 		or (journal_panel != null and journal_panel.visible) or (plaque_panel != null and plaque_panel.visible)
 
 
@@ -1331,7 +1345,7 @@ func _process(delta: float) -> void:
 	_light = move_toward(_light, 1.0 if view_mode == View.LIGHT else 0.0, delta / SUMMARY_FADE)
 	if _summary_allowed() and view_mode != View.HIDDEN:
 		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
-	if big_map.visible:
+	if journal_panel.visible:
 		_sync_map_hint()
 	# 19.11.2026: сводка раскладывается только когда что-то сдвинулось (проявление, вид, экраны поверх игры);
 	# остальные изменения отмечают _reveal_dirty

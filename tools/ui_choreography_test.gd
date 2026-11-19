@@ -303,6 +303,17 @@ func _test_pause_settings_and_live_preview(main: Node) -> void:
 
 	# Регрессия Alt+Tab: открытый Дневник -> пауза -> Esc/E/J в GameWorld не должны закрывать его и красть мышь
 	gw.open_journal()
+	var atlas: Hud.Atlas = main.hud.big_map
+	root.push_input(_action_event(&"toggle_map"))
+	_check(main.hud.journal_panel.active_tab == Hud.Tablet.Tab.MAP and main.hud.big_map == atlas and gw.show_map,
+		"5.3 M переключает открытый планшет на ту же карту")
+	root.push_input(_action_event(&"journal"))
+	_check(main.hud.journal_panel.active_tab == Hud.Tablet.Tab.PATH and main.hud.big_map == atlas and gw.show_map,
+		"5.3 J возвращает к пути без закрытия планшета")
+	root.push_input(_pad_button(JOY_BUTTON_RIGHT_SHOULDER))
+	_check(main.hud.journal_panel.active_tab == Hud.Tablet.Tab.ALBUM and not atlas.is_visible_in_tree(),
+		"5.3 RB переключает планшет с пути на альбом")
+	root.push_input(_action_event(&"journal"))
 	gw._captured_at = 0
 	_check(gw._journal_open() and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE,
 		"5.3 Дневник открывается с видимым курсором до паузы")

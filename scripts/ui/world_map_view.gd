@@ -11,6 +11,8 @@ extends Control
 
 signal place_selected(place: Dictionary)
 signal marker_requested(at: Vector2)
+signal hover_changed(place: Dictionary)
+signal photo_thumbnail_requested(path: String)
 
 const Data = preload("res://scripts/ui/local_map_data.gd")
 const Paint = preload("res://scripts/ui/map_paint.gd")
@@ -18,6 +20,7 @@ const Journal = preload("res://scripts/game/map_journal.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const ATLAS_STROKE := preload("res://resources/atlas_stroke.gdshader")
+const ATLAS_RELIEF := preload("res://resources/atlas_relief.gdshader")
 const TILE := GameConfig.TILE
 const PICK := 17.0
 const MIN_SCALE := 0.06
@@ -33,6 +36,11 @@ const FOG_STEP := 60.0     # м между отметками трека в ма
 
 var park := false
 var paper := false
+var tablet := false
+enum Status { VISITED = 1, REVEALED = 2, PHOTO = 4, QUEST = 8 }
+var selected_place := {}
+var _show_photos := false
+var _photo_cache := {}
 var journal: Journal
 var hover := {}
 var places: Array = []
@@ -146,7 +154,9 @@ func set_source(source: Data) -> void:
 	_data = Data.new(source.world, source) if source != null else null
 	if _data != null:
 		_data.park = park
+		_data.paper_tiles = paper
 	hover = {}
+	selected_place = {}
 	places = []
 	player = Vector2.INF
 	goal = Vector2.INF
@@ -165,6 +175,7 @@ func set_source(source: Data) -> void:
 	_fog_places = {}
 	if _base != null:
 		_configure_atlas_strokes()
+		_configure_relief()
 		_tiles.queue_redraw()
 		_lines.queue_redraw()
 		_fog_node.queue_redraw()
@@ -213,9 +224,22 @@ func set_places(pins: Array) -> void:
 	if places == pins:
 		return
 	places = pins
+	if not selected_place.is_empty():
+		var id: String = selected_place.key
+		selected_place = {}
+		for place: Dictionary in pins:
+			if place.key == id:
+				selected_place = place
+				break
 	if paper:
 		_fog_pending = true
 	_set_hover({})
+	refresh_overlay()
+
+
+func set_photo_pins(on: bool, cache: Dictionary) -> void:
+	_show_photos = on
+	_photo_cache = cache
 	refresh_overlay()
 
 
@@ -355,6 +379,20 @@ func _configure_atlas_strokes() -> void:
 			_atlas_layers[index].mesh = _data.atlas_strokes[kind]
 
 
+func _configure_relief() -> void:
+	_tiles.material = null
+	if not paper or _data == null or _data.atlas_relief.is_empty():
+		return
+	var relief := ShaderMaterial.new()
+	relief.shader = ATLAS_RELIEF
+	relief.set_shader_parameter("heights", _data.atlas_relief[0])
+	relief.set_shader_parameter("biomes", _data.atlas_relief[1])
+	relief.set_shader_parameter("lakes", _data.atlas_relief[2])
+	relief.set_shader_parameter("height_scale", GameConfig.HS)
+	relief.set_shader_parameter("beach_index", float(Biomes.BEACH))
+	_tiles.material = relief
+
+
 func _update_atlas_width() -> void:
 	var width := Paint.stroke_scale(_scale)
 	for index in _atlas_layers.size():
@@ -391,6 +429,15 @@ func _set_hover(place: Dictionary) -> void:
 		hover = place
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if not hover.is_empty() else (Control.CURSOR_ARROW if park else Control.CURSOR_DRAG)
 		refresh_overlay()
+		hover_changed.emit(hover)
+
+
+func _select_place(place: Dictionary) -> void:
+	if tablet:
+		selected_place = place
+		hover_changed.emit(place)
+		refresh_overlay()
+	place_selected.emit(place)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -429,7 +476,7 @@ func _map_button(event: InputEventMouseButton) -> void:
 				elif button == MOUSE_BUTTON_LEFT:
 					var place := _pick(event.position)
 					if not place.is_empty():
-						place_selected.emit(place)
+						_select_place(place)
 					elif not park and event.ctrl_pressed:
 						marker_requested.emit(screen_to_world(event.position) / TILE)
 			_pressed = Vector2.INF
@@ -442,7 +489,8 @@ func _map_button(event: InputEventMouseButton) -> void:
 ## Курок газа (тоже «вперёд» в действиях) намеренно не двигает карту: с ним её открывают на ходу.
 func _pad_navigate(delta: float) -> void:
 	var cross := controls != null and controls.joypad and not park
-	if cross != _pad_cross:
+	var device_changed := cross != _pad_cross
+	if device_changed:
 		_pad_cross = cross
 		_legend.queue_redraw()
 	if controls == null or park or _data == null or (input_blocked.is_valid() and input_blocked.call()):
@@ -468,6 +516,8 @@ func _pad_navigate(delta: float) -> void:
 		refresh_overlay()
 	if zoom != 0.0:
 		_zoom_at(size * 0.5, pow(PAD_ZOOM, clampf(zoom, -1.0, 1.0) * delta))
+	if cross and (device_changed or pan != Vector2.ZERO or zoom != 0.0):
+		_set_hover(_pick(size * 0.5))
 
 
 ## Действие игрока над личной картой (из GameWorld): «прыжок» — к себе, «взаимодействие» — выбрать место
@@ -482,7 +532,7 @@ func map_action(event: InputEvent) -> bool:
 		var at := size * 0.5 if _pad_cross else get_local_mouse_position()
 		var place := _pick(at)
 		if not place.is_empty():
-			place_selected.emit(place)
+			_select_place(place)
 		else:
 			marker_requested.emit(screen_to_world(at) / TILE)
 		return true
@@ -679,6 +729,7 @@ static func _pin_color(kind: String) -> Color:
 
 func _draw_pins() -> void:
 	var labels: Array[Rect2] = []
+	var photos: Array[Dictionary] = []
 	var font: Font = _park_font if _styled() else ThemeDB.fallback_font
 	var fs := 16 if _styled() else 14
 	for i in places.size():
@@ -686,7 +737,7 @@ func _draw_pins() -> void:
 		var at := world_to_screen(place_at(place))
 		if not Rect2(Vector2.ONE * 10.0, size - Vector2.ONE * 20.0).has_point(at):
 			continue
-		var focused: bool = place.key == hover.get("key")
+		var focused: bool = place.key == hover.get("key") or (tablet and place.key == selected_place.get("key"))
 		var here := park and i == 0
 		var kind := str(place.get("kind", "settlement"))
 		var color := Color("#c14930") if here else _pin_color(kind)
@@ -698,6 +749,14 @@ func _draw_pins() -> void:
 		_overlay.draw_circle(at, halo, Color("#fff9e9"), true, -1.0, true)
 		_overlay.draw_circle(at, radius, color, true, -1.0, true)
 		_overlay.draw_texture_rect(UiIcons.map_icon(kind), Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, Color.WHITE)
+		if tablet:
+			_draw_status(at, int(place.get("map_status", 0)))
+			var path: String = place.get("map_photo", "")
+			if _show_photos and not path.is_empty():
+				if not _photo_cache.has(path):
+					photo_thumbnail_requested.emit(path)
+				elif _photo_cache[path] != null:
+					photos.append({at = at, image = _photo_cache[path]})
 		var title: String = "Вы здесь" if here else place.name
 		var width := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var x := clampf(at.x, width * 0.5 + 10.0, maxf(width * 0.5 + 10.0, size.x - width * 0.5 - 10.0))
@@ -709,14 +768,60 @@ func _draw_pins() -> void:
 			labels.append(rect)
 			Paint.text(_overlay, label_at, title, Paint.PARK_INK if _styled() else Paint.INK, fs, font)
 			break
+	_draw_photo_pins(photos, labels)
+
+
+func _draw_status(at: Vector2, status: int) -> void:
+	if status & Status.QUEST:
+		_overlay.draw_arc(at, 13.0, 0.0, TAU, 24, Color("#7a461a"), 2.0, true)
+	if status & Status.VISITED:
+		_draw_status_badge(at + Vector2(9, -8), UiIcons.CHECK, Color("#254a3e"))
+	elif status & Status.REVEALED:
+		var pos := at + Vector2(9, -8)
+		_overlay.draw_circle(pos, 5.0, Color("#fff9e9"), true, -1.0, true)
+		_overlay.draw_arc(pos, 3.1, 0.0, TAU, 12, Color("#655436"), 1.5, true)
+	if status & Status.PHOTO:
+		_draw_status_badge(at + Vector2(-9, 8), UiIcons.ALBUM, Color("#55416e"))
+
+
+func _draw_status_badge(at: Vector2, icon: Texture2D, color: Color) -> void:
+	_overlay.draw_circle(at, 6.0, Color("#fff9e9"), true, -1.0, true)
+	_overlay.draw_circle(at, 4.9, color, true, -1.0, true)
+	_overlay.draw_texture_rect(icon, Rect2(at - Vector2.ONE * 3.5, Vector2.ONE * 7.0), false, Color.WHITE)
+
+
+func _draw_photo_pins(photos: Array[Dictionary], occupied: Array[Rect2]) -> void:
+	if photos.is_empty():
+		return
+	for point: Vector2 in [player, goal, quest]:
+		if point.is_finite():
+			occupied.append(Rect2(world_to_screen(point) - Vector2.ONE * 12.0, Vector2.ONE * 24.0))
+	var safe := Rect2(Vector2.ONE * 12.0, size - Vector2(24, 48))
+	for photo: Dictionary in photos:
+		var at: Vector2 = photo.at
+		var image: Texture2D = photo.image
+		var dimensions := image.get_size()
+		dimensions *= minf(52.0 / dimensions.x, 34.0 / dimensions.y)
+		var left := -16.0 - dimensions.x
+		var top := -dimensions.y * 0.5
+		for offset: Vector2 in [Vector2(16, top), Vector2(left, top), Vector2(16, top + 23),
+				Vector2(left, top + 23), Vector2(16, top - 23), Vector2(left, top - 23)]:
+			var rect := Rect2(at + offset, dimensions)
+			if not safe.encloses(rect) or occupied.any(func(other: Rect2) -> bool: return other.intersects(rect.grow(3.0))):
+				continue
+			occupied.append(rect.grow(3.0))
+			var edge := Vector2(at.x + signf(offset.x) * 16.0, clampf(at.y, rect.position.y + 2.0, rect.end.y - 2.0))
+			_overlay.draw_line(at.move_toward(edge, 7.0), edge, Paint.PARK_INK, 1.0, true)
+			_overlay.draw_rect(rect.grow(2.0), Color("#fff9e9"))
+			_overlay.draw_texture_rect(image, rect, false)
+			break
 
 
 func _draw_legend() -> void:
 	if _data == null:
 		return
 	var color := Paint.PARK_INK if _styled() else Paint.INK
-	# у личной карты правый верхний угол занят кнопками «К себе» и «×» — стрелка севера под ними
-	var north := Vector2(size.x - 26.0, 28.0) if park else Vector2(size.x - 38.0, 84.0)
+	var north := Vector2(size.x - 26.0, 28.0) if park or tablet else Vector2(size.x - 38.0, 84.0)
 	_legend.draw_colored_polygon(PackedVector2Array([north + Vector2(0, -8), north + Vector2(5, 7),
 		north + Vector2(0, 4), north + Vector2(-5, 7)]), color)
 	Paint.text(_legend, north + Vector2(0, 23), "С", color, 12)
@@ -727,7 +832,7 @@ func _draw_legend() -> void:
 	Paint.text(_legend, (start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, 12)
 	if _styled():
 		_legend.draw_rect(Rect2(Vector2.ONE, size - Vector2.ONE * 2), Color("#aca17e"), false, 2.0)
-	if not park and journal != null:
+	if not park and journal != null and not tablet:
 		var panel := Color("#f2e7cd") if paper else Color("#f5f8f3")
 		_legend.draw_rect(Rect2(16, 12, 210, 92), panel)
 		if paper:
@@ -738,6 +843,8 @@ func _draw_legend() -> void:
 		Paint.text(_legend, Vector2(121, 85), "Открыто мест · %d" % places.size(), color, 14, font)
 		Paint.text(_legend, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 13)
 		_draw_key(color, font)
+	elif tablet:
+		_draw_key(color, _park_font)
 	if _pad_cross:
 		# прицел геймпада: метка и выбор места — под ним
 		var c := size * 0.5

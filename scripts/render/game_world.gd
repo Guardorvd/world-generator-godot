@@ -468,7 +468,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	navigation_line.setup(world, heights)
 	hud.goal_changed.connect(_navigation_goal)
 	hud.travel_requested.connect(travel_to)
-	hud.map_close_requested.connect(toggle_map)
+	hud.map_close_requested.connect(close_tablet)
 	quests = Quests.new()
 	_beacon_layer = BeaconLayer.new()
 	add_child(_beacon_layer)
@@ -597,14 +597,12 @@ func _exit_tree() -> void:
 	if chunk_source != null: chunk_source.close()
 	# Hud переживает игру; удалить только обработчики этой сцены, включая панель поселения.
 	if is_instance_valid(hud):
-		var connections: Array = [[hud.goal_changed, _navigation_goal], [hud.travel_requested, travel_to], [hud.map_close_requested, toggle_map]]
+		var connections: Array = [[hud.goal_changed, _navigation_goal], [hud.travel_requested, travel_to], [hud.map_close_requested, close_tablet]]
 		if is_instance_valid(hud.settlement_panel):
 			var panel: SettlementPanel = hud.settlement_panel
 			connections.append_array([[panel.closed, _close_settlement],
 				[panel.travel_requested, _board_travel], [panel.bike_requested, _recall_bike],
 				[panel.quest_accepted, _accept_quest], [panel.quest_abandoned, _abandon_quest]])
-		if is_instance_valid(hud.journal_panel):
-			connections.append([hud.journal_panel.closed, close_journal])
 		if is_instance_valid(hud.plaque_panel):
 			connections.append([hud.plaque_panel.closed, close_plaque])
 		for connection: Array in connections:
@@ -746,6 +744,10 @@ func set_paused(p: bool) -> void:
 		_cancel_bike_placement()
 		_set_photo(false)
 	paused = p
+	if p:
+		_resume_map_rendering()
+	elif show_map:
+		_suspend_map_rendering()
 	if is_instance_valid(navigation_line) and p:
 		navigation_line.visible = false
 	if p and place_names != null:
@@ -976,26 +978,44 @@ func _occluded(from: Vector3, to: Vector3) -> bool:
 
 
 func toggle_map() -> void:
-	if _opening or travel_active():
+	if show_map and hud.journal_panel.active_tab == Hud.Tablet.Tab.MAP:
+		close_tablet()
+	else:
+		_open_tablet(Hud.Tablet.Tab.MAP)
+
+
+func _open_tablet(tab: Hud.Tablet.Tab) -> void:
+	if _opening or paused or player == null or travel_active() or crash.active():
 		return
-	_cancel_bike_placement()
-	_set_photo(false)
-	_close_settlement(false)
-	show_map = not show_map
-	hud.set_map_visible(show_map)
-	# The atlas fills the viewport with opaque paper.
-	if show_map and not get_viewport().disable_3d:
+	if not show_map:
+		_cancel_bike_placement()
+		_set_photo(false)
+		_close_settlement(false)
+		close_plaque(false)
+		services.controls.release_motion()
+		services.controls.read_bike_body(bike, false)
+		_dragging = false
+		show_map = true
+		_suspend_map_rendering()
+		sync_mouse_mode()
+	hud.show_tablet(tab)
+
+
+func close_tablet(capture := true) -> void:
+	if not show_map or travel_active():
+		return
+	show_map = false
+	hud.set_map_visible(false)
+	_resume_map_rendering()
+	if capture:
+		sync_mouse_mode()
+
+
+func _suspend_map_rendering() -> void:
+	if not get_viewport().disable_3d:
 		get_viewport().disable_3d = true
 		_map_disabled_3d = true
 		_map_stream_origin = Vector2(player.x, player.z)
-	else:
-		_resume_map_rendering()
-	# на карте курсор нужен, чтобы выбрать место; закрыли — снова осматриваемся мышью
-	if show_map or paused:
-		_dragging = false
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	else:
-		capture_mouse()
 
 
 func _resume_map_rendering() -> void:
@@ -1074,7 +1094,7 @@ func travel_to(place: Dictionary) -> void:
 	bike_view.draw(1.0)
 	_travel_waiting = false # карта закрывается только после завершения перехода
 	if show_map:
-		toggle_map()
+		close_tablet()
 	_finish_travel("Вы переместились: «%s»" % place.name, from_board, &"discovery")
 
 
@@ -1209,10 +1229,40 @@ func _input(event: InputEvent) -> void:
 		services.controls.note(event)
 		if not _fix_target.is_empty() and event.is_action_released("interact"):
 			_cancel_repair()
+		if _tablet_shortcut(event):
+			get_viewport().set_input_as_handled()
+
+
+func _tablet_shortcut(event: InputEvent) -> bool:
+	if not show_map or event.is_echo() or paused or hud._travel_dialog != null:
+		return false
+	if travel_active():
+		return true
+	if event.is_action_pressed("toggle_map"):
+		toggle_map()
+	elif event.is_action_pressed("journal"):
+		if hud.journal_panel.active_tab == Hud.Tablet.Tab.PATH:
+			close_tablet()
+		else:
+			open_journal()
+	elif event.is_action_pressed("pause") or event.is_action_pressed("back"):
+		if not hud.journal_panel.close_lightbox():
+			close_tablet()
+	elif event is InputEventJoypadButton and event.pressed \
+			and event.button_index in [JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]:
+		var direction := 1 if event.button_index == JOY_BUTTON_RIGHT_SHOULDER else -1
+		hud.journal_panel.cycle_tab(direction)
+	else:
+		return false
+	return true
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if startup_input_locked or event.is_echo() or paused:
+		return
+	if show_map:
+		if _tablet_shortcut(event) or (hud._travel_dialog == null and not travel_active() and hud.big_map.map_action(event)):
+			get_viewport().set_input_as_handled()
 		return
 	if _placing_bike():
 		if event.is_action_pressed("recover_bike") or event.is_action_pressed("pause") or event.is_action_pressed("back") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT):
@@ -1233,15 +1283,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			close_plaque()
 			get_viewport().set_input_as_handled()
 		return
-	if _journal_open():
-		if event.is_action_pressed("pause") or event.is_action_pressed("back"):
-			if not hud.journal_panel.close_lightbox():
-				close_journal()
-			get_viewport().set_input_as_handled()
-		elif event.is_action_pressed("journal"):
-			close_journal()
-			get_viewport().set_input_as_handled()
-		return
 	if _settlement_open():
 		if event.is_action_pressed("pause") or event.is_action_pressed("interact") or event.is_action_pressed("back"):
 			_close_settlement()
@@ -1249,9 +1290,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("pause"):
 		# Esc сначала закрывает большую карту и убирает фотоаппарат, потом ставит паузу
-		if show_map and not paused and not travel_active():
-			toggle_map()
-		elif photo != null and photo.active and not paused:
+		if photo != null and photo.active and not paused:
 			_set_photo(false)
 		else:
 			pause_requested.emit()
@@ -1265,15 +1304,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_finish_opening()
 		get_viewport().set_input_as_handled()
 		return
-	# 19.11.2026: на открытой личной карте «прыжок» — к себе, «взаимодействие» — цель или метка (геймпад и клавиатура)
-	if show_map and hud.big_map.map_action(event):
-		get_viewport().set_input_as_handled()
-		return
 	if event.is_action_pressed("back"):
 		# B на геймпаде закрывает карту и убирает фотоаппарат, как Esc, но паузу не ставит
-		if show_map:
-			toggle_map()
-		elif photo.active:
+		if photo.active:
 			_set_photo(false)
 		get_viewport().set_input_as_handled()
 	elif photo.active and event.is_action_pressed("photo_shoot"):
@@ -1281,8 +1314,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif photo.active and (event.is_action_pressed("photo_zoom_in") or event.is_action_pressed("photo_zoom_out")):
 		photo.zoom_by(1 if event.is_action_pressed("photo_zoom_in") else -1)
 	elif event.is_action_pressed("photo"):
-		if not show_map:
-			toggle_photo()
+		toggle_photo()
 	elif event.is_action_pressed("recover_bike"):
 		toggle_bike_placement()
 		get_viewport().set_input_as_handled()
@@ -1297,25 +1329,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		var step := -1.0 if event is InputEventKey and event.shift_pressed else 1.0
 		_hour_skip += step
 		hud.toast_now("Перемотка на %s1 ч" % ("−" if step < 0.0 else "+"))
-	elif event.is_action_pressed("interact") and not show_map:
+	elif event.is_action_pressed("interact"):
 		interact()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
-		if event.pressed and not show_map:
+		if event.pressed:
 			toggle_photo()
 	elif event is InputEventMouseButton and photo.active and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 		if event.pressed:
 			photo.zoom_by(1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		if show_map:
-			return
 		if event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			capture_mouse()
 		elif event.pressed and photo.active:
 			photo.shoot()
 		_dragging = event.pressed
 	elif event is InputEventMouseMotion:
-		if show_map:
-			return
 		# без захвата мыши можно смотреть, зажав левую кнопку
 		# сразу после захвата курсор переносится в центр окна, этот скачок — не взгляд
 		if Time.get_ticks_msec() - _captured_at < 150:
@@ -2182,31 +2210,19 @@ func close_plaque(capture := true) -> void:
 		capture_mouse()
 
 
-## «Путешествие» (J, с большой карты и из паузы): путь и альбом. Игра идёт, но управление заперто, как на карте.
 func _journal_open() -> bool:
-	return hud != null and hud.journal_panel != null and hud.journal_panel.visible
+	return hud != null and hud.journal_panel != null and hud.journal_panel.visible \
+			and hud.journal_panel.active_tab != Hud.Tablet.Tab.MAP
 
 
 func open_journal(album := false) -> void:
-	if _opening or paused or player == null or travel_active() or crash.active() or _journal_open() or _placing_bike():
-		return
-	_set_photo(false)
-	_close_settlement(false)
-	services.controls.release_motion()
-	services.controls.read_bike_body(bike, false)
-	_dragging = false
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	if not hud.journal_panel.closed.is_connected(close_journal):
-		hud.journal_panel.closed.connect(close_journal)
-	hud.journal_panel.open(hud.journey_data(), album)
+	if not _placing_bike():
+		_open_tablet(Hud.Tablet.Tab.ALBUM if album else Hud.Tablet.Tab.PATH)
 
 
 func close_journal(capture := true) -> void:
-	if not _journal_open():
-		return
-	hud.journal_panel.clear()
-	if capture and not paused and not show_map:
-		capture_mouse()
+	if _journal_open():
+		close_tablet(capture)
 
 
 ## С верхней площадки вышки и с вершины видно далеко: все малые места в радиусе, не закрытые склоном, открываются
@@ -2237,6 +2253,10 @@ func _album_photo(shot: Dictionary) -> void:
 	var far := not place.is_empty() and float(shot.get("dist", 0.0)) > Exploration.album_reach(place.kind)
 	var keys := Exploration.classify({} if far else place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
 	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true))
+	var photographed: String = shot.get("plaque", "")
+	if photographed.is_empty() and not far:
+		photographed = place.get("id", "")
+	hud.explore.record_place_photo(photographed, str(shot.get("path", "")))
 	if not titles.is_empty():
 		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles), &"album")
 	if far:

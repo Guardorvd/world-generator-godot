@@ -81,6 +81,8 @@ func _map_fixture() -> WorldData:
 	world.N = world.W * world.H
 	var biomes := PackedByteArray()
 	biomes.resize(world.N)
+	var heights := PackedFloat32Array()
+	heights.resize(world.N)
 	for y in world.H:
 		for x in world.W:
 			var at := Vector2(x, y)
@@ -90,7 +92,9 @@ func _map_fixture() -> WorldData:
 			if ((at - Vector2(154, 147)) / Vector2(15, 11)).length_squared() < 1.0:
 				biome = Biomes.LAKE
 			biomes[y * world.W + x] = biome
+			heights[y * world.W + x] = (40.0 + 210.0 * exp(-at.distance_squared_to(Vector2(120, 101)) / 2300.0)) / GameConfig.HS
 	world.biome = biomes
+	world.h = heights
 	var wet := PackedByteArray()
 	wet.resize(world.N)
 	world.river = wet
@@ -240,12 +244,36 @@ func _journal_checks() -> void:
 	var keys := Exploration.classify({}, Biomes.FOREST, {dark = 0.9, up = 0.4, aurora = 0.8})
 	hud.explore.add_photo({path = shot_path, place = ""}, keys, "2026-11-18 12:00:00")
 	_check(keys.has("biome:%d" % Biomes.FOREST) and keys.has("night:aurora"), "снимок ночью: страницы биома и сияния")
-	hud.journal_panel.open(hud.journey_data())
+	var village := hud.world.settlements[0] as SettlementData
+	var id := WorldData.place_id("settlement", village.x, village.y)
+	hud.visited[id] = true
+	hud.map_journal.read[id] = true
+	hud.explore.record_place_photo(id, shot_path)
+	var snapshot := hud.explore.save_state()
+	var restored := Exploration.new()
+	restored.restore(snapshot)
+	snapshot.erase("place_photos")
+	_check(restored.place_photos.get(id) == shot_path and Exploration.valid_save(snapshot),
+		"снимок места переживает сохранение, прежний формат тоже читается")
+	hud.show_tablet(Hud.Tablet.Tab.PATH)
 	_check(hud.journal_panel.visible and hud.journal_panel._path_page.visible and not hud.journal_panel._album_page.visible, "«Путешествие» открывается на вкладке «Путь»")
 	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()), "экран помещается в 1280×720")
+	await process_frame
+	if not hud.big_map.places.is_empty():
+		hud.big_map._set_hover(hud.big_map.places[0])
 	await _shot("hud_journal_path")
-	hud.journal_panel.open(hud.journey_data(), true)
-	_check(hud.journal_panel._album_page.visible and hud.journal_panel._album_page.get_child(0).get_child_count() >= 6, "вкладка «Альбом»: группы страниц")
+	var atlas := hud.big_map
+	_check(atlas.places.size() > 0 and int(atlas.places[0].map_status) & Hud.Atlas.Status.PHOTO != 0
+		and hud.journal_panel._cache.has(shot_path), "место со снимком получает статус и миниатюру")
+	var center := atlas._center
+	var zoom := atlas._scale
+	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	hud.show_tablet(Hud.Tablet.Tab.PATH)
+	_check(hud.big_map == atlas and atlas._center == center and atlas._scale == zoom, "Карта и Путь сохраняют один вид")
+	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+	var filters := hud.journal_panel._album_page.get_child(0).get_children()
+	_check(hud.journal_panel._album_page.visible and filters.any(func(node: Node) -> bool:
+		return node is Button and node.text.begins_with("Ночь")), "вкладка «Альбом»: группы страниц")
 	await _shot("hud_journal_album")
 	var card_buttons: Array[Node] = hud.journal_panel._album_content.find_children("*", "Button", true, false)
 	_check(card_buttons.size() >= 2, "открытые страницы альбома интерактивны")
@@ -268,6 +296,21 @@ func _journal_checks() -> void:
 	var mode_before: int = hud.view_mode
 	await _tap_hud()
 	_check(hud.view_mode == mode_before and not hud.summary_visible(), "Tab под «Путешествием» не меняет вид сводки")
+	var old_scale := root.content_scale_size
+	var old_size := root.size
+	root.content_scale_size = Vector2i.ZERO
+	root.size = Vector2i(720, 560)
+	hud.show_tablet(Hud.Tablet.Tab.PATH)
+	await _shot("hud_tablet_narrow")
+	_check(hud.journal_panel._map_row.vertical and root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()),
+		"на узком экране док переезжает под карту")
+	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+	await _shot("hud_album_narrow")
+	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()) and hud.journal_panel._album_columns() < 5,
+		"сетка альбома сужается вместе с планшетом")
+	root.content_scale_size = old_scale
+	root.size = old_size
+	await process_frame
 	# сообщения: пролежавшее под окном дольше TOAST_STALE некритичное сгорает, задание остаётся
 	hud._toast_queue.clear()
 	hud._toast_kinds.clear()
@@ -388,6 +431,8 @@ func _run() -> void:
 	await _shot("hud_big_map_pad")
 	hud.big_map.controls.joypad = false
 	if hud.big_map._data.atlas_texture != null:
+		_check(hud.big_map._data.atlas_relief.size() == 3 and hud.big_map._tiles.material != null,
+			"атлас использует высоты для отмывки и изолиний")
 		var road_mesh: ArrayMesh = hud.big_map._data.atlas_strokes[hud.big_map.Data.Line.ROAD]
 		_check(road_mesh != null and road_mesh.surface_get_array_index_len(0) > 0,
 			"личная карта использует готовый меш дорог")
@@ -401,7 +446,7 @@ func _run() -> void:
 		await process_frame
 		_check(hud.big_map._atlas_layers[2 * hud.big_map.Data.Line.ROAD].mesh == road_mesh,
 			"повторное открытие использует тот же меш дорог")
-	var close_map: Button = hud.big_map.get_children().filter(func(n: Node) -> bool: return n is Button).back()
+	var close_map: Button = hud.journal_panel._close
 	_check(close_map != null and close_map.icon == Hud.UiIcons.CLOSE and close_map.size.x >= 44.0 and close_map.size.y >= 44.0,
 		"кнопка закрытия карты имеет иконку и размер >= 44x44 px")
 	var atlas_draws := {track = 0}
