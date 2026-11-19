@@ -49,6 +49,12 @@ const SECTOR := 4
 const MIN_CAPACITY := 64
 const SECTORS_PER_SLICE := 4
 const UPLOAD_US := 900
+## 19.11.2026: обязательная порция. Квадрат, который виден или станет виден до следующей склейки, выкладывается
+## каждый кадр по одному — без доли общего срока кадра (StreamFrameBudget) и после него. Общий срок делят рельеф,
+## вода, деревья и области; прежде ковёр получал его примерно раз в шесть кадров, на скорости очередь росла
+## быстрее, чем выкладывалась, и ковёр появлялся рывками или только после остановки (регрессия 19.11, и раньше
+## такая же после правок «пиков кадра»). Один квадрат — около 0,1–0,3 мс; дальние квадраты ждут бюджет, как прежде.
+const URGENT_PAD := 6.0     # м за видимой дальностью, ещё обязательные (запас на ход до следующей склейки)
 const KINDS := Models.CARPET_KINDS
 ## Ветер и свет вида: [sway, flutter, sway_speed, ao, glow, base_shade] (см. VegetationLayer._wind_mat) и насколько трава расступается у игрока, м
 const WIND := [
@@ -260,8 +266,8 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upl
 	var forward := _view_forward() if directional else Vector2.UP
 	if directional:
 		_publish_forward(forward)
-	if not may_work:
-		return false
+	# 19.11.2026: опрос задачи, обязательная порция и запуск следующей склейки идут и без доли общего срока
+	# (may_work/may_upload): они дешёвые, а без них ковёр стоит, пока кадр занят рельефом и деревьями
 	if _task != -1:
 		if not WorkerThreadPool.is_task_completed(_task):
 			return false
@@ -270,16 +276,16 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upl
 	if not _out.is_empty():
 		if _last == Vector2.INF or road_revision != _road_revision:
 			_out.clear()
-		elif may_upload:
-			var until := Time.get_ticks_usec() + UPLOAD_US
-			if deadline_usec > 0:
-				until = mini(until, deadline_usec)
-			var uploaded := _present_next(fade_clock, until)
+		else:
+			var until := -1  # без доли общего срока — только обязательный ближний квадрат
+			if may_work and may_upload:
+				until = Time.get_ticks_usec() + UPLOAD_US
+				if deadline_usec > 0:
+					until = mini(until, deadline_usec)
+			var uploaded := _present_next(fade_clock, until, p)
 			if uploaded and _out.is_empty():
 				stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
 			return uploaded
-		else:
-			return false
 	var lead := stream.lead()
 	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
 			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision and fade_clock < _cleanup_at:
@@ -553,11 +559,14 @@ static func _join_tiles(bucket: Dictionary) -> PackedFloat32Array:
 	return buffer
 
 
-func _present_next(now: float, deadline_usec := 0) -> bool:
+## deadline_usec: 0 — всё сразу; > 0 — порция до срока; < 0 — только обязательная. Квадрат в видимой дальности от
+## urgent_from (игрок) выкладывается и после срока — один за вызов
+func _present_next(now: float, deadline_usec := 0, urgent_from := Vector2.INF) -> bool:
 	var sectors_done := 0
 	while not _out.is_empty():
-		if deadline_usec > 0 and (sectors_done >= SECTORS_PER_SLICE or Time.get_ticks_usec() >= deadline_usec):
-			return sectors_done > 0
+		if deadline_usec != 0 and (sectors_done >= SECTORS_PER_SLICE or Time.get_ticks_usec() >= deadline_usec):
+			if sectors_done > 0 or not _urgent(_out.back().key, urgent_from):
+				return sectors_done > 0
 		var pair: Dictionary = _out.pop_back()
 		var key: Vector3i = pair.key
 		var sector := Vector2i(key.x, key.y)
@@ -579,6 +588,16 @@ func _present_next(now: float, deadline_usec := 0) -> bool:
 			if expires > 0.0:
 				_cleanup_at = minf(_cleanup_at, expires)
 	return sectors_done > 0
+
+
+## Квадрат виден или станет виден до следующей склейки: его ковёр нельзя откладывать до бюджета кадра
+func _urgent(key: Vector3i, from: Vector2) -> bool:
+	if not from.is_finite():
+		return false
+	var side := SECTOR * TILE
+	var low := Vector2(key.x, key.y) * side
+	var d := from.distance_to(from.clamp(low, low + Vector2.ONE * side))
+	return d <= reach() * (EXTRA_REACH.x if directional else 1.0) + URGENT_PAD
 
 
 func _present_sector(n: int, sector: Vector2i, frame: Dictionary) -> void:

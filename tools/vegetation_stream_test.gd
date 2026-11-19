@@ -44,6 +44,7 @@ func contact_publication() -> void:
 	layer._present_next(Time.get_ticks_usec() - 1)
 	check(layer.obstacles_version == 0 and layer.obstacles.is_empty() and layer.bumps.is_empty(),
 		"Waiting for GPU budget leaves both contact buffers unpublished")
+	check(layer.upload_order == [-1], "Expired budget still publishes one nearby detail group per frame")
 	layer._present_next(0)
 	check(layer.version_at_upload == {-1: 0, 0: 0, 1: 0, 2: 1},
 		"Contacts publish after the last obstacle group, without waiting for later decorations")

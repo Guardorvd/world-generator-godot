@@ -12,6 +12,11 @@ class MemorySource extends Source:
 		if gate != null: gate.wait()
 		return groups[layer + 1][key]
 
+class CountingLayer extends VegetationLayer:
+	var presented := []
+	func _present_group(group: int, _immediate: bool) -> void:
+		presented.append(group)
+
 class DelayedTerrain extends PlanTerrain:
 	func _arrays(key: Vector2i) -> Variant:
 		OS.delay_usec(3000)
@@ -129,11 +134,15 @@ func _test_pool_and_slices() -> void:
 func _test_deadlines() -> void:
 	var budget := FrameBudget.new()
 	budget.deadline_usec = Time.get_ticks_usec() - 1
-	var layer := VegetationLayer.new()
+	var layer := CountingLayer.new()
 	layer.frame_budget = budget
-	layer._present.assign([-1])
+	# 19.11.2026: трава и подлесок у игрока — хотя бы одна группа за кадр и после общего срока (прежде ни одной,
+	# и на скорости снимок травы отставал от игрока)
+	layer._present.assign([-1, 0])
 	layer._present_next(budget.deadline_usec)
-	check(layer._present == [-1], "expired shared deadline cannot force the first detail upload")
+	check(layer.presented == [-1] and layer._present == [0], "expired shared deadline still publishes exactly one detail group")
+	layer._present_next(-1)
+	check(layer.presented == [-1, 0] and layer._present.is_empty(), "a mandatory slice without a grant publishes one group")
 	var built := {chunk = Vector2i.ZERO, entries = [{kind = 0}]}
 	layer._defs[0] = {trunk = BoxMesh.new()}
 	check(not layer._apply_chunk(built, 1, budget.deadline_usec) and layer.node_stats.created == 0, "expired tree deadline leaves a resumable chunk without creating a node")
@@ -237,19 +246,20 @@ func _test_carpet_publication() -> void:
 		and near_stones[Mesh.ARRAY_TEX_UV2].slice(0, shared) == far_stones[Mesh.ARRAY_TEX_UV2],
 		"road gravel changes LOD only after the discarded stones have dissolved")
 	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 3.0, false)
-	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false) and carpet.count == 0,
-		"carpet holds completed buffers without an upload grant")
-	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, true, Time.get_ticks_usec() - 1) and carpet.count == 0,
-		"carpet leaves all sectors pending when the common deadline has passed")
-	check(carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and carpet.count == 3 * Carpet.SECTORS_PER_SLICE and not carpet._out.is_empty(),
-		"one carpet grant publishes a bounded number of sectors with both LODs")
-	check(carpet.layers[0].nodes.has(Vector2i.ZERO) and not carpet.layers[0].nodes.has(Vector2i(Carpet.SECTORS_PER_SLICE, 0)),
-		"nearby carpet coverage is published before farther sectors regardless of insertion order")
+	# 19.11.2026: квадрат в пределах видимости выкладывается каждый кадр — без доли общего срока и после него
+	# (прежде ковёр в такие кадры не выкладывал ничего и на скорости отставал от игрока)
+	check(carpet.update(Vector2.ZERO, 0.01, 1, true, false, 0, 5.0) and carpet.count == 3 and carpet.layers[0].nodes.has(Vector2i.ZERO),
+		"without an upload grant the nearest visible carpet sector is still published")
+	check(carpet.update(Vector2.ZERO, 0.01, 1, true, true, Time.get_ticks_usec() - 1, 5.0) and carpet.count == 6,
+		"after the common deadline exactly one more visible sector is published")
+	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false, 0, 5.0) and carpet.count == 6,
+		"sectors beyond the visible carpet range wait for a budget grant")
 	var key := Vector3i.ZERO
 	var history: RefCounted = carpet._shown[key].history
 	check(history.displayed[0][19] == 5.0 and history.displayed[1][19] == 5.0,
 		"both forms start invisible when the delayed upload actually occurs")
-	check(carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty(),
+	check(carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty()
+		and carpet.layers[0].nodes.has(Vector2i(Carpet.SECTORS_PER_SLICE, 0)),
 		"the next grant resumes the snapshot without repeating a sector")
 	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 5.1, false)
 	check(carpet._out.is_empty(), "unchanged carpet tiles need no new GPU upload")

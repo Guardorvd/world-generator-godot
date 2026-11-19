@@ -713,7 +713,11 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			_pending = _by_distance(_pending, p)
 		_built = []
 	phase_started = _record_phase(1, phase_started)
-	if allow_upload and not uploaded and (frame_budget == null or frame_budget.allows_work()) and _task != -1 and WorkerThreadPool.is_task_completed(_task):
+	# 19.11.2026: трава и подлесок у игрока не ждут доли общего срока кадра (StreamFrameBudget): готовый снимок
+	# принимается сразу, и каждый кадр выкладывается хотя бы одна его группа. Прежде в кадры, где срок съели рельеф,
+	# вода или ковёр, не выкладывалось ничего, а новый снимок ждёт, пока прежний передан целиком, — на скорости
+	# трава отставала и появлялась рывками. Дальние деревья (_pending) по-прежнему идут только в бюджет.
+	if _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		if _detail_epoch == _epoch and p.distance_to(_fill_at) < maxf(grass_r, under_r) + StreamPolicy.MAX_LEAD:
@@ -721,10 +725,12 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		else:
 			last_fill = Vector2.INF
 			_detail_frames.clear()
-	if allow_upload and not uploaded and not _present.is_empty():
-		if frame_budget == null or frame_budget.allows_work():
+	if not _present.is_empty():
+		if allow_upload and not uploaded and (frame_budget == null or frame_budget.allows_work()):
 			_present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US if frame_budget == null else frame_budget.deadline(DETAIL_UPLOAD_US))
-			uploaded = true
+		else:
+			_present_next(-1)  # обязательная порция: одна группа
+		uploaded = true
 	phase_started = _record_phase(2, phase_started)
 	var lead := stream.lead()
 	if (frame_budget == null or frame_budget.allows_work()) and (last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK):
@@ -1603,10 +1609,12 @@ func _accept_contacts() -> void:
 	obstacles_version += 1
 
 
-## deadline_usec = 0 — передать всё оставшееся сразу.
+## deadline_usec = 0 — передать всё оставшееся сразу; > 0 — до срока, но хотя бы одну группу; < 0 — ровно одну группу.
 func _present_next(deadline_usec: int, immediate := false) -> void:
 	var pending := not _present.is_empty()
-	while not _present.is_empty() and (deadline_usec == 0 or Time.get_ticks_usec() < deadline_usec):
+	var groups_done := 0
+	while not _present.is_empty() and (deadline_usec == 0 or groups_done == 0 or (deadline_usec > 0 and Time.get_ticks_usec() < deadline_usec)):
+		groups_done += 1
 		var group: int = _present.pop_front()
 		_present_group(group, immediate)
 		if _far_of.has(group):
