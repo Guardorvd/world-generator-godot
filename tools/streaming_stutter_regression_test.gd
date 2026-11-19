@@ -247,10 +247,11 @@ func _test_carpet_publication() -> void:
 		"road gravel changes LOD only after the discarded stones have dissolved")
 	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 3.0, false)
 	# 19.11.2026: у ковра своя доля кадра (GroundCarpet.UPLOAD_US): он выкладывается и без доли общего срока, и после
-	# него, и общий срок не занимает (прежде в такие кадры не выкладывалось ничего, и на скорости ковёр отставал)
-	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false, Time.get_ticks_usec() - 1, 5.0) and carpet.layers[0].nodes.has(Vector2i.ZERO)
+	# него (прежде в такие кадры не выкладывалось ничего, и на скорости ковёр отставал). Выкладку он сообщает честно
+	# (true), чтобы координатор не клал в тот же кадр меш рельефа или воды
+	check(carpet.update(Vector2.ZERO, 0.01, 1, true, false, Time.get_ticks_usec() - 1, 5.0) and carpet.layers[0].nodes.has(Vector2i.ZERO)
 		and carpet.count >= 3 and carpet.count <= 3 * Carpet.SECTORS_PER_SLICE and not carpet._out.is_empty(),
-		"carpet publishes a bounded slice of its own without the shared grant and does not consume it")
+		"carpet publishes a bounded slice of its own without the shared grant and reports the upload")
 	var key := Vector3i.ZERO
 	var history: RefCounted = carpet._shown[key].history
 	check(history.displayed[0][19] == 5.0 and history.displayed[1][19] == 5.0,

@@ -298,11 +298,12 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upl
 			_out.clear()
 		else:
 			# своя доля кадра (UPLOAD_US), независимо от общего срока и очереди групп подгрузки (may_work, may_upload,
-			# deadline_usec больше не ограничивают ковёр); общий срок она не занимает — возвращается false
+			# deadline_usec больше не ограничивают ковёр). 19.11.2026: выкладка возвращается честно (true) — порцию это
+			# не урезает, но координатор не кладёт в тот же кадр меш рельефа, воды или дальней местности
 			var uploaded := _present_next(fade_clock, Time.get_ticks_usec() + UPLOAD_US, p)
 			if uploaded and _out.is_empty():
 				stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
-			return false
+			return uploaded
 	var lead := stream.lead().limit_length(stream.velocity.length() * LEAD_MAX_S)
 	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
 			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision and fade_clock < _cleanup_at 			and not _incomplete:

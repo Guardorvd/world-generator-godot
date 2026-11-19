@@ -692,14 +692,18 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_refresh_details = false # the initial snapshot already includes these trees
 		return true
 	var uploaded := false
+	# 19.11.2026: выкладка ковра — отдельно от uploaded: трава и подлесок в её кадре берут ту же порцию, что и прежде
+	# (ковёр раньше всегда отвечал false), а координатору кадр сообщается занятым — рельеф, вода, дальняя местность,
+	# области и дальние деревья ждут следующего кадра, а не ложатся поверх ковра
+	var carpet_uploaded := false
 	if carpet != null:
 		var may_work: bool = frame_budget == null or frame_budget.allows_work()
 		var details_ready := not _present.is_empty() or (_task != -1 and WorkerThreadPool.is_task_completed(_task))
 		var yield_to_vegetation := _carpet_uploaded_last and (details_ready or not _pending.is_empty())
-		uploaded = carpet.update(p, dt, _road_revision, may_work, allow_upload and not yield_to_vegetation,
+		carpet_uploaded = carpet.update(p, dt, _road_revision, may_work, allow_upload and not yield_to_vegetation,
 			frame_budget.deadline_usec if frame_budget != null else 0, stream.clock)
 		if allow_upload and may_work:
-			_carpet_uploaded_last = uploaded
+			_carpet_uploaded_last = carpet_uploaded
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
 		WorkerThreadPool.wait_for_task_completion(_tree_task)
 		_tree_task = -1
@@ -768,11 +772,11 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_detail_started_clock = stream.clock
 		_task = WorkerThreadPool.add_task(_fill_details.bind(px, pz, lead, _epoch, stream.clock, false, _detail_snapshot()), true, "Трава и подлесок")
 	phase_started = _record_phase(4, phase_started)
-	if allow_upload and not uploaded and not _pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
+	if allow_upload and not uploaded and not carpet_uploaded and not _pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
 		_upload_next()
 		uploaded = true
 	_record_phase(5, phase_started)
-	return uploaded
+	return uploaded or carpet_uploaded
 
 ## Идут фоновые задачи слоя (раскладка, деревья, ковёр). Перемещение ждёт их кадрами, а не в travel_begin:
 ## _finish() на них стоял одним кадром до 8 с (стресс-тест 14.11, перенос сразу после быстрых видов).
