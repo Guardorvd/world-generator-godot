@@ -124,6 +124,7 @@ var _seat_id := ""             # лавка, на которой сидит иг
 var _fix_progress := 0.0       # 0..1: удержание «взаимодействия» у сломанного объекта задания
 var paused := false
 var show_map := false
+var _hints_key := []  # от чего зависели последние подсказки (_update_hints)
 var _map_disabled_3d := false
 var _map_stream_origin := Vector2.INF
 var info_timer := 0.0
@@ -176,6 +177,7 @@ var _grass_mesh: Mesh
 ## С 9.0 сразу готовится только окружение игрока: ближний рельеф (до NEAR), лес вокруг и край за картой;
 ## дальний рельеф и растительность догружаются в игре, сначала по ходу движения.
 func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_scope: ServiceScope = null) -> void:
+	_hints_key = [] # подсказки HUD собрать заново
 	services = service_scope if service_scope != null else loaded.service_scope
 	if services == null:
 		services = GameContext.scope
@@ -1614,6 +1616,15 @@ func _crash() -> void:
 ## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас.
 ## Действия к месту чипами [клавиша] действие; полная раскладка — в паузе.
 func _update_hints() -> void:
+	# 19.11.2026: подсказки собираются заново (подписи клавиш из InputMap, массивы) только когда сменилось то,
+	# от чего они зависят; раньше — каждый кадр
+	var kind: String = _target.get("kind", "")
+	var key := [_placing_bike(), bike_placement.reason if _placing_bike() else "", _opening or show_map or _settlement_open() or photo.active,
+		crash.active(), kind, _target.place.name if kind == "board" else "", _target.get("repair_kind", ""), _seat_id,
+		bike.riding, services.controls.joypad]
+	if key == _hints_key:
+		return
+	_hints_key = key
 	var k := services.controls.label
 	if _placing_bike():
 		var confirm_key: String = k.call("jump") if services.controls.joypad else "ЛКМ / " + k.call("interact")

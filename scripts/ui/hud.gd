@@ -22,6 +22,8 @@ const Journal = preload("res://scripts/game/map_journal.gd")
 const MINI := LocalMap.DIAMETER
 const SUMMARY_FADE := 0.24
 const SUMMARY_HINT_TIME := 5.0
+const LEFT_MARGIN := 18.0  # левая колонка: отступ от края и зазор между карточками (с 19.11.2026)
+const LEFT_GAP := 10.0
 const TOAST_TIME := 3.5 # сколько сообщение висит на экране (с)
 const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
 const TOAST_QUEUE := 3 # сколько сообщений ждут в очереди, старые отбрасываются
@@ -86,9 +88,12 @@ var _reticle_on_target := false
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
+var _reveal_key := Vector4.INF  # что было при последней раскладке сводки (_process)
+var _reveal_dirty := true
 var _map_hint_pad := -1  # для какого устройства написана подсказка под картой (1 — геймпад)
 var _repair: RepairArc  # 18.11.2026: кольцо удержания «взаимодействия» при ремонте
 var _ride: RideDial  # 18.11.2026: прибор движения слева внизу — скорость, дуга сил (14.2) и тормоза в одном круге
+var _vignette_strength := -1.0
 var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
 var _prompt_items: Array = []
@@ -156,6 +161,7 @@ func _ready() -> void:
 
 	tracker = _build_tracker()
 	add_child(tracker)
+	tracker.resized.connect(func() -> void: _reveal_dirty = true)
 	move_child(tracker, compass.get_index() + 1)
 
 	big_map = Atlas.new()
@@ -303,7 +309,7 @@ func _style_summary() -> void:
 	_surface.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_nearby.hide()
 	_surface.hide()
-	_info_panel.resized.connect(_place_toast)
+	_info_panel.resized.connect(func() -> void: _reveal_dirty = true)
 
 	# 19.11.2026: нижние подсказки — одна полупрозрачная пилюля без рамки, клавиша — заливкой без своей рамки
 	_hint_style = HudStyle.panel(Color(HudStyle.SURFACE, 0.82), HudStyle.BORDER, 8, Vector2(7, 4))
@@ -746,12 +752,10 @@ func quest_kind() -> String:
 ## 11.9: счётчик задания под мини-картой — вид и название, текущий шаг с расстоянием, шаг из скольких, груз
 func _build_tracker() -> PanelContainer:
 	var panel := PanelContainer.new()
-	panel.anchor_left = 1.0
-	panel.anchor_right = 1.0
-	panel.offset_left = -288
-	panel.offset_right = -18
-	panel.offset_top = MINI + 30
-	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	# 19.11.2026: левая колонка под сведениями о месте, той же ширины; место по высоте задаёт _layout_left_column
+	panel.offset_left = 18
+	panel.offset_right = 300
+	panel.offset_top = 18
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13, Vector2(12, 10)))
 	var box := VBoxContainer.new()
@@ -936,7 +940,6 @@ func _apply_reveal() -> void:
 	minimap.modulate.a = map_alpha
 	_info_panel.visible = alpha > 0.0 and not info.text.is_empty()
 	_info_panel.modulate.a = alpha
-	_place_toast()
 	var quest_on := not _tracker_title.text.is_empty()
 	var tracker_alpha := maxf(alpha, map_alpha if quest_on else 0.0)
 	tracker.visible = tracker_alpha > 0.0 and (quest_on or (alpha > 0.0 and not _tracker_series.text.is_empty()))
@@ -949,6 +952,7 @@ func _apply_reveal() -> void:
 	# modulate оставлен вспышке задания. Для затухания используем родительский цвет панели и её строк.
 	tracker.self_modulate.a = tracker_alpha
 	_tracker_content.modulate.a = tracker_alpha
+	_layout_left_column()
 	var urgent: bool = _hint_urgent and not _photo_mode and not big_map.visible and not settlement_panel.visible
 	hint.visible = (alpha > 0.0 or urgent) and hint.get_child_count() > 0
 	hint.modulate.a = 1.0 if urgent else alpha
@@ -1008,9 +1012,13 @@ func set_hints(bottom: Array, near: Array, urgent := false) -> void:
 ## 14.2: state — Stamina.State: трата ниже LOW пульсирует и затемняет края, накат подсвечен
 func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
 	_ride.set_stamina(value, exhausted, state, _gauges_allowed())
-	var mat: ShaderMaterial = _vignette.material
-	mat.set_shader_parameter("strength", _ride.warning * 0.4)
-	_vignette.visible = _ride.warning > 0.01
+	# затемнение краёв: параметр шейдера — только когда меняется (обычно он 0 и узел скрыт)
+	var strength := _ride.warning * 0.4
+	if strength != _vignette_strength:
+		_vignette_strength = strength
+		var mat: ShaderMaterial = _vignette.material
+		mat.set_shader_parameter("strength", strength)
+		_vignette.visible = _ride.warning > 0.01
 	_show_ride()
 
 
@@ -1146,10 +1154,25 @@ func _apply_toast_style(kind: StringName, text: String) -> void:
 		_toast_icon.modulate = accent
 
 
-func _place_toast() -> void:
-	var top := _info_panel.position.y + _info_panel.size.y + 10.0 if _info_panel.visible else 18.0
-	if $Toast.position.y != top:
-		$Toast.position.y = top
+## 19.11.2026: левая колонка — сведения о месте, под ними задание, под ним сообщение; одна ширина, один зазор.
+## Каждый кадр из _apply_reveal, поэтому только сравнения: свойства пишутся, лишь когда что-то сдвинулось
+func _layout_left_column() -> void:
+	var width := _info_panel.size.x
+	var y := LEFT_MARGIN
+	if _info_panel.visible:
+		y += _info_panel.size.y + LEFT_GAP
+	_column(tracker, y, width)
+	if tracker.visible:
+		y += tracker.size.y + LEFT_GAP
+	_column($Toast, y, width)
+
+
+static func _column(panel: Control, y: float, width: float) -> void:
+	if panel.position.y != y:
+		panel.position.y = y
+	width = maxf(width, panel.get_combined_minimum_size().x)  # иначе контейнер вернёт свой минимум и запись пойдёт каждый кадр
+	if panel.size.x != width:
+		panel.size.x = width
 
 
 func _input(event: InputEvent) -> void:
@@ -1166,7 +1189,14 @@ func _process(delta: float) -> void:
 		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
 	if big_map.visible:
 		_sync_map_hint()
-	_apply_reveal()
+	# 19.11.2026: сводка раскладывается только когда что-то сдвинулось (проявление, вид, экраны поверх игры);
+	# остальные изменения отмечают _reveal_dirty
+	var flags := int(big_map.visible) | int(settlement_panel.visible) << 1 | int(is_visible_in_tree()) << 2 | int(view_mode) << 3 | int(controls.joypad) << 5
+	var key := Vector4(_summary_progress, _light, _summary_hint_left, flags)
+	if _reveal_dirty or key != _reveal_key:
+		_reveal_key = key
+		_reveal_dirty = false
+		_apply_reveal()
 	var obscured: bool = not is_visible_in_tree() or big_map.visible or settlement_panel.visible
 	$Toast.visible = not obscured and _toast_left > 0.0
 	if obscured or _toast_left <= 0.0:
@@ -1258,6 +1288,7 @@ func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
 func _set_location(biome: String, surface: String, altitude: int, temp: int, nearby: String) -> void:
 	if info.text != biome:
 		info.text = biome
+		_reveal_dirty = true
 	_set_optional_text(_surface, surface)
 	_set_optional_text(_altitude, "%d м" % altitude)
 	_set_optional_text(_temperature, "%s%s °C" % ["+" if temp > 0 else "", str(temp).replace("-", "−")])
