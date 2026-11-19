@@ -1552,7 +1552,8 @@ func _process(delta: float) -> void:
 			hud.minimap.set_route(navigation_line.path, navigation_line._road_first, navigation_line._road_last) # маршрут подсвечен и на мини-карте
 		if navigating and navigation_line.status != _navigation_status:
 			_navigation_status = navigation_line.status
-			if _navigation_status != "": hud.toast_now(_navigation_status)
+			# 19.11.2026: в сообщения — только отказ («Проход к цели не найден»); «Расчёт маршрута…» не мелькает
+			if _navigation_status != "" and _navigation_status != NavigationLine.SEARCHING: hud.toast_now(_navigation_status)
 	t0 = _tick_mark("frame_route_ui", t0)
 	if place_names != null:
 		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)

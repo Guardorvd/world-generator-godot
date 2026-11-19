@@ -73,6 +73,19 @@ func run() -> void:
 	line._road_last = 1
 	line.update_line(Vector3(40,h.ground_at(40,100),100),0.1,true)
 	check(count.calls > 0 and count.longest <= Line.REACH + 0.001, "line validates only visible 70m, not entire long edge")
+	# 19.11.2026: игрок у дороги на другой высоте (кювет, откос) не «перекрывает» маршрут — проверка идёт от уровня дороги
+	var live := Roads.new()
+	live._world = h.world
+	live._heights = h
+	var road_at := Vector2(40,100)
+	var road_y := h.surface_at(road_at.x, road_at.y, INF)
+	var request := {nearest = road_at, start = 0.0, segment = 1, path = PackedVector2Array([road_at, Vector2(220,100)]),
+		arc = PackedFloat32Array([0,180]), road_first = 0, road_last = 1, obstacles = -1, wrong = 0.0, flow = 0.0}
+	request.at = Vector3(road_at.x, road_y, road_at.y)
+	var on_road := Line.RoutePaint.new().build(request.duplicate(), live, h)
+	request.at = Vector3(road_at.x, road_y - 1.2, road_at.y + 4.0)
+	var beside := Line.RoutePaint.new().build(request.duplicate(), live, h)
+	check(on_road.has("blocked") == beside.has("blocked"), "player 1.2m below the road beside it sees the same route as on it (blocked=%s)" % on_road.has("blocked"))
 	line.setup(h.world,h)
 	line.background_search = true
 	var from := Vector2(40,200)

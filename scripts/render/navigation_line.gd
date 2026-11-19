@@ -7,6 +7,11 @@ const REACH := 70.0
 const SEARCH_BLOCK := 32
 const REDRAW_STEP := 0.4
 const AVOID_MS := 6000 # recheck a locally blocked edge after the obstacle snapshot has had time to change
+# 19.11.2026: съезд с маршрута. Пока игрок в коридоре OFF_ROUTE от линии, маршрут не пересчитывается — линия ведёт
+# от ближайшей точки, вернуться можно самому. На последнем участке без дороги (прямо к цели) — LAST_LEG_DRIFT.
+const OFF_ROUTE := 45.0
+const LAST_LEG_DRIFT := 18.0
+const SEARCHING := "Расчёт маршрута…"  # состояние поиска; HUD его не показывает (линия появится сама)
 const PIECE := 0.75     # длина кусочка штриха, м; штрих — DASH кусочков, пауза — столько же
 const DASH := 2
 const HALF := 0.14      # полуширина штриха, м
@@ -235,7 +240,7 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 				distance = score
 				segment = i
 				nearest = p
-	if distance > 24.0 and _reroute_timer <= 0.0 and _search_task == -1:
+	if distance > OFF_ROUTE and _reroute_timer <= 0.0 and _search_task == -1:
 		_rebuild(here, at.y)
 		return
 	if segment == -1 or distance > REACH:
@@ -245,7 +250,7 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 	var start: float = _cum[segment - 1] + path[segment - 1].distance_to(nearest)
 	_progress = start
 	# После перехода на последний участок ближайшая старая дорожная точка уже не должна тянуть назад.
-	if _road_last >= 0 and segment > _road_last and _reroute_timer <= 0 and distance > 6.0 and _search_task == -1:
+	if _road_last >= 0 and segment > _road_last and _reroute_timer <= 0 and distance > LAST_LEG_DRIFT and _search_task == -1:
 		_rebuild(here, at.y)
 		return
 	_check_direction(here, nearest, start)
@@ -392,7 +397,10 @@ class RoutePaint extends RefCounted:
 			else:
 				# проверяется только ещё не проверенная часть участка (от прежней границы или от игрока)
 				var from := nearest if i == segment else a0
-				var from_level := ground
+				# 19.11.2026: проверка идёт по самому маршруту. Игрок рядом с дорогой (в кювете, на откосе) стоит на другой
+				# высоте; прежде его ноги брались за высоту ближайшей точки, перепад > 0,5 м «перекрывал» дорогу и
+				# запускал пересчёт с обходом исправного участка
+				var from_level := ground if i != segment else heights_level(nearest, ground)
 				if checked > c0:
 					from = a0 + direction * (checked - base)
 					from_level = _levels[i]
@@ -411,6 +419,13 @@ class RoutePaint extends RefCounted:
 			if c1 - start >= REACH:
 				break
 		return {vertices = vertices, colors = colors}
+
+	## Высота опоры маршрута в точке p; feet — подсказка уровня (мост над дорогой или дорога под мостом)
+	func heights_level(p: Vector2, feet: float) -> float:
+		if _heights == null:
+			return feet
+		var y := _heights.surface_at(p.x, p.y, feet)
+		return y if is_finite(y) else feet
 
 	## Штрихи на дороге: кусочки по сетке PIECE от начала маршрута; при предупреждении сетка едет назад
 	func _dashes(vertices: PackedVector3Array, colors: PackedColorArray, a0: Vector2, direction: Vector2,
@@ -565,7 +580,9 @@ func _start_search() -> void:
 		search._node_keys = roads._node_keys
 		search._edges = roads._edges
 		search._components = roads._components
-	status = "Расчёт маршрута…"
+	# 19.11.2026: «Расчёт маршрута…» — только когда линии ещё нет; тихий пересчёт старую линию не прячет и не пишет в HUD
+	if path.is_empty():
+		status = SEARCHING
 	var out := {}
 	_search_out = out
 	_search_task = WorkerThreadPool.add_task(func() -> void:
