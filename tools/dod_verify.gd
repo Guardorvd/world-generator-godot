@@ -7,8 +7,10 @@ extends SceneTree
 ## Выбор стартовой области и океан с сухими ложбинами (relief) — на настоящем рельефе плана 768 нескольких сидов
 ## (только этапы relief и ocean, без остальной генерации), --seeds a,b,c — свои сиды.
 ## Стоимости природных маршрутов (rides, RideRoutes.cost_fields) — на синтетических полях.
-##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,relief,rides,rivers,mesh] [--dir <папка кэша>]
-## Лимит 240 с (watchdog). Код 1 при любом расхождении.
+## Раскладка леса и камней плана (vegetation, FastGrid.VegetationPlan) — только по --only vegetation: генерация плана
+## на сид (~30 с), в ней та же раскладка на C# и на GDScript побайтно (объекты и списки чанков); --seeds — свои сиды.
+##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,relief,rides,vegetation,rivers,mesh] [--dir <папка кэша>]
+## Лимит 300 с (watchdog). Код 1 при любом расхождении.
 
 const SEED := "Север-1234"
 var failures := 0
@@ -16,7 +18,7 @@ var _only := PackedStringArray()
 
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 240)
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	run.call_deferred()
 
 
@@ -49,6 +51,8 @@ func run() -> void:
 		verify_relief()
 	if wanted("rides"):
 		verify_rides()
+	if "--only" in OS.get_cmdline_user_args() and wanted("vegetation"):
+		verify_vegetation()
 	if (wanted("rivers") or wanted("mesh")) and not verify_saved_world():
 		quit(1)
 		return
@@ -324,3 +328,18 @@ func verify_rides() -> void:
 		check(slow.cost.to_byte_array() == PackedFloat32Array(fast.cost).to_byte_array()
 			and slow.wood.to_byte_array() == PackedFloat32Array(fast.wood).to_byte_array()
 			and slow.block == PackedInt32Array(fast.block), "%s: стоимости маршрутов и вершины блоков побайтно" % size)
+
+
+## Раскладка леса и камней плана: настоящая генерация, в StageVegetation.place_plan раскладка C# и затем GDScript
+## на тех же полях (посаженные массивы, тропы, дома), сравнение всех obj_* и списков чанков побайтно
+func verify_vegetation() -> void:
+	var seeds := _arg("--seeds", "Север-1234,Туман-4821,Ущелье").split(",", false)
+	StageVegetation.verify = true
+	StageVegetation.verify_report.clear()
+	for seed_text: String in seeds:
+		WorldGenerator._generate_plan(seed_text, WorldGenerator.PLAN_SIZE)
+	StageVegetation.verify = false
+	check(StageVegetation.verify_report.size() == seeds.size(), "раскладка: C# работала на всех сидах (%d из %d)" % [StageVegetation.verify_report.size(), seeds.size()])
+	for r: Dictionary in StageVegetation.verify_report:
+		check(r.same, "%s: лес и камни побайтно (объектов %d, C# %d, первое расхождение %d); C# %.0f мс, GDScript %.0f мс" % [
+			r.seed, r.objects, r.native_objects, r.first_diff, r.native_ms, r.gdscript_ms])

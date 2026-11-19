@@ -68,16 +68,65 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	if surface != null:
 		f.massifs = RockMassif.seated(f.massifs, surface)
 	w.generation_profile.veg_seated_ms = (Time.get_ticks_usec() - part_us) / 1000.0
-	part_us = Time.get_ticks_usec()
+	place_plan(w, f)
+
+
+## Раскладка всех чанков плана по готовым полям f (fields, массивы уже посажены) в w.obj_*, w.chunks.
+## C# (FastGrid.VegetationPlan), если allow_fast и поля полные, иначе GDScript; результат тот же побайтно.
+static func place_plan(w: WorldData, f: Dictionary) -> void:
+	var W := w.W
+	var H := w.H
+	w.CS = WorldData.CHUNK_SIZE
+	w.CW = ceili(float(W) / w.CS)
+	w.CH = ceili(float(H) / w.CS)
+	var part_us := Time.get_ticks_usec()
 	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
 	# С 12.2 ряды чанков считаются на всех ядрах (Parallel.bands), каждый в свой список; списки склеиваются
 	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.
+	var huts := ObjStore.collect_huts(w)
+	var massifs := RockMassif.by_chunk(f.massifs, W, H, w.CS)
+	var fast := Grid.fast_grid() if allow_fast else null
+	if fast != null and _plan_native(w, f, massifs, huts, fast):
+		w.generation_profile.veg_chunks_ms = (Time.get_ticks_usec() - part_us) / 1000.0
+		w.generation_profile.veg_native = true
+		if not verify:
+			return
+		# Сверка (tools/dod_verify.gd -- --only vegetation): тот же план ещё раз на GDScript, итог — GDScript
+		var native := [w.obj_x, w.obj_y, w.obj_k, w.obj_v, w.obj_s, w.chunks]
+		var native_ms: float = w.generation_profile.veg_chunks_ms
+		part_us = Time.get_ticks_usec()
+		_plan_gdscript(w, f, massifs, huts)
+		var same := var_to_bytes(native) == var_to_bytes([w.obj_x, w.obj_y, w.obj_k, w.obj_v, w.obj_s, w.chunks])
+		verify_report.append({seed = w.seed_text, same = same, objects = w.obj_count, native_objects = native[0].size(),
+			native_ms = native_ms, gdscript_ms = (Time.get_ticks_usec() - part_us) / 1000.0,
+			first_diff = -1 if same else _first_diff(native, w)})
+		return
+	w.generation_profile.veg_native = false
+	_plan_gdscript(w, f, massifs, huts)
+
+
+## Сверка C# и GDScript: включает StageVegetation.place_plan (вторая раскладка тем же процессом), итог — в verify_report
+static var verify := false
+static var verify_report: Array = []
+
+
+## Первый номер объекта, где C# разошёлся с GDScript (или число объектов, если различие только в списках чанков)
+static func _first_diff(native: Array, w: WorldData) -> int:
+	var n := mini(native[0].size(), w.obj_count)
+	for o in n:
+		if native[0][o] != w.obj_x[o] or native[1][o] != w.obj_y[o] or native[2][o] != w.obj_k[o] or native[3][o] != w.obj_v[o] or native[4][o] != w.obj_s[o]:
+			return o
+	return n
+
+
+static func _plan_gdscript(w: WorldData, f: Dictionary, massifs: Array[PackedFloat32Array], huts: PackedFloat64Array) -> void:
+	var W := w.W
+	var H := w.H
 	var CS := w.CS
 	var CW := w.CW
 	var CH := w.CH
 	var seed_num := w.seed_num
-	var huts := ObjStore.collect_huts(w)
-	var massifs := RockMassif.by_chunk(f.massifs, W, H, CS)
+	var part_us := Time.get_ticks_usec()
 	var job := func(c0: int, c1: int) -> ObjStore:
 		var first := c0 * CW
 		var st := ObjStore.new(w, first, (c1 - c0) * CW, huts)
@@ -124,6 +173,78 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	w.chunks = chunks
 	w.obj_count = ox.size()
 	w.generation_profile.veg_merge_ms = (Time.get_ticks_usec() - part_us) / 1000.0
+
+
+## false — раскладка чанков плана на GDScript (эталон для tools/dod_verify.gd -- --only vegetation)
+static var allow_fast := true
+
+
+## Раскладка всех чанков плана на C# (FastGrid.VegetationPlan — копия place_chunk, RockScatter.place_chunk и ObjStore,
+## тот же результат побайтно). Углы обломков камней считает движок (cos/sin/atan2 .NET расходятся в последнем бите).
+## false — поля не те, что ждёт копия (нет необязательного поля): тогда прежний путь GDScript.
+static func _plan_native(w: WorldData, f: Dictionary, massifs: Array[PackedFloat32Array], huts: PackedFloat64Array, fast: Object) -> bool:
+	for key: String in ["river", "dist_path", "village", "light", "age_n", "wood", "stand", "glade", "rock", "moist"]:
+		var field: Variant = f.get(key)
+		if field == null or field.size() != w.N:
+			return false
+	if f.has("path"):
+		return false # маска путей снимка (OuterLand) — не план
+	var kinds_start := PackedInt32Array([0])
+	var kinds := PackedInt32Array()
+	for list: Array in _TABLES.kinds:
+		for kind: int in list:
+			kinds.append(kind)
+		kinds_start.append(kinds.size())
+	var trunk := PackedFloat64Array()
+	for kind in Biomes.CROWN_RADIUS.size():
+		trunk.append(TRUNK.get(kind, NAN))
+	# Массивы и их плотные тела по чанкам, как place_chunk (chunk_massifs, RockMassif.cores)
+	var massif_start := PackedInt32Array()
+	var massif_data := PackedFloat32Array()
+	var massif_tor := PackedByteArray()
+	var core_start := PackedInt32Array()
+	var core_data := PackedFloat32Array()
+	for list: PackedFloat32Array in massifs:
+		massif_start.append(massif_data.size())
+		core_start.append(core_data.size())
+		massif_data.append_array(list)
+		for at in range(0, list.size(), RockMassif.STRIDE):
+			massif_tor.append(1 if RockModels.massif_form(int(list[at + 2])) == RockModels.M_TOR else 0)
+		for c: Vector3 in RockMassif.cores(list):
+			core_data.append_array([c.x, c.y, c.z])
+	massif_start.append(massif_data.size())
+	core_start.append(core_data.size())
+	# Метод объекта, а не лямбда: лямбда статической функции приходит в C# пустой
+	var engine_math := EngineTrig.new()
+	var trig := Callable(engine_math, "at")
+	var got: Dictionary = fast.VegetationPlan(w.seed_num, w.W, w.H, w.CS, w.CW, w.CH,
+		f.biome, f.forest, f.stony, f.elev, f.slope, f.dw, f.temp, f.moist,
+		f.river, f.dist_path, f.village, f.light, f.age_n, f.wood, f.stand, f.glade, f.rock, w.path_mask,
+		_TABLES.water, _TABLES.trees, kinds_start, kinds, _TABLES.tree, PackedFloat64Array(Biomes.CROWN_RADIUS), trunk,
+		world_cover(w.seed_num), GameConfig.TILE, GameConfig.HS, massif_start, massif_data, massif_tor, core_start, core_data,
+		huts, trig)
+	var start: PackedInt32Array = got.start
+	var items: PackedInt32Array = got.items
+	var chunks: Array[PackedInt32Array] = []
+	chunks.resize(w.CW * w.CH)
+	for c in chunks.size():
+		chunks[c] = items.slice(start[c], start[c + 1])
+	w.obj_x = got.x
+	w.obj_y = got.y
+	w.obj_k = got.k
+	w.obj_v = got.v
+	w.obj_s = got.s
+	w.chunks = chunks
+	w.obj_count = w.obj_x.size()
+	return true
+
+
+## Тригонометрия движка для FastGrid.VegetationPlan (cos/sin/atan2 .NET расходятся с движком в последнем бите)
+class EngineTrig:
+	extends RefCounted
+
+	func at(a: float, b: float, mode: int) -> float:
+		return cos(a) if mode == 0 else (sin(a) if mode == 1 else atan2(a, b))
 
 
 ## Поля стартовой области для place_chunk (stride W, угол 0, 0)
