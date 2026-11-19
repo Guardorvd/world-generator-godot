@@ -37,6 +37,11 @@ var _sizes: Array[Vector2i] = []
 var _pending := {}
 var _old_geometry := {}
 var _deadline := 0
+var _last_tab := 0
+var _tab_step_dir := 0
+var _tab_tween: Tween
+var _style_dragging := false
+var _option_buttons: Array[OptionButton] = []
 
 func setup(host: Node) -> void:
 	_host = host
@@ -106,14 +111,29 @@ func setup(host: Node) -> void:
 		(style_on[id] as CheckBox).tooltip_text = VisualStyle.HINTS[id]
 		(style_amount[id] as HSlider).tooltip_text = VisualStyle.HINTS[id]
 		(style_on[id] as CheckBox).toggled.connect(func(_on: bool) -> void: _style_changed())
-		(style_amount[id] as HSlider).value_changed.connect(func(_v: float) -> void: _style_changed())
+		var style_slider := style_amount[id] as HSlider
+		style_slider.value_changed.connect(func(_v: float) -> void: _style_changed())
+		style_slider.drag_started.connect(func() -> void:
+			_style_dragging = true
+			if _host.has_method("_set_preview_peek"):
+				_host._set_preview_peek(true))
+		style_slider.drag_ended.connect(func(_changed: bool) -> void:
+			_style_dragging = false
+			if _host.has_method("_set_preview_peek"):
+				_host._set_preview_peek(false))
 	apply_button.pressed.connect(preview)
+	_option_buttons = [mode, resolution, scale, aa, draw, flora, lighting, fog_quality, cloud_quality,
+		particles, carpet_density, carpet_range, mid_grass, road_quality, road_range]
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
-	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, cloud_quality, particles, carpet_density, carpet_range, mid_grass, road_quality, road_range]:
-		option.item_selected.connect(func(_i: int) -> void: apply_graphics())
+	for option: OptionButton in [scale, aa, lighting, fog_quality, cloud_quality, particles, road_range]:
+		option.item_selected.connect(func(_i: int) -> void: apply_graphics(&"graphics"))
+	for option: OptionButton in [draw, flora, carpet_density, carpet_range, mid_grass, road_quality]:
+		option.item_selected.connect(func(_i: int) -> void: apply_graphics(&"vegetation"))
 	for box: CheckBox in [vsync, shadows, tree_garlands]:
-		box.toggled.connect(func(_on: bool) -> void: apply_graphics())
+		box.toggled.connect(func(_on: bool) -> void: apply_graphics(&"graphics"))
+	_last_tab = tabs.current_tab
+	tabs.tab_changed.connect(_on_tab_changed)
 	dialog = ConfirmationDialog.new()
 	dialog.title = "Сохранить режим экрана?"
 	dialog.ok_button_text = "Сохранить"
@@ -150,10 +170,14 @@ func sync() -> void:
 	road_quality.select(state.get("road_quality", GameSettings.DEFAULT_ROAD_QUALITY))
 	road_range.select(state.get("road_range", GameSettings.DEFAULT_ROAD_RANGE))
 	for id: String in VisualStyle.EFFECTS:
-		(style_on[id] as CheckBox).set_pressed_no_signal(state.style_on[id])
-		(style_amount[id] as HSlider).set_value_no_signal(state.style_amount[id])
-		(style_amount[id] as HSlider).editable = state.style_on[id]
-		(style_amount[id] as HSlider).modulate = Color.WHITE if state.style_on[id] else Color(0.55, 0.55, 0.55, 0.7)
+		var cb: CheckBox = style_on[id]
+		var slider: HSlider = style_amount[id]
+		var on: bool = state.style_on[id]
+		cb.set_pressed_no_signal(on)
+		slider.set_value_no_signal(state.style_amount[id])
+		slider.editable = on
+		slider.focus_mode = Control.FOCUS_ALL if on else Control.FOCUS_NONE
+		slider.modulate = Color.WHITE if on else Color(0.55, 0.55, 0.55, 0.7)
 		_show_style_value(id)
 	VisualStyle.configure(state.style_on, state.style_amount)
 	_update_apply()
@@ -190,7 +214,7 @@ func _update_apply() -> void:
 		and _sizes[resolution.selected] == state.resolution)
 
 ## Графика: сразу в GameSettings, на экран и на диск (тени и дальность игра читает из GameSettings)
-func apply_graphics() -> void:
+func apply_graphics(category: StringName = &"graphics") -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
 	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "mid_grass", "road_quality", "road_range"]:
@@ -199,20 +223,28 @@ func apply_graphics() -> void:
 			_pending[key] = chosen[key]
 	GameContext.scope.settings.set_display_state(state)
 	_resize()
-	_host._settings_changed()
+	_host._settings_changed(category)
 
 ## Визуальный стиль: выключатель и сила каждого эффекта сразу в GameSettings, на экран (VisualStyle) и на диск
 func _style_changed() -> void:
 	var state := GameContext.scope.settings.display_state()
 	for id: String in VisualStyle.EFFECTS:
-		state.style_on[id] = (style_on[id] as CheckBox).button_pressed
-		state.style_amount[id] = (style_amount[id] as HSlider).value
-		(style_amount[id] as HSlider).editable = state.style_on[id]
-		(style_amount[id] as HSlider).modulate = Color.WHITE if state.style_on[id] else Color(0.55, 0.55, 0.55, 0.7)
+		var cb: CheckBox = style_on[id]
+		var slider: HSlider = style_amount[id]
+		var on := cb.button_pressed
+		state.style_on[id] = on
+		state.style_amount[id] = slider.value
+		slider.editable = on
+		slider.focus_mode = Control.FOCUS_ALL if on else Control.FOCUS_NONE
+		slider.modulate = Color.WHITE if on else Color(0.55, 0.55, 0.55, 0.7)
+		if not on and slider.has_focus():
+			cb.grab_focus()
 		_show_style_value(id)
 	GameContext.scope.settings.set_display_state(state)
 	VisualStyle.configure(state.style_on, state.style_amount)
-	_host._settings_changed()
+	_host._settings_changed(&"style")
+	if not _style_dragging and tabs != null and tabs.is_visible_in_tree() and _host.has_method("_pulse_preview_peek"):
+		_host._pulse_preview_peek()
 
 func _show_style_value(id: String) -> void:
 	(style_value[id] as Label).text = "%d %%" % roundi((style_amount[id] as HSlider).value * 100.0) if (style_on[id] as CheckBox).button_pressed else "выкл."
@@ -279,10 +311,70 @@ func tick() -> void:
 	else:
 		dialog.dialog_text = "Изображение видно правильно?\nБез подтверждения прежний режим вернётся через %d с." % seconds
 
+func step_tab(direction: int) -> void:
+	if tabs == null or tabs.get_tab_count() <= 1:
+		return
+	_tab_step_dir = signi(direction)
+	tabs.current_tab = posmod(tabs.current_tab + _tab_step_dir, tabs.get_tab_count())
+
+
+func close_open_popup() -> bool:
+	for opt: OptionButton in _option_buttons:
+		if is_instance_valid(opt) and opt.get_popup().visible:
+			opt.get_popup().hide()
+			opt.grab_focus()
+			return true
+	return false
+
+
+func _on_tab_changed(tab: int) -> void:
+	var dir := _tab_step_dir if _tab_step_dir != 0 else (1 if tab >= _last_tab else -1)
+	_tab_step_dir = 0
+	_last_tab = tab
+	_reset_tab_slides()
+	if tabs == null or not tabs.is_visible_in_tree():
+		return
+	if _host == null or not _host.is_processing() or DisplayServer.get_name() == "headless":
+		return
+	var scroll := tabs.get_tab_control(tab) as Control
+	var page := scroll.get_node_or_null("Page") as Control if scroll != null else null
+	if page == null:
+		return
+	scroll.modulate.a = 0.25
+	page.position.x = 18.0 * dir
+	_tab_tween = scroll.create_tween()
+	_tab_tween.set_parallel(true)
+	_tab_tween.tween_property(scroll, "modulate:a", 1.0, 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_tab_tween.tween_method(func(x: float) -> void:
+		if is_instance_valid(page):
+			page.position.x = x, 18.0 * dir, 0.0, 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_tab_tween.set_parallel(false)
+	_tab_tween.tween_callback(func() -> void:
+		_tab_tween = null
+		_reset_tab_slides())
+
+
+func _reset_tab_slides() -> void:
+	if _tab_tween != null and _tab_tween.is_valid():
+		_tab_tween.kill()
+		_tab_tween = null
+	if tabs == null:
+		return
+	for i in tabs.get_tab_count():
+		var scroll := tabs.get_tab_control(i) as Control
+		if scroll != null:
+			scroll.modulate.a = 1.0
+			var page := scroll.get_node_or_null("Page") as Control
+			if page != null:
+				page.position.x = 0.0
+
+
 func _resize() -> void:
 	Config.apply_quality(_window, _pending if pending() else GameContext.scope.settings.display_state())
 
 func shutdown() -> void:
+	_style_dragging = false
+	_reset_tab_slides()
 	revert()
 	if _window.size_changed.is_connected(_resize):
 		_window.size_changed.disconnect(_resize)

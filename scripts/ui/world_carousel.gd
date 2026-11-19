@@ -3,6 +3,7 @@ extends VBoxContainer
 
 signal world_selected(seed_text: String)
 signal play_requested
+signal stepped(direction: int)
 
 const MAX_WORLDS := 8
 
@@ -17,18 +18,24 @@ const MAX_WORLDS := 8
 @onready var _next: Button = $Strip/Next
 @onready var _cards: HBoxContainer = $Strip/Cards
 
+var force_animate_in_headless := false
+
 var _entries: Array[Dictionary] = []
 var _index := -1
 var _start: Button
 var _actions: Array[Button] = []
 var _trail_lab: Button
 var _fade: Tween
+var _card_offset_x := 0.0
+var _has_applied := false
 
 
 func setup(start_button: Button, actions: Array[Button], trail_lab: Button) -> void:
 	_start = start_button
 	_actions = actions
 	_trail_lab = trail_lab
+	_previous.set_meta(&"ui_sound_custom", true)
+	_next.set_meta(&"ui_sound_custom", true)
 	_previous.pressed.connect(move.bind(-1))
 	_next.pressed.connect(move.bind(1))
 	_artwork.gui_input.connect(_card_input)
@@ -37,6 +44,7 @@ func setup(start_button: Button, actions: Array[Button], trail_lab: Button) -> v
 func set_entries(entries: Array[Dictionary], selected: String) -> void:
 	_entries = entries
 	_index = -1
+	_has_applied = false
 	for child in _cards.get_children():
 		_cards.remove_child(child)
 		child.queue_free()
@@ -49,12 +57,12 @@ func set_entries(entries: Array[Dictionary], selected: String) -> void:
 	show_world(selected)
 
 
-func show_world(seed_text: String, animate := false) -> void:
+func show_world(seed_text: String, animate := false, direction := 0) -> void:
 	for i in _entries.size():
 		if _entries[i].seed == seed_text:
-			_show_index(i, animate)
+			_show_index(i, animate, direction)
 			return
-	_show_index(0 if not _entries.is_empty() else -1, false)
+	_show_index(0 if not _entries.is_empty() else -1, false, 0)
 
 
 func selected_index() -> int:
@@ -63,7 +71,8 @@ func selected_index() -> int:
 
 func move(direction: int) -> void:
 	if not _entries.is_empty():
-		_choose(posmod(_index + direction, _entries.size()))
+		var dir := signi(direction)
+		_choose(posmod(_index + dir, _entries.size()), dir)
 
 
 func move_focused(direction: int) -> bool:
@@ -82,24 +91,69 @@ func move_focused(direction: int) -> bool:
 		var target := buttons[next]
 		target.grab_focus()
 		if target.get_parent() == _cards and target.get_index() < _entries.size():
-			_choose(target.get_index())
+			_choose(target.get_index(), signi(direction))
 		return true
 	return false
 
 
-func _choose(index: int) -> void:
+func _choose(index: int, direction := 0) -> void:
 	if index != _index:
-		_show_index(index, true)
+		var dir := signi(direction) if direction != 0 else (1 if index > _index else -1)
+		_show_index(index, true, dir)
 		world_selected.emit(_entries[index].seed)
-	else:
+	elif index >= 0 and index < _cards.get_child_count():
 		(_cards.get_child(index) as Button).set_pressed_no_signal(true)
 
 
-func _show_index(index: int, animate: bool) -> void:
+func _show_index(index: int, animate: bool, direction := 0) -> void:
+	if _has_applied and index == _index:
+		for i in _entries.size():
+			(_cards.get_child(i) as Button).set_pressed_no_signal(i == index)
+		return
+	var prev_index := _index
+	var changed := _has_applied and prev_index != index
+	_index = index
+	_has_applied = true
+	_previous.disabled = _entries.size() < 2
+	_next.disabled = _previous.disabled
+	for i in _entries.size():
+		(_cards.get_child(i) as Button).set_pressed_no_signal(i == index)
+	_link_focus()
+	var dir := signi(direction) if direction != 0 else (1 if index > prev_index else -1)
+	if changed and animate:
+		stepped.emit(dir)
+	var do_anim := animate and changed and (DisplayServer.get_name() != "headless" or force_animate_in_headless) and is_visible_in_tree()
+	if not do_anim:
+		if _fade != null and _fade.is_valid():
+			_fade.kill()
+			_fade = null
+		_apply_entry(index)
+		_set_card_offset_x(0.0)
+		_card.modulate.a = 1.0
+		return
 	if _fade != null and _fade.is_valid():
 		_fade.kill()
-	var changed := _index != index
-	_index = index
+	_fade = create_tween()
+	if _card.modulate.a > 0.25:
+		var exit_dur := clampf(0.09 * _card.modulate.a, 0.035, 0.09)
+		_fade.set_parallel(true)
+		_fade.tween_method(_set_card_offset_x, _card_offset_x, -24.0 * dir, exit_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		_fade.tween_property(_card, "modulate:a", 0.0, exit_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		_fade.set_parallel(false)
+	_fade.tween_callback(func() -> void:
+		_apply_entry(index)
+		_set_card_offset_x(24.0 * dir)
+		_card.modulate.a = 0.0)
+	_fade.set_parallel(true)
+	_fade.tween_method(_set_card_offset_x, 24.0 * dir, 0.0, 0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_fade.tween_property(_card, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_fade.set_parallel(false)
+	_fade.tween_callback(func() -> void:
+		_fade = null
+		_set_card_offset_x(0.0))
+
+
+func _apply_entry(index: int) -> void:
 	var entry: Dictionary = _entries[index] if index >= 0 else {}
 	_artwork.visible = index >= 0
 	_strip.visible = index >= 0
@@ -110,16 +164,17 @@ func _show_index(index: int, animate: bool) -> void:
 	_name.text = entry.get("seed", "Случайный мир")
 	_summary.text = entry.get("summary", "Список миров пуст")
 	_summary.custom_minimum_size.y = 44.0 if index >= 0 else 24.0
-	_previous.disabled = _entries.size() < 2
-	_next.disabled = _previous.disabled
-	for i in _entries.size():
-		(_cards.get_child(i) as Button).set_pressed_no_signal(i == index)
-	_card.modulate.a = 1.0
-	if animate and changed:
-		_card.modulate.a = 0.66
-		_fade = create_tween()
-		_fade.tween_property(_card, "modulate:a", 1.0, 0.15).set_trans(Tween.TRANS_SINE)
-	_link_focus()
+
+
+func _set_card_offset_x(offset_x: float) -> void:
+	_card_offset_x = offset_x
+	if _card != null:
+		_card.position.x = offset_x
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_SORT_CHILDREN and _card != null and not is_zero_approx(_card_offset_x):
+		_card.position.x = _card_offset_x
 
 
 func _make_button(label: String, texture: Texture2D) -> Button:
@@ -128,6 +183,7 @@ func _make_button(label: String, texture: Texture2D) -> Button:
 	button.theme_type_variation = &"CarouselTab"
 	button.tooltip_text = label
 	button.accessibility_name = label
+	button.set_meta(&"ui_sound_custom", true)
 	if texture != null:
 		button.icon = texture
 		button.expand_icon = true

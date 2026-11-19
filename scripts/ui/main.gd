@@ -21,6 +21,24 @@ const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
+const UiAudio := preload("res://scripts/ui/ui_audio.gd")
+const UiStack := preload("res://scripts/ui/ui_stack.gd")
+
+
+class CancelFlag extends RefCounted:
+	var _mutex := Mutex.new()
+	var _cancelled := false
+
+	func cancel() -> void:
+		_mutex.lock()
+		_cancelled = true
+		_mutex.unlock()
+
+	func is_cancelled() -> bool:
+		_mutex.lock()
+		var v := _cancelled
+		_mutex.unlock()
+		return v
 const LIVE_WARM_START_DELAY := 0.18
 # Заставка запуска: цвет совпадает с application/boot_splash/bg_color, меню проявляется уже с живым фоном.
 const STARTUP_COVER_COLOR := Color(0.043, 0.051, 0.059)
@@ -68,7 +86,23 @@ var _menu_wind: AudioStreamPlayer
 var _menu_bird: AudioStreamPlayer
 var _bird_wait := 0.0
 var _parallax := Vector2.ZERO
+var _parallax_tween: Tween
 var _menu_rng := RandomNumberGenerator.new()
+var _ui_audio: UiAudio
+var _ui_stack: UiStack
+var _active_screen := ""
+var _pause_settings_btn: Button
+var _confirm_return_focus: Control
+var _hud_fade: Tween
+var _progress_target := 0.0
+var _load_step_tween: Tween
+var _load_cancel_flag: CancelFlag
+var _load_cancel_requested := false
+var _load_quit_requested := false
+var _favorites_notice_tween: Tween
+var _fov_dragging := false
+var _volume_dragging := false
+var _volume_tick_ms := 0
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -141,6 +175,7 @@ func _ready() -> void:
 	carousel.setup(%Start, [%OpenNew, %OpenWorlds, %MenuSettings, %MenuExit], %TrailLab)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
 	carousel.play_requested.connect(_on_start)
+	carousel.stepped.connect(func(dir: int) -> void: _play_ui(&"carousel_step", 1.04 if dir > 0 else 0.96))
 	for item: Dictionary in RecommendedSeeds.SEEDS:
 		var button := Button.new()
 		button.text = item.seed
@@ -152,47 +187,129 @@ func _ready() -> void:
 	_refresh_world_cards()
 	_seed_tab = "saved" if not _saved_seeds.is_empty() else ("recent" if not GameContext.scope.settings.recent_seeds.is_empty() else "recommended")
 	%LoadPreview.texture = null
+	_ui_audio = UiAudio.new()
+	add_child(_ui_audio)
+	_ui_stack = UiStack.new()
+	add_child(_ui_stack)
+	_pause_settings_btn = get_node_or_null("UI/Root/Pause/Panel/Box/Settings") as Button
+	_ui_stack.setup(self, {menu = %Menu, new_world = %NewWorld, all_worlds = %AllWorlds,
+		loading = %Loading, pause = %Pause, settings = %Settings}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
+	for launch_btn: Button in [%Start, %PlaySelected, %CreateWorld]:
+		launch_btn.set_meta(&"ui_sound_custom", true)
+	%FovSlider.drag_started.connect(func() -> void:
+		_fov_dragging = true
+		_set_preview_peek(true))
+	%FovSlider.drag_ended.connect(func(_changed: bool) -> void:
+		_fov_dragging = false
+		_set_preview_peek(false))
+	%VolumeSlider.drag_started.connect(func() -> void: _volume_dragging = true)
+	%VolumeSlider.drag_ended.connect(func(_changed: bool) -> void:
+		_volume_dragging = false
+		_play_ui(&"volume_tick"))
+	for subtree: Node in [%Menu, %AllWorlds, %NewWorld, %Loading, %Pause, %Settings]:
+		_ui_audio.bind_tree(subtree)
 	get_viewport().size_changed.connect(_fit_menu)
 	if _progress_enabled and DisplayServer.get_name() != "headless" and "--static-menu" not in OS.get_cmdline_user_args():
 		_cover_startup()
-	_show("menu")
+	_show("menu", {instant = true})
 	if _progress_enabled and "--menu-timing" in OS.get_cmdline_user_args():
 		_report_first_menu_frame()
 
 
-func _show(screen: String) -> void:
-	for s: String in screens:
-		if s != "back":
-			screens[s].visible = s == screen
-	screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading"] or (screen == "settings" and game == null)
+func _is_screen(screen: String) -> bool:
+	return _ui_stack.is_open(screen) if _ui_stack != null else _active_screen == screen
+
+
+func _play_ui(kind: StringName, pitch := 1.0) -> void:
+	if _ui_audio != null:
+		_ui_audio.play(kind, pitch)
+
+
+func _grab_focus_quiet(control: Control) -> void:
+	if control == null or not is_instance_valid(control):
+		return
+	if _ui_audio != null:
+		_ui_audio.suppress_focus_sound = true
+	control.grab_focus()
+	if _ui_audio != null:
+		_ui_audio.suppress_focus_sound = false
+
+
+func _restore_focus(target: Control) -> void:
+	if is_instance_valid(target) and target.is_inside_tree() and target.is_visible_in_tree():
+		_grab_focus_quiet(target)
+		_grab_focus_quiet.call_deferred(target)
+
+
+func _opener_focus(fallback: Control) -> Control:
+	var owner := get_viewport().gui_get_focus_owner()
+	if is_instance_valid(owner) and owner.is_visible_in_tree():
+		var cur_node: Control = screens.get(_active_screen)
+		if cur_node == null or cur_node.is_ancestor_of(owner):
+			return owner
+	return fallback
+
+
+func _sync_backdrop_visibility(screen := _active_screen) -> void:
+	if screens.has("back") and screens.back != null:
+		screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading"] or (screen == "settings" and game == null)
 	if screen != "menu" and _startup_cover != null:
 		_lift_startup_cover()
 	if _progress_enabled:
-		var mode := "frozen" if screen == "loading" else ("live" if screens.back.visible else "")
+		var mode := "frozen" if screen == "loading" else ("live" if screens.has("back") and screens.back.visible else "")
 		_set_backdrop_mode(mode)
+
+
+func _focus_screen_default(screen: String) -> void:
 	# фокус на главной кнопке экрана: можно пользоваться клавиатурой (стрелки, Enter)
 	match screen:
 		"menu":
 			_fit_menu()
-			%Start.grab_focus()
+			_grab_focus_quiet(%Start)
 		"new_world":
-			%CreateWorld.grab_focus()
+			_grab_focus_quiet(%CreateWorld)
 		"all_worlds":
 			_update_selection()
 			var play: Button = %PlaySelected
 			var target: Control = _tab_button(_seed_tab) if play.disabled else play
-			target.grab_focus()
+			_grab_focus_quiet(target)
 		"pause":
 			_fill_controls()
-			%Resume.grab_focus()
+			_grab_focus_quiet(%Resume)
 		"settings":
-			%Done.grab_focus()
+			_grab_focus_quiet(%Done)
+
+
+func _show(screen: String, opts := {}) -> void:
+	_active_screen = screen
+	if _ui_stack != null:
+		_ui_stack.cancel_dissolve(screens.back, screens.loading)
+		_ui_stack.replace(screen, opts)
+	else:
+		for s: String in screens:
+			if s != "back" and screens[s] != null:
+				screens[s].visible = s == screen
+	_sync_backdrop_visibility(screen)
+	_focus_screen_default(screen)
 
 
 func _input(event: InputEvent) -> void:
-	if %Settings.visible and game == null:
+	if _is_screen("settings") and game == null:
 		GameContext.scope.controls.note(event)
-	if _confirm != null or not %Menu.is_visible_in_tree():
+	if _confirm != null or event.is_echo():
+		return
+	if _is_screen("settings") and (display_options == null or not display_options.pending()):
+		var pad := event as InputEventJoypadButton
+		if pad != null and pad.pressed and display_options != null:
+			if pad.button_index == JOY_BUTTON_LEFT_SHOULDER:
+				display_options.step_tab(-1)
+				get_viewport().set_input_as_handled()
+				return
+			if pad.button_index == JOY_BUTTON_RIGHT_SHOULDER:
+				display_options.step_tab(1)
+				get_viewport().set_input_as_handled()
+				return
+	if not _is_screen("menu"):
 		return
 	var direction := int(event.is_action_pressed("ui_right", true)) - int(event.is_action_pressed("ui_left", true))
 	if direction != 0 and (%Carousel as Carousel).move_focused(direction):
@@ -200,20 +317,56 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	var button := event as InputEventJoypadButton
-	var pad_back := button != null and button.pressed and button.button_index == JOY_BUTTON_B
-	if game != null or not (pad_back or event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")):
+	if event.is_echo() or trail_lab != null:
 		return
-	if %Settings.visible:
+	var button := event as InputEventJoypadButton
+	var pad_back := (button != null and button.pressed and button.button_index == JOY_BUTTON_B) or event.is_action_pressed("back")
+	if not (pad_back or event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")):
+		return
+	if _confirm != null:
+		_cancel_confirm()
+		get_viewport().set_input_as_handled()
+		return
+	if busy and _is_screen("loading"):
+		_cancel_loading(false)
+		get_viewport().set_input_as_handled()
+		return
+	if _is_screen("settings"):
+		if display_options != null and display_options.close_open_popup():
+			get_viewport().set_input_as_handled()
+			return
+		if display_options != null and display_options.pending():
+			display_options.revert()
+			get_viewport().set_input_as_handled()
+			return
 		_close_settings()
 		get_viewport().set_input_as_handled()
-	elif %NewWorld.visible or %AllWorlds.visible:
+		return
+	if _is_screen("pause") and game != null and game.paused:
+		_resume()
+		get_viewport().set_input_as_handled()
+		return
+	if game == null and (_is_screen("new_world") or _is_screen("all_worlds")):
 		_return_to_menu_screen()
 		get_viewport().set_input_as_handled()
 
 
 func _open_new_world() -> void:
+	var opener := _opener_focus(%OpenNew)
 	seed_edit.text = random_seed()
+	if _ui_stack != null and _is_screen("menu"):
+		_active_screen = "new_world"
+		_ui_stack.push("new_world", {
+			dimmer = 0.35,
+			enter_duration = 0.20,
+			exit_duration = 0.14,
+			dimmer_duration = 0.18,
+			return_focus = opener,
+			sound = &"panel_open",
+		})
+		_sync_backdrop_visibility("new_world")
+		_focus_screen_default("new_world")
+		return
 	_show("new_world")
 
 
@@ -224,14 +377,37 @@ func _sync_author_suggestions() -> void:
 
 
 func _open_all_worlds() -> void:
+	var opener := _opener_focus(%OpenWorlds)
 	var state: Dictionary = _world_cards.get(_selected_seed, {})
 	if state.get("corrupt", false):
 		_seed_tab = _tab_with_seed(_selected_seed)
 	_show_seed_tab(_seed_tab)
+	if _ui_stack != null and _is_screen("menu"):
+		_active_screen = "all_worlds"
+		_ui_stack.push("all_worlds", {
+			dimmer = 0.35,
+			enter_duration = 0.20,
+			exit_duration = 0.14,
+			dimmer_duration = 0.18,
+			return_focus = opener,
+			sound = &"panel_open",
+		})
+		_sync_backdrop_visibility("all_worlds")
+		_focus_screen_default("all_worlds")
+		return
 	_show("all_worlds")
 
 
 func _return_to_menu_screen() -> void:
+	if _ui_stack != null and (_ui_stack.is_open("new_world") or _ui_stack.is_open("all_worlds")):
+		var popped := _ui_stack.pop({sound = &"panel_close", exit_duration = 0.14, reveal_duration = 0.16, dimmer_duration = 0.14})
+		_active_screen = popped.active
+		_sync_backdrop_visibility(_active_screen)
+		if _active_screen == "menu":
+			_fit_menu()
+		var target: Control = popped.return_focus if is_instance_valid(popped.return_focus) and (popped.return_focus as Control).is_visible_in_tree() else %Start
+		_grab_focus_quiet(target)
+		return
 	_show("menu")
 
 
@@ -242,7 +418,11 @@ func _set_backdrop_mode(mode: String) -> void:
 	_backdrop_epoch += 1
 	if _backdrop_fade != null and _backdrop_fade.is_valid():
 		_backdrop_fade.kill()
+	if _parallax_tween != null and _parallax_tween.is_valid():
+		_parallax_tween.kill()
+		_parallax_tween = null
 	var frame := _poster
+	var prev_parallax := _parallax
 	if _backdrop != null:
 		var live: TextureRect = %LiveBackdrop
 		var presented := live.visible
@@ -259,12 +439,26 @@ func _set_backdrop_mode(mode: String) -> void:
 	if mode == "frozen" and _frozen_fallback != null:
 		frame = _frozen_fallback
 	_frozen_fallback = null
-	bg.texture = frame
+	if not mode.is_empty():
+		bg.texture = frame
 	_parallax = Vector2.ZERO
+	if mode == "frozen" and DisplayServer.get_name() != "headless" and is_processing():
+		_set_bg_parallax(prev_parallax)
+		_parallax_tween = create_tween()
+		_parallax_tween.tween_method(_set_bg_parallax, prev_parallax, Vector2.ZERO, 0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	else:
+		_set_bg_parallax(Vector2.ZERO)
 	if mode == "live":
 		_start_menu_backdrop(_backdrop_epoch)
 	else:
 		_set_menu_audio(false)
+
+
+func _set_bg_parallax(offset: Vector2) -> void:
+	bg.offset_left = offset.x - 4.0
+	bg.offset_right = offset.x + 4.0
+	bg.offset_top = offset.y - 4.0
+	bg.offset_bottom = offset.y + 4.0
 
 
 func _start_menu_backdrop(epoch: int) -> void:
@@ -413,23 +607,61 @@ func _report_first_menu_frame() -> void:
 # ---------- Настройки ----------
 
 func _open_settings() -> void:
-	_settings_from = "pause" if screens.pause.visible else "menu"
+	_settings_from = "pause" if _is_screen("pause") else "menu"
+	var opener := _opener_focus(_pause_settings_btn if _settings_from == "pause" else %MenuSettings)
 	_sync_settings_controls()
+	if _ui_stack != null and _is_screen(_settings_from):
+		_active_screen = "settings"
+		_ui_stack.push("settings", {
+			dimmer = 0.55 if _settings_from == "pause" else 0.35,
+			enter_duration = 0.18 if _settings_from == "pause" else 0.20,
+			exit_duration = 0.14,
+			dimmer_duration = 0.18,
+			return_focus = opener,
+			sound = &"panel_open",
+		})
+		_sync_backdrop_visibility("settings")
+		_focus_screen_default("settings")
+		return
 	_show("settings")
 
 
 func _close_settings() -> void:
 	if display_options != null:
 		display_options.revert()
+	_fov_dragging = false
+	_volume_dragging = false
 	_save_due = -1
 	GameContext.scope.settings.save_settings()
+	if _ui_stack != null and _ui_stack.is_open("settings") and _ui_stack.depth() > 1:
+		var popped := _ui_stack.pop({sound = &"panel_close", exit_duration = 0.14, reveal_duration = 0.18, dimmer_duration = 0.14})
+		_active_screen = popped.active
+		_sync_backdrop_visibility(_active_screen)
+		var fallback: Control = _pause_settings_btn if _active_screen == "pause" else %MenuSettings
+		var target: Control = popped.return_focus if is_instance_valid(popped.return_focus) and (popped.return_focus as Control).is_visible_in_tree() else fallback
+		_grab_focus_quiet(target)
+		return
 	_show(_settings_from)
 
 
+func _set_preview_peek(active: bool) -> void:
+	if _ui_stack != null and _is_screen("settings"):
+		_ui_stack.set_dimmer_peek(active, 0.25 if game != null else 0.15)
+
+
+func _pulse_preview_peek(hold_seconds := 0.75) -> void:
+	if _ui_stack != null and _is_screen("settings"):
+		_ui_stack.pulse_dimmer_peek(hold_seconds, 0.25 if game != null else 0.15)
+
+
 ## Управление, звук и графика применяются сразу; на диск — чуть позже, чтобы не писать файл на каждый шаг ползунка
-func _settings_changed() -> void:
+func _settings_changed(category: StringName = &"graphics") -> void:
 	_save_due = Time.get_ticks_msec() + 400
-	if game != null and game.garlands != null:
+	if game == null:
+		return
+	if game.has_method("apply_live_settings"):
+		game.apply_live_settings(category)
+	elif game.get("garlands") != null:
 		game.garlands.set_enabled(GameContext.scope.settings.tree_garlands)
 
 
@@ -458,7 +690,7 @@ func _sync_settings_controls() -> void:
 ## Сброс — только после подтверждения
 func _on_reset_settings() -> void:
 	_ask("Сбросить настройки?", "Управление, звук, время и графика вернутся к исходным. Режим экрана будет только выбран: он включится после «Применить».",
-		"Сбросить", true, _do_reset_settings)
+		"Сбросить", true, _do_reset_settings, %Reset)
 
 
 func _do_reset_settings() -> void:
@@ -475,6 +707,7 @@ func _do_reset_settings() -> void:
 	if display_options != null:
 		display_options._resize()
 		display_options.stage_mode(defaults)
+	_settings_changed(&"all")
 
 
 func _show_values() -> void:
@@ -487,26 +720,32 @@ func _show_values() -> void:
 
 func _on_mouse_changed(v: float) -> void:
 	GameContext.scope.settings.mouse = v
-	_settings_changed()
+	_settings_changed(&"input")
 	_show_values()
 
 
 func _on_fov_changed(v: float) -> void:
 	GameContext.scope.settings.fov = v
-	_settings_changed()
+	_settings_changed(&"fov")
 	_show_values()
+	if not _fov_dragging:
+		_pulse_preview_peek()
 
 
 func _on_volume_changed(v: float) -> void:
 	GameContext.scope.settings.volume = v
 	GameContext.scope.settings.apply_volume()
-	_settings_changed()
+	_settings_changed(&"audio")
 	_show_values()
+	var now := Time.get_ticks_msec()
+	if not _volume_dragging or now - _volume_tick_ms >= 110:
+		_volume_tick_ms = now
+		_play_ui(&"volume_tick")
 
 
 func _on_day_changed(v: float) -> void:
 	GameContext.scope.settings.day_minutes = v
-	_settings_changed()
+	_settings_changed(&"time")
 	_show_values()
 
 
@@ -514,29 +753,29 @@ func _on_start_hour_changed(v: float) -> void:
 	GameContext.scope.settings.start_hour = v
 	GameContext.scope.settings.start_hour_set = true
 	%RandomHour.set_pressed_no_signal(false)
-	_settings_changed()
+	_settings_changed(&"time")
 	_show_values()
 
 
 func _on_random_hour_toggled(on: bool) -> void:
 	GameContext.scope.settings.start_hour_set = not on
-	_settings_changed()
+	_settings_changed(&"time")
 	_show_values()
 
 
 func _on_invert_toggled(on: bool) -> void:
 	GameContext.scope.settings.invert_y = on
-	_settings_changed()
+	_settings_changed(&"input")
 
 
 func _on_head_bob_toggled(on: bool) -> void:
 	GameContext.scope.settings.head_bob = on
-	_settings_changed()
+	_settings_changed(&"input")
 
 
 func _on_trail_clutter_toggled(on: bool) -> void:
 	GameContext.scope.settings.trail_clutter = on
-	_settings_changed()
+	_settings_changed(&"input")
 
 
 func _on_seed_submitted(_text: String) -> void:
@@ -618,7 +857,7 @@ func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
 		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
 			_carousel_seeds.pop_back()
 		_carousel_seeds.append(_selected_seed)
-	if not %NewWorld.visible:
+	if not _is_screen("new_world"):
 		seed_edit.text = _selected_seed
 	_update_carousel()
 	_update_selection()
@@ -649,6 +888,18 @@ func _show_seed_tab(tab: String) -> void:
 	for name: String in ["recent", "favorites", "recommended", "saved"]:
 		_tab_button(name).set_pressed_no_signal(name == tab)
 	var list: VBoxContainer = %SeedList
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	var restore_seed := ""
+	var restore_star := false
+	var restore_index := -1
+	if is_instance_valid(focus_owner) and list.is_ancestor_of(focus_owner):
+		for i in list.get_child_count():
+			var c := list.get_child(i)
+			if c == focus_owner or c.is_ancestor_of(focus_owner):
+				restore_seed = str(c.get_meta("seed")) if c.has_meta("seed") else ""
+				restore_star = c.has_meta("star_button") and focus_owner == c.get_meta("star_button")
+				restore_index = i
+				break
 	for child in list.get_children():
 		list.remove_child(child)
 		child.queue_free()
@@ -668,6 +919,8 @@ func _show_seed_tab(tab: String) -> void:
 				var restore := Button.new()
 				restore.text = "Показать миры от автора"
 				restore.pressed.connect(_restore_author_worlds)
+				if _ui_audio != null:
+					_ui_audio.bind_control(restore)
 				list.add_child(restore)
 			else:
 				rows = RecommendedSeeds.SEEDS
@@ -682,29 +935,86 @@ func _show_seed_tab(tab: String) -> void:
 	for r: Dictionary in rows:
 		list.add_child(_seed_row(str(r.seed), str(r.get("note", ""))))
 	_update_selection()
-	if %AllWorlds.visible and get_viewport().gui_get_focus_owner() == null:
-		_tab_button(tab).grab_focus()
+	_link_seed_rows(tab)
+	if _is_screen("all_worlds") or %AllWorlds.visible:
+		if restore_index >= 0:
+			var target := _find_seed_row_focus(restore_seed, restore_index, restore_star)
+			_grab_focus_quiet(target if target != null else _tab_button(tab))
+		elif get_viewport().gui_get_focus_owner() == null:
+			_grab_focus_quiet(_tab_button(tab))
 
 
-## Строка списка: миниатюра карты, зерно, подпись и состояние, звёздочка. Щелчок — выбрать мир, двойной — играть
-func _seed_row(seed_text: String, note: String) -> Button:
-	var row := Button.new()
-	row.toggle_mode = true
+func _link_seed_rows(tab: String) -> void:
+	var row_nodes: Array[Dictionary] = []
+	for child in %SeedList.get_children():
+		if not (child.has_meta("select_button") and child.has_meta("star_button")):
+			continue
+		var sel := child.get_meta("select_button") as Button
+		var st := child.get_meta("star_button") as Button
+		if sel != null and st != null:
+			row_nodes.append({select = sel, star = st})
+	if row_nodes.is_empty():
+		return
+	var active_tab := _tab_button(tab)
+	var side_target: Control = %Star if not %Star.disabled else %PlaySelected
+	for i in row_nodes.size():
+		var sel: Button = row_nodes[i].select
+		var st: Button = row_nodes[i].star
+		sel.focus_neighbor_right = sel.get_path_to(st)
+		st.focus_neighbor_left = st.get_path_to(sel)
+		st.focus_neighbor_right = st.get_path_to(side_target)
+		sel.focus_neighbor_top = sel.get_path_to(row_nodes[i - 1].select if i > 0 else active_tab)
+		st.focus_neighbor_top = st.get_path_to(row_nodes[i - 1].star if i > 0 else active_tab)
+		sel.focus_neighbor_bottom = sel.get_path_to(row_nodes[i + 1].select if i + 1 < row_nodes.size() else %Storage)
+		st.focus_neighbor_bottom = st.get_path_to(row_nodes[i + 1].star if i + 1 < row_nodes.size() else %Storage)
+
+
+func _find_seed_row_focus(seed_text: String, fallback_idx: int, prefer_star: bool) -> Control:
+	var rows := []
+	for child in %SeedList.get_children():
+		if child.has_meta("select_button"):
+			rows.append(child)
+	if rows.is_empty():
+		return null
+	var chosen: Node = null
+	for child in rows:
+		if child.has_meta("seed") and str(child.get_meta("seed")) == seed_text:
+			chosen = child
+			break
+	if chosen == null:
+		chosen = rows[mini(fallback_idx, rows.size() - 1)]
+	var meta_key := "star_button" if prefer_star else "select_button"
+	return chosen.get_meta(meta_key) as Control if chosen.has_meta(meta_key) else null
+
+
+## Строка списка: соседние кнопки выбора мира и звёздочки в горизонтальном контейнере (без кнопки внутри кнопки)
+func _seed_row(seed_text: String, note: String) -> PanelContainer:
+	var row := PanelContainer.new()
+	row.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	row.custom_minimum_size = Vector2(0, 60)
 	row.set_meta("seed", seed_text)
-	row.theme_type_variation = &"ListRow"   # выбранный мир — золотая рамка
-	row.tooltip_text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
-	row.pressed.connect(_pick_seed.bind(seed_text))
-	row.gui_input.connect(func(e: InputEvent) -> void:
+	var outer := HBoxContainer.new()
+	outer.add_theme_constant_override("separation", 6)
+	row.add_child(outer)
+	var select_btn := Button.new()
+	select_btn.toggle_mode = true
+	select_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	select_btn.custom_minimum_size = Vector2(0, 60)
+	select_btn.set_meta("seed", seed_text)
+	select_btn.theme_type_variation = &"ListRow"   # выбранный мир — золотая рамка
+	select_btn.tooltip_text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
+	select_btn.pressed.connect(_pick_seed.bind(seed_text))
+	select_btn.gui_input.connect(func(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.pressed and e.double_click and e.button_index == MOUSE_BUTTON_LEFT:
-			row.accept_event()
+			select_btn.accept_event()
 			_pick_seed(seed_text)
 			_on_start())
+	outer.add_child(select_btn)
 	var box := HBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 6)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_theme_constant_override("separation", 10)
-	row.add_child(box)
+	select_btn.add_child(box)
 	var tex := _preview_tex(seed_text)
 	var thumb := TextureRect.new()
 	thumb.custom_minimum_size = Vector2(48, 48)
@@ -756,10 +1066,17 @@ func _seed_row(seed_text: String, note: String) -> Button:
 	star.custom_minimum_size = Vector2(44, 44)
 	star.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var full := not fav and GameContext.scope.settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
-	star.disabled = full
+	star.modulate = Color(0.62, 0.64, 0.68, 0.65) if full else Color.WHITE
+	if full:
+		star.set_meta(&"ui_sound_custom", true)
 	star.tooltip_text = _star_tip(fav, full)
-	star.pressed.connect(_on_star.bind(seed_text))
-	box.add_child(star)
+	star.pressed.connect(_on_star.bind(seed_text, star))
+	outer.add_child(star)
+	row.set_meta("select_button", select_btn)
+	row.set_meta("star_button", star)
+	if _ui_audio != null:
+		_ui_audio.bind_control(select_btn)
+		_ui_audio.bind_control(star)
 	return row
 
 
@@ -778,7 +1095,7 @@ func _pick_seed(seed_text: String) -> void:
 
 
 func _choose_typed() -> void:
-	if not %NewWorld.visible:
+	if not _is_screen("new_world"):
 		_pick_seed(seed_edit.text.strip_edges())
 
 
@@ -793,7 +1110,7 @@ func _suggested_seed(seed_text: String) -> void:
 
 func _select_world(seed_text: String) -> void:
 	_selected_seed = seed_text
-	if not %NewWorld.visible:
+	if not _is_screen("new_world"):
 		seed_edit.text = seed_text
 	if not seed_text.is_empty() and seed_text not in _carousel_seeds:
 		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
@@ -806,7 +1123,7 @@ func _select_world(seed_text: String) -> void:
 
 
 func _chosen_seed() -> String:
-	return seed_edit.text.strip_edges() if %NewWorld.visible else _selected_seed
+	return seed_edit.text.strip_edges() if _is_screen("new_world") else _selected_seed
 
 
 func _update_selection() -> void:
@@ -820,8 +1137,12 @@ func _update_selection() -> void:
 	%PlaySelected.text = label
 	%PlaySelected.disabled = corrupt or seed_text.is_empty()
 	for row in %SeedList.get_children():
-		if row is Button:
-			(row as Button).set_pressed_no_signal(not seed_text.is_empty() and row.get_meta("seed", "") == seed_text)
+		var row_seed := str(row.get_meta("seed")) if row.has_meta("seed") else ""
+		var select_btn := row.get_meta("select_button") as Button if row.has_meta("select_button") else null
+		if select_btn != null:
+			select_btn.set_pressed_no_signal(not seed_text.is_empty() and row_seed == seed_text)
+		elif row is Button:
+			(row as Button).set_pressed_no_signal(not seed_text.is_empty() and row_seed == seed_text)
 	var tex: Texture2D = _previews.get(seed_text)
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
@@ -832,7 +1153,12 @@ func _update_selection() -> void:
 	var fav := seed_text in GameContext.scope.settings.favorite_seeds
 	var full := not fav and GameContext.scope.settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.icon = UiIcons.star(fav)
-	star.disabled = seed_text.is_empty() or full
+	star.disabled = seed_text.is_empty()
+	star.modulate = Color(0.62, 0.64, 0.68, 0.65) if (full and not seed_text.is_empty()) else Color.WHITE
+	if full:
+		star.set_meta(&"ui_sound_custom", true)
+	elif star.has_meta(&"ui_sound_custom"):
+		star.remove_meta(&"ui_sound_custom")
 	star.tooltip_text = _star_tip(fav, full)
 	if corrupt:
 		%WorldStatus.text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
@@ -852,24 +1178,53 @@ static func _local_time_text(unix: int) -> String:
 func _on_star_selected() -> void:
 	var seed_text := _chosen_seed()
 	if not seed_text.is_empty():
-		_on_star(seed_text)
+		_on_star(seed_text, %Star)
 
 
-func _on_star(seed_text: String) -> void:
-	GameContext.scope.settings.toggle_favorite(seed_text)
-	GameContext.scope.settings.save_settings()
+func _on_star(seed_text: String, source_button: Control = null) -> void:
+	var settings := GameContext.scope.settings
+	if not (seed_text in settings.favorite_seeds) and settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX:
+		_play_ui(&"error_deny")
+		UiAudio.shake(source_button if is_instance_valid(source_button) else %Star, 4.0)
+		_show_favorites_full_notice()
+		return
+	settings.toggle_favorite(seed_text)
+	settings.save_settings()
 	if GameContext.scope.cache.enabled:
-		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
+		GameContext.scope.cache.keep_only(settings.keep_seeds())
 	_previews.clear()
 	_refresh_world_cards()
 	_show_seed_tab(_seed_tab)
+
+
+func _show_favorites_full_notice() -> void:
+	var notice := get_node_or_null("%FavoritesNotice") as Label
+	if notice == null:
+		return
+	if _favorites_notice_tween != null and _favorites_notice_tween.is_valid():
+		_favorites_notice_tween.kill()
+		_favorites_notice_tween = null
+	notice.text = "Избранное заполнено (%d)" % GameSettings.FAVORITES_MAX
+	notice.visible = true
+	if DisplayServer.get_name() == "headless" or not is_processing():
+		notice.modulate.a = 1.0
+		return
+	notice.modulate.a = 0.0
+	_favorites_notice_tween = create_tween()
+	_favorites_notice_tween.tween_property(notice, "modulate:a", 1.0, 0.12).set_trans(Tween.TRANS_SINE)
+	_favorites_notice_tween.tween_interval(2.0)
+	_favorites_notice_tween.tween_property(notice, "modulate:a", 0.0, 0.25).set_trans(Tween.TRANS_SINE)
+	_favorites_notice_tween.tween_callback(func() -> void:
+		_favorites_notice_tween = null
+		notice.visible = false
+		notice.modulate.a = 1.0)
 
 
 func _restart_world() -> void:
 	var seed_text := _chosen_seed()
 	if seed_text.is_empty():
 		return
-	_ask("Создать мир заново?", "Мир «%s» будет сгенерирован заново, путешествие начнётся сначала. Старые сохранения будут перенесены в архив." % seed_text, "Создать заново", true, _do_restart_world.bind(seed_text))
+	_ask("Создать мир заново?", "Мир «%s» будет сгенерирован заново, путешествие начнётся сначала. Старые сохранения будут перенесены в архив." % seed_text, "Создать заново", true, _do_restart_world.bind(seed_text), %RestartWorld)
 
 
 func _do_restart_world(seed_text: String) -> void:
@@ -884,6 +1239,7 @@ func _do_restart_world(seed_text: String) -> void:
 	_previews.erase(seed_text)
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
+	_play_ui(&"confirm")
 	start_game(seed_text, WorldGenerator.START_SIZE, "", false)
 
 
@@ -891,7 +1247,7 @@ func _delete_world() -> void:
 	var seed_text := _chosen_seed()
 	if seed_text.is_empty():
 		return
-	_ask("Удалить мир?", "Мир «%s» будет удалён из недавних и избранного вместе с текущими сохранениями и готовыми данными. Рекомендованные миры останутся в списке автора." % seed_text, "Удалить", true, _do_delete_world.bind(seed_text))
+	_ask("Удалить мир?", "Мир «%s» будет удалён из недавних и избранного вместе с текущими сохранениями и готовыми данными. Рекомендованные миры останутся в списке автора." % seed_text, "Удалить", true, _do_delete_world.bind(seed_text), %DeleteWorld)
 
 
 func _do_delete_world(seed_text: String) -> void:
@@ -919,7 +1275,7 @@ func _open_storage() -> void:
 	var u := GameContext.scope.cache.usage() if GameContext.scope.cache.enabled else {worlds = 0, bytes = 0}
 	var body := "Готовых миров нет." if u.worlds == 0 else "Готовых миров: %d, занято %d МБ." % [u.worlds, roundi(u.bytes / 1048576.0)]
 	body += "\nНедавние и избранные миры хранятся готовыми и открываются быстрее. Если очистить, они создадутся заново при запуске; сохранения прогресса и задания останутся."
-	_ask("Хранилище миров", body, "Очистить", true, _on_clear_cache)
+	_ask("Хранилище миров", body, "Очистить", true, _on_clear_cache, %Storage)
 	_confirm.get_ok_button().disabled = u.worlds == 0
 	_confirm.cancel_button_text = "Закрыть"
 
@@ -932,10 +1288,10 @@ func _on_clear_cache() -> void:
 
 
 func _clear_all_saves() -> void:
-	if busy or game != null or not %AllWorlds.visible or %ClearAllSaves.disabled:
+	if busy or game != null or not _is_screen("all_worlds") or %ClearAllSaves.disabled:
 		return
 	_ask("Очистить все сохранения?", "Автоматические, ручные и резервные сохранения будут перенесены в архив. Все миры исчезнут из меню, а списки недавних и избранных очистятся.",
-		"Очистить", true, _do_clear_all_saves)
+		"Очистить", true, _do_clear_all_saves, %ClearAllSaves)
 
 
 func _do_clear_all_saves() -> void:
@@ -987,7 +1343,7 @@ func _restore_author_worlds() -> void:
 	_sync_author_suggestions()
 	_refresh_world_cards()
 	_show_seed_tab("recommended")
-	%Recommended.grab_focus()
+	_grab_focus_quiet(%Recommended)
 
 
 func _fit_menu() -> void:
@@ -999,9 +1355,11 @@ func _fit_menu() -> void:
 
 
 func _process(delta: float) -> void:
+	if _ui_stack != null:
+		_ui_stack.tick()
 	if display_options != null:
 		display_options.tick()
-	if %Settings.visible:
+	if _is_screen("settings"):
 		_update_control_hint()
 	_flush_settings()
 	if _backdrop_mode == "live" and get_window().mode != Window.MODE_MINIMIZED:
@@ -1013,8 +1371,9 @@ func _process(delta: float) -> void:
 		if _auto_save_task == -1 and (_save_elapsed >= 60.0 or hud.map_place_count() != _saved_discoveries):
 			_queue_auto_save()
 	if busy:
+		bar.value = lerpf(bar.value, _progress_target, Util.damp(8.0, delta))
 		var seconds := (Time.get_ticks_msec() - _load_started_ms) / 1000
-		if seconds != _load_elapsed:
+		if seconds != _load_elapsed and (_load_step_tween == null or not _load_step_tween.is_valid()):
 			_load_elapsed = seconds
 			load_step.text = "%s\nПрошло: %d:%02d" % [_load_label, seconds / 60, seconds % 60]
 
@@ -1023,12 +1382,12 @@ func _process(delta: float) -> void:
 
 ## Лаборатория — отдельная сцена, без запуска/сохранения выбранного мира.
 func _open_trail_lab() -> void:
-	if busy or game != null or trail_lab != null or not screens.menu.visible:
+	if busy or game != null or trail_lab != null or not _is_screen("menu"):
 		return
 	trail_lab = (load(TRAIL_LAB_SCENE) as PackedScene).instantiate()
 	trail_lab.exit_requested.connect(_close_trail_lab)
 	hud.visible = false
-	_show("")
+	_show("", {instant = true})
 	add_child(trail_lab)
 
 
@@ -1038,14 +1397,14 @@ func _close_trail_lab() -> void:
 	trail_lab.shutdown()
 	trail_lab.queue_free()
 	trail_lab = null
-	_show("menu")
+	_show("menu", {instant = true})
 
 
 func _on_start() -> void:
 	# второй запуск во время загрузки не нужен: мир уже строится
 	if busy:
 		return
-	if %NewWorld.visible:
+	if _is_screen("new_world"):
 		_on_create_world()
 		return
 	if _selected_seed.is_empty():
@@ -1071,11 +1430,14 @@ func _launch_seed(seed_text: String) -> void:
 		_pick_seed(seed_text)
 		_update_carousel()
 		_open_all_worlds()
-		%RestartWorld.grab_focus()
+		_grab_focus_quiet(%RestartWorld)
 		return
 	_pick_seed(seed_text)
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
+	_play_ui(&"confirm")
+	var launch_btn: Button = %CreateWorld if _is_screen("new_world") else (%PlaySelected if _is_screen("all_worlds") else %Start)
+	UiAudio.pulse_confirm(launch_btn)
 	start_game(seed_text, WorldGenerator.START_SIZE, latest.slot)
 
 
@@ -1101,69 +1463,149 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 		if result.backup:
 			_message("Резервная копия", "Основное сохранение повреждено. Загружается предыдущая исправная копия.")
 	busy = true
+	_progress_target = 0.0
+	_load_cancel_requested = false
+	_load_quit_requested = false
+	_load_cancel_flag = CancelFlag.new()
 	_load_started_ms = Time.get_ticks_msec()
 	_free_game()
 	hud.visible = false
+	_load_label = ""
 	_set_progress(0.0, "Подготовка")
+	var cancel_btn := get_node_or_null("%CancelLoad") as Button
+	if cancel_btn != null:
+		cancel_btn.visible = true
+		cancel_btn.disabled = false
+		cancel_btn.text = "Отменить"
 	%LoadPreview.texture = _preview_tex(seed_text)
 	%LoadPreview.visible = %LoadPreview.texture != null
 	%LoadPlaceholder.visible = not %LoadPreview.visible
 	%LoadPlaceholder.text = seed_text
 	%Title.text = "Мир «%s»" % seed_text
 	%Title.tooltip_text = %Title.text
-	_show("loading")
+	_show("loading", {enter_duration = 0.18, exit_duration = 0.14})
 	gen_thread = Thread.new()
 	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
-	gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec()))
+	gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec(), _load_cancel_flag))
 
 
-func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int) -> void:
+func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int, cancel_flag: CancelFlag) -> void:
 	var entered_us := Time.get_ticks_usec()
 	var cache := GameContext.scope.cache
-	if cache.enabled:
+	if cache.enabled and not cancel_flag.is_cancelled():
 		cache.keep_only(GameContext.scope.settings.keep_seeds())
-		if allow_bundled and not QuickTrails.active() and size == WorldGenerator.START_SIZE:
+		if allow_bundled and not QuickTrails.active() and size == WorldGenerator.START_SIZE and not cancel_flag.is_cancelled():
 			cache.install_bundled(WorldCache.BUNDLED, seed_text)
+	if cancel_flag.is_cancelled():
+		var aborted := WorldLoader.new()
+		aborted.cancelled = true
+		_on_world_ready.call_deferred(aborted, cancel_flag)
+		return
 	var before_loader_us := Time.get_ticks_usec()
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
-		_set_progress.call_deferred(p, label), null, start_at)
+		_set_progress.call_deferred(p, label), null, start_at, cancel_flag.is_cancelled)
 	if loaded == null:
 		# ошибка скрипта оборвала загрузку: вернуть меню, а не держать экран загрузки вечно
-		_on_world_failed.call_deferred()
+		_on_world_failed.call_deferred(cancel_flag)
 		return
 	var ready_us := Time.get_ticks_usec()
 	loaded.timings.thread_dispatch_ms = (entered_us - dispatched_us) / 1000.0
 	loaded.timings.before_loader_ms = (before_loader_us - entered_us) / 1000.0
 	loaded.timings.loader_call_ms = (ready_us - before_loader_us) / 1000.0
 	loaded.timings.ready_queued_us = ready_us
-	_on_world_ready.call_deferred(loaded)
+	_on_world_ready.call_deferred(loaded, cancel_flag)
 
 
-func _on_world_failed() -> void:
-	gen_thread.wait_to_finish()
+func _on_world_failed(cancel_flag: CancelFlag = null) -> void:
+	if gen_thread != null and gen_thread.is_started():
+		gen_thread.wait_to_finish()
 	busy = false
+	var want_quit := _load_quit_requested
+	var was_cancelled := _load_cancel_requested or (cancel_flag != null and cancel_flag.is_cancelled())
+	_load_cancel_requested = false
+	_load_quit_requested = false
+	_load_cancel_flag = null
+	if want_quit:
+		_exit_game()
+		return
 	_show("menu")
-	_message("Мир не подготовлен", "Генерация прервалась с ошибкой. Подробности в журнале godot.log.")
+	if not was_cancelled:
+		_message("Мир не подготовлен", "Генерация прервалась с ошибкой. Подробности в журнале godot.log.")
+
+
+func _on_cancel_load_pressed() -> void:
+	_cancel_loading(false)
+
+
+func _cancel_loading(quit_after: bool) -> void:
+	if not busy:
+		return
+	if quit_after:
+		_load_quit_requested = true
+	else:
+		_load_cancel_requested = true
+	if _load_cancel_flag != null:
+		_load_cancel_flag.cancel()
+	var cancel_btn := get_node_or_null("%CancelLoad") as Button
+	if cancel_btn != null:
+		cancel_btn.disabled = true
+		cancel_btn.text = "Ожидание остановки потока…"
+	_set_progress(_progress_target, "Завершение загрузки перед выходом…\nОжидание остановки потока" if _load_quit_requested else "Отмена загрузки…\nОжидание завершения текущего этапа")
+	_play_ui(&"panel_close")
 
 
 func _set_progress(p: float, label: String) -> void:
-	bar.value = p
+	_progress_target = clampf(p, 0.0, 1.0)
+	if not busy or p <= 0.0:
+		bar.value = _progress_target
+	var changed := label != _load_label
 	_load_label = label
 	_load_elapsed = -1
-	load_step.text = label
+	if not changed:
+		return
+	if _load_step_tween != null and _load_step_tween.is_valid():
+		_load_step_tween.kill()
+		_load_step_tween = null
+	if not busy or not %Loading.visible or DisplayServer.get_name() == "headless" or not is_processing():
+		load_step.modulate.a = 1.0
+		load_step.text = label
+		return
+	_load_step_tween = create_tween()
+	_load_step_tween.tween_property(load_step, "modulate:a", 0.0, 0.06).set_trans(Tween.TRANS_SINE)
+	_load_step_tween.tween_callback(func() -> void:
+		var sec := (Time.get_ticks_msec() - _load_started_ms) / 1000
+		_load_elapsed = sec
+		load_step.text = "%s\nПрошло: %d:%02d" % [_load_label, sec / 60, sec % 60])
+	_load_step_tween.tween_property(load_step, "modulate:a", 1.0, 0.06).set_trans(Tween.TRANS_SINE)
+	_load_step_tween.tween_callback(func() -> void:
+		_load_step_tween = null)
 
 
-func _on_world_ready(loaded: WorldLoader) -> void:
+func _on_world_ready(loaded: WorldLoader, cancel_flag: CancelFlag = null) -> void:
 	loaded.timings.ready_queue_ms = (Time.get_ticks_usec() - int(loaded.timings.get("ready_queued_us", Time.get_ticks_usec()))) / 1000.0
 	loaded.timings.erase("ready_queued_us")
-	gen_thread.wait_to_finish()
+	if gen_thread != null and gen_thread.is_started():
+		gen_thread.wait_to_finish()
+	if loaded.cancelled or _load_cancel_requested or _load_quit_requested or (cancel_flag != null and cancel_flag.is_cancelled()):
+		busy = false
+		var want_quit := _load_quit_requested
+		_load_cancel_requested = false
+		_load_quit_requested = false
+		_load_cancel_flag = null
+		if want_quit:
+			_exit_game()
+		else:
+			_show("menu", {sound = &"panel_close"})
+		return
 	if not loaded.error.is_empty():
 		busy = false
+		_load_cancel_flag = null
 		_show("menu")
 		_message("Мир не подготовлен", loaded.error)
 		return
 	if not _pending_save.is_empty() and not load(GAME_SCRIPT).can_restore(_pending_save, loaded.world):
 		busy = false
+		_load_cancel_flag = null
 		_show("menu")
 		_message("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Нажмите «Создать заново», чтобы пересоздать этот мир и начать новое путешествие.")
 		return
@@ -1171,6 +1613,17 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	_set_progress(0.97, "Окружение вокруг игрока")
 	var phase_started := Time.get_ticks_usec()
 	await get_tree().process_frame
+	if _load_cancel_requested or _load_quit_requested or (cancel_flag != null and cancel_flag.is_cancelled()):
+		busy = false
+		var want_quit := _load_quit_requested
+		_load_cancel_requested = false
+		_load_quit_requested = false
+		_load_cancel_flag = null
+		if want_quit:
+			_exit_game()
+		else:
+			_show("menu", {sound = &"panel_close"})
+		return
 	loaded.timings.ready_frame_wait_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	phase_started = Time.get_ticks_usec()
 	game = (load(GAME_SCENE) as PackedScene).instantiate()
@@ -1183,40 +1636,111 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 		_free_game()
 		hud.visible = false
 		busy = false
+		_load_cancel_flag = null
 		_show("menu")
 		_message("Мир не подготовлен", loaded.error)
 		return
 	loaded.timings.game_start_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	_set_progress(1.0, "Готово")
+	var cancel_btn := get_node_or_null("%CancelLoad") as Button
+	if cancel_btn != null:
+		cancel_btn.visible = false
 	# 15.1: первые кадры мира собирают шейдеры и буферы (стресс-тест: кадры 47–67 мс и прогрев до 260 мс у точки
 	# появления) — пусть это идёт под заставкой загрузки, а не на глазах игрока. Инструменты (main не главная сцена)
 	# берут мир сразу, как раньше.
 	phase_started = Time.get_ticks_usec()
 	for i in 30 if _progress_enabled else 0:
 		await get_tree().process_frame
-		if game == null or Time.get_ticks_usec() - phase_started > 400000:
+		if game == null or _load_cancel_requested or _load_quit_requested or Time.get_ticks_usec() - phase_started > 400000:
 			break
 	loaded.timings.first_frames_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	if _load_cancel_requested or _load_quit_requested or (cancel_flag != null and cancel_flag.is_cancelled()):
+		_free_game()
+		hud.visible = false
+		busy = false
+		var want_quit := _load_quit_requested
+		_load_cancel_requested = false
+		_load_quit_requested = false
+		_load_cancel_flag = null
+		if want_quit:
+			_exit_game()
+		else:
+			_show("menu", {sound = &"panel_close"})
+		return
 	if game == null:
 		busy = false
+		_load_cancel_flag = null
 		return
 	_save_elapsed = 0.0
 	_saved_discoveries = hud.map_place_count()
 	game.quests.changed.connect(func() -> void: _save_elapsed = 60.0)
-	hud.visible = not game.opening_active()
-	hud.set_map_visible(false)
-	_show("")
-	busy = false
 	phase_started = Time.get_ticks_usec()
 	if _pending_save.is_empty():
 		_save_current()
 	loaded.timings.initial_save_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	busy = false
+	_load_cancel_flag = null
+	_load_cancel_requested = false
+	_load_quit_requested = false
+	hud.set_map_visible(false)
+	var show_hud: bool = not game.opening_active()
+	if _ui_stack != null and _progress_enabled and DisplayServer.get_name() != "headless":
+		_fade_hud(show_hud, 0.22)
+		_active_screen = ""
+		_ui_stack.dissolve_to_world(%Back, %Loading, 0.28)
+		_set_backdrop_mode("")
+	else:
+		_fade_hud(show_hud, 0.0)
+		_show("", {instant = true})
 	loaded.timings.published_us = Time.get_ticks_usec()
+
+
+func _cancel_hud_fade() -> void:
+	if _hud_fade != null and _hud_fade.is_valid():
+		_hud_fade.kill()
+	_hud_fade = null
+	if hud != null:
+		hud.modulate.a = 1.0
+		hud.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_INHERITED
+
+
+func _fade_hud(show_hud: bool, duration: float) -> void:
+	_cancel_hud_fade()
+	if hud == null:
+		return
+	if duration <= 0.0 or DisplayServer.get_name() == "headless" or not is_processing():
+		hud.visible = show_hud
+		hud.modulate.a = 1.0
+		hud.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_INHERITED
+		return
+	if show_hud:
+		hud.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_INHERITED
+		if not hud.visible:
+			hud.modulate.a = 0.0
+			hud.visible = true
+		_hud_fade = create_tween()
+		_hud_fade.tween_property(hud, "modulate:a", 1.0, duration).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		_hud_fade.tween_callback(func() -> void: _hud_fade = null)
+	else:
+		if not hud.visible:
+			return
+		hud.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_DISABLED
+		_hud_fade = create_tween()
+		_hud_fade.tween_property(hud, "modulate:a", 0.0, duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		_hud_fade.tween_callback(func() -> void:
+			_hud_fade = null
+			if hud != null:
+				hud.visible = false
+				hud.modulate.a = 1.0
+				hud.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_INHERITED)
 
 
 func _toggle_pause() -> void:
 	if game == null:
 		return
-	if screens.settings.visible:
+	if _is_screen("settings"):
+		if display_options != null and display_options.close_open_popup():
+			return
 		if display_options != null and display_options.pending():
 			display_options.revert()
 			return
@@ -1226,15 +1750,32 @@ func _toggle_pause() -> void:
 	else:
 		game.set_paused(true)
 		_save_current()
-		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
+		_fade_hud(false, 0.18)   # подсказки и сообщения не лезут поверх панели паузы
 		%PauseWorld.text = "Мир «%s»" % game.world.seed_text
-		_show("pause")
+		if _ui_stack != null:
+			_active_screen = "pause"
+			_ui_stack.push("pause", {
+				dimmer = 0.55,
+				enter_duration = 0.20,
+				exit_duration = 0.14,
+				dimmer_duration = 0.18,
+				sound = &"panel_open",
+			})
+			_sync_backdrop_visibility("pause")
+			_focus_screen_default("pause")
+		else:
+			_show("pause")
 
 
 func _resume() -> void:
 	_close_confirm()
-	_show("")
-	hud.visible = not game.opening_active()
+	if _ui_stack != null and _ui_stack.is_open("pause"):
+		_active_screen = ""
+		_ui_stack.pop({sound = &"panel_close", exit_duration = 0.14, dimmer_duration = 0.14})
+		_sync_backdrop_visibility("")
+	else:
+		_show("")
+	_fade_hud(not game.opening_active(), 0.14)
 	game.set_paused(false)
 	# щелчок по кнопке «Продолжить» не должен сразу считаться щелчком по миру
 	get_viewport().gui_release_focus()
@@ -1244,6 +1785,7 @@ func _resume() -> void:
 ## наверх нет (рельеф за краем знает только размер карты), поэтому он освобождается сам целиком.
 ## Проверка: tools/lifecycle_test.gd
 func _free_game() -> void:
+	_cancel_hud_fade()
 	if GameContext.scope.resource_profile != null: GameContext.scope.resource_profile.save()
 	if game != null:
 		game.queue_free()
@@ -1256,19 +1798,20 @@ func _free_game() -> void:
 ## Уход из мира — только с подтверждением: случайное нажатие не закрывает мир (его загрузка — до минуты)
 func _confirm_to_menu() -> void:
 	_ask("Выйти в главное меню?", "Прогресс сохранится. Мир закроется, снова его загружать придётся с экрана загрузки.",
-		"В меню", false, _back_to_menu)
+		"В меню", false, _back_to_menu, get_node_or_null("%ToMenu") as Control)
 
 
 func _confirm_exit() -> void:
 	if game == null:
 		_exit_game()
 		return
-	_ask("Выйти из игры?", "Прогресс сохранится, игра закроется.", "Выйти", true, _exit_game)
+	_ask("Выйти из игры?", "Прогресс сохранится, игра закроется.", "Выйти", true, _exit_game, get_node_or_null("%Exit") as Control)
 
 
 ## Подтверждение; фокус на «Остаться», чтобы Enter по привычке ничего не закрыл
-func _ask(title: String, body: String, ok_text: String, danger: bool, action: Callable) -> void:
+func _ask(title: String, body: String, ok_text: String, danger: bool, action: Callable, return_focus: Control = null) -> void:
 	_close_confirm()
+	_confirm_return_focus = return_focus
 	var dialog := ConfirmationDialog.new()
 	_confirm = dialog
 	dialog.title = title
@@ -1280,14 +1823,30 @@ func _ask(title: String, body: String, ok_text: String, danger: bool, action: Ca
 		dialog.get_ok_button().theme_type_variation = &"DangerButton"
 	add_child(dialog)
 	dialog.confirmed.connect(func() -> void:
+		_confirm_return_focus = null
 		_close_confirm()
 		action.call())
-	dialog.canceled.connect(_close_confirm)
+	dialog.canceled.connect(_cancel_confirm)
+	dialog.window_input.connect(func(ev: InputEvent) -> void:
+		if ev.is_echo():
+			return
+		var pad := ev as InputEventJoypadButton
+		if (pad != null and pad.pressed and pad.button_index == JOY_BUTTON_B) or ev.is_action_pressed("back"):
+			dialog.set_input_as_handled()
+			_cancel_confirm())
 	dialog.popup_centered(Vector2i(440, 0))
-	dialog.get_cancel_button().grab_focus()
+	_grab_focus_quiet(dialog.get_cancel_button())
+
+
+func _cancel_confirm() -> void:
+	var target := _confirm_return_focus
+	_confirm_return_focus = null
+	_close_confirm()
+	_restore_focus(target)
 
 
 func _close_confirm() -> void:
+	_confirm_return_focus = null
 	if _confirm != null:
 		_confirm.hide()   # скрыть сразу: до удаления окно ещё держит модальность
 		_confirm.queue_free()
@@ -1297,6 +1856,7 @@ func _close_confirm() -> void:
 func _back_to_menu() -> void:
 	if not _save_current():
 		return
+	_cancel_hud_fade()
 	_free_game()
 	hud.visible = false
 	_previews.clear()   # после игры у мира появилось или обновилось превью
@@ -1308,7 +1868,7 @@ func _exit_game() -> void:
 	if display_options != null:
 		display_options.revert()
 	if busy:
-		_message("Мир загружается", "Дождитесь завершения загрузки перед выходом.")
+		_cancel_loading(true)
 		return
 	if not _save_current():
 		return
@@ -1399,8 +1959,9 @@ func _message(title: String, body: String) -> void:
 
 
 func _confirm_load(seed_text: String, slot: String) -> void:
+	var opener: Control = _load_manual if _is_screen("all_worlds") else (get_node_or_null("%QuickLoad") as Control)
 	_ask("Загрузить сохранение?", "Текущий прогресс будет записан в автосохранение.\nЗатем загрузится ручное сохранение этого мира.",
-		"Загрузить", false, start_game.bind(seed_text, WorldGenerator.START_SIZE, slot))
+		"Загрузить", false, start_game.bind(seed_text, WorldGenerator.START_SIZE, slot), opener)
 
 
 ## Кнопки сохранения стоят в сцене (меню — «Загрузить ручное», пауза — быстрое сохранение и загрузка),
@@ -1485,6 +2046,15 @@ func _fill_controls() -> void:
 
 func _exit_tree() -> void:
 	_backdrop_epoch += 1
+	_cancel_hud_fade()
+	for tw: Tween in [_load_step_tween, _favorites_notice_tween, _parallax_tween]:
+		if tw != null and tw.is_valid():
+			tw.kill()
+	_load_step_tween = null
+	_favorites_notice_tween = null
+	_parallax_tween = null
+	if _load_cancel_flag != null:
+		_load_cancel_flag.cancel()
 	_finish_auto_save(false)
 	if display_options != null:
 		display_options.shutdown()

@@ -36,6 +36,11 @@ const DB_STEP := -15.0
 const DB_LAND := -10.0
 const DB_BIRD := -6.0
 
+const WORLD_BUS := &"World"
+const DUCK_DB := -18.0
+const DUCK_CUTOFF_HZ := 900.0
+const FULL_CUTOFF_HZ := 16000.0
+
 const S := "res://resources/sounds/"
 
 # Биомы с хрустом под ногами.
@@ -74,9 +79,28 @@ var _grit_level := 0.0      # сколько песчинок на этой по
 var _grit_pitch := 1.0
 var _crank := 0.0
 var _pedal_t := 0.0
+var _ducked := false
+var _duck_tween: Tween
+
+
+static func ensure_world_bus() -> int:
+	var idx := AudioServer.get_bus_index(WORLD_BUS)
+	if idx != -1:
+		return idx
+	idx = AudioServer.bus_count
+	AudioServer.add_bus(idx)
+	AudioServer.set_bus_name(idx, WORLD_BUS)
+	AudioServer.set_bus_send(idx, &"Master")
+	var lpf := AudioEffectLowPassFilter.new()
+	lpf.cutoff_hz = FULL_CUTOFF_HZ
+	lpf.resonance = 0.5
+	AudioServer.add_bus_effect(idx, lpf, 0)
+	AudioServer.set_bus_effect_enabled(idx, 0, false)
+	return idx
 
 
 func _ready() -> void:
+	ensure_world_bus()
 	_water = _loop("water", DB_WATER)
 	_surf = _loop("surf", DB_SURF)
 	_roll = _loop("roll", DB_ROLL)
@@ -84,12 +108,14 @@ func _ready() -> void:
 	_tick = _loop("freewheel", DB_TICK)
 	_chain = _loop("chain", DB_CHAIN)
 	_fire = AudioStreamPlayer3D.new()
+	_fire.bus = WORLD_BUS
 	_fire.stream = load(S + "fire.wav")
 	_fire.unit_size = 4.0
 	_fire.max_distance = FIRE_R
 	_fire.volume_db = DB_FIRE
 	add_child(_fire)
 	_bird = AudioStreamPlayer3D.new()
+	_bird.bus = WORLD_BUS
 	_bird.stream = _random(["bird_1", "bird_2", "bird_3"], 1.12, 3.0)
 	_bird.unit_size = 12.0
 	_bird.volume_db = DB_BIRD
@@ -99,24 +125,43 @@ func _ready() -> void:
 		for k in (3 if kind == "wood" or kind == "splash" else 4):
 			names.append("step_%s_%d" % [kind, k + 1])
 		var p := AudioStreamPlayer.new()
+		p.bus = WORLD_BUS
 		p.stream = _random(names, 1.1, 2.0)
 		p.max_polyphony = 2
 		add_child(p)
 		_steps[kind] = p
 	_land = AudioStreamPlayer.new()
+	_land.bus = WORLD_BUS
 	_land.stream = _random(["land"], 1.1, 1.0)
 	add_child(_land)
 	_bottom = AudioStreamPlayer.new()
+	_bottom.bus = WORLD_BUS
 	_bottom.stream = _random(["land"], 1.08, 1.0)
 	add_child(_bottom)
 	_knock = AudioStreamPlayer.new()
+	_knock.bus = WORLD_BUS
 	_knock.stream = _random(["land"], 1.12, 2.0)
 	_knock.max_polyphony = 2
 	add_child(_knock)
 
 
+func _exit_tree() -> void:
+	if _duck_tween != null and _duck_tween.is_valid():
+		_duck_tween.kill()
+		_duck_tween = null
+	var idx := AudioServer.get_bus_index(WORLD_BUS)
+	if idx != -1:
+		AudioServer.set_bus_volume_db(idx, 0.0)
+		if AudioServer.get_bus_effect_count(idx) > 0:
+			var lpf := AudioServer.get_bus_effect(idx, 0) as AudioEffectLowPassFilter
+			if lpf != null:
+				lpf.cutoff_hz = FULL_CUTOFF_HZ
+			AudioServer.set_bus_effect_enabled(idx, 0, false)
+
+
 func _loop(file: String, db: float) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
+	p.bus = WORLD_BUS
 	p.stream = load(S + file + ".wav")
 	p.volume_db = SILENT
 	add_child(p)
@@ -146,6 +191,44 @@ func setup(w: WorldData, h: Heightfield) -> void:
 func set_paused(on: bool) -> void:
 	for p: Node in get_children():
 		p.stream_paused = on
+
+
+## На паузе окружение приглушается (-18 дБ и Low-Pass), звуки езды замолкают, чтобы в меню настроек
+## оставался живой фон мира и было слышно ползунок громкости
+func set_ducked(on: bool, duration := 0.18) -> void:
+	var idx := ensure_world_bus()
+	_ducked = on
+	if _duck_tween != null and _duck_tween.is_valid():
+		_duck_tween.kill()
+		_duck_tween = null
+	for p: AudioStreamPlayer in [_roll, _grit, _tick, _chain]:
+		if p != null:
+			p.stream_paused = on
+	var lpf := AudioServer.get_bus_effect(idx, 0) as AudioEffectLowPassFilter if AudioServer.get_bus_effect_count(idx) > 0 else null
+	var target_db := DUCK_DB if on else 0.0
+	var target_hz := DUCK_CUTOFF_HZ if on else FULL_CUTOFF_HZ
+	if duration <= 0.0 or not is_inside_tree() or DisplayServer.get_name() == "headless" or AudioServer.get_driver_name() == "Dummy":
+		AudioServer.set_bus_volume_db(idx, target_db)
+		if lpf != null:
+			lpf.cutoff_hz = target_hz
+			AudioServer.set_bus_effect_enabled(idx, 0, on)
+		return
+	if on and lpf != null:
+		AudioServer.set_bus_effect_enabled(idx, 0, true)
+	var start_db := AudioServer.get_bus_volume_db(idx)
+	var start_hz := lpf.cutoff_hz if lpf != null else FULL_CUTOFF_HZ
+	_duck_tween = create_tween()
+	_duck_tween.set_parallel(true)
+	_duck_tween.tween_method(func(v: float) -> void: AudioServer.set_bus_volume_db(idx, v),
+		start_db, target_db, duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	if lpf != null:
+		_duck_tween.tween_method(func(hz: float) -> void: lpf.cutoff_hz = hz,
+			start_hz, target_hz, duration).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_duck_tween.set_parallel(false)
+	_duck_tween.tween_callback(func() -> void:
+		_duck_tween = null
+		if not _ducked and lpf != null:
+			AudioServer.set_bus_effect_enabled(idx, 0, false))
 
 
 ## Такт физики: шаги по фазе покачивания (два шага на её оборот: внизу и вверху), как идёт игрок

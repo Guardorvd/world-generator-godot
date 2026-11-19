@@ -414,14 +414,20 @@ func save_view(seed_text: String, size: int, images: Dictionary) -> void:
 ## Мир с кэшем: подходящие слои читаются, с первого неподходящего генерация продолжается обычным путём,
 ## а новые слои пишутся в кэш в фоне (дождаться — wait_writes). layers — сколько слоёв взято из кэша.
 func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
-		after_climate: Callable = Callable()) -> Dictionary:
+		after_climate: Callable = Callable(), should_cancel: Callable = Callable()) -> Dictionary:
+	if should_cancel.is_valid() and bool(should_cancel.call()):
+		return {world = null, layers = 0, cancelled = true}
 	var got := _load(seed_text, size)
 	var n: int = got.layers
+	if should_cancel.is_valid() and bool(should_cancel.call()):
+		return {world = null, layers = n, cancelled = true}
 	# Validate the plan before starting expensive preparation, even when schema keys match.
 	if n >= 2 and StageTrailPlan.stale(got.world.trail_plan):
 		invalidate_from(seed_text, size, 1)
 		got = _load(seed_text, size)
 		n = got.layers
+		if should_cancel.is_valid() and bool(should_cancel.call()):
+			return {world = null, layers = n, cancelled = true}
 	if n == WorldGenerator.LAYERS.size():
 		return {world = got.world, layers = n}
 	# Снимок для сравнения — отдельная копия: мир из кэша держит те же массивы и словари, и следующий слой,
@@ -439,7 +445,9 @@ func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 	if n > 0: got.world.generation_profile = {} # report only stages actually generated on this load
 	var w := WorldGenerator.generate_layers(seed_text, size, on_progress, prepare_base, got.world, n,
 		func(cur: WorldData, k: int) -> void:
-			state.prev = _save_layer(cur, size, k, state.prev))
+			state.prev = _save_layer(cur, size, k, state.prev), should_cancel)
+	if w == null:
+		return {world = null, layers = n, cancelled = true}
 	return {world = w, layers = n}
 
 

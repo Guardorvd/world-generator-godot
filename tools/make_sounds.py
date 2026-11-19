@@ -345,6 +345,92 @@ def main():
             write_wav("step_%s_%d" % (kind, k + 1), step(kind, rng))
     write_wav("land", land(rng))
 
+    # Звуки UI (используют отдельный генератор, чтобы не менять ни байта в звуках мира)
+    ui_rng = random.Random(2026)
+    write_wav("ui_hover", ui_hover(ui_rng))
+    write_wav("ui_click", ui_click(ui_rng))
+    write_wav("ui_carousel_step", ui_carousel_step(ui_rng))
+    write_wav("ui_panel_open", ui_panel_open(ui_rng))
+    write_wav("ui_panel_close", ui_panel_close(ui_rng))
+    write_wav("ui_confirm", ui_confirm(ui_rng))
+    write_wav("ui_error_deny", ui_error_deny(ui_rng))
+    write_wav("ui_volume_tick", ui_volume_tick(ui_rng))
+
+
+def ui_hover(rng):
+    """Тихий деревянный отклик при наведении или смене фокуса"""
+    n = int(RATE * 0.022)
+    out = [0.0] * n
+    mix(out, bandpass(burst(18, 5.0, rng, 1.5), 950.0, 1.4), 0, 0.35)
+    mix(out, tone(0.018, 760.0, 680.0, harm=0.05), 0, 0.45)
+    return fade(out, 2, 10)
+
+
+def ui_click(rng):
+    """Мягкий тактильный щелчок нажатия кнопки"""
+    n = int(RATE * 0.042)
+    out = [0.0] * n
+    mix(out, bandpass(burst(22, 6.0, rng, 0.8), 1450.0, 1.5), 0, 0.45)
+    mix(out, thump(36, 520.0, 340.0, 10.0), 0, 0.85)
+    return fade(out, 1, 16)
+
+
+def ui_carousel_step(rng):
+    """Чёткий короткий щелчок переключения карточки карусели или вкладки"""
+    n = int(RATE * 0.046)
+    out = [0.0] * n
+    mix(out, bandpass(burst(24, 5.5, rng, 0.6), 1850.0, 1.8), 0, 0.55)
+    mix(out, tone(0.032, 940.0, 660.0, harm=0.06), 0, 0.75)
+    return fade(out, 1, 18)
+
+
+def ui_panel_open(rng):
+    """Мягкое раскрытие панели (лёгкий вздох вверх + тёплый тон)"""
+    n = int(RATE * 0.13)
+    noise = pink(n, rng)
+    freq = [420.0 + 480.0 * (i / max(1, n - 1)) for i in range(n)]
+    swell = bandpass(noise, freq, 1.3)
+    out = [swell[i] * math.sin(math.pi * i / max(1, n - 1)) * 0.55 for i in range(n)]
+    mix(out, tone(0.11, 310.0, 420.0, harm=0.06), int(RATE * 0.01), 0.55)
+    return fade(out, 8, 45)
+
+
+def ui_panel_close(rng):
+    """Мягкое закрытие панели (спад вниз)"""
+    n = int(RATE * 0.10)
+    noise = pink(n, rng)
+    freq = [750.0 - 390.0 * (i / max(1, n - 1)) for i in range(n)]
+    swell = bandpass(noise, freq, 1.3)
+    out = [swell[i] * math.sin(math.pi * i / max(1, n - 1)) * 0.5 for i in range(n)]
+    mix(out, tone(0.085, 360.0, 260.0, harm=0.05), int(RATE * 0.005), 0.5)
+    return fade(out, 5, 40)
+
+
+def ui_confirm(rng):
+    """Тёплый двухнотный отклик подтверждения запуска мира"""
+    n = int(RATE * 0.16)
+    out = [0.0] * n
+    mix(out, bandpass(burst(20, 6.0, rng, 1.0), 1200.0, 1.2), 0, 0.25)
+    mix(out, tone(0.085, 440.0, 445.0, harm=0.08), 0, 0.65)
+    mix(out, tone(0.115, 660.0, 665.0, harm=0.08), int(RATE * 0.04), 0.75)
+    return fade(out, 2, 55)
+
+
+def ui_error_deny(rng):
+    """Приглушённый двойной низкий отказ"""
+    n = int(RATE * 0.12)
+    out = [0.0] * n
+    mix(out, thump(48, 220.0, 175.0, 16.0), 0, 0.9)
+    mix(out, bandpass(burst(18, 6.0, rng, 1.0), 520.0, 1.2), 0, 0.25)
+    mix(out, thump(54, 175.0, 135.0, 18.0), int(RATE * 0.048), 0.85)
+    return fade(out, 2, 35)
+
+
+def ui_volume_tick(_rng):
+    """Нейтральный чистый тон проверки громкости"""
+    out = tone(0.075, 440.0, 440.0, harm=0.08)
+    return fade(out, 4, 24)
+
 
 if __name__ == "__main__":
     main()

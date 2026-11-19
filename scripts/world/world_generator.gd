@@ -29,11 +29,15 @@ static func noise_rng(seed_num: int, name: String) -> WGRandom:
 	return WGRandom.new(WGRandom.derive(seed_num, "noise." + name))
 
 
+static func _cancelled(should_cancel: Callable) -> bool:
+	return should_cancel.is_valid() and bool(should_cancel.call())
+
+
 ## seed — строка зерна, size — сторона доступной территории в клетках; on_progress(p 0..1, подпись этапа) — необязательно.
 ## after_climate(w) — необязательно: вызывается, когда рельеф, вода и биомы готовы. Следующие этапы их
 ## уже не меняют, поэтому то, что зависит только от них, можно считать в другом потоке параллельно с ними.
-static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
-	return generate_layers(seed_text, size, on_progress, after_climate)
+static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
+	return generate_layers(seed_text, size, on_progress, after_climate, null, 0, Callable(), should_cancel)
 
 
 ## Слои генерации для кэша миров (с 10.2, WorldCache): география (рельеф, вода, климат), места и пути,
@@ -45,8 +49,10 @@ enum PlanMode { STAND, WORLD }
 ## Генерация по слоям. from — мир с готовыми слоями до start (из кэша: шумы на месте, без base_heights);
 ## on_layer(w, k) — после каждого слоя k, пока следующий его не тронул.
 static func generate_layers(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
-		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
-	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, PlanMode.WORLD)
+		from: WorldData = null, start := 0, on_layer: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
+	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, PlanMode.WORLD, should_cancel)
+	if w == null:
+		return null
 	# Генерация не читает размер из меню: открываем окно только после всех этапов.
 	w.territory_center = start_center(w)
 	w.expand_territory(size)
@@ -63,14 +69,18 @@ static func start_center(w: WorldData) -> Vector2i:
 
 ## Общая природная география без домов и дорог. Соседние области — прямоугольники этого же плана
 ## (WorldData.region_rect), а не flood в отдельном окне другого размера.
-static func geography(seed_text: String, on_progress: Callable = Callable()) -> WorldData:
-	var w := _geography(seed_text, PLAN_SIZE, on_progress)
+static func geography(seed_text: String, on_progress: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
+	var w := _geography(seed_text, PLAN_SIZE, on_progress, should_cancel)
+	if w == null:
+		return null
 	w.clear_noise_fields()
 	w.base_heights = null
 	return w
 
 
-static func _geography(seed_text: String, side: int, on_progress: Callable = Callable()) -> WorldData:
+static func _geography(seed_text: String, side: int, on_progress: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
+	if _cancelled(should_cancel):
+		return null
 	var w := WorldData.new()
 	w.W = side
 	w.H = side
@@ -85,25 +95,43 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 		if on_progress.is_valid():
 			on_progress.call(p, label)
 
+	if _cancelled(should_cancel):
+		w.clear_noise_fields()
+		return null
 	step.call(StageRelief.PROGRESS, StageRelief.LABEL)
 	var t := Time.get_ticks_usec()
 	StageRelief.run(w)
 	w.start_noise_fields(["moist"])
 	t = _stage_time(w, "relief", t)
+	if _cancelled(should_cancel):
+		w.clear_noise_fields()
+		return null
 	step.call(StageOcean.PROGRESS, StageOcean.LABEL)
 	StageOcean.run(w)
 	t = _stage_time(w, "ocean", t)
+	if _cancelled(should_cancel):
+		w.clear_noise_fields()
+		return null
 	step.call(StageHydrology.PROGRESS, StageHydrology.LABEL)
 	StageHydrology.run(w)
 	t = _stage_time(w, "hydrology", t)
+	if _cancelled(should_cancel):
+		w.clear_noise_fields()
+		return null
 	w.start_noise_fields(["temp"])
 	step.call(StageRivers.PROGRESS, StageRivers.LABEL)
 	StageRivers.run(w)
 	t = _stage_time(w, "rivers", t)
+	if _cancelled(should_cancel):
+		w.clear_noise_fields()
+		return null
 	step.call(StageGeography.PROGRESS, StageGeography.LABEL)
 	# Последняя граница изменений географии: общие поля нужны всем зависимым системам.
 	StageGeography.run(w)
 	t = _stage_time(w, "geography", t)
+	if _cancelled(should_cancel):
+		w.clear_noise_fields()
+		return null
 	step.call(StageClimate.PROGRESS, StageClimate.LABEL)
 	StageClimate.run(w)
 	_stage_time(w, "climate", t)
@@ -120,10 +148,19 @@ static func _stage_time(w: WorldData, stage: String, since_us: int) -> int:
 
 
 static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
-		from: WorldData = null, start := 0, on_layer: Callable = Callable(), mode := PlanMode.STAND) -> WorldData:
+		from: WorldData = null, start := 0, on_layer: Callable = Callable(), mode := PlanMode.STAND, should_cancel: Callable = Callable()) -> WorldData:
+	var abort_plan := func(cur: WorldData) -> WorldData:
+		if cur != null:
+			cur.clear_noise_fields()
+			cur.base_heights = null
+		return null
+	if _cancelled(should_cancel):
+		return abort_plan.call(from)
 	var w := from
 	if start == 0:
-		w = _geography(seed_text, side, on_progress)
+		w = _geography(seed_text, side, on_progress, should_cancel)
+		if w == null or _cancelled(should_cancel):
+			return abort_plan.call(w)
 		if on_layer.is_valid():
 			on_layer.call(w, 0)
 	else:
@@ -131,6 +168,8 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		# поля шума — из сида
 		if w.base_heights == null:
 			w.base_heights = Heightfield.new(w, false)
+	if _cancelled(should_cancel):
+		return abort_plan.call(w)
 	w.start_noise_fields(["cost", "forest"])
 	if after_climate.is_valid():
 		after_climate.call(w)
@@ -138,18 +177,28 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		if on_progress.is_valid():
 			on_progress.call(p, label)
 	if start <= 1:
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		step.call(StageLandmarks.PROGRESS, StageLandmarks.LABEL)
 		var t := Time.get_ticks_usec()
 		StageLandmarks.run(w)
 		t = _stage_time(w, "landmarks", t)
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		step.call(StageTrails.PROGRESS, StageTrails.LABEL)
 		StageTrails.run(w, step)
 		t = _stage_time(w, "trails", t)
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		step.call(StageSites.PROGRESS, StageSites.LABEL)
 		StageSites.run(w)
 		t = _stage_time(w, "sites", t)
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		StageLakes.run(w)
 		t = _stage_time(w, "lakes", t)
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		# Prepared parks are temporarily disabled in normal worlds. Explicit developer
 		# network modes retain the original pipeline; Lab/manual definitions use StageTrailPlan directly.
 		if mode == PlanMode.WORLD:
@@ -158,11 +207,15 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 			else:
 				w.trail_plan = {version = StageTrailPlan.VERSION, state = "none", reason = "автоматические велопарки отключены"}
 			_stage_time(w, "trail_plan", t)
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)
 	var surface: Heightfield = w.generation.trail_surface
 	var later := Time.get_ticks_usec()
 	if surface == null:
+		if _cancelled(should_cancel):
+			return abort_plan.call(w)
 		step.call(0.85, "Подготовка рельефа и дорожного полотна")
 		surface = Heightfield.base_of(w)
 		w.generation.surface_rock = RockRelief.field_of(w)
@@ -177,9 +230,13 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 			RoadSurface.run(w)
 			surface.finish_paths()
 		later = _stage_time(w, "path_surface", later)
+	if _cancelled(should_cancel):
+		return abort_plan.call(w)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	StageVegetation.run(w, surface)
 	_stage_time(w, "vegetation", later)
+	if _cancelled(should_cancel):
+		return abort_plan.call(w)
 	if w.generation.trail_surface == null and w.trail_plan.get("mode", "") != "terrain_network":
 		surface.weaken_world()
 		w.generation.trail_surface = surface

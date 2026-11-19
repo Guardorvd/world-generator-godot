@@ -205,7 +205,7 @@ func _navigation() -> void:
 	cancel.pressed = true
 	root.push_input(cancel)
 	await process_frame
-	_check(start.has_focus() and _main.get_node("%Menu").visible, "B возвращает в главное меню")
+	_check(_main.get_node("%OpenNew").has_focus() and _main.get_node("%Menu").visible, "B возвращает в главное меню")
 	_main._open_all_worlds()
 	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%Storage").is_visible_in_tree(), "все миры и хранилище доступны")
 	_main._return_to_menu_screen()

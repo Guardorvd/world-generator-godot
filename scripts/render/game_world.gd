@@ -167,6 +167,10 @@ var _tick_pitch: float:
 
 var _defs: Dictionary
 var _grass_mesh: Mesh
+var _live_veg_dirty := false
+var _live_veg_due_ms := -1
+var _live_veg_pumping := false
+var _live_veg_fade_left := 0.0
 
 @onready var camera: Camera3D = $Camera
 @onready var vegetation: VegetationLayer = $Vegetation
@@ -649,7 +653,8 @@ func _apply_lighting_and_fog() -> void:
 	var settings := services.settings
 	preload("res://scripts/render/lighting_quality.gd").apply(
 		$WorldEnvironment.environment, $Sun, settings.lighting, settings.shadows, settings.fog_quality)
-	local_mist.set_quality(settings.fog_quality, $WorldEnvironment.environment)
+	if local_mist != null:
+		local_mist.set_quality(settings.fog_quality, $WorldEnvironment.environment)
 	preload("res://scripts/render/lighting_quality.gd").apply_clouds($WorldEnvironment.environment, settings.cloud_quality)
 	# визуальный стиль (13.11): окружение мира и настройки игрока; на паузе меню меняет их сразу, здесь — на старте и после паузы
 	VisualStyle.bind($WorldEnvironment.environment)
@@ -689,6 +694,18 @@ func capture_mouse() -> void:
 	_captured_at = Time.get_ticks_msec()
 
 
+func has_cursor_overlay() -> bool:
+	return show_map or _settlement_open() or _journal_open() or _plaque_open()
+
+
+func sync_mouse_mode() -> void:
+	if paused or has_cursor_overlay():
+		_dragging = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		capture_mouse()
+
+
 func set_paused(p: bool) -> void:
 	if p:
 		services.controls.release_motion()
@@ -712,22 +729,103 @@ func set_paused(p: bool) -> void:
 	if p:
 		_close_settlement(false)
 	else:
+		_live_veg_dirty = false
+		_live_veg_due_ms = -1
+		_live_veg_pumping = false
+		_live_veg_fade_left = 0.0
 		_apply_lighting_and_fog()
-		var redraw := vegetation.set_draw(services.settings.draw) # и дальность прорисовки (с 9.8+)
-		redraw = vegetation.set_flora(services.settings.flora) or redraw # и качество растительности (16.0)
-		redraw = vegetation.set_mid_grass(services.settings.mid_grass) or redraw # 17.11.2026: дерновины вдали
-		vegetation.set_carpet() # 14.11.2026: густота и дальность дернины; ковёр пересоберёт своя фоновая задача
+		_apply_live_fov()
+		var redraw := _apply_vegetation_settings()
 		if ambient != null:
 			ambient.density = GameSettings.PARTICLE_LEVELS[services.settings.particles].density
-		if redraw:
+		if redraw and DisplayServer.get_name() == "headless" and stream_coordinator.vegetation_update.is_valid():
 			stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
-	audio.set_paused(p or travel_active())
-	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
-	_dragging = false
-	if p or show_map:
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if travel_active():
+		audio.set_paused(true)
 	else:
-		capture_mouse()
+		audio.set_paused(false)
+		audio.set_ducked(p, 0.18)
+	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
+	sync_mouse_mode()
+
+
+func apply_live_settings(category: StringName = &"all") -> void:
+	if player == null:
+		return
+	if category in [&"all", &"fov"]:
+		_apply_live_fov()
+	if category in [&"all", &"graphics", &"lighting", &"style"]:
+		_apply_lighting_and_fog()
+		if day != null:
+			_apply_render_clock(_clock_frame_alpha)
+			var dome := get_node_or_null("SkyCloudDome")
+			if dome != null:
+				dome._full = true
+		if local_mist != null and camera != null:
+			local_mist.update(camera.global_position, 0.0)
+		if ambient != null:
+			ambient.density = GameSettings.PARTICLE_LEVELS[services.settings.particles].density
+		var road: Dictionary = GameSettings.ROAD_QUALITY[services.settings.road_quality]
+		RenderingServer.global_shader_parameter_set("road_quality", Vector2(road.quality, GameSettings.ROAD_RANGE[services.settings.road_range].scale))
+	if category in [&"all", &"vegetation"]:
+		var road: Dictionary = GameSettings.ROAD_QUALITY[services.settings.road_quality]
+		RenderingServer.global_shader_parameter_set("road_quality", Vector2(road.quality, GameSettings.ROAD_RANGE[services.settings.road_range].scale))
+		_live_veg_dirty = true
+		_live_veg_due_ms = Time.get_ticks_msec() + 200
+
+
+func _apply_live_fov() -> void:
+	if camera == null or player == null:
+		return
+	if photo != null and photo.active:
+		camera.fov = photo.fov(services.settings.fov)
+		return
+	var fov_goal := services.settings.fov
+	if bike != null and bike.riding:
+		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3)
+	else:
+		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
+	camera.fov = fov_goal
+
+
+func _apply_vegetation_settings() -> bool:
+	if vegetation == null or vegetation.world == null:
+		return false
+	var draw_changed := vegetation.set_draw(services.settings.draw)
+	if draw_changed:
+		vegetation.last_trees = Vector2.INF
+	var redraw := draw_changed
+	redraw = vegetation.set_flora(services.settings.flora) or redraw
+	redraw = vegetation.set_mid_grass(services.settings.mid_grass) or redraw
+	var carpet_changed := vegetation.set_carpet()
+	return redraw or carpet_changed
+
+
+func _tick_paused_preview(delta: float) -> void:
+	if player == null or vegetation == null:
+		return
+	if _live_veg_dirty and Time.get_ticks_msec() >= _live_veg_due_ms:
+		if vegetation.busy():
+			var busy_budget := stream_coordinator.frame_budget
+			busy_budget.deadline_usec = Time.get_ticks_usec() + stream_coordinator.publication_budget_us
+			vegetation.update(player.x, player.z, false, delta, true)
+			busy_budget.deadline_usec = 0
+		else:
+			_live_veg_dirty = false
+			_live_veg_due_ms = -1
+			if _apply_vegetation_settings():
+				_live_veg_pumping = true
+				_live_veg_fade_left = 0.45
+	if _live_veg_pumping:
+		var budget := stream_coordinator.frame_budget
+		budget.deadline_usec = Time.get_ticks_usec() + stream_coordinator.publication_budget_us
+		vegetation.update(player.x, player.z, false, delta, true)
+		budget.deadline_usec = 0
+		var carpet_busy := vegetation.carpet != null and vegetation.carpet.busy()
+		if vegetation.placement_ready() and not carpet_busy:
+			_live_veg_fade_left -= delta
+			if _live_veg_fade_left <= 0.0:
+				_live_veg_pumping = false
 
 
 func look(dx: float, dy: float) -> void:
@@ -1054,7 +1152,7 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_echo():
+	if event.is_echo() or paused:
 		return
 	if _placing_bike():
 		if event.is_action_pressed("recover_bike") or event.is_action_pressed("pause") or event.is_action_pressed("back") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT):
@@ -1413,9 +1511,10 @@ func _process(delta: float) -> void:
 	if player == null or travel_active():
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
-	hud.lock_hint.visible = (not paused and not show_map and not _settlement_open() and not photo.active
+	hud.lock_hint.visible = (not paused and not has_cursor_overlay() and not photo.active
 		and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 	if paused:
+		_tick_paused_preview(delta)
 		return
 	var t0 := Time.get_ticks_usec()
 	tick_us.frames = tick_us.get("frames", 0) + 1
