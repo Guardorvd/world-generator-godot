@@ -14,6 +14,7 @@ const AHEAD := 600.0   # точка впереди по ходу, к котор�
 var chunks := {}
 var nodes := {}
 var pending: Array[Vector2i] = []
+var _evict_pending: Array[Vector2i] = []
 var material: Material
 ## 15.11.2026: дальний вариант материала (TerrainBuilder.far_material) у частей, целиком лежащих дальше FAR_FROM.
 ## В шейдере ближняя деталь гаснет к DETAIL_FAR = 110 м; 40 м запаса — на камеру за игроком и путь между пересчётами
@@ -145,9 +146,20 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 	return p.distance_to(p.clamp(corner, corner + Vector2.ONE * SIDE))
 
 
-## force — старт/быстрое перемещение: части ближе near передаются сразу, остальные ждут очереди.
+func arrival_ready(p: Vector2, radius: float) -> bool:
+	return p.distance_to(checked_at) < RECHECK and not _has_near_pending(p, radius)
+
+
+func _has_near_pending(p: Vector2, radius: float) -> bool:
+	# The arrival queue has no look-ahead and is ordered by distance.
+	return not pending.is_empty() and distance_to_chunk(pending.back(), p) <= radius
+
+
+## force — старт: части ближе near передаются сразу, остальные ждут очереди.
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
-func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
+func update(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
+	if not force and frame_budget != null and not frame_budget.allows_work():
+		return false
 	var p := Vector2(x, z)
 	var uploaded := false
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
@@ -165,11 +177,11 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		# последние RECHECK метров пути задают направление: очередь берёт сначала части впереди
 		var ahead := p if force or checked_at == Vector2.INF else p + (p - checked_at).normalized() * AHEAD
 		checked_at = p
-		for key: Vector2i in nodes.keys():
-			if distance_to_chunk(key, p) > DROP:
-				nodes[key].visible = false
-				nodes[key].queue_free()
-				nodes.erase(key)
+		if force or near == INF:
+			_evict_pending.clear()
+			for key: Vector2i in nodes:
+				if distance_to_chunk(key, p) > DROP:
+					_evict_pending.append(key)
 		# Ключ сортировки — один раз на часть (раньше четыре расстояния в каждом сравнении); порядок тот же.
 		var keyed: Array = []
 		for key: Vector2i in chunks:
@@ -185,10 +197,11 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		if due: source.retain_layer(water_layer, pending)
 		for offset in mini(3, pending.size()):
 			var at: Vector2i = pending[pending.size() - 1 - offset]
+			if not force and near < INF and distance_to_chunk(at, p) > near: break
 			# Preserve the consumer's order, including look-ahead and equal-distance ties.
 			source.request(water_layer, at, distance_to_chunk(at, p) + offset * (RADIUS + SIDE))
 		source.poll()
-	while not pending.is_empty() and (force and distance_to_chunk(pending.back(), p) <= near or allow_apply and not uploaded):
+	while _has_near_pending(p, near) and (force or allow_apply and not uploaded):
 		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		var key: Vector2i = pending.back()
 		var arrays: Variant = _arrays(key)
@@ -225,13 +238,21 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 			_uncached_key = null
 			_uncached_arrays = []
 		uploaded = true
-	if far_material != null and (force or p.distance_to(_far_at) >= FAR_RECHECK):
+	if (force or near == INF) and far_material != null and (force or p.distance_to(_far_at) >= FAR_RECHECK):
 		_far_at = p
 		for key: Vector2i in nodes:
 			var wanted := _material_for(key, p)
 			if nodes[key].material_override != wanted:
 				nodes[key].material_override = wanted
 	# Кроны — после рельефа: только в кадре без передачи чанка и в пределах общего бюджета.
-	if _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
+	if (force or near == INF) and _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
 		uploaded = true
+	if near == INF and allow_apply and not uploaded and not _evict_pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
+		var key: Vector2i = _evict_pending.pop_back()
+		if nodes.has(key) and distance_to_chunk(key, p) > DROP:
+			nodes[key].hide()
+			nodes[key].queue_free()
+			nodes.erase(key)
+			_crown_wait.erase(key)
+			uploaded = true
 	return uploaded

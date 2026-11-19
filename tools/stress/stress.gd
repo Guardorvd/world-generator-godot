@@ -15,6 +15,7 @@ extends SceneTree
 ## Ключи: --only <часть имени,…> — только эти замеры; --out <папка> (по умолчанию tools/control/runs/stress);
 ##   --save-base — записать этот прогон как базу (base.json); без ключа прогон сравнивается с base.json, если она есть;
 ##   --compare <база.json> <новый.json> — только сравнить два отчёта (окно не нужно, ничего не меряется).
+##   --travel-from-map — начать перенос с открытым атласом и проверить его закрытие при прибытии.
 ## Итог: stress.json (все числа), stress.md (выводы и таблицы), строка STRESS_RESULT в консоли. Код 1 — прогон не завершён.
 ## Отчёт пишется после каждого замера: при зависании остаётся всё снятое. Лимит: 150 с без мира, 540 с с миром.
 
@@ -122,6 +123,8 @@ func _run(groups: Array) -> void:
 	if "base" in groups and report.cases.size() > 1:
 		# та же пустая сцена в конце: если числа разошлись, машина была занята чем-то ещё
 		spike_cause = Callable()
+		_unlock_frames()
+		await _frames(5)
 		var scene := _stage(false)
 		await _case("base.calib_end", "Пустая сцена в конце (шум машины)", HOLD)
 		scene.queue_free()
@@ -211,6 +214,10 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var began := Time.get_ticks_usec()
 	var last := began
 	var dt := 1.0 / 60.0
+	var draw_pipelines := int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_DRAW))
+	var previous_pipelines := draw_pipelines
+	var live := keep and game != null and not game.paused
+	var previous_ticks: Dictionary = game.tick_us.duplicate() if live else {}
 	while Time.get_ticks_usec() - began < seconds * 1000000.0:
 		var w0 := Time.get_ticks_usec()
 		if step.is_valid():
@@ -224,6 +231,9 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 		clock += dt
 		last = now
 		if keep:
+			var pipelines := int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_DRAW))
+			var compiled := pipelines - previous_pipelines
+			previous_pipelines = pipelines
 			ms.append(dt * 1000.0)
 			gpu.append(RenderingServer.viewport_get_measured_render_time_gpu(vp))
 			cpu.append(RenderingServer.viewport_get_measured_render_time_cpu(vp))
@@ -236,17 +246,32 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 			physics += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 			peak_video = maxf(peak_video, Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED))
 			# длинный кадр — с причиной: счётчики подгрузки ещё хранят этот кадр
-			if dt > 0.0167 and spike_cause.is_valid() and spikes.size() < 64:
-				spikes.append({t = snappedf((now - began) / 1000000.0, 0.01), ms = snappedf(dt * 1000.0, 0.1), work_ms = snappedf(worked, 0.1),
-					gpu_ms = snappedf(gpu[gpu.size() - 1], 0.1), cpu_ms = snappedf(cpu[cpu.size() - 1], 0.1), cause = spike_cause.call()})
+			if dt > 0.0167 and spike_cause.is_valid() and (spikes.size() < 5 or dt * 1000.0 > spikes[-1].ms):
+				var spike := {t = snappedf((now - began) / 1000000.0, 0.01), ms = snappedf(dt * 1000.0, 0.1), work_ms = snappedf(worked, 0.1),
+					gpu_ms = snappedf(gpu[gpu.size() - 1], 0.1), cpu_ms = snappedf(cpu[cpu.size() - 1], 0.1),
+					draw_pipelines = compiled, cause = spike_cause.call()}
+				if live:
+					var tick_parts := {}
+					for part: String in game.tick_us:
+						if part != "frames" and part != "ticks":
+							tick_parts[part] = snappedf(float(game.tick_us[part] - previous_ticks.get(part, 0)) / 1000.0, 0.01)
+					spike.tick_ms = tick_parts
+					spike.physics_ticks = game.tick_us.get("ticks", 0) - previous_ticks.get("ticks", 0)
+					if game.navigation_line != null:
+						spike.navigation_us = game.navigation_line.timings_us.duplicate()
+				spikes.append(spike)
+				spikes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.ms > b.ms)
+				if spikes.size() > 5: spikes.pop_back()
+			if live:
+				previous_ticks = game.tick_us.duplicate()
 	if not keep:
 		return {}
 	var out := Report.stats(ms, gpu, cpu, work, calls, prims)
 	if out.frames > 0:
+		out.draw_pipelines = previous_pipelines - draw_pipelines
 		out.physics_ms = snappedf(physics / out.frames, 0.01)
 		out.peak_video_mb = snappedf(peak_video / 1048576.0, 0.1)
-		spikes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.ms > b.ms)
-		out.worst = spikes.slice(0, 5)
+		out.worst = spikes
 	return out
 
 
@@ -261,6 +286,7 @@ func _case(name: String, title: String, seconds: float, step := Callable(), extr
 	case_end = Time.get_ticks_msec()
 	c.setup_s = setup_s
 	c.cold_max_ms = warm.ms.max if warm.get("frames", 0) > 0 else 0.0 # худший кадр прогрева: шейдеры и первая догрузка
+	c.cold_draw_pipelines = warm.get("draw_pipelines", 0)
 	c.name = name
 	c.title = title
 	c.group = name.get_slice(".", 0)
@@ -898,6 +924,9 @@ func _group_world() -> void:
 	_memory("after_free", "Мир выгружен")
 	if "--cycles" in args or _wanted("world.reload"):
 		await _reload(seed_text, size)
+	main.queue_free()
+	main = null
+	await _frames(5)
 
 
 ## Готовые слои этого мира из других папок кэша, если своих ещё нет: чтение чужого кэша, запись только в свой
@@ -993,26 +1022,47 @@ func _brake(t: float, _dt: float) -> void:
 func _travel(v: Dictionary) -> void:
 	game.paused = false
 	main.hud.visible = true
+	var from_map := "--travel-from-map" in args
+	var atlas_open_ms := 0.0
+	if from_map:
+		var open_tick := Time.get_ticks_usec()
+		game.toggle_map()
+		if not game.show_map:
+			report.failed.append("атлас не открылся перед быстрым перемещением")
+		# Игрок сначала видит карту, затем выбирает на ней место.
+		for frame in 8:
+			await process_frame
+			var now := Time.get_ticks_usec()
+			atlas_open_ms = maxf(atlas_open_ms, (now - open_tick) / 1000.0)
+			open_tick = now
 	var place := {kind = "peak", name = "стресс-тест", x = v.target.x / Dev.TILE, y = v.target.z / Dev.TILE}
 	var before := Vector2(game.player.x, game.player.z)
 	var t0 := Time.get_ticks_usec()
 	var worst := 0.0
+	var worst_phase := ""
 	var last := t0
 	game.travel_to(place)
 	var frames := 0
 	while game.travel_active() and Time.get_ticks_usec() - t0 < 20000000:
+		var phase := "prepare" if game._travel_task != -1 else "publish"
 		await process_frame
 		beat = Time.get_ticks_msec()
 		var now := Time.get_ticks_usec()
-		worst = maxf(worst, (now - last) / 1000.0)
+		var elapsed := (now - last) / 1000.0
+		if elapsed > worst:
+			worst = elapsed
+			worst_phase = phase if game.travel_active() else "arrive"
 		last = now
 		frames += 1
 	var travel_s := snappedf((Time.get_ticks_usec() - t0) / 1000000.0, 0.01)
 	var moved := before.distance_to(Vector2(game.player.x, game.player.z)) > 1.0
 	await _case("world.after_travel", "Мир: первые 2 с после быстрого перемещения", HOLD, Callable(),
-		{travel_s = travel_s, travel_worst_ms = snappedf(worst, 0.1), travel_frames = frames, travel_moved = moved})
+		{travel_s = travel_s, travel_worst_ms = snappedf(worst, 0.1), travel_peak_phase = worst_phase,
+		travel_frames = frames, travel_moved = moved, atlas_open_ms = snappedf(atlas_open_ms, 0.1)})
 	if not moved:
 		report.failed.append("быстрое перемещение не сработало (место недоступно)")
+	if from_map and (game.show_map or root.disable_3d):
+		report.failed.append("при прибытии атлас не закрылся или 3D не включилось")
 	game.paused = true
 	main.hud.visible = false
 

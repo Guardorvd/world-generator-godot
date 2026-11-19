@@ -87,6 +87,21 @@ func run() -> void:
 		ticks += 1
 	check(line._search_task == -1 and not line.path.is_empty() and line.path[-1].distance_to(Vector2(40,100)) < 0.01, "background route published")
 	check(line.roads._heights == h, "accepted path validates against live terrain")
+	var eye := Vector3(from.x, h.ground_at(from.x, from.y), from.y)
+	line.update_line(eye, 0.25, true)
+	check(line._paint_task != -1 and line.mesh == null, "visible route validation and geometry run on a worker")
+	while line._paint_task != -1:
+		await process_frame
+		line._poll_paint(eye, true)
+	check(line.mesh != null, "render thread receives the prepared route mesh")
+	line._painted_at = Vector3.INF
+	line._timer = 0.0
+	line.update_line(eye, 0.25, true)
+	line.set_goal({}, from)
+	while line._paint_task != -1:
+		await process_frame
+		line._poll_paint(eye, true)
+	check(line.mesh == null, "clearing a goal discards geometry from the previous route")
 	line.set_goal({kind="marker",x=50.0,y=50.0}, from,h.ground_at(from.x,from.y))
 	line.set_goal({},from)
 	while line._search_task != -1:

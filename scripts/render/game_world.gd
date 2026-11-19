@@ -91,7 +91,7 @@ var terrain_stream: PlanTerrain
 var _water_streams: Array[PlanTerrain] = []
 var chunk_source: RefCounted
 var _travel_task := -1
-var _travel_waiting := false # перемещение ждёт фоновые задачи растительности (кадры идут, слой не обновляется)
+var _travel_waiting := false # во время подготовки и передачи чанков физика и обычный стриминг остановлены
 var _water_turn := 0
 var _resource_before := {}
 var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
@@ -533,7 +533,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		services.resource_profile.save()
 
 
-func _update_water(x: float, z: float, force := false, allow_apply := true, near := PlanTerrain.RADIUS) -> bool:
+func _update_water(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
 	var uploaded := false
 	for offset in _water_streams.size():
 		var stream := _water_streams[(_water_turn + offset) % _water_streams.size()]
@@ -882,11 +882,16 @@ func travel_to(place: Dictionary) -> void:
 	var from_board := _settlement_open()
 	_set_photo(false)
 	_close_settlement(false)
+	_travel_waiting = true
+	while heights.obstacles.busy():
+		await get_tree().process_frame
+		if not is_inside_tree() or is_queued_for_deletion(): return
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	var arriving := PlayerState.arrive(world, heights, place)
 	if arriving == null:
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
+		_travel_waiting = false
 		_finish_travel("Рядом с местом прибытия не найдено безопасной точки", from_board, &"warning")
 		return
 	if chunk_source != null:
@@ -894,18 +899,13 @@ func travel_to(place: Dictionary) -> void:
 		services.controls.read_bike_body(bike, false)
 		_dragging = false
 		audio.set_paused(true)
-		if not await _travel_load(Vector2(arriving.x, arriving.z)): return
-	var destination := Vector3(arriving.x, arriving.feet, arriving.z)
-	_travel_publish(destination)
+	if not await _travel_load(Vector3(arriving.x, arriving.feet, arriving.z)): return
 	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	var arrival_yaw := PlayerState.arrival_heading(place, Vector2(arriving.x, arriving.z), yaw)
 	var parked := BikeRide.park_near(arriving, arrival_yaw, world, heights)
 	if parked == null or not safe_position(arriving.x, arriving.z, arriving.feet):
 		var origin := Vector3(player.x, player.feet, player.z)
-		# 14.11: возврат той же фоновой задачей, что и перенос: синхронные force_terrain/force_vegetation здесь
-		# давали один кадр 7–8 с (стресс-тест, место прибытия без места для велосипеда)
-		if chunk_source != null and not await _travel_load(Vector2(origin.x, origin.z)): return
-		_travel_publish(origin)
+		if not await _travel_load(origin): return
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 		_finish_travel("Рядом с местом прибытия нет свободного места для игрока и велосипеда", from_board, &"warning")
 		return
@@ -920,29 +920,32 @@ func travel_to(place: Dictionary) -> void:
 	_trauma = 0.0
 	_snap()
 	bike_view.draw(1.0)
-	if world.outer != null:
-		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
+	_travel_waiting = false # карта закрывается только после завершения перехода
 	if show_map:
 		toggle_map()
 	_finish_travel("Вы переместились: «%s»" % place.name, from_board, &"discovery")
 
 
 func _finish_travel(message: String, from_board: bool, kind: StringName = &"info") -> void:
+	_travel_waiting = false
 	if from_board and not paused and not show_map:
 		capture_mouse()
 	audio.set_paused(paused)
 	hud.toast_now(message, kind)
 
 
-## Рельеф, вода и растительность вокруг at — в фоновой задаче, кадры идут. false — мир закрыт во время ожидания.
-func _travel_load(at: Vector2) -> bool:
-	_travel_waiting = true
+## Рельеф, вода и растительность готовятся в фоне и передаются порциями. false — мир закрыт во время ожидания.
+func _travel_load(destination: Vector3) -> bool:
+	if chunk_source == null:
+		stream_coordinator.force_terrain(destination, NEAR)
+		stream_coordinator.force_vegetation(destination)
+		return true
+	var at := Vector2(destination.x, destination.z)
 	while vegetation.busy():
 		await get_tree().process_frame
 		if not is_inside_tree() or is_queued_for_deletion():
 			_travel_waiting = false
 			return false
-	_travel_waiting = false
 	var source := chunk_source
 	# 15.1: деревья, трава и подлесок места прибытия считаются в той же фоновой задаче (было 8–10 с без кадров)
 	var layer := vegetation
@@ -956,17 +959,41 @@ func _travel_load(at: Vector2) -> bool:
 		if not is_inside_tree() or is_queued_for_deletion(): return false
 	WorkerThreadPool.wait_for_task_completion(_travel_task)
 	_travel_task = -1
+
+	var layers: Array[PlanTerrain] = [terrain_stream]
+	layers.append_array(_water_streams)
+	for layer_stream: PlanTerrain in layers:
+		layer_stream.checked_at = Vector2.INF
+	var outdoor_keys: Array[Vector2i] = []
+	if outer != null:
+		outdoor_keys = outer.arrival_chunks(at)
+		outer.recheck()
+	vegetation.travel_prepare_present()
+	var budget := stream_coordinator.frame_budget
+	while true:
+		await get_tree().process_frame
+		if not is_inside_tree() or is_queued_for_deletion(): return false
+		budget.deadline_usec = Time.get_ticks_usec() + stream_coordinator.publication_budget_us
+		var uploaded := false
+		var ready := true
+		for layer_stream: PlanTerrain in layers:
+			if not layer_stream.arrival_ready(at, NEAR):
+				uploaded = layer_stream.update(at.x, at.y, false, not uploaded, NEAR) or uploaded
+				ready = ready and layer_stream.arrival_ready(at, NEAR)
+		if outer != null and not outer.arrival_ready(outdoor_keys):
+			uploaded = outer.update(at.x, at.y, not uploaded, true) or uploaded
+			ready = ready and outer.arrival_ready(outdoor_keys)
+		var finished := ready and not uploaded and vegetation.travel_present(at, budget.deadline_usec)
+		budget.deadline_usec = 0
+		if finished: break
+
+	chunk_source.finish_startup()
+	vegetation.travel_end(at)
+	for layer_stream: PlanTerrain in layers:
+		layer_stream.checked_at = Vector2.INF # штатная очередь выгрузит узлы старого места
+	if outer != null:
+		outer.recheck()
 	return true
-
-
-## Показать подготовленное _travel_load (или без ChunkSource — построить синхронно) вокруг точки.
-func _travel_publish(at: Vector3) -> void:
-	stream_coordinator.force_terrain(at, NEAR)
-	if chunk_source != null:
-		chunk_source.finish_startup()
-		vegetation.travel_end(at.x, at.z)
-	else:
-		stream_coordinator.force_vegetation(at)
 
 
 func _placing_bike() -> bool:
@@ -1410,21 +1437,25 @@ func _process(delta: float) -> void:
 		crash.draw()
 	else:
 		bike_view.draw(alpha, summary)
+	t0 = _tick_mark("frame_bike_view", t0)
 	_update_camera(alpha, delta)
 	_update_bike_placement(delta)
 	if _speed_wind != null:
 		_speed_wind.update_effect(_speed_rush, delta)
 	if _opening:
 		_draw_opening(alpha)
+	t0 = _tick_mark("frame_camera", t0)
 	if navigation_line != null:
 		var navigating := not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike() and not _settlement_open()
 		navigation_line.update_line(pos, delta, navigating, hud.navigation_visible())
+		t0 = _tick_mark("frame_route", t0)
 		if navigation_line.route_revision != _route_revision:
 			_route_revision = navigation_line.route_revision
 			hud.minimap.set_route(navigation_line.path, navigation_line._road_first, navigation_line._road_last) # маршрут подсвечен и на мини-карте
 		if navigating and navigation_line.status != _navigation_status:
 			_navigation_status = navigation_line.status
 			if _navigation_status != "": hud.toast_now(_navigation_status)
+	t0 = _tick_mark("frame_route_ui", t0)
 	if place_names != null:
 		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)
 	if _bag != null and _bag.visible:

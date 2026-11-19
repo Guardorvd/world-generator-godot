@@ -26,6 +26,8 @@ var _palette := PackedColorArray()
 var _nodes := {}         # номер куска -> MeshInstance3D (или null, если в куске нечего рисовать)
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
+var _evict_pending: Array[Vector2i] = []
+var _crown_wait := {}
 var _checked_at := Vector2.INF
 var _redo: Array[Vector2i] = []   # 13.9: загруженные куски закреплённой области, пересчитать поверх старых
 var _stale := {}                  # куски, чей расчёт начат до закрепления: после него пересчитать снова
@@ -74,7 +76,7 @@ func preload_around(x: float, z: float, radius: float = RADIUS) -> void:
 
 
 ## Каждый кадр: забрать готовые куски, выгрузить дальние, запустить расчёт ближайших недостающих
-func update(x: float, z: float, allow_apply: bool = true) -> bool:
+func update(x: float, z: float, allow_apply: bool = true, keep_current := false) -> bool:
 	if not _within_frame_budget():
 		return false
 	var applied := false
@@ -95,7 +97,7 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 		# Публикация инвалидирует незавершённые задачи этой клетки. Свою уже забрали:
 		# иначе готовый кусок помечает сам себя устаревшим и пересобирается бесконечно.
 		if not completed.is_empty():
-			_add(done, completed)
+			_add(done, completed, true)
 			applied = true
 		if _stale.has(done):
 			_stale.erase(done)
@@ -108,12 +110,11 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 		return applied
 	if Vector2(x, z).distance_to(_checked_at) > RECHECK:
 		_checked_at = Vector2(x, z)
-		for key: Vector2i in _nodes.keys():
-			if _center(key).distance_to(Vector2(x, z)) > DROP:
-				if _nodes[key] != null:
-					_nodes[key].queue_free()
-				_nodes.erase(key)
-				land.chunks.erase(key)
+		if not keep_current:
+			_evict_pending.clear()
+			for key: Vector2i in _nodes:
+				if _center(key).distance_to(Vector2(x, z)) > DROP:
+					_evict_pending.append(key)
 		_queue.clear()
 		for key: Vector2i in _wanted(x, z):
 			if not _nodes.has(key) and not _tasks.has(key):
@@ -134,7 +135,38 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 		# низкий приоритет: растительность и кадр важнее дальнего рельефа
 		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
 		_tasks[key] = {id = id, out = out}
+	if not keep_current and allow_apply and not applied and not _crown_wait.is_empty() and _within_frame_budget():
+		var key: Vector2i = _crown_wait.keys()[0]
+		var crowns: Dictionary = _crown_wait[key]
+		_crown_wait.erase(key)
+		FarForest.attach(_nodes[key], crowns, Vector2.ZERO, true)
+		applied = true
+	if not keep_current and allow_apply and not applied and not _evict_pending.is_empty() and _within_frame_budget():
+		var key: Vector2i = _evict_pending.pop_back()
+		if _nodes.has(key) and _center(key).distance_to(Vector2(x, z)) > DROP:
+			if _nodes[key] != null:
+				_nodes[key].hide()
+				_nodes[key].queue_free()
+			_nodes.erase(key)
+			_crown_wait.erase(key)
+			land.chunks.erase(key)
+			applied = true
 	return applied
+
+
+func arrival_chunks(p: Vector2) -> Array[Vector2i]:
+	return _wanted(p.x, p.y, C * TILE * 0.5)
+
+
+func arrival_ready(keys: Array[Vector2i]) -> bool:
+	for key in keys:
+		if not _nodes.has(key):
+			return false
+	return true
+
+
+func recheck() -> void:
+	_checked_at = Vector2.INF
 
 
 func _within_frame_budget() -> bool:
@@ -203,13 +235,16 @@ func _center(key: Vector2i) -> Vector2:
 	return (Vector2(key) + Vector2(0.5, 0.5)) * C * TILE
 
 
-func _add(key: Vector2i, built: Dictionary) -> void:
-	var node := stage_chunk(key, built)
+func _add(key: Vector2i, built: Dictionary, defer_crowns := false) -> void:
+	var node := stage_chunk(key, built, not defer_crowns)
 	publish_chunks({key: built}, {key: node})
+	if defer_crowns and node != null and not built.get("crowns", {}).is_empty():
+		_crown_wait[key] = built.crowns
 
 
 func publish_chunks(chunks: Dictionary, nodes: Dictionary) -> void:
 	for key: Vector2i in chunks:
+		_crown_wait.erase(key)
 		if _nodes.get(key) != null:
 			_nodes[key].visible = false
 			_nodes[key].queue_free()
@@ -219,7 +254,7 @@ func publish_chunks(chunks: Dictionary, nodes: Dictionary) -> void:
 		if _tasks.has(key): _stale[key] = true
 
 
-func stage_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
+func stage_chunk(key: Vector2i, built: Dictionary, attach_crowns := true) -> MeshInstance3D:
 	var mi: MeshInstance3D = null
 	if not built.arrays.is_empty():
 		var mesh := ArrayMesh.new()
@@ -235,9 +270,10 @@ func stage_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
 		mi.visibility_range_end_margin = RECHECK
 		# Terrain must occlude sunlight too; the directional shadow frustum culls distant chunks.
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
-		add_child(mi)
-		FarForest.attach(mi, built.get("crowns", {}), Vector2.ZERO, true)
 		mi.visible = false
+		add_child(mi)
+		if attach_crowns:
+			FarForest.attach(mi, built.get("crowns", {}), Vector2.ZERO, true)
 	return mi
 
 

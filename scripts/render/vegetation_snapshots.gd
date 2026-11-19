@@ -111,7 +111,7 @@ func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, r
 	return {buffer = result, count = result.size() / STRIDE, bounds = box if have_bounds else AABB(), changes = changes, deadline = deadline, base_deadline = deadline}
 
 
-## Background timestamps are provisional; commit corrects changed rows to their actual upload time.
+## Stamp changed rows with the actual upload time.
 func stamp(frame: Dictionary, now: float) -> void:
 	var result: PackedFloat32Array = frame.buffer
 	var changes: PackedFloat64Array = frame.changes
@@ -144,8 +144,7 @@ func stamp(frame: Dictionary, now: float) -> void:
 
 
 func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
-	# Background completion is only an estimate; a delayed group starts/reverses its
-	# fade when actually uploaded. The native batch keeps this correction off the GDScript hot loop.
+	# A queued group starts or reverses its fade when its buffer reaches the GPU.
 	if frame.get("stamped_at", -INF) != now:
 		stamp(frame, now)
 	displayed[group] = frame.buffer

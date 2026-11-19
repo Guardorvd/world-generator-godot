@@ -48,6 +48,8 @@ var _cards_ready := false
 var _has_active_saves := false
 var _pending_save := {}
 var _save_elapsed := 0.0
+var _auto_save_task := -1
+var _auto_save_result := {}
 var _save_status: Label
 var _load_manual: Button
 var _saved_discoveries := 0
@@ -1004,11 +1006,12 @@ func _process(delta: float) -> void:
 	_flush_settings()
 	if _backdrop_mode == "live" and get_window().mode != Window.MODE_MINIMIZED:
 		_animate_menu(delta)
-	if game != null and not busy and not game.paused and not game.travel_active():
+	if _auto_save_task != -1 and WorkerThreadPool.is_task_completed(_auto_save_task):
+		_finish_auto_save()
+	if _progress_enabled and game != null and not busy and not game.paused and not game.travel_active():
 		_save_elapsed += delta
-		if _save_elapsed >= 60.0 or hud.map_place_count() != _saved_discoveries:
-			_save_elapsed = 0.0
-			_save_current()
+		if _auto_save_task == -1 and (_save_elapsed >= 60.0 or hud.map_place_count() != _saved_discoveries):
+			_queue_auto_save()
 	if busy:
 		var seconds := (Time.get_ticks_msec() - _load_started_ms) / 1000
 		if seconds != _load_elapsed:
@@ -1343,9 +1346,37 @@ func _has_save(seed_text: String) -> bool:
 func _save_current(slot := "auto") -> bool:
 	if game == null or game.quests == null or not _progress_enabled:
 		return true
+	# Перед выходом или сменой мира новая запись должна идти после фоновой записи того же слота.
+	_finish_auto_save(false)
 	var err := Saves.write_slot(game.save_state(), slot)
 	if err == OK:
 		_saved_discoveries = hud.map_place_count()
+	return _report_save(err, slot)
+
+
+func _queue_auto_save() -> void:
+	var state: Dictionary = game.save_state()
+	var result := {discoveries = hud.map_place_count(), error = ERR_BUSY}
+	_auto_save_result = result
+	_save_elapsed = 0.0
+	_auto_save_task = WorkerThreadPool.add_task(func() -> void:
+		result.error = Saves.write_slot(state), false, "Автосохранение")
+
+
+func _finish_auto_save(report := true) -> void:
+	if _auto_save_task == -1:
+		return
+	WorkerThreadPool.wait_for_task_completion(_auto_save_task)
+	_auto_save_task = -1
+	var err: Error = _auto_save_result.error
+	if err == OK:
+		_saved_discoveries = _auto_save_result.discoveries
+	_auto_save_result = {}
+	if report:
+		_report_save(err, "auto")
+
+
+func _report_save(err: Error, slot: String) -> bool:
 	_save_status.text = ("Ручное сохранение записано" if slot == "manual" else "Автосохранение записано") if err == OK else "Ошибка сохранения: " + error_string(err)
 	if err != OK:
 		_message("Не удалось сохранить", "Прогресс остаётся в текущей игре. Освободите место и повторите сохранение.\n" + error_string(err))
@@ -1454,6 +1485,7 @@ func _fill_controls() -> void:
 
 func _exit_tree() -> void:
 	_backdrop_epoch += 1
+	_finish_auto_save(false)
 	if display_options != null:
 		display_options.shutdown()
 	if gen_thread != null and gen_thread.is_started():

@@ -30,6 +30,7 @@ func run() -> void:
 	await _test_cancellation()
 	_test_pool_and_slices()
 	_test_deadlines()
+	_test_arrival()
 	_test_carpet_publication()
 	print("streaming_stutter: ", checks, " checks, ", failures, " failures")
 	quit(1 if failures else 0)
@@ -174,17 +175,45 @@ func _test_deadlines() -> void:
 	check(within_budget.update(Vector3.ZERO) == -1, "normal-priority region publication consumes the decor slot")
 
 
+func _test_arrival() -> void:
+	var terrain := PlanTerrain.new()
+	root.add_child(terrain)
+	var mesh := WaterBuilder._arrays(PackedVector3Array([Vector3.ZERO, Vector3.RIGHT, Vector3.FORWARD]), PackedInt32Array([0, 1, 2]))
+	terrain.chunks = {Vector2i.ZERO: mesh, Vector2i(1, 0): mesh, Vector2i(2, 0): mesh}
+	var at := Vector2(250, 30)
+	var near := 32.0
+	check(not terrain.arrival_ready(at, near), "arrival waits for its first demand scan")
+	check(terrain.update(at.x, at.y, false, true, near) and terrain.nodes.size() == 1 and not terrain.arrival_ready(at, near),
+		"arrival uploads at most one terrain chunk per grant")
+	check(terrain.update(at.x, at.y, false, true, near) and terrain.nodes.size() == 2 and terrain.arrival_ready(at, near),
+		"arrival can complete with distant geometry still queued")
+	check(terrain.update(at.x, at.y) and terrain.nodes.size() == 3, "normal streaming resumes the distant queue")
+	terrain.free()
+
+
 func _test_carpet_publication() -> void:
 	var carpet := Carpet.new()
+	carpet.layer = Node3D.new()
+	root.add_child(carpet.layer)
 	carpet._last = Vector2.ZERO
 	carpet._road_revision = 1
-	carpet._out = [{}, {}, {}, {}]
-	carpet._out_n = PackedInt32Array([1, 2, 3, 4])
-	for i in 4:
-		carpet.layers.append({n = 0, nodes = {}})
+	var near := {}
+	var far := {}
+	var buffer := PackedFloat32Array()
+	buffer.resize(Carpet.MIN_CAPACITY * Carpet.STRIDE)
+	for x in Carpet.SECTORS_PER_SLICE + 1:
+		var key := Vector2i(x, 0)
+		near[key] = {buf = buffer, n = 1, low = Vector3.ZERO, high = Vector3.ONE}
+		far[key] = {buf = buffer, n = 2, low = Vector3.ZERO, high = Vector3.ONE}
+	carpet._out = [near, far]
+	for i in 2:
+		carpet.layers.append({n = 0, nodes = {}, pool = [], mesh = BoxMesh.new(), mat = null, name = "Carpet%d" % i})
 	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false) and carpet.count == 0,
 		"carpet holds completed buffers without an upload grant")
-	check(carpet.update(Vector2.ZERO, 0.01, 1) and carpet.count == 3 and not carpet._out.is_empty(),
-		"one carpet grant presents one near/far pair")
-	check(carpet.update(Vector2.ZERO, 0.01, 1) and carpet.count == 10 and carpet._out.is_empty(),
-		"the next grant publishes the remaining pair")
+	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, true, Time.get_ticks_usec() - 1) and carpet.count == 0,
+		"carpet leaves all sectors pending when the common deadline has passed")
+	check(carpet._present_next(Time.get_ticks_usec() + 1000000) and carpet.count == 3 * Carpet.SECTORS_PER_SLICE and not carpet._out.is_empty(),
+		"one carpet grant publishes a bounded number of sectors with both LODs")
+	check(carpet._present_next(Time.get_ticks_usec() + 1000000) and carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty(),
+		"the next grant resumes the snapshot without repeating a sector")
+	carpet.layer.free()

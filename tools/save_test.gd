@@ -5,6 +5,14 @@ const Quests = preload("res://scripts/game/quests.gd")
 const Main = preload("res://scripts/ui/main.gd")
 var failed := 0
 
+class SaveFixture extends Node:
+	var quests := RefCounted.new()
+	var state: Dictionary
+
+	func save_state() -> Dictionary:
+		return state.duplicate(true)
+
+
 func check(ok: bool, label: String) -> void:
 	print(("OK " if ok else "FAIL ") + label)
 	if not ok:
@@ -80,6 +88,7 @@ func run() -> void:
 		loading = main.get_node("%Loading"), pause = main.get_node("%Pause"), settings = main.get_node("%Settings")}
 	main._setup_save_controls()
 	check(main._load_manual != null and main._save_status != null, "menu save controls created")
+	_test_auto_save_order(main, state)
 	main._show_seed_tab("saved")
 	main._pick_seed(state.seed)
 	main._show("menu")
@@ -99,7 +108,7 @@ func run() -> void:
 		await integration(main)
 	main.queue_free()
 	await process_frame
-	for seed_text: String in ["save-test", "another-world", "Север-1234"]:
+	for seed_text: String in ["save-test", "another-world", "auto-order", "Север-1234"]:
 		for slot: String in ["auto", "manual"]:
 			var path := Saves.path_for(seed_text, slot)
 			for suffix: String in ["", ".bak"]:
@@ -108,6 +117,27 @@ func run() -> void:
 	DirAccess.remove_absolute(Saves.dir)
 	print("SAVE TEST failures: ", failed)
 	quit(1 if failed else 0)
+
+
+func _test_auto_save_order(main: Node, state: Dictionary) -> void:
+	var fixture := SaveFixture.new()
+	main.add_child(fixture)
+	fixture.state = state.duplicate(true)
+	fixture.state.seed = "auto-order"
+	fixture.state.saved_at = 300
+	main.game = fixture
+	main._progress_enabled = true
+	main._queue_auto_save()
+	check(main._auto_save_task != -1, "autosave hands the snapshot to a worker")
+	fixture.state.saved_at = 400
+	check(main._save_current() and main._auto_save_task == -1 and Saves.read_slot("auto-order").data.saved_at == 400,
+		"immediate save drains autosave before writing the newer snapshot")
+	var backup := Saves._read_file(Saves.path_for("auto-order") + ".bak")
+	check(backup.get("saved_at") == 300, "background save keeps the older snapshot as backup")
+	main.game = null
+	main._progress_enabled = false
+	fixture.free()
+
 
 func _test_marker_save(state: Dictionary) -> void:
 	var marker := state.duplicate(true)

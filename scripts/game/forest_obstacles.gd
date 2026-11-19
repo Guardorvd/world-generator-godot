@@ -88,6 +88,10 @@ func update(px: float, pz: float, details: PackedFloat32Array, version: int, for
 	_adopt(job)
 
 
+func busy() -> bool:
+	return _task != -1 and not WorkerThreadPool.is_task_completed(_task)
+
+
 ## Дожидается пересборки. Снимок можно принять, пока актуальны подлесок и постоянный слой.
 func finish(adopt := true) -> void:
 	if _task == -1:

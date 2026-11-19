@@ -16,6 +16,7 @@ const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолж�
 const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
+const ARRIVAL_TREE_RADIUS := 128.0
 const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO] # виды без ствола на дальнем уровне
 const FAR_FORM_R := 24.0 # м: дальше от центра раскладки мох, папоротник, корни и камни рисуются упрощённой формой
 ## 15.0: на самом дальнем уровне все силуэты вида одного чанка рисуются одним узлом с мешом первого силуэта
@@ -166,6 +167,7 @@ var _present: Array[int] = [] # группы готового снимка (-1 �
 var _last_contact_group := -1
 var _queued := {}
 var _tree_target := Vector2.INF
+var _tree_scan_pending := false
 var _pending: Array = [] # готовые чанки, ближайшие в конце
 var _built: Array = []   # пишет задача, читаем после wait_for_task_completion
 var _loaded := {}       # включая пустые чанки
@@ -679,6 +681,8 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_fill_lead = Vector2.ZERO
 		_drop(p)
 		last_trees = p
+		_tree_target = p
+		_tree_scan_pending = false
 		last_fill = p
 		_fill(px, pz, _wanted(p), carpet.build_now.bind(p, _road_revision) if carpet != null else Callable())
 		for built: Dictionary in _built:
@@ -692,18 +696,21 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		var may_work: bool = frame_budget == null or frame_budget.allows_work()
 		var details_ready := not _present.is_empty() or (_task != -1 and WorkerThreadPool.is_task_completed(_task))
 		var yield_to_vegetation := _carpet_uploaded_last and (details_ready or not _pending.is_empty())
-		uploaded = carpet.update(p, dt, _road_revision, may_work, allow_upload and not yield_to_vegetation)
+		uploaded = carpet.update(p, dt, _road_revision, may_work, allow_upload and not yield_to_vegetation,
+			frame_budget.deadline_usec if frame_budget != null else 0)
 		if allow_upload and may_work:
 			_carpet_uploaded_last = uploaded
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
 		WorkerThreadPool.wait_for_task_completion(_tree_task)
 		_tree_task = -1
-		last_trees = Vector2.INF
+		var pending_before := _pending.size()
 		for built: Dictionary in _built:
 			if _distance(built.chunk, p) <= load_radius + StreamPolicy.MAX_LEAD:
 				_pending.append(built)
 			else:
 				_queued.erase(built.chunk)
+		if _pending.size() > pending_before:
+			_pending = _by_distance(_pending, p)
 		_built = []
 	phase_started = _record_phase(1, phase_started)
 	if allow_upload and not uploaded and (frame_budget == null or frame_budget.allows_work()) and _task != -1 and WorkerThreadPool.is_task_completed(_task):
@@ -724,6 +731,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	if (frame_budget == null or frame_budget.allows_work()) and (last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK):
 		last_trees = p
 		_tree_target = p + lead
+		_tree_scan_pending = true
 		_drop(p)
 		var kept: Array = []
 		for built: Dictionary in _pending:
@@ -733,12 +741,14 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 				_discard_partial(built, true) # 15.1: за дальностью видимости — без затухания (перезапись буферов стоила ~10 мс)
 				_queued.erase(built.chunk)
 		_pending = _by_distance(kept, p)
-		if _tree_task == -1:
-			var missing := _wanted(p, p + lead)
-			if not missing.is_empty():
-				for chunk in missing:
-					_queued[chunk] = true
-				_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
+	# Завершение задачи обновляет очередь готового. Повторный обход мира нужен только после сдвига цели.
+	if _tree_scan_pending and _tree_task == -1 and (frame_budget == null or frame_budget.allows_work()):
+		_tree_scan_pending = false
+		var missing := _wanted(p, p + lead)
+		if not missing.is_empty():
+			for chunk in missing:
+				_queued[chunk] = true
+			_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
 	phase_started = _record_phase(3, phase_started)
 	if _task == -1 and _present.is_empty() and _refresh_details:
 		for box: Rect2 in _history_cuts:
@@ -767,13 +777,13 @@ func busy() -> bool:
 	return carpet != null and carpet.busy()
 
 
-## 15.1: быстрое перемещение без замирания. То же, что update(force), но расчёт — в фоне, пока игра рисует кадры:
-## travel_begin (главный поток) -> travel_fill (поток пула, из задачи перемещения) -> travel_end (главный поток).
-## Пока идёт перемещение, GameWorld._process не зовёт update, поэтому состояние слоя трогает только этот путь.
+## При перемещении обычный update остановлен: сначала готовим снимок в фоне,
+## затем отдаём ближайшие деревья и подлесок теми же порциями, что при езде.
 func travel_begin(px: float, pz: float) -> Array[Vector2i]:
 	_finish()
 	if carpet != null:
-		carpet.clear()
+		carpet.finish()
+		carpet.invalidate_position()
 	_present.clear()
 	_clear_pending()
 	_built.clear()
@@ -787,20 +797,34 @@ func travel_fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
 	_fill(px, pz, missing)
 
 
-func travel_end(px: float, pz: float) -> void:
-	var p := Vector2(px, pz)
+func travel_prepare_present() -> void:
+	_pending = _built
+	_built = []
+	for built: Dictionary in _pending:
+		_queued[built.chunk] = true
+	_begin_present()
+
+
+func travel_present(p: Vector2, deadline_usec: int) -> bool:
+	# Дальние чанки остаются в очереди и догружаются по ходу игры.
+	for slice in 3:
+		if Time.get_ticks_usec() >= deadline_usec:
+			return false
+		if _pending.is_empty() or _distance(_pending.back().chunk, p) > ARRIVAL_TREE_RADIUS:
+			_present_next(deadline_usec, true)
+			return _present.is_empty()
+		_upload_next(true, deadline_usec)
+	return false
+
+
+func travel_end(p: Vector2) -> void:
 	stream.sample(p, 0.0, true)
 	RenderingServer.global_shader_parameter_set("veg_center", p)
 	RenderingServer.global_shader_parameter_set("vegetation_clock", stream.clock)
-	_clean_retired()
-	_free_trash(0)
-	_drop(p) # дальние от места прибытия чанки — в корзину; ближние и уже собранные остаются
-	last_trees = p
+	last_trees = Vector2.INF # старые чанки уйдут через обычную очередь выгрузки
 	last_fill = p
-	for built: Dictionary in _built:
-		_apply_chunk(built)
-	_built.clear()
-	_apply_grass(true)
+	_job_lead = Vector2.ZERO
+	_accept_contacts()
 	if carpet != null:
 		carpet.stream.sample(p, 0.0, true) # ковёр досчитает фоновая задача первого же кадра
 	_refresh_details = false
@@ -978,9 +1002,7 @@ func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float
 				var other: Dictionary = understory[peer]
 				other_form = snapshots.form_history(peer, other.buf, other.count)
 		frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate, entry.has_contacts, other_form)
-	var now := clock + (Time.get_ticks_usec() - started) / 1000000.0
 	for group: int in frames:
-		snapshots.stamp(frames[group], now)
 		_fit_capacity(frames[group], _group_mm(group))
 	_detail_frames = frames
 	_detail_seconds = (Time.get_ticks_usec() - started) / 1000000.0
@@ -1400,9 +1422,11 @@ func refresh(rect: Rect2i) -> void:
 	last_trees = Vector2.INF
 
 
-func _upload_next() -> void:
+func _upload_next(immediate := false, deadline_usec := 0) -> void:
 	var built: Dictionary = _pending.back()
-	if _apply_chunk(built, 1, Time.get_ticks_usec() + TREE_UPLOAD_US if frame_budget == null else frame_budget.deadline(TREE_UPLOAD_US)):
+	if deadline_usec == 0:
+		deadline_usec = Time.get_ticks_usec() + TREE_UPLOAD_US if frame_budget == null else frame_budget.deadline(TREE_UPLOAD_US)
+	if _apply_chunk(built, 1, deadline_usec, immediate):
 		_pending.pop_back()
 		_queued.erase(built.chunk)
 
@@ -1436,7 +1460,7 @@ func _discard_partial(built: Dictionary, beyond_range := false) -> void:
 
 
 ## limit = 0 — полный синхронный перенос при появлении игрока; иначе ограниченная порция.
-func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
+func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0, immediate := false) -> bool:
 	var chunk: Vector2i = built.chunk
 	if built.get("epoch", _epoch) < _dirty.get(chunk, -1):
 		_discard_partial(built)
@@ -1495,7 +1519,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				var white_trunk: bool = part == "trunk" and entry.has("tcbuf")
 				var node := _multimesh(levels[level], mat, entry.count, part == "crown" or white_trunk, not small, true, true)
 				node.set_meta("level", level) # уровень LOD для инструментов (stress, forest_scene_perf)
-				if limit > 0:
+				if limit > 0 and not immediate:
 					_reveal_node(node, mat)
 				if level >= FAR_LOD_NO_SHADOW:
 					# Дальний LOD лежит за плавным краем теней солнца: теневой проход его не рисует.
@@ -1509,7 +1533,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					var caster := _multimesh(levels[levels.size() - 1], mat, entry.count, false, true, true, true)
 					caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 					caster.set_meta("level", level) # тень ближнего уровня
-					if limit > 0:
+					if limit > 0 and not immediate:
 						_reveal_node(caster, mat)
 					caster.multimesh.buffer = _tree_buffer(entry.tbuf, false, caster.get_meta("stream_birth", 0.0))
 					caster.multimesh.custom_aabb = entry.bounds
@@ -1524,7 +1548,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					var crown_caster := _multimesh(levels[levels.size() - 1], mat, entry.count, true, true, true, true)
 					crown_caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 					crown_caster.set_meta("level", level)
-					if limit > 0:
+					if limit > 0 and not immediate:
 						_reveal_node(crown_caster, mat)
 					crown_caster.multimesh.buffer = _tree_buffer(entry.cbuf, true, crown_caster.get_meta("stream_birth", 0.0))
 					crown_caster.multimesh.custom_aabb = entry.bounds
@@ -1587,15 +1611,15 @@ func _accept_contacts() -> void:
 
 
 ## deadline_usec = 0 — передать всё оставшееся сразу.
-func _present_next(deadline_usec: int) -> void:
+func _present_next(deadline_usec: int, immediate := false) -> void:
 	while not _present.is_empty() and (deadline_usec == 0 or Time.get_ticks_usec() < deadline_usec):
 		var group: int = _present.pop_front()
-		_present_group(group, false)
+		_present_group(group, immediate)
 		if _far_of.has(group):
 			# Both forms switch to the same snapshot and fade timestamp in this frame.
-			_present_group(_far_of[group], false)
+			_present_group(_far_of[group], immediate)
 		# Even a prepared worker snapshot can spend several frames in this queue.
-		if group == _last_contact_group:
+		if group == _last_contact_group and not immediate:
 			_accept_contacts()
 	if _present.is_empty():
 		_detail_frames.clear()
