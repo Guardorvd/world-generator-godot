@@ -26,6 +26,7 @@ extends RefCounted
 ## голой земли. Не рисуется на воде, на полотне дорог и троп (RoadRefinement.weight_at), на скале без укрытия.
 
 const StreamPolicy := preload("res://scripts/render/vegetation_stream_policy.gd")
+const Snapshots := preload("res://scripts/render/vegetation_snapshots.gd")
 const TILE := GameConfig.TILE
 const STRIDE := 20          # преобразование (12), цвет (4), custom (4) — как у травы
 const SUB := 9              # ячеек на сторону плитки: 4 м / 9 = 0,44 м
@@ -89,17 +90,18 @@ var last_job_ms := 0.0
 var max_job_ms := 0.0
 var tiles_built := 0         # плиток, посчитанных с запуска (замер)
 
-var _tiles := {}             # Vector2i -> Array из KINDS PackedFloat32Array (экземпляры плитки по видам)
+var _tiles := {}             # Vector2i -> { id, full, rear }
 var _tile_y := {}            # Vector2i -> Vector2(мин. и макс. высота)
+var _tile_id := 0
+var _shown := {}             # квадрат и вид -> опубликованные плитки и история обеих форм
+var _cleanup_at := INF
 var _task := -1
 var _last := Vector2.INF
 var _last_lead := Vector2.ZERO
 var _last_forward := Vector2.UP
 var _published_forward := Vector2.INF
 var _started_clock := 0.0
-var _out: Array = []         # результат задачи: на слой — квадраты отсечения {buf, n, low, high}
-var _present_layer := 0
-var _present_sectors: Array[Vector2i] = []
+var _out: Array = []         # изменившиеся пары форм, ближайшие в конце
 var _reset := false
 var _cuts: Array[Rect2] = []
 var _road_revision := -1
@@ -185,6 +187,8 @@ func configure(density_scale: float, range_m: float, flora: Dictionary, use_dire
 	if not _enabled:
 		for entry: Dictionary in layers:
 			_hide_layer(entry)
+		_shown.clear()
+		_cleanup_at = INF
 		count = 0
 	_last = Vector2.INF
 
@@ -216,11 +220,6 @@ func finish() -> void:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 	_out.clear()
-	_present_sectors.clear()
-
-
-func invalidate_position() -> void:
-	_last = Vector2.INF
 
 
 func release() -> void:
@@ -240,6 +239,8 @@ func clear() -> void:
 	finish()
 	_tiles.clear()
 	_tile_y.clear()
+	_shown.clear()
+	_cleanup_at = INF
 	_reset = false
 	_last = Vector2.INF
 	count = 0
@@ -249,8 +250,11 @@ func clear() -> void:
 
 ## Каждый кадр из VegetationLayer.update. Не блокирует: считает фоновая задача, главный поток только
 ## передаёт готовые буферы.
-func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upload := true, deadline_usec := 0) -> bool:
+func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upload := true,
+		deadline_usec := 0, fade_clock := 0.0) -> bool:
 	stream.sample(p, maxf(dt, 0.000001), false)
+	if fade_clock == 0.0:
+		fade_clock = stream.clock
 	if not _enabled:
 		return false
 	var forward := _view_forward() if directional else Vector2.UP
@@ -263,42 +267,57 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true, may_upl
 			return false
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
-		_present_layer = 0
 	if not _out.is_empty():
 		if _last == Vector2.INF or road_revision != _road_revision:
 			_out.clear()
-			_present_sectors.clear()
 		elif may_upload:
 			var until := Time.get_ticks_usec() + UPLOAD_US
 			if deadline_usec > 0:
 				until = mini(until, deadline_usec)
-			return _present_next(until)
+			var uploaded := _present_next(fade_clock, until)
+			if uploaded and _out.is_empty():
+				stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
+			return uploaded
 		else:
 			return false
 	var lead := stream.lead()
 	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
-			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision:
+			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision and fade_clock < _cleanup_at:
 		return false
 	_last_forward = forward
 	_begin(p, lead, road_revision)
-	_task = WorkerThreadPool.add_task(_job.bind(p, lead, forward), true, "Дернина")
+	_task = WorkerThreadPool.add_task(_job.bind(p, lead, forward, fade_clock, false), true, "Дернина")
 	return false
 
 
 ## Сразу, на месте (старт, возрождение): ковёр готов в том же кадре. Дальше — update.
 func build_now(p: Vector2, road_revision: int) -> void:
 	finish()
+	var build := prepare_arrival(p, road_revision, _view_forward())
+	if build.is_valid():
+		build.call()
+		present_arrival(0)
+		finish_arrival()
+
+
+## Возвращает чисто фоновую часть. Узлы и шейдеры обновляются на главном потоке.
+func prepare_arrival(p: Vector2, road_revision: int, forward: Vector2) -> Callable:
 	stream.sample(p, 0.0, true)
 	if not _enabled:
-		return
-	_last_forward = _view_forward() if directional else Vector2.UP
+		return Callable()
+	_last_forward = forward if directional else Vector2.UP
+	_begin(p, Vector2.ZERO, road_revision)
+	return _job.bind(p, Vector2.ZERO, _last_forward, stream.clock, true)
+
+
+func present_arrival(deadline_usec: int) -> bool:
+	_present_next(stream.clock, deadline_usec)
+	return _out.is_empty()
+
+
+func finish_arrival() -> void:
 	if directional:
 		_publish_forward(_last_forward, true)
-	_begin(p, Vector2.ZERO, road_revision)
-	_job(p, Vector2.ZERO, _last_forward)
-	_present_layer = 0
-	while not _out.is_empty():
-		_present_next()
 
 
 func _publish_forward(forward: Vector2, force := false) -> void:
@@ -354,7 +373,9 @@ func kind_counts() -> Array:
 
 
 func _begin(p: Vector2, lead: Vector2, road_revision: int) -> void:
-	if _reset or road_revision != _road_revision:
+	# A committed region already supplies its exact changed rectangle. A revision
+	# without a rectangle still invalidates everything.
+	if _reset or (road_revision != _road_revision and _cuts.is_empty()):
 		_tiles.clear()
 		_tile_y.clear()
 		_reset = false
@@ -375,7 +396,7 @@ func _begin(p: Vector2, lead: Vector2, road_revision: int) -> void:
 
 
 ## Фоновая задача: плитки капсулы, недостающие досчитываются, буферы склеиваются из кусков.
-func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
+func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immediate: bool) -> void:
 	var r := reach()
 	var reach_all := r * (EXTRA_REACH.x if directional else 1.0) + MARGIN
 	var coverage_lead := Vector2(lead.dot(forward), forward.cross(lead))
@@ -402,7 +423,7 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 			if visible:
 				need.append([d, i, j, far, directional and offset.dot(forward) < -tile_pad])
 	need.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
-	var outs: Array = []        # слой -> квадрат -> {buf, n, low, high}
+	var outs: Array = []        # слой -> квадрат -> набор плиток
 	for n in KINDS * 2:
 		outs.append({})
 	var total := 0
@@ -411,14 +432,9 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 	for entry: Array in need:
 		var key := Vector2i(entry[1], entry[2])
 		used[key] = true
-		var tile: Array
-		if _tiles.has(key):
-			tile = _tiles[key]
-		else:
-			tile = _build_tile(key.x, key.y)
-			_tiles[key] = tile
-			tiles_built += 1
-		if tile.is_empty():
+		var tile := _cached_tile(key, entry[4])
+		var parts: Array = tile.rear if entry[4] else tile.full
+		if parts.is_empty():
 			continue
 		var far := 1 if entry[3] else 0
 		var sector := Vector2i(key.x / SECTOR, key.y / SECTOR)
@@ -426,9 +442,7 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 		var tile_low := Vector3(key.x * TILE, y.x, key.y * TILE)
 		var tile_high := Vector3((key.x + 1) * TILE, y.y, (key.y + 1) * TILE)
 		for kind in KINDS:
-			var part: PackedFloat32Array = tile[kind]
-			if entry[4]:
-				part = _thin_rear(part)
+			var part: PackedFloat32Array = parts[kind]
 			var m := part.size() / STRIDE
 			if m == 0:
 				continue
@@ -437,11 +451,11 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 				continue
 			var buckets: Dictionary = outs[kind * 2 + far]
 			if not buckets.has(sector):
-				buckets[sector] = {buf = PackedFloat32Array(), low = tile_low, high = tile_high}
+				buckets[sector] = {parts = [], ids = [], bounds = AABB(tile_low, tile_high - tile_low)}
 			var bucket: Dictionary = buckets[sector]
-			bucket.buf.append_array(part)
-			bucket.low = bucket.low.min(tile_low)
-			bucket.high = bucket.high.max(tile_high)
+			bucket.parts.append(part)
+			bucket.ids.append(tile.id * 2 + int(entry[4]))
+			bucket.bounds = (bucket.bounds as AABB).merge(AABB(tile_low, tile_high - tile_low))
 			total += m
 	if overflow:
 		capped += 1
@@ -453,18 +467,21 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 		if StreamPolicy.distance_to_coverage(Vector2(key.x + 0.5, key.y + 0.5) * TILE, p, lead) > keep_d:
 			_tiles.erase(key)
 			_tile_y.erase(key)
-	# Ёмкость MultiMesh — ступенями (степени двойки): буфер сразу нужного размера
-	for buckets: Dictionary in outs:
-		for sector: Vector2i in buckets:
-			var bucket: Dictionary = buckets[sector]
-			bucket.n = bucket.buf.size() / STRIDE
-			var capacity := MIN_CAPACITY
-			while capacity < bucket.n:
-				capacity *= 2
-			bucket.buf.resize(capacity * STRIDE)
-	_out = outs
+	_prepare_publication(outs, p, lead, fade_clock, immediate)
 	last_job_ms = (Time.get_ticks_usec() - _job_started) / 1000.0
 	max_job_ms = maxf(max_job_ms, last_job_ms)
+
+
+func _cached_tile(key: Vector2i, rear: bool) -> Dictionary:
+	if not _tiles.has(key):
+		_tile_id += 1
+		_tiles[key] = {id = _tile_id, full = _build_tile(key.x, key.y), rear = []}
+		tiles_built += 1
+	var tile: Dictionary = _tiles[key]
+	if rear and tile.rear.is_empty():
+		for part: PackedFloat32Array in tile.full:
+			tile.rear.append(_thin_rear(part))
+	return tile
 
 
 ## Постоянная выборка по зерну куртинки: сзади меньше экземпляров в буфере MultiMesh.
@@ -476,43 +493,101 @@ static func _thin_rear(part: PackedFloat32Array) -> PackedFloat32Array:
 	return kept
 
 
-func _present_next(deadline_usec := 0) -> bool:
+func _prepare_publication(buckets: Array, p: Vector2, lead: Vector2, now: float, immediate: bool) -> void:
+	var pairs := _shown.duplicate()
+	for n in buckets.size():
+		for sector: Vector2i in buckets[n]:
+			var key := Vector3i(sector.x, sector.y, n / 2)
+			if not pairs.has(key):
+				pairs[key] = {ids = [[], []], history = Snapshots.new()}
+	var queue: Array = []
+	for key: Vector3i in pairs:
+		var sector := Vector2i(key.x, key.y)
+		var n := key.z * 2
+		var pair: Dictionary = pairs[key]
+		var near: Dictionary = buckets[n].get(sector, {})
+		var far: Dictionary = buckets[n + 1].get(sector, {})
+		var ids := [near.get("ids", []), far.get("ids", [])]
+		ids[0].sort()
+		ids[1].sort()
+		var history: Snapshots = pair.history
+		if not immediate and ids == pair.ids and not history.cleanup_due(now):
+			continue
+		var sources := [_join_tiles(near), _join_tiles(far)]
+		var frames: Array[Dictionary] = []
+		for lod in 2:
+			var bucket: Dictionary = near if lod == 0 else far
+			var data: PackedFloat32Array = sources[lod]
+			var peer: PackedFloat32Array = sources[1 - lod]
+			var other := {}
+			if not immediate and not peer.is_empty():
+				other = history.form_history(1 - lod, peer, peer.size() / STRIDE)
+			elif not immediate and history.shown.get(1 - lod, 0) > 0 and not data.is_empty():
+				other = history.form_history(1 - lod, peer, 0)
+			var bounds: AABB = bucket.get("bounds", AABB())
+			if not data.is_empty():
+				bounds = bounds.grow(0.9)
+			var frame := history.prepare(lod, data, data.size() / STRIDE, bounds, 0.9, now, immediate, false, other)
+			var capacity := MIN_CAPACITY
+			while capacity < frame.count:
+				capacity *= 2
+			var previous: PackedFloat32Array = history.displayed.get(lod, PackedFloat32Array())
+			var old_capacity := previous.size() / STRIDE
+			if old_capacity >= frame.count and old_capacity <= maxi(MIN_CAPACITY, frame.count * 4):
+				capacity = maxi(MIN_CAPACITY, old_capacity)
+			frame.buffer.resize(capacity * STRIDE if frame.count > 0 else 0)
+			frames.append(frame)
+		var center := (Vector2(sector) + Vector2.ONE * 0.5) * (SECTOR * TILE)
+		# Prefer additions along the rider's path. Expired tails outside the new coverage can wait.
+		var priority := INF if near.is_empty() and far.is_empty() else (
+			StreamPolicy.distance_to_coverage(center, p, lead) + center.distance_to(p) * 0.25)
+		queue.append({key = key, ids = ids, history = history, frames = frames, priority = priority})
+	queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.priority > b.priority)
+	_out = queue
+
+
+static func _join_tiles(bucket: Dictionary) -> PackedFloat32Array:
+	var buffer := PackedFloat32Array()
+	for part: PackedFloat32Array in bucket.get("parts", []):
+		buffer.append_array(part)
+	return buffer
+
+
+func _present_next(now: float, deadline_usec := 0) -> bool:
 	var sectors_done := 0
-	while _present_layer < layers.size():
+	while not _out.is_empty():
 		if deadline_usec > 0 and (sectors_done >= SECTORS_PER_SLICE or Time.get_ticks_usec() >= deadline_usec):
 			return sectors_done > 0
-		if _present_sectors.is_empty():
-			var sectors := {}
-			for n in range(_present_layer, _present_layer + 2):
-				for sector: Vector2i in _out[n]:
-					sectors[sector] = true
-				for sector: Vector2i in layers[n].nodes:
-					sectors[sector] = true
-			_present_sectors.assign(sectors.keys())
-			_present_sectors.reverse()
-		while not _present_sectors.is_empty():
-			if deadline_usec > 0 and (sectors_done >= SECTORS_PER_SLICE or Time.get_ticks_usec() >= deadline_usec):
-				return sectors_done > 0
-			# Обе формы одного квадрата переключаются вместе, в том числе при смене LOD.
-			var sector: Vector2i = _present_sectors.pop_back()
-			_present_sector(_present_layer, sector)
-			_present_sector(_present_layer + 1, sector)
-			sectors_done += 1
-		_present_layer += 2
-	_out.clear()
-	if deadline_usec > 0:
-		stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
+		var pair: Dictionary = _out.pop_back()
+		var key: Vector3i = pair.key
+		var sector := Vector2i(key.x, key.y)
+		var history: Snapshots = pair.history
+		for lod in 2:
+			var frame := history.commit(lod, pair.frames[lod], now)
+			_present_sector(key.z * 2 + lod, sector, frame)
+		if history.shown[0] + history.shown[1] == 0:
+			_shown.erase(key)
+		else:
+			_shown[key] = {ids = pair.ids, history = history}
+			for expires: float in history.deadlines.values():
+				if expires > 0.0:
+					_cleanup_at = minf(_cleanup_at, expires)
+		sectors_done += 1
+	_cleanup_at = INF
+	for pair: Dictionary in _shown.values():
+		for expires: float in pair.history.deadlines.values():
+			if expires > 0.0:
+				_cleanup_at = minf(_cleanup_at, expires)
 	return sectors_done > 0
 
 
-func _present_sector(n: int, sector: Vector2i) -> void:
+func _present_sector(n: int, sector: Vector2i, frame: Dictionary) -> void:
 	var entry: Dictionary = layers[n]
-	var bucket: Variant = _out[n].get(sector)
 	var part: Variant = entry.nodes.get(sector)
 	var previous := 0
 	if part != null:
 		previous = part.mm.visible_instance_count
-	if bucket == null:
+	if frame.count == 0:
 		if part != null:
 			_stash(entry, part)
 			entry.nodes.erase(sector)
@@ -523,16 +598,15 @@ func _present_sector(n: int, sector: Vector2i) -> void:
 		part = _sector_node(entry)
 		entry.nodes[sector] = part
 	var mm: MultiMesh = part.mm
-	var capacity: int = bucket.buf.size() / STRIDE
+	var capacity: int = frame.buffer.size() / STRIDE
 	if mm.instance_count != capacity:
 		mm.visible_instance_count = 0
 		mm.instance_count = capacity
-	mm.buffer = bucket.buf
-	mm.visible_instance_count = bucket.n
-	# Травинки и ветер выходят за точки основания куртинок.
-	mm.custom_aabb = AABB(bucket.low, bucket.high - bucket.low).grow(0.9)
-	entry.n += bucket.n - previous
-	count += bucket.n - previous
+	mm.buffer = frame.buffer
+	mm.visible_instance_count = frame.count
+	mm.custom_aabb = frame.bounds
+	entry.n += frame.count - previous
+	count += frame.count - previous
 
 
 ## Плитка (i, j): куртинки на сетке SUB × SUB с дрожанием, по видам. Пустой массив — травы здесь нет.

@@ -3,9 +3,11 @@ extends RefCounted
 ## INSTANCE_CUSTOM.w: 0 — зрелое растение, +время — появление, −время — уход.
 const STRIDE := 20
 const DURATION := 0.5
+const LIVE_CONTACT := 1.0 # source-only marker in the timestamp column, never sent to the shader
 var displayed := {}
 var shown := {} # число показанных строк: буфер в displayed может быть дополнен до ёмкости MultiMesh
 var deadlines := {}
+var _bounds := {}
 static var allow_fast_stamps := true
 
 static func opacity(stamp: float, now: float) -> float:
@@ -20,6 +22,7 @@ func reset() -> void:
 	displayed.clear()
 	shown.clear()
 	deadlines.clear()
+	_bounds.clear()
 
 func cleanup_due(now: float) -> bool:
 	for deadline: float in deadlines.values():
@@ -32,6 +35,10 @@ func cleanup_due(now: float) -> bool:
 ## Call only when the preparation worker no longer reads displayed history.
 func exclude_rect(box: Rect2) -> void:
 	for group: int in displayed:
+		var bounds: AABB = _bounds[group]
+		var area := Rect2(Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.size.x, bounds.size.z))
+		if area.has_area() and not area.intersects(box):
+			continue
 		var data: PackedFloat32Array = displayed[group]
 		var kept := PackedFloat32Array()
 		for at in range(0, int(shown[group]) * STRIDE, STRIDE):
@@ -40,8 +47,8 @@ func exclude_rect(box: Rect2) -> void:
 		displayed[group] = kept
 		shown[group] = kept.size() / STRIDE
 
-func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false) -> Dictionary:
-	return commit(group, prepare(group, source, count, bounds, radius, now, immediate, instant_arrival), now)
+func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, contact_rows := false) -> Dictionary:
+	return commit(group, prepare(group, source, count, bounds, radius, now, immediate, contact_rows), now)
 
 
 ## Two meshes at the same planting site share the history of the plant.
@@ -58,7 +65,7 @@ func form_history(group: int, source: PackedFloat32Array, count: int) -> Diction
 
 ## Подготовка выполняется фоновым потоком. История неизменна до завершения задачи.
 ## Препятствия видны сразу после передачи группы, когда для неё могут включиться контакты.
-func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false, other_form := {}) -> Dictionary:
+func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, contact_rows := false, other_form := {}) -> Dictionary:
 	var previous: PackedFloat32Array = displayed.get(group, PackedFloat32Array())
 	var rows: int = shown.get(group, previous.size() / STRIDE)
 	var changes := PackedFloat64Array()
@@ -74,7 +81,7 @@ func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, r
 		var id := key(result, at)
 		var old_at: int = old.get(id, -1)
 		var stamp := 0.0
-		if not immediate and not instant_arrival:
+		if not immediate and not (contact_rows and result[at + 19] == LIVE_CONTACT):
 			stamp = previous[old_at + 19] if old_at >= 0 else other_stamps.get(id, INF)
 			if stamp == INF:
 				changes.append_array(PackedFloat64Array([at, 2, 0]))
@@ -120,7 +127,10 @@ func stamp(frame: Dictionary, now: float) -> void:
 		frame.stamped = true
 		frame.stamped_at = now
 		return
-	var fast := Grid.fast_grid() if allow_fast_stamps else null
+	# Interop copies the entire packed buffer. Write sparse changes in place and
+	# reserve the native batch for dense updates where the loop pays for the copy.
+	var use_batch := changes.size() / 3 >= 96 + result.size() / (STRIDE * 8)
+	var fast := Grid.fast_grid() if allow_fast_stamps and use_batch else null
 	if fast != null:
 		var stamped: Variant = fast.StampVegetation(result, changes, deadline, now, DURATION)
 		if stamped is Dictionary:
@@ -150,4 +160,5 @@ func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
 	displayed[group] = frame.buffer
 	shown[group] = frame.count
 	deadlines[group] = frame.deadline
+	_bounds[group] = frame.bounds
 	return frame

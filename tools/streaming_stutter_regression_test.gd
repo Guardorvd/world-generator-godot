@@ -220,21 +220,71 @@ func _test_carpet_publication() -> void:
 	carpet._road_revision = 1
 	var near := {}
 	var far := {}
-	var buffer := PackedFloat32Array()
-	buffer.resize(Carpet.MIN_CAPACITY * Carpet.STRIDE)
-	for x in Carpet.SECTORS_PER_SLICE + 1:
+	for x in range(Carpet.SECTORS_PER_SLICE, -1, -1):
 		var key := Vector2i(x, 0)
-		near[key] = {buf = buffer, n = 1, low = Vector3.ZERO, high = Vector3.ONE}
-		far[key] = {buf = buffer, n = 2, low = Vector3.ZERO, high = Vector3.ONE}
-	carpet._out = [near, far]
+		near[key] = _carpet_tile(x * 16, 1, x * 2)
+		far[key] = _carpet_tile(x * 16 + 4, 2, x * 2 + 1)
 	for i in 2:
 		carpet.layers.append({n = 0, nodes = {}, pool = [], mesh = BoxMesh.new(), mat = null, name = "Carpet%d" % i})
+	var near_stones := Models.build_carpet_mesh(Models.CARPET_STONES).surface_get_arrays(0)
+	var far_stones := Models.build_carpet_mesh(Models.CARPET_STONES, true).surface_get_arrays(0)
+	var missing_visible := 0
+	var shared := far_stones[Mesh.ARRAY_VERTEX].size() as int
+	for i in range(shared, near_stones[Mesh.ARRAY_VERTEX].size()):
+		if near_stones[Mesh.ARRAY_TEX_UV2][i].x < Models.CARPET_FAR_KEEP + 0.1 - 0.000001:
+			missing_visible += 1
+	check(missing_visible == 0 and near_stones[Mesh.ARRAY_VERTEX].slice(0, shared) == far_stones[Mesh.ARRAY_VERTEX]
+		and near_stones[Mesh.ARRAY_TEX_UV2].slice(0, shared) == far_stones[Mesh.ARRAY_TEX_UV2],
+		"road gravel changes LOD only after the discarded stones have dissolved")
+	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 3.0, false)
 	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, false) and carpet.count == 0,
 		"carpet holds completed buffers without an upload grant")
 	check(not carpet.update(Vector2.ZERO, 0.01, 1, true, true, Time.get_ticks_usec() - 1) and carpet.count == 0,
 		"carpet leaves all sectors pending when the common deadline has passed")
-	check(carpet._present_next(Time.get_ticks_usec() + 1000000) and carpet.count == 3 * Carpet.SECTORS_PER_SLICE and not carpet._out.is_empty(),
+	check(carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and carpet.count == 3 * Carpet.SECTORS_PER_SLICE and not carpet._out.is_empty(),
 		"one carpet grant publishes a bounded number of sectors with both LODs")
-	check(carpet._present_next(Time.get_ticks_usec() + 1000000) and carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty(),
+	check(carpet.layers[0].nodes.has(Vector2i.ZERO) and not carpet.layers[0].nodes.has(Vector2i(Carpet.SECTORS_PER_SLICE, 0)),
+		"nearby carpet coverage is published before farther sectors regardless of insertion order")
+	var key := Vector3i.ZERO
+	var history: RefCounted = carpet._shown[key].history
+	check(history.displayed[0][19] == 5.0 and history.displayed[1][19] == 5.0,
+		"both forms start invisible when the delayed upload actually occurs")
+	check(carpet._present_next(5.0, Time.get_ticks_usec() + 1000000) and carpet.count == 3 * (Carpet.SECTORS_PER_SLICE + 1) and carpet._out.is_empty(),
 		"the next grant resumes the snapshot without repeating a sector")
+	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 5.1, false)
+	check(carpet._out.is_empty(), "unchanged carpet tiles need no new GPU upload")
+	var outgoing: Dictionary = far[Vector2i.ZERO]
+	far[Vector2i.ZERO] = near[Vector2i.ZERO]
+	near.erase(Vector2i.ZERO)
+	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 5.25, false)
+	carpet._present_next(5.25)
+	check(history.shown[0] == 0 and history.shown[1] == 3 and history.displayed[1][19] == 5.0,
+		"a carpet row retains its reveal time when it switches LOD")
+	check(is_equal_approx(Carpet.Snapshots.opacity(history.displayed[1][39], 5.25), 0.5)
+		and history.displayed[1][39] < 0.0, "departing carpet rows dissolve from the opacity already visible")
+	far[Vector2i.ZERO] = outgoing
+	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 5.35, false)
+	carpet._present_next(5.35)
+	check(is_equal_approx(Carpet.Snapshots.opacity(history.displayed[1][19], 5.35), 0.3),
+		"returning carpet reverses the dissolve without becoming fully opaque")
+	carpet._prepare_publication([near, far], Vector2.ZERO, Vector2.ZERO, 6.0, false)
+	carpet._present_next(6.0)
+	check(history.shown[1] == 2, "expired carpet rows are removed when coverage stays still")
+	carpet._tiles = {Vector2i.ZERO: {}, Vector2i(50, 50): {}}
+	carpet.invalidate(Rect2i(50, 50, 1, 1))
+	carpet._begin(Vector2.ZERO, Vector2.ZERO, 2)
+	check(carpet._tiles.has(Vector2i.ZERO) and not carpet._tiles.has(Vector2i(50, 50)),
+		"updating one terrain region preserves cached carpet tiles elsewhere")
 	carpet.layer.free()
+
+
+func _carpet_tile(x: float, rows: int, id: int) -> Dictionary:
+	var buffer := PackedFloat32Array()
+	buffer.resize(rows * Carpet.STRIDE)
+	for i in rows:
+		var offset := i * Carpet.STRIDE
+		buffer[offset] = 1.0
+		buffer[offset + 5] = 1.0
+		buffer[offset + 10] = 1.0
+		buffer[offset + 3] = x + i
+	return {parts = [buffer], ids = [id], bounds = AABB(Vector3(x, 0, 0), Vector3.ONE)}

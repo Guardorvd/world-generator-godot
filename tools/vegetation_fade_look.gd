@@ -115,6 +115,40 @@ func check_third_form(node: MultiMeshInstance3D, mesh: Mesh) -> void:
 		"The middle and coarse LODs share pixels during the second blend: %s / %s / %s" % [middle, blend, coarse])
 
 
+func check_carpet_upload(kind: int, label: String) -> void:
+	var parent := Node3D.new()
+	root.add_child(parent)
+	var carpet := GroundCarpet.new()
+	carpet.setup(parent, WorldData.new(), Heightfield.new(), null)
+	var material: ShaderMaterial = carpet.layers[kind * 2].mat
+	var mesh: Mesh = carpet.layers[kind * 2].mesh
+	var bounds := mesh.get_aabb()
+	var center := bounds.get_center()
+	camera.size = bounds.size.length() * 1.3
+	camera.look_at_from_position(center + Vector3(2.0, 2.2, -3.0), center)
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2.ZERO)
+	var data := PackedFloat32Array()
+	data.resize(GroundCarpet.STRIDE)
+	for index in [0, 5, 10, 12, 13, 14, 15]:
+		data[index] = 1.0
+	material.set_shader_parameter("sway", 0.0)
+	material.set_shader_parameter("flutter", 0.0)
+	var buckets := []
+	for i in carpet.layers.size():
+		buckets.append({})
+	buckets[kind * 2][Vector2i.ZERO] = {parts = [data], ids = [1], bounds = bounds}
+	carpet._prepare_publication(buckets, Vector2.ZERO, Vector2.ZERO, 25.0, false)
+	carpet._present_next(30.0)
+	var counts := []
+	for clock in [30.0, 30.25, 30.5]:
+		RenderingServer.global_shader_parameter_set("vegetation_clock", clock)
+		counts.append(pixels(await capture()))
+	check(counts[0] == 0 and counts[1] > counts[2] * 0.35 and counts[1] < counts[2] * 0.65 and counts[2] > 30,
+		"%s fades on the real GPU from the delayed sector upload: %s" % [label, counts])
+	carpet.release()
+	parent.free()
+
+
 func run() -> void:
 	if DisplayServer.get_name() == "headless":
 		quit(1)
@@ -186,5 +220,7 @@ func run() -> void:
 		check(half > 0 and half < counts[2] and gone == 0, "%s dissolves progressively" % test[0])
 		node.free()
 	await check_form_pair(plants[Plants.BUSH])
+	await check_carpet_upload(Models.CARPET_MEADOW, "Ground carpet")
+	await check_carpet_upload(Models.CARPET_STONES, "Road gravel")
 	print("vegetation_fade_look: %d failures" % fails)
 	quit(1 if fails else 0)

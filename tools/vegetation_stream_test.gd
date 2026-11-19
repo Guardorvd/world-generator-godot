@@ -143,17 +143,23 @@ func run() -> void:
 	frame = history.merge(0, rows([]), 0, AABB(), 1, 15)
 	check(frame.count == 0, "Empty snapshots eventually release all retained plants")
 	frame = history.merge(1, rows([10]), 1, bounds, 1, 16, true)
-	frame = history.merge(1, rows([20]), 1, bounds, 1, 17, false, true)
-	check(stamp(frame, 20) == 0.0 and stamp(frame, 10) < 0.0,
-		"A new obstacle is visible immediately, while the outgoing obstacle can fade")
-	frame = history.merge(1, rows([10, 20]), 2, bounds, 1, 17.2, false, true)
+	var mixed := rows([20, 30])
+	mixed[19] = Snapshots.LIVE_CONTACT
+	frame = history.merge(1, mixed, 2, bounds, 1, 17, false, true)
+	check(stamp(frame, 20) == 0.0 and stamp(frame, 10) < 0.0 and stamp(frame, 30) == 17.0,
+		"A new obstacle is visible immediately while decorative instances in the same group fade")
+	mixed = rows([10, 20, 30])
+	mixed[19] = Snapshots.LIVE_CONTACT
+	mixed[39] = Snapshots.LIVE_CONTACT
+	frame = history.merge(1, mixed, 3, bounds, 1, 17.2, false, true)
 	check(stamp(frame, 10) == 0.0, "Returning obstacles are fully visible before their contacts can return")
 	var stamped := []
 	for fast in [false, true]:
 		Snapshots.allow_fast_stamps = fast
 		var probe := Snapshots.new()
 		probe.merge(0, rows([10, 20]), 2, bounds, 1, 10, true)
-		var pending := probe.prepare(0, rows([20, 30]), 2, bounds, 1, 10)
+		var sites := range(512)
+		var pending := probe.prepare(0, rows(sites), sites.size(), bounds, 1, 10)
 		probe.stamp(pending, 10.1)
 		var published := probe.commit(0, pending, 10.3)
 		stamped.append(published.buffer)

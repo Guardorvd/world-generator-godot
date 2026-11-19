@@ -95,7 +95,8 @@ func run() -> void:
 	var continuity := true
 	var max_opacity_error := 0.0
 	var changed_rows := 0
-	for i in 90:
+	# Compare several real publications while moving. The worker can need a full second per snapshot.
+	for i in 240:
 		await process_frame
 		var before := veg.commits
 		veg.update(632.0 + (i + 1) * 45.0 / 60.0, 512, false, 1.0 / 60.0)
@@ -115,10 +116,30 @@ func run() -> void:
 				max_opacity_error = maxf(max_opacity_error, error)
 				continuity = continuity and error < 0.00001
 			previous = current
-	check(veg.commits > route_start + 1, "45 m/s streaming publishes more than one replacement within 90 frames")
+			if veg.commits >= route_start + 3:
+				break
+	check(veg.commits >= route_start + 2, "45 m/s streaming publishes repeated replacement snapshots")
 	check(continuity, "Real worker snapshots at 45 m/s preserve shared, incoming and outgoing opacity")
 	print("Opacity diagnostic: publications=", veg.commits - route_start, " discontinuities=", changed_rows, " max_error=", max_opacity_error, " phases_us=", veg.phase_stats.max_us, " worker_seconds=", veg._detail_seconds)
 	print("Detail CPU phases: ", veg.fill_stats)
+	while veg.busy():
+		await process_frame
+	var destination := Vector2(432, 640)
+	var arrival := WorkerThreadPool.add_task(veg.travel_begin(destination, Vector2.LEFT), true)
+	while not WorkerThreadPool.is_task_completed(arrival):
+		await process_frame
+	WorkerThreadPool.wait_for_task_completion(arrival)
+	veg.travel_prepare_present()
+	while not veg.travel_present(destination, Time.get_ticks_usec() + 2000):
+		await process_frame
+	veg.travel_end(destination)
+	var carpet_nearby := false
+	for at: Vector3 in veg.carpet.positions():
+		if Vector2(at.x, at.z).distance_to(destination) < 10.0:
+			carpet_nearby = true
+			break
+	check(veg.carpet._out.is_empty() and veg.carpet.stream.previous == destination and carpet_nearby,
+		"Budgeted travel publishes the destination carpet before returning control")
 	veg.update(800, 800, true, 1.0 / 60.0)
 	check(veg._task == -1 and veg._tree_task == -1 and veg._pending.is_empty() and veg._queued.is_empty(), "Teleport joins both workers and clears queued data")
 	check(veg._fill_lead == Vector2.ZERO and veg.stream.velocity == Vector2.ZERO, "Teleport resets prediction")

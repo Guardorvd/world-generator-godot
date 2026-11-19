@@ -901,13 +901,13 @@ func travel_to(place: Dictionary) -> void:
 		services.controls.read_bike_body(bike, false)
 		_dragging = false
 		audio.set_paused(true)
-	if not await _travel_load(Vector3(arriving.x, arriving.feet, arriving.z)): return
-	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	var arrival_yaw := PlayerState.arrival_heading(place, Vector2(arriving.x, arriving.z), yaw)
+	if not await _travel_load(Vector3(arriving.x, arriving.feet, arriving.z), arrival_yaw): return
+	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	var parked := BikeRide.park_near(arriving, arrival_yaw, world, heights)
 	if parked == null or not safe_position(arriving.x, arriving.z, arriving.feet):
 		var origin := Vector3(player.x, player.feet, player.z)
-		if not await _travel_load(origin): return
+		if not await _travel_load(origin, yaw): return
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 		_finish_travel("Рядом с местом прибытия нет свободного места для игрока и велосипеда", from_board, &"warning")
 		return
@@ -937,7 +937,7 @@ func _finish_travel(message: String, from_board: bool, kind: StringName = &"info
 
 
 ## Рельеф, вода и растительность готовятся в фоне и передаются порциями. false — мир закрыт во время ожидания.
-func _travel_load(destination: Vector3) -> bool:
+func _travel_load(destination: Vector3, heading: float) -> bool:
 	if chunk_source == null:
 		stream_coordinator.force_terrain(destination, NEAR)
 		stream_coordinator.force_vegetation(destination)
@@ -948,11 +948,10 @@ func _travel_load(destination: Vector3) -> bool:
 		if not is_inside_tree() or is_queued_for_deletion():
 			_travel_waiting = false
 			return false
-	var layer := vegetation
-	var missing := vegetation.travel_begin(at.x, at.y)
+	var prepare_vegetation := vegetation.travel_begin(at, Vector2(-sin(heading), -cos(heading)))
 	# PlanTerrain reads and uploads destination geometry while the vegetation job is running.
 	# Going through ChunkSource's normal read queue also bounds the memory held before upload.
-	_travel_task = WorkerThreadPool.add_task(layer.travel_fill.bind(at.x, at.y, missing), true, "Растительность у места прибытия")
+	_travel_task = WorkerThreadPool.add_task(prepare_vegetation, true, "Растительность у места прибытия")
 
 	var layers: Array[PlanTerrain] = [terrain_stream]
 	layers.append_array(_water_streams)

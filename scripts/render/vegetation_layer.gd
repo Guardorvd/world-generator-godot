@@ -697,7 +697,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		var details_ready := not _present.is_empty() or (_task != -1 and WorkerThreadPool.is_task_completed(_task))
 		var yield_to_vegetation := _carpet_uploaded_last and (details_ready or not _pending.is_empty())
 		uploaded = carpet.update(p, dt, _road_revision, may_work, allow_upload and not yield_to_vegetation,
-			frame_budget.deadline_usec if frame_budget != null else 0)
+			frame_budget.deadline_usec if frame_budget != null else 0, stream.clock)
 		if allow_upload and may_work:
 			_carpet_uploaded_last = uploaded
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
@@ -716,7 +716,6 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	if allow_upload and not uploaded and (frame_budget == null or frame_budget.allows_work()) and _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
-		stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
 		if _detail_epoch == _epoch and p.distance_to(_fill_at) < maxf(grass_r, under_r) + StreamPolicy.MAX_LEAD:
 			_begin_present()
 		else:
@@ -779,22 +778,16 @@ func busy() -> bool:
 
 ## При перемещении обычный update остановлен: сначала готовим снимок в фоне,
 ## затем отдаём ближайшие деревья и подлесок теми же порциями, что при езде.
-func travel_begin(px: float, pz: float) -> Array[Vector2i]:
+func travel_begin(p: Vector2, forward: Vector2) -> Callable:
 	_finish()
-	if carpet != null:
-		carpet.finish()
-		carpet.invalidate_position()
 	_present.clear()
 	_clear_pending()
 	_built.clear()
 	snapshots.reset()
 	_history_cuts.clear()
 	_fill_lead = Vector2.ZERO
-	return _wanted(Vector2(px, pz))
-
-
-func travel_fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
-	_fill(px, pz, missing)
+	var build_carpet := carpet.prepare_arrival(p, _road_revision, forward) if carpet != null else Callable()
+	return _fill.bind(p.x, p.y, _wanted(p), build_carpet)
 
 
 func travel_prepare_present() -> void:
@@ -812,7 +805,7 @@ func travel_present(p: Vector2, deadline_usec: int) -> bool:
 			return false
 		if _pending.is_empty() or _distance(_pending.back().chunk, p) > ARRIVAL_TREE_RADIUS:
 			_present_next(deadline_usec, true)
-			return _present.is_empty()
+			return _present.is_empty() and (carpet == null or carpet.present_arrival(deadline_usec))
 		_upload_next(true, deadline_usec)
 	return false
 
@@ -826,7 +819,7 @@ func travel_end(p: Vector2) -> void:
 	_job_lead = Vector2.ZERO
 	_accept_contacts()
 	if carpet != null:
-		carpet.stream.sample(p, 0.0, true) # ковёр досчитает фоновая задача первого же кадра
+		carpet.finish_arrival()
 	_refresh_details = false
 
 
@@ -1612,6 +1605,7 @@ func _accept_contacts() -> void:
 
 ## deadline_usec = 0 — передать всё оставшееся сразу.
 func _present_next(deadline_usec: int, immediate := false) -> void:
+	var pending := not _present.is_empty()
 	while not _present.is_empty() and (deadline_usec == 0 or Time.get_ticks_usec() < deadline_usec):
 		var group: int = _present.pop_front()
 		_present_group(group, immediate)
@@ -1623,6 +1617,8 @@ func _present_next(deadline_usec: int, immediate := false) -> void:
 			_accept_contacts()
 	if _present.is_empty():
 		_detail_frames.clear()
+		if pending and not immediate:
+			stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
 
 
 func _present_group(group: int, immediate: bool) -> void:
@@ -1637,8 +1633,8 @@ func _present_group(group: int, immediate: bool) -> void:
 
 
 func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
-	var instant_arrival: bool = group >= 0 and understory[group].has_contacts
-	var frame := snapshots.commit(group, _detail_frames[group], stream.clock) if _detail_frames.has(group) else snapshots.merge(group, source, count, bounds, radius, stream.clock, immediate, instant_arrival)
+	var contact_rows: bool = group >= 0 and understory[group].has_contacts
+	var frame := snapshots.commit(group, _detail_frames[group], stream.clock) if _detail_frames.has(group) else snapshots.merge(group, source, count, bounds, radius, stream.clock, immediate, contact_rows)
 	if not frame.has("fitted"):
 		_fit_capacity(frame, mm)
 	_upload_instances(mm, frame.buffer, frame.count)
@@ -2685,16 +2681,16 @@ static func _form_blend(bounds: Vector2) -> Vector2:
 
 ## Вторая форма того же растения: те же строки буфера (без проверок места — их прошла первая), обе помечены
 ## INSTANCE_CUSTOM.z + 2 — шейдер делит между ними пиксели по расстоянию (form_switch).
-func _put_twin(other: Dictionary, entry: Dictionary, offset: int, xf: Transform3D, scale: float) -> void:
+func _put_twin(other: Dictionary, entry: Dictionary, offset: int, xf: Transform3D, scale: float) -> int:
 	if other.count >= other.cap:
 		if other.base >= Floor.FIRST:
-			return
+			return -1
 		other.cap *= 2
 		other.buf.resize(other.cap * STRIDE)
 	var at: int = other.count * STRIDE
 	var source: PackedFloat32Array = entry.buf
 	var target: PackedFloat32Array = other.buf
-	for c in 19:
+	for c in STRIDE:
 		target[at + c] = source[offset + c]
 	target[at + 18] += 2.0
 	source[offset + 18] += 2.0
@@ -2702,6 +2698,7 @@ func _put_twin(other: Dictionary, entry: Dictionary, offset: int, xf: Transform3
 	other.low = other.low.min(render_box.position)
 	other.high = other.high.max(render_box.end)
 	other.count += 1
+	return at
 
 
 ## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло.
@@ -2799,12 +2796,12 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.buf[offset + 16] = rank
 	entry.buf[offset + 17] = WGRandom.hash2(floori(x * 13), floori(z * 11), 73)
 	entry.buf[offset + 18] = WGRandom.hash2(floori(x * 7), floori(z * 17), 79)
+	entry.buf[offset + 19] = 0.0
 	var render_box: AABB = (xf * (entry.mesh_box as AABB)).grow(entry.margin * scale)
 	entry.low = entry.low.min(render_box.position)
 	entry.high = entry.high.max(render_box.end)
 	entry.count += 1
-	if twin >= 0:
-		_put_twin(understory[twin], entry, offset, xf, scale)
+	var twin_offset := _put_twin(understory[twin], entry, offset, xf, scale) if twin >= 0 else -1
 	# The roots of one tree fan out from a shared base. Their boxes may overlap.
 	if kind == Understory.HAZEL or kind == Understory.HAZEL_TALL:
 		# 17.11.2026: лещина занимает место пучком стволов, а не всей кроной (до 5 м): под краем кроны растут
@@ -2842,10 +2839,14 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		var form := kind - Floor.FIRST
 		var variant := [Floor.ROOT_SPAN, Floor.ROOT_SPAN_B, Floor.ROOT_SPAN_C].find(form) if bump_kind == RoadObstacles.ROOT else [Floor.STONES, Floor.STONE_SINGLE, Floor.STONES_PAIR].find(form)
 		var contact := RoadObstacles.bump(bump_kind, xf, scale, placement, maxi(0, variant))
+		if contact.is_empty():
+			return RoadPlacement.VISUAL
 		_bumps_next.append_array(contact)
-		return RoadPlacement.VISUAL if contact.is_empty() else RoadPlacement.CONTACT
 	else:
 		return RoadPlacement.VISUAL
+	entry.buf[offset + 19] = Snapshots.LIVE_CONTACT
+	if twin_offset >= 0:
+		understory[twin].buf[twin_offset + 19] = Snapshots.LIVE_CONTACT
 	return RoadPlacement.CONTACT
 
 

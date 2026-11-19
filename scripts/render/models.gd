@@ -224,7 +224,8 @@ static func build_carpet_mesh(kind := CARPET_MEADOW, far := false) -> ArrayMesh:
 
 ## 15.11.2026: россыпь у дорожного полотна — горсть гранёных камней (или комьев: цвет даёт экземпляр) 10–30 см (с масштабом экземпляра).
 ## Настоящая геометрия поверх фактуры полотна: у камня есть силуэт, грани ловят свет, низ тёмный (тень у земли —
-## теней от ковра нет). Раскладывает GroundCarpet по кромкам, обочинам и между колеями. Дальняя форма — половина камней.
+## теней от ковра нет). Раскладывает GroundCarpet по кромкам, обочинам и между колеями.
+## Дальняя форма содержит те же камни, что остаются после поредения в шейдере.
 static func _carpet_stones(far: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -238,7 +239,8 @@ static func _carpet_stones(far: bool) -> ArrayMesh:
 		var centre := Vector3(cos(a) * r, 0.0, sin(a) * r)
 		var w := 0.03 + 0.05 * h2 * h2
 		var h := w * (0.55 + 0.6 * h3)
-		var rank := 0.1 + 0.5 * h1
+		# The last three stones fade to zero before switching to the four-stone mesh.
+		var rank := 0.1 + 0.5 * h1 if k < 4 else CARPET_FAR_KEEP + 0.1 + h1 * 0.2
 		var tone := 0.8 + 0.35 * h3
 		var low: Array[Vector3] = []
 		var mid: Array[Vector3] = []
@@ -262,7 +264,7 @@ static func _carpet_stones(far: bool) -> ArrayMesh:
 				var lit := 0.62 if v.y < 0.0 else (0.95 if v.y < h * 0.9 else 1.12)
 				st.set_normal(normal)
 				st.set_color(Color(lit * tone, lit * tone, lit * tone))
-				st.set_uv(Vector2(float(k) / stones, clampf(v.y / h, 0.0, 1.0)))
+				st.set_uv(Vector2(float(k) / 7.0, clampf(v.y / h, 0.0, 1.0)))
 				st.set_uv2(Vector2(rank, 0.0))
 				st.add_vertex(v)
 	return st.commit()
