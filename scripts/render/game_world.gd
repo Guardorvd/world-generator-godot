@@ -295,7 +295,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		regions.name = "Regions"
 		add_child(regions)
 		regions.setup(world, heights, null, vegetation)
-		regions.storage_failed.connect(hud.toast_now)
+		regions.storage_failed.connect(hud.toast_now.bind(&"warning"))
 		regions.settlements_changed.connect(_sync_region_settlements)
 		stream_coordinator.region_restore = regions.restore
 		if saved.is_empty():
@@ -517,7 +517,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		return {explored = hud.map_journal.explored_cells(Quests.EXPLORED_CELL), from = hud.map_journal.came_from(Vector2(player.x, player.z))}
 	interaction_service.message.connect(hud.toast_now)
 	interaction_service.close_requested.connect(_close_settlement)
-	bike_controller.message.connect(hud.toast)
+	bike_controller.message.connect(hud.toast.bind(&"warning"))
 	bike_controller.mount_changed.connect(_bike_mount_changed)
 	bike_controller.recovered.connect(func() -> void:
 		hud.toast("Вы встали. Подойдите к велосипеду и нажмите %s" % services.controls.label("interact")))
@@ -763,7 +763,7 @@ func toggle_photo() -> void:
 	if _opening or paused or show_map or crash.active() or _settlement_open():
 		return
 	if bike.riding:
-		hud.toast_now("Фотоаппарат — пешком: слезьте с велосипеда (%s)" % services.controls.label("interact"))
+		hud.toast_now("Фотоаппарат — пешком: слезьте с велосипеда (%s)" % services.controls.label("interact"), &"warning")
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		capture_mouse()
@@ -877,7 +877,7 @@ func travel_to(place: Dictionary) -> void:
 		return
 	_cancel_bike_placement()
 	if quests != null and quests.cargo:
-		hud.toast_now("С сумкой за спиной быстро не переместиться — довезите её сами")
+		hud.toast_now("С сумкой за спиной быстро не переместиться — довезите её сами", &"warning")
 		return
 	var from_board := _settlement_open()
 	_set_photo(false)
@@ -887,7 +887,7 @@ func travel_to(place: Dictionary) -> void:
 	var arriving := PlayerState.arrive(world, heights, place)
 	if arriving == null:
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
-		_finish_travel("Рядом с местом прибытия не найдено безопасной точки", from_board)
+		_finish_travel("Рядом с местом прибытия не найдено безопасной точки", from_board, &"warning")
 		return
 	if chunk_source != null:
 		services.controls.release_motion()
@@ -907,7 +907,7 @@ func travel_to(place: Dictionary) -> void:
 		if chunk_source != null and not await _travel_load(Vector2(origin.x, origin.z)): return
 		_travel_publish(origin)
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
-		_finish_travel("Рядом с местом прибытия нет свободного места для игрока и велосипеда", from_board)
+		_finish_travel("Рядом с местом прибытия нет свободного места для игрока и велосипеда", from_board, &"warning")
 		return
 	crash.abort()
 	hud.map_journal.end_trip()
@@ -924,14 +924,14 @@ func travel_to(place: Dictionary) -> void:
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
 	if show_map:
 		toggle_map()
-	_finish_travel("Вы переместились: «%s»" % place.name, from_board)
+	_finish_travel("Вы переместились: «%s»" % place.name, from_board, &"discovery")
 
 
-func _finish_travel(message: String, from_board: bool) -> void:
+func _finish_travel(message: String, from_board: bool, kind: StringName = &"info") -> void:
 	if from_board and not paused and not show_map:
 		capture_mouse()
 	audio.set_paused(paused)
-	hud.toast_now(message)
+	hud.toast_now(message, kind)
 
 
 ## Рельеф, вода и растительность вокруг at — в фоновой задаче, кадры идут. false — мир закрыт во время ожидания.
@@ -983,7 +983,7 @@ func toggle_bike_placement() -> bool:
 	if _opening or paused or show_map or player == null or bike == null or _settlement_open():
 		return false
 	if (crash != null and crash.active()) or bike.airborne or not player.on_ground:
-		if hud != null: hud.toast_now("Для размещения дождитесь остановки на земле")
+		if hud != null: hud.toast_now("Для размещения дождитесь остановки на земле", &"warning")
 		return false
 	_set_photo(false)
 	if not is_instance_valid(bike_placement):
@@ -1313,7 +1313,7 @@ func _physics_process(dt: float) -> void:
 		_discovery_tick = 0
 		var known := hud.visited.size()
 		for text: String in player.check_discoveries(world, hud.visited):
-			hud.toast(text)
+			hud.toast(text, &"discovery")
 		if hud.visited.size() != known:
 			hud.sync_map_places()
 			for pk in world.peaks:
@@ -1324,7 +1324,7 @@ func _physics_process(dt: float) -> void:
 			if not hud.explore.scanned.has(tower.id) and TowerLayout.on_deck(tower, player.x, player.z, player.feet):
 				_look_around(tower.id, Exploration.TOWER_RADIUS, "С вышки")
 		if not quests.thanks.is_empty():
-			hud.toast(quests.thank(_at_village))
+			hud.toast(quests.thank(_at_village), &"quest")
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_tick_repair(dt)
 	# 18.11.2026: сумка сама надевается у доски, где её выдают (взяли задание или вернулись за новым грузом)
@@ -1333,7 +1333,7 @@ func _physics_process(dt: float) -> void:
 	_quest_progress(quests.tick(_quest_arrived))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
 	if reached != "":
-		hud.toast(reached)
+		hud.toast(reached, &"discovery")
 	_tick_mark("places", t0)
 
 
@@ -1478,11 +1478,11 @@ func _opening_welcome() -> void:
 		return
 	# 18.11.2026: старт на дороге к удалённой деревне (OpeningRoute) — она впереди и становится целью компаса
 	if opening_place.kind == "settlement":
-		hud.toast_now("Впереди — «%s»" % opening_place.name)
+		hud.toast_now("Впереди — «%s»" % opening_place.name, &"discovery")
 		if hud.goal.is_empty():
 			hud.set_goal(InteractionService.target(opening_place))
 	else:
-		hud.toast_now("Начало пути: «%s»" % opening_place.name)
+		hud.toast_now("Начало пути: «%s»" % opening_place.name, &"discovery")
 
 
 func _finish_opening() -> void:
@@ -1574,7 +1574,7 @@ func _crash() -> void:
 	# 12.3: хрупкий груз бьётся при падении
 	var broken := quests.crashed() if quests != null else ""
 	if not broken.is_empty():
-		hud.toast_now("Груз разбит\n" + broken)
+		hud.toast_now("Груз разбит\n" + broken, &"warning")
 	if bike.land_impact <= 0.0:
 		audio.land(bike.x, bike.z, bike.y, 12.0) # удар в стену: глухой стук, как от жёсткой посадки
 	pitch = -0.35
@@ -1719,7 +1719,7 @@ func _open_settlement(village: Variant = {}) -> void:
 	_set_photo(false)
 	if bike.riding:
 		if absf(bike.speed) > 0.5 or bike.airborne:
-			hud.toast("Остановитесь у костра, чтобы прочитать указатель")
+			hud.toast("Остановитесь у костра, чтобы прочитать указатель", &"warning")
 			return
 		toggle_bike()
 	services.controls.release_motion()
@@ -1790,7 +1790,7 @@ func _tick_repair(dt: float) -> void:
 			else:
 				var place := world.place(id)
 				if not place.is_empty():
-					hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)))
+					hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)), &"quest")
 	else:
 		_fix_progress = maxf(0.0, _fix_progress - dt * 2.0)
 	hud.set_repair(_fix_progress)
@@ -1837,7 +1837,7 @@ func _quest_photo(shot: Dictionary) -> void:
 	if shot.get("plaque", "") != "":
 		var text := quests.plaque_photographed(shot.plaque)
 		if text != "":
-			hud.toast(text)
+			hud.toast(text, &"quest")
 
 
 ## Задание изменилось: цель на компасе, сумка у доски и за спиной, нужный снимок в видоискателе, счётчик
@@ -1979,7 +1979,7 @@ func _look_around(source: String, radius: float, from_text: String) -> void:
 	if found.is_empty():
 		hud.toast("%s новых мест не видно" % from_text)
 	else:
-		hud.toast("%s видно новых мест: %d" % [from_text, found.size()])
+		hud.toast("%s видно новых мест: %d" % [from_text, found.size()], &"discovery")
 	hud.sync_map_places()
 
 
@@ -1998,11 +1998,11 @@ func _album_photo(shot: Dictionary) -> void:
 	var keys := Exploration.classify({} if far else place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
 	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true))
 	if not titles.is_empty():
-		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles))
+		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles), &"album")
 	if far:
 		for key: String in Exploration.classify(place, -1, {}):
 			if not hud.explore.album.has(key):
-				hud.toast("Для альбома слишком далеко: подойдите к «%s» ближе %s" % [place.name, Util.distance_text(Exploration.album_reach(place.kind))])
+				hud.toast("Для альбома слишком далеко: подойдите к «%s» ближе %s" % [place.name, Util.distance_text(Exploration.album_reach(place.kind))], &"warning")
 				break
 
 
@@ -2025,7 +2025,7 @@ func _recall_bike() -> void:
 		return
 	var parked := BikeRide.park_near(player, yaw, world, heights)
 	if parked == null:
-		hud.toast_now("Рядом нет свободного места для велосипеда")
+		hud.toast_now("Рядом нет свободного места для велосипеда", &"warning")
 		return
 	bike = parked
 	bike_view.snap(bike)
@@ -2038,7 +2038,7 @@ func _recall_bike() -> void:
 ## Пешком переключается только рядом с велосипедом, в пределах доступности посадки.
 func toggle_flashlight() -> void:
 	if not bike.riding and not bike.can_mount(player):
-		hud.toast_now("Подойдите к велосипеду, чтобы переключить фару")
+		hud.toast_now("Подойдите к велосипеду, чтобы переключить фару", &"warning")
 		return
 	bike_view.set_lamp(not bike_view.lamp_on())
 

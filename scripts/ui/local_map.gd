@@ -5,6 +5,7 @@ extends Control
 const MapData = preload("res://scripts/ui/local_map_data.gd")
 const Paint = preload("res://scripts/ui/map_paint.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
+const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const DIAMETER := 220.0
 const VIEW_SIZE := 208
 const MAP_SIZE := VIEW_SIZE * 2   # подложка с запасом: круг сдвигается по ней без перерисовки
@@ -23,7 +24,7 @@ const ROUTE := Color("#ff9a2e")       # середина дороги маршр
 const ROUTE_EDGE := Color("#b5560f")  # её кромка: та же толщина, что у дороги подложки — дорога «загорается»
 const GOAL := Color("#d98c28")
 const BIKE := Color("#276582")
-const RIM_INSET := 17.0
+const RIM_INSET := 18.5
 
 var _viewport: SubViewport
 var _surface: Node2D
@@ -46,11 +47,12 @@ var _bike := Vector2.INF
 var _goal := Vector2.INF
 var _quest := Vector2.INF
 var _quest_color := Color.WHITE
+var _quest_kind := ""
 var _knows: Callable
 var _route := PackedVector2Array()  # путь навигации, мировые метры
 var _route_road := Vector2i(0, -1)
 var _places: Array[Dictionary] = []  # известные места для значков: {at — м, kind: peak | site}
-const PLACE_GAP := 20.0   # px: ближе друг к другу и к поселениям значки не ставятся — без мешанины
+const PLACE_GAP := 22.0   # px: ближе друг к другу и к поселениям значки не ставятся — без мешанины
 const PLACE_MAX := 14
 
 
@@ -121,6 +123,7 @@ func set_world(world: WorldData, knows := Callable(), source: MapData = null) ->
 	_bike = Vector2.INF
 	_goal = Vector2.INF
 	_quest = Vector2.INF
+	_quest_kind = ""
 	_route = PackedVector2Array()
 	_places = []
 	queue_redraw()
@@ -143,14 +146,15 @@ func set_view(at: Vector2, heading: float) -> void:
 		_redraw_marks()
 
 
-func set_destinations(goal: Dictionary, quest: Dictionary, quest_color: Color) -> void:
+func set_destinations(goal: Dictionary, quest: Dictionary, quest_color: Color, quest_kind := "") -> void:
 	var next_goal := _place_position(goal)
 	var next_quest := _place_position(quest)
-	if next_goal == _goal and next_quest == _quest and quest_color == _quest_color:
+	if next_goal == _goal and next_quest == _quest and quest_color == _quest_color and quest_kind == _quest_kind:
 		return
 	_goal = next_goal
 	_quest = next_quest
 	_quest_color = quest_color
+	_quest_kind = quest_kind
 	_redraw_marks()
 
 
@@ -274,6 +278,13 @@ func _draw_lines() -> void:
 		Paint.lines(_lines_canvas, _data, PIXELS_PER_METER, false)
 
 
+static func _draw_badge(canvas: CanvasItem, at: Vector2, bg: Color, halo: Color, icon: Texture2D,
+		icon_color := Color.WHITE, radius := 7.2, icon_size := 11.0) -> void:
+	canvas.draw_circle(at, radius + 1.3, halo, true, -1.0, true)
+	canvas.draw_circle(at, radius, bg, true, -1.0, true)
+	canvas.draw_texture_rect(icon, Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, icon_color)
+
+
 func _draw_map_places() -> void:
 	if _data == null or not _anchor.is_finite():
 		return
@@ -281,8 +292,7 @@ func _draw_map_places() -> void:
 	for place: Dictionary in _visible_settlements():
 		var at := _to_canvas(place.position)
 		taken.append(at)
-		_places_canvas.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
-		_places_canvas.draw_circle(at, 2.5, Color("#706387"), true, -1.0, true)
+		_draw_badge(_places_canvas, at, Color("#5f507a"), Color.WHITE, UiIcons.map_icon("settlement"))
 	_draw_places(taken)
 
 
@@ -302,16 +312,9 @@ func _draw_places(taken: Array[Vector2]) -> void:
 			continue
 		taken.append(at)
 		shown += 1
-		if item[2] == "peak":
-			var tri := PackedVector2Array([at + Vector2(0, -5.5), at + Vector2(5, 3.5), at + Vector2(-5, 3.5)])
-			_places_canvas.draw_colored_polygon(tri, Color("#8a6a45"))
-			tri.append(tri[0])
-			_places_canvas.draw_polyline(tri, Color.WHITE, 1.2, true)
-		else:
-			var diamond := PackedVector2Array([at + Vector2(0, -4.5), at + Vector2(4.5, 0), at + Vector2(0, 4.5), at + Vector2(-4.5, 0)])
-			_places_canvas.draw_colored_polygon(diamond, Color("#3f6f6a"))
-			diamond.append(diamond[0])
-			_places_canvas.draw_polyline(diamond, Color.WHITE, 1.2, true)
+		var kind := str(item[2])
+		var bg := Color("#866038") if kind == "peak" else (Color("#2f6d8c") if kind == "lake" else Color("#316760"))
+		_draw_badge(_places_canvas, at, bg, Color.WHITE, UiIcons.map_icon(kind))
 
 
 ## Маршрут: дорожная часть пути идёт по тем же точкам участков, что и линии дорог подложки (граф навигации — вершины
@@ -390,24 +393,23 @@ func _draw_label() -> void:
 func _draw_markers() -> void:
 	if _bike.is_finite():
 		var at := world_to_map(_bike)
-		if _fits(at, 7.0):
-			_marks.draw_circle(at, 4.0, Color.WHITE, true, -1.0, true)
-			_marks.draw_circle(at, 2.6, BIKE, true, -1.0, true)
+		if _fits(at, 8.0):
+			_draw_badge(_marks, at, BIKE, Color.WHITE, UiIcons.map_icon("bike"), Color.WHITE, 6.8, 10.5)
 		elif _position.distance_to(_bike) > 8.0:
 			_rim(_bike, BIKE, "bike", false)
 	var same := _goal.is_finite() and _quest.is_finite() and _goal.distance_to(_quest) < 6.0
 	if _goal.is_finite() and not same:
 		var at := world_to_map(_goal)
-		if _fits(at, 8.0):
-			_marks.draw_circle(at, 6.5, Color.WHITE, true, -1.0, true)
-			_marks.draw_circle(at, 4.5, GOAL, false, 2.5, true)
+		if _fits(at, 9.0):
+			_draw_badge(_marks, at, HudStyle.SURFACE, Color.WHITE, UiIcons.map_icon("goal"), HudStyle.AMBER, 7.6, 11.5)
+			_marks.draw_arc(at, 7.6, 0.0, TAU, 24, GOAL, 1.4, true)
 		else:
 			_rim(_goal, GOAL, "goal", true)
 	if _quest.is_finite():
 		var at := world_to_map(_quest)
-		if _fits(at, 8.0):
-			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), _quest_color)
-			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), INK, false, 1.5)
+		if _fits(at, 9.0):
+			_draw_badge(_marks, at, HudStyle.SURFACE, Color.WHITE, UiIcons.quest_small(_quest_kind), _quest_color, 8.0, 12.0)
+			_marks.draw_arc(at, 8.0, 0.0, TAU, 24, _quest_color, 1.5, true)
 		else:
 			_rim(_quest, _quest_color, "quest", true)
 
@@ -419,20 +421,20 @@ func _rim(target: Vector2, color: Color, kind: String, distance: bool) -> void:
 		return
 	var at := CENTER + dir * (CENTER.x - RIM_INSET)
 	var side := Vector2(-dir.y, dir.x)
-	_marks.draw_circle(at, 7.5, Color.WHITE, true, -1.0, true)
 	# остриё за значком — куда ехать
-	_marks.draw_colored_polygon(PackedVector2Array([at + dir * 14.5, at + dir * 8.0 + side * 5.0, at + dir * 8.0 - side * 5.0]), INK)
+	_marks.draw_colored_polygon(PackedVector2Array([at + dir * 15.0, at + dir * 8.5 + side * 5.0, at + dir * 8.5 - side * 5.0]), INK)
 	match kind:
 		"quest":
-			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), color)
-			_marks.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), INK, false, 1.2)
+			_draw_badge(_marks, at, HudStyle.SURFACE, Color.WHITE, UiIcons.quest_small(_quest_kind), color, 8.0, 12.0)
+			_marks.draw_arc(at, 8.0, 0.0, TAU, 24, color, 1.5, true)
 		"goal":
-			_marks.draw_circle(at, 4.5, color, false, 2.5, true)
+			_draw_badge(_marks, at, HudStyle.SURFACE, Color.WHITE, UiIcons.map_icon("goal"), HudStyle.AMBER, 7.6, 11.5)
+			_marks.draw_arc(at, 7.6, 0.0, TAU, 24, color, 1.4, true)
 		_:
-			_marks.draw_circle(at, 4.0, color, true, -1.0, true)
+			_draw_badge(_marks, at, color, Color.WHITE, UiIcons.map_icon("bike"), Color.WHITE, 6.8, 10.5)
 	if distance:
 		var label := Util.distance_text(_position.distance_to(target))
-		var inward := at - dir * (18.0 + absf(dir.x) * _text_width(label, 11) * 0.5)
+		var inward := at - dir * (19.5 + absf(dir.x) * _text_width(label, 11) * 0.5)
 		_text(label, inward + Vector2(0.0, 4.0), 11)
 
 

@@ -676,7 +676,7 @@ func _run() -> void:
 	hud.set_photo_mode(true)
 	_check(not hud.tracker.visible, "в видоискателе счётчика нет")
 	hud.set_photo_mode(false)
-	hud.toast("Задание выполнено\nПосылка: «Каменка»")
+	hud.toast("Задание выполнено\nПосылка: «Каменка»", &"quest")
 	quests.cargo = false
 	bike.set_pack(false)
 	for i in 30:

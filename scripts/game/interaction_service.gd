@@ -1,7 +1,7 @@
 class_name InteractionService
 extends RefCounted
 ## Board/quest rules and target selection. Presentation is delivered through signals.
-signal message(text: String)
+signal message(text: String, kind: StringName)
 signal close_requested
 const Quests = preload("res://scripts/game/quests.gd")
 const BeaconSites = preload("res://scripts/game/beacon_sites.gd")
@@ -74,13 +74,13 @@ func offers(village: Variant, catalog: Variant = null) -> Array:
 func accept(q: QuestData) -> void:
 	quests.accept(q)
 	close_requested.emit()
-	message.emit("Новое задание\n" + q.title)
+	message.emit("Новое задание\n" + q.title, &"quest")
 
 
 func abandon() -> void:
 	quests.abandon()
 	close_requested.emit()
-	message.emit("Вы отказались от задания")
+	message.emit("Вы отказались от задания", &"warning")
 
 
 ## Одно уведомление о следующем шаге или завершении задания.
@@ -88,9 +88,9 @@ func progress(text: String) -> void:
 	if text.is_empty():
 		return
 	if quests.active.is_empty():
-		message.emit("Задание выполнено\n" + quests.last)
+		message.emit("Задание выполнено\n" + quests.last, &"quest")
 	else:
-		message.emit("Дальше: " + text)
+		message.emit("Дальше: " + text, &"quest")
 
 
 ## Снимок: засчитать для задания или подсказать, почему не засчитан
@@ -99,10 +99,10 @@ func photographed(shot: Dictionary) -> void:
 	if s.get("do") != "shoot":
 		return
 	if shot.place.is_empty():
-		message.emit("Наведите фотоаппарат на «%s»: снимок засчитается, когда в видоискателе появится название" % s.place.name)
+		message.emit("Наведите фотоаппарат на «%s»: снимок засчитается, когда в видоискателе появится название" % s.place.name, &"warning")
 	elif not quests.wants_photo(shot.place):
-		message.emit("Это «%s». Для задания нужен снимок «%s»" % [shot.name, s.place.name])
+		message.emit("Это «%s». Для задания нужен снимок «%s»" % [shot.name, s.place.name], &"warning")
 	elif shot.dist > Quests.SHOT_REACH_M:
-		message.emit("Слишком далеко для задания: подойдите к «%s» ближе %s (сейчас %s)" % [s.place.name, distance_text.call(Quests.SHOT_REACH_M), distance_text.call(shot.dist)])
+		message.emit("Слишком далеко для задания: подойдите к «%s» ближе %s (сейчас %s)" % [s.place.name, distance_text.call(Quests.SHOT_REACH_M), distance_text.call(shot.dist)], &"warning")
 	else:
 		progress(quests.photographed(shot.place, shot.dist))

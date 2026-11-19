@@ -61,6 +61,7 @@ var _tracker_kind: Label
 var _tracker_count: Label
 var _tracker_step: Label
 var _tracker_note: Label
+var _tracker_note_row: HBoxContainer
 var _tracker_progress: Control
 var _tracker_head: HBoxContainer
 var _tracker_series: Label  # вторая строка счётчика: «Летопись обелисков: 2 из 5» (серия идёт параллельно заданию)
@@ -94,7 +95,9 @@ var _prompt_style: StyleBoxFlat
 var _warning_style: StyleBoxFlat
 @onready var _info_panel: PanelContainer = $InfoPanel
 @onready var info: Label = $InfoPanel/Rows/Header/Info
+@onready var _clock_card: PanelContainer = $InfoPanel/Rows/Header/Time
 @onready var _clock_label: Label = $InfoPanel/Rows/Header/Time/Clock
+var _clock_row: HBoxContainer
 @onready var _surface: Label = $InfoPanel/Rows/Surface
 @onready var _altitude: Label = $InfoPanel/Rows/Readings/Altitude/Value
 @onready var _temperature: Label = $InfoPanel/Rows/Readings/Temperature/Value
@@ -107,6 +110,11 @@ var _warning_style: StyleBoxFlat
 @onready var prompt: HBoxContainer = $Prompt
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
+var _toast_kinds: Array[StringName] = []
+var _toast_icon: TextureRect
+var _toast_panel_style: StyleBoxFlat
+var _toast_fill_style: StyleBoxFlat
+var _toast_kind: StringName = &"info"
 var _clock_minute := -1
 
 # Состояние игрока для отрисовки карт
@@ -155,7 +163,11 @@ func _ready() -> void:
 	big_map.visible = false
 	add_child(big_map)
 	var close_map := Button.new()
-	close_map.text = "×"
+	close_map.icon = UiIcons.CLOSE
+	close_map.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	close_map.custom_minimum_size = Vector2(44, 44)
+	close_map.theme = HudStyle.theme()
+	close_map.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	close_map.tooltip_text = "Закрыть карту"
 	close_map.accessibility_name = "Закрыть карту"
 	close_map.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -224,18 +236,32 @@ func _style_summary() -> void:
 	_info_panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 7)))
 	$InfoPanel/Rows.add_theme_constant_override("separation", 3)
 	HudStyle.label(info, 17)
-	var clock_card := _clock_label.get_parent() as PanelContainer
-	clock_card.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 6, Vector2(7, 1), false))
+	_clock_card.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 6, Vector2(7, 1), false))
+	_clock_row = HBoxContainer.new()
+	_clock_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_clock_row.add_theme_constant_override("separation", 5)
+	_clock_row.add_child(UiIcons.rect(UiIcons.CLOCK, 13, HudStyle.MINT))
+	_clock_label.reparent(_clock_row, false)
+	_clock_card.add_child(_clock_row)
 	HudStyle.label(_clock_label, 13, HudStyle.MINT)
 	HudStyle.label(_altitude, 14)
 	HudStyle.label(_temperature, 14)
 	HudStyle.label(_nearby, 12, HudStyle.MINT)
 	$InfoPanel/Rows/Divider.hide()
 	var readings: HBoxContainer = $InfoPanel/Rows/Readings
-	readings.add_theme_constant_override("separation", 12)
-	for cell: Control in [$InfoPanel/Rows/Readings/Altitude, $InfoPanel/Rows/Readings/Temperature]:
-		cell.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		cell.get_node("Title").hide()
+	readings.add_theme_constant_override("separation", 10)
+	var alt_box: HBoxContainer = $InfoPanel/Rows/Readings/Altitude
+	alt_box.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	alt_box.get_node("Title").hide()
+	var alt_icon := UiIcons.rect(UiIcons.ALTITUDE, 14, Color(HudStyle.MUTED, 0.9))
+	alt_box.add_child(alt_icon)
+	alt_box.move_child(alt_icon, 0)
+	var temp_box: HBoxContainer = $InfoPanel/Rows/Readings/Temperature
+	temp_box.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	temp_box.get_node("Title").hide()
+	var temp_icon := UiIcons.rect(UiIcons.THERMOMETER, 14, Color(HudStyle.MUTED, 0.9))
+	temp_box.add_child(temp_icon)
+	temp_box.move_child(temp_icon, 0)
 	_surface.reparent(readings, false)
 	HudStyle.label(_surface, 13, HudStyle.MUTED)
 	_surface.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -255,20 +281,28 @@ func _style_summary() -> void:
 	HudStyle.label($LockHint/Text, 13, HudStyle.MUTED)
 	_reticle.draw.connect(_draw_reticle)
 
-	$Toast.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 9)))
-	var icon := UiIcons.rect(UiIcons.QUESTS.visit, 17, HudStyle.MINT)
-	$Toast/Stack/Line.add_child(icon)
-	$Toast/Stack/Line.move_child(icon, 0)
+	_toast_panel_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 9))
+	_toast_panel_style.border_width_left = 3
+	_toast_panel_style.corner_radius_top_left = 6
+	_toast_panel_style.corner_radius_bottom_left = 6
+	_toast_panel_style.content_margin_left = 14
+	$Toast.add_theme_stylebox_override("panel", _toast_panel_style)
+	_toast_icon = UiIcons.rect(UiIcons.INFO, 17, HudStyle.MUTED)
+	$Toast/Stack/Line.add_child(_toast_icon)
+	$Toast/Stack/Line.move_child(_toast_icon, 0)
 	HudStyle.label(toast_label, 14)
 	_toast_time.add_theme_stylebox_override("background", HudStyle.panel(HudStyle.RECESS, HudStyle.RECESS, 1, Vector2.ZERO, false))
-	_toast_time.add_theme_stylebox_override("fill", HudStyle.panel(HudStyle.MINT, HudStyle.MINT, 1, Vector2.ZERO, false))
+	_toast_fill_style = HudStyle.panel(HudStyle.MINT, HudStyle.MINT, 1, Vector2.ZERO, false)
+	_toast_time.add_theme_stylebox_override("fill", _toast_fill_style)
 
 
 ## Новая игра: запомнить карту мира и забыть сообщения прошлой игры
 func set_world(w: WorldData, map_image: Image) -> void:
 	world = w
 	_clock_minute = -1
-	_clock_label.get_parent().hide()
+	_clock_card.hide()
+	if _clock_row != null:
+		_clock_row.hide()
 	info.text = ""
 	_surface.hide()
 	_nearby.hide()
@@ -295,6 +329,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	_summary_hint_left = SUMMARY_HINT_TIME
 	_apply_reveal()
 	_toast_queue.clear()
+	_toast_kinds.clear()
 	_toast_left = 0.0
 	$Toast.modulate.a = 0.0
 
@@ -324,6 +359,7 @@ func clear_world() -> void:
 	bike_pos = Vector2.ZERO
 	bike_shown = false
 	_toast_queue.clear()
+	_toast_kinds.clear()
 	_toast_left = 0.0
 	$Toast.modulate.a = 0.0
 	set_hints([], [])
@@ -513,6 +549,7 @@ func _sync_map_goal() -> void:
 	var objective := quest_place()
 	big_map.quest = Atlas.place_at(objective) if objective.get("kind") in Quests.FIELD_PLACES else Vector2.INF
 	big_map.quest_color = quest_color()
+	big_map.quest_kind = quest_kind()
 	big_map.refresh_overlay()
 
 
@@ -652,6 +689,11 @@ func quest_color() -> Color:
 	return GOLD if quests == null or quests.active.is_empty() else Quests.KINDS[quests.active.kind].color
 
 
+## Вид активного задания или пусто
+func quest_kind() -> String:
+	return "" if quests == null or quests.active.is_empty() else quests.active.kind
+
+
 ## 11.9: счётчик задания под мини-картой — вид и название, текущий шаг с расстоянием, шаг из скольких, груз
 func _build_tracker() -> PanelContainer:
 	var panel := PanelContainer.new()
@@ -684,7 +726,14 @@ func _build_tracker() -> PanelContainer:
 	_tracker_count.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_tracker_title = _tracker_label(box, 18, HudStyle.CREAM)
 	_tracker_step = _tracker_label(box, 13, HudStyle.MUTED)
-	_tracker_note = _tracker_label(box, 12, HudStyle.MINT)
+	_tracker_note_row = HBoxContainer.new()
+	_tracker_note_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tracker_note_row.add_theme_constant_override("separation", 6)
+	_tracker_note_row.add_child(UiIcons.rect(UiIcons.BAG, 14, HudStyle.AMBER))
+	_tracker_note = _tracker_label(_tracker_note_row, 12, HudStyle.AMBER)
+	_tracker_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tracker_note_row.hide()
+	box.add_child(_tracker_note_row)
 	_tracker_progress = Control.new()
 	_tracker_progress.custom_minimum_size.y = 4
 	_tracker_progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -771,6 +820,7 @@ func update_tracker() -> void:
 	_tracker_title.text = title
 	_set_optional_text(_tracker_step, line)
 	_set_optional_text(_tracker_note, note)
+	_tracker_note_row.visible = _tracker_note.visible
 	_tracker_progress.queue_redraw()
 	_apply_reveal()
 
@@ -947,7 +997,7 @@ func set_bike(x: float, z: float, shown: bool) -> void:
 
 ## Пока одно уведомление на экране, следующие ждут в очереди,
 ## чтобы не затирать друг друга (например, сразу два открытия поселений)
-func toast(text: String) -> void:
+func toast(text: String, kind: StringName = &"info") -> void:
 	if text.is_empty():
 		return
 	if _toast_left > 0.0:
@@ -956,30 +1006,69 @@ func toast(text: String) -> void:
 		if toast_label.text == text or _toast_queue.has(text):
 			return
 		_toast_queue.append(text)
+		_toast_kinds.append(kind)
 		if _toast_queue.size() > TOAST_QUEUE:
 			_toast_queue.resize(TOAST_QUEUE)
+			_toast_kinds.resize(TOAST_QUEUE)
 		return
-	_show_toast(text)
+	_show_toast(text, kind)
 
 
 ## Контекстное предупреждение идёт следующим, сохраняя текущий кадр и остальные события.
-func toast_now(text: String) -> void:
+func toast_now(text: String, kind: StringName = &"info") -> void:
 	if _toast_left <= 0.0:
-		toast(text)
+		toast(text, kind)
 	elif not text.is_empty() and toast_label.text != text:
 		var queued := _toast_queue.find(text)
 		if queued >= 0:
 			_toast_queue.remove_at(queued)
+			if queued < _toast_kinds.size():
+				_toast_kinds.remove_at(queued)
 		_toast_queue.insert(0, text)
+		_toast_kinds.insert(0, kind)
 		if _toast_queue.size() > TOAST_QUEUE:
 			_toast_queue.resize(TOAST_QUEUE)
+			_toast_kinds.resize(TOAST_QUEUE)
 
 
-func _show_toast(text: String) -> void:
+func _show_toast(text: String, kind: StringName = &"info") -> void:
 	toast_label.text = text
+	_apply_toast_style(kind, text)
 	$Toast.modulate.a = 0.0
 	_toast_left = TOAST_TIME
 	_toast_time.value = 1.0
+
+
+func _apply_toast_style(kind: StringName, text: String) -> void:
+	var accent := HudStyle.MUTED
+	var tex: Texture2D = UiIcons.INFO
+	match kind:
+		&"discovery":
+			accent = HudStyle.MINT
+			tex = UiIcons.QUESTS.visit
+		&"album":
+			accent = HudStyle.AMBER
+			tex = UiIcons.ALBUM
+		&"warning":
+			accent = HudStyle.RED
+			tex = UiIcons.ALERT
+		&"quest":
+			if text.begins_with("Задание выполнено") or quests == null or quests.active.is_empty():
+				accent = HudStyle.MINT
+				tex = UiIcons.CHECK
+			else:
+				accent = quest_color()
+				tex = UiIcons.quest(quests.active.kind)
+	_toast_kind = kind
+	if _toast_panel_style != null:
+		_toast_panel_style.border_color = Color(accent, 0.9)
+		$Toast.queue_redraw()
+	if _toast_fill_style != null:
+		_toast_fill_style.bg_color = accent
+		_toast_fill_style.border_color = accent
+	if _toast_icon != null:
+		_toast_icon.texture = tex
+		_toast_icon.modulate = accent
 
 
 func _place_toast() -> void:
@@ -1012,8 +1101,11 @@ func _process(delta: float) -> void:
 		return
 	if not _toast_queue.is_empty():
 		var next := _toast_queue[0]
+		var next_kind: StringName = _toast_kinds[0] if not _toast_kinds.is_empty() else &"info"
 		_toast_queue.remove_at(0)
-		_show_toast(next)
+		if not _toast_kinds.is_empty():
+			_toast_kinds.remove_at(0)
+		_show_toast(next, next_kind)
 	else:
 		$Toast.hide()
 
@@ -1036,7 +1128,7 @@ func set_player(x: float, z: float, y: float) -> void:
 
 func _sync_minimap_destinations() -> void:
 	_compass_quest = quest_place()
-	minimap.set_destinations(goal, _compass_quest, quest_color())
+	minimap.set_destinations(goal, _compass_quest, quest_color(), quest_kind())
 
 
 func set_clock(hour: float) -> void:
@@ -1045,7 +1137,9 @@ func set_clock(hour: float) -> void:
 		return
 	_clock_minute = minute
 	_clock_label.text = "%02d:%02d" % [minute / 60, minute % 60]
-	_clock_label.get_parent().show()
+	_clock_card.show()
+	if _clock_row != null:
+		_clock_row.show()
 
 
 ## Строки о местности под ногами: биом и дорога, высота и температура; без цели — ближайшее поселение.
@@ -1150,13 +1244,13 @@ class Compass extends Control:
 		var x := _ruler_x(offset)
 		var inside := absf(offset) <= HALF_ANGLE
 		var tint := color if inside else color.lerp(HudStyle.MUTED, 0.42)
-		draw_line(Vector2(x, ROW + 5.0), Vector2(x, RULER), Color(tint, 0.8), 1.5, true)
+		draw_line(Vector2(x, ROW + 7.5), Vector2(x, RULER), Color(tint, 0.8), 1.5, true)
 		var text := Util.distance_text(Vector2(dx, dz).length())
 		var font := ThemeDB.fallback_font
 		var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
 		# сторона подписи: наружу от середины, если там свободно, иначе внутрь; в пределах ленты
-		var right := Rect2(x + 8.0, ROW - 8.0, width, 16.0)
-		var left := Rect2(x - 8.0 - width, ROW - 8.0, width, 16.0)
+		var right := Rect2(x + 10.0, ROW - 8.0, width, 16.0)
+		var left := Rect2(x - 10.0 - width, ROW - 8.0, width, 16.0)
 		var sides: Array[Rect2] = [right, left]
 		if x < size.x * 0.5:
 			sides.reverse()
@@ -1175,25 +1269,22 @@ class Compass extends Control:
 		for attempt in 3:
 			if free:
 				break
-			var next := Rect2(chosen.position + Vector2(side * (width + 20.0), 0.0), chosen.size)
+			var next := Rect2(chosen.position + Vector2(side * (width + 24.0), 0.0), chosen.size)
 			if not bounds.encloses(next):
 				break
 			chosen = next
 			moved = true
 			free = not taken.any(func(r: Rect2) -> bool: return r.intersects(next))
-		taken.append(chosen.grow_individual(14.0 if moved and side > 0.0 else 0.0, 0.0, 14.0 if moved and side < 0.0 else 0.0, 0.0))
+		taken.append(chosen.grow_individual(18.0 if moved and side > 0.0 else 0.0, 0.0, 18.0 if moved and side < 0.0 else 0.0, 0.0))
 		# сдвинутая подпись несёт значок с собой: на курсе уже стоит значок соседа
-		_mark(Vector2(chosen.end.x + 7.0 if side < 0.0 else chosen.position.x - 7.0, ROW) if moved else Vector2(x, ROW), quest, tint)
+		_mark(Vector2(chosen.end.x + 9.0 if side < 0.0 else chosen.position.x - 9.0, ROW) if moved else Vector2(x, ROW), quest, tint)
 		draw_string(font, Vector2(chosen.position.x, ROW + 4.5), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, tint)
 
-	## Значок места: квадрат — задание, ромб — цель путешествия; с тёмной обводкой поверх ленты
+	## Значок места: иконка вида задания или звезда цели поверх тёмного диска
 	func _mark(at: Vector2, quest: bool, tint: Color) -> void:
-		if quest:
-			draw_rect(Rect2(at - Vector2.ONE * 3.5, Vector2.ONE * 7.0), HudStyle.SURFACE)
-			draw_rect(Rect2(at - Vector2.ONE * 2.5, Vector2.ONE * 5.0), tint)
-		else:
-			draw_colored_polygon(PackedVector2Array([at + Vector2(0, -5), at + Vector2(5, 0), at + Vector2(0, 5), at + Vector2(-5, 0)]), HudStyle.SURFACE)
-			draw_colored_polygon(PackedVector2Array([at + Vector2(0, -4), at + Vector2(4, 0), at + Vector2(0, 4), at + Vector2(-4, 0)]), tint)
+		draw_circle(at, 8.0, HudStyle.SURFACE, true, -1.0, true)
+		var icon := UiIcons.quest_small(hud.quest_kind()) if quest else UiIcons.map_icon("goal")
+		draw_texture_rect(icon, Rect2(at - Vector2.ONE * 6.5, Vector2.ONE * 13.0), false, tint)
 
 
 ## Ремонт: доля удержания 0..1 (кольцо под прицелом; 0 — скрыто)

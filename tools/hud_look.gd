@@ -341,6 +341,9 @@ func _run() -> void:
 	_check(hud.big_map._fog != null and hud.big_map._fog.get_pixelv(Vector2i(Vector2(512, 512) / hud.big_map.FOG_CELL)).a < 0.1
 		and hud.big_map._fog.get_pixel(0, 0).a > 0.9, "личная карта: у пути открыто, вдали бумага")
 	await _shot("hud_big_map")
+	var close_map: Button = hud.big_map.get_children().filter(func(n: Node) -> bool: return n is Button).back()
+	_check(close_map != null and close_map.icon == Hud.UiIcons.CLOSE and close_map.size.x >= 44.0 and close_map.size.y >= 44.0,
+		"кнопка закрытия карты имеет иконку и размер >= 44x44 px")
 	var atlas_draws := {track = 0}
 	hud.big_map._track.draw.connect(func() -> void: atlas_draws.track += 1)
 	hud.set_player(515, 512, 0.6)
@@ -351,10 +354,38 @@ func _run() -> void:
 	hud.set_map_visible(false)
 	await _journal_checks()
 	await _panel_shots(world)
-	hud.toast_now("Открыто место: перевал Седой")
-	hud.toast("Достигнута цель")
-	hud.toast_now("Открыто место: перевал Седой")
+	var seen_icons := {}
+	for qkind: String in Hud.Quests.KINDS:
+		var tex := Hud.UiIcons.quest(qkind)
+		_check(tex != null and not seen_icons.has(tex), "вид задания %s имеет уникальную иконку" % qkind)
+		if tex != null:
+			seen_icons[tex] = qkind
+	hud.toast_now("Открыто место: перевал Седой", &"discovery")
+	hud.toast("Достигнута цель", &"discovery")
+	hud.toast_now("Открыто место: перевал Седой", &"discovery")
 	_check(hud._toast_queue.size() == 1 and hud.toast_label.text.begins_with("Открыто"), "очередь сохраняет событие без дубля")
+	var expected_toasts := {
+		discovery = [Hud.UiIcons.QUESTS.visit, Hud.HudStyle.MINT],
+		album = [Hud.UiIcons.ALBUM, Hud.HudStyle.AMBER],
+		warning = [Hud.UiIcons.ALERT, Hud.HudStyle.RED],
+		quest = [Hud.UiIcons.quest("delivery"), hud.quest_color()],
+		info = [Hud.UiIcons.INFO, Hud.HudStyle.MUTED],
+	}
+	for tkind_str: String in expected_toasts:
+		var tkind := StringName(tkind_str)
+		hud._toast_left = 0.0
+		hud._toast_queue.clear()
+		hud._toast_kinds.clear()
+		hud.toast("Проверка: " + tkind_str, tkind)
+		var spec: Array = expected_toasts[tkind_str]
+		_check(hud._toast_icon.texture == spec[0] and hud._toast_panel_style.border_color.is_equal_approx(Color(spec[1], 0.9)),
+			"тост %s задаёт иконку и акцент" % tkind_str)
+	hud._toast_left = 0.0
+	hud.toast_now("Груз разбит\nПосылка повреждена", &"warning")
+	await create_timer(0.25).timeout
+	await _shot("hud_toast_warning")
+	hud._toast_left = 0.0
+	hud.get_node("Toast").hide()
 	hud.set_hints([["Shift", "Сильнее"], ["Пробел", "Прыжок"], ["F", "Слезть"], ["Y", "Поставить велосипед"]], [["F", "Доска «Ольховка»"]])
 	_check(hud.hint.get_child_count() == 4 and hud.prompt.get_child_count() == 1, "чипы: четыре внизу и один у прицела")
 	_check(hud._reticle_on_target, "прицел обозначает доступное действие")
@@ -418,5 +449,7 @@ func _run() -> void:
 	main.get_node("%WorldStatus").text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
 	await _shot("menu_warning")
 	_check(root.get_visible_rect().encloses(panel.get_global_rect()), "меню с предупреждениями целиком помещается в 1280×720")
+	var journey_btn: Button = main.get_node("%Journey")
+	_check(journey_btn.icon != null, "кнопка «Путешествие» в меню паузы имеет иконку")
 	print("hud_look: %s, снимки в %s" % ["FAIL %d" % failed if failed else "ok", out])
 	quit(1 if failed else 0)

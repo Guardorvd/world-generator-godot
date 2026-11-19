@@ -61,7 +61,7 @@ func _button(text: String, action: Callable, parent: Container = null) -> Button
 		parent = _box
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size.y = 38
+	button.custom_minimum_size.y = 44
 	button.pressed.connect(action)
 	parent.add_child(button)
 	return button
@@ -161,7 +161,7 @@ func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		var title := _titled(q, 16, head)
 		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
-		take.custom_minimum_size = Vector2(96, 40)
+		take.custom_minimum_size = Vector2(96, 44)
 		take.tooltip_text = "Взять задание: %s" % Quests.KINDS[q.kind].title.to_lower()
 		_label("Серия · обелисков: %d · идёт параллельно с другими заданиями" % q.steps.size(), 13, card, Quests.KINDS[q.kind].color)
 		_label(q.text, 13, card, MUTED, CARD_W * 2.0)
@@ -237,7 +237,7 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		title.clip_text = true
 		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
-		take.custom_minimum_size = Vector2(96, 40)
+		take.custom_minimum_size = Vector2(96, 44)
 		take.tooltip_text = "Взять задание: %s" % kind.title.to_lower()
 		var length := Util.distance_text(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
 		_label("%s · %s · шагов: %d" % [kind.title, length, q.steps.size()], 13, card, kind.color)

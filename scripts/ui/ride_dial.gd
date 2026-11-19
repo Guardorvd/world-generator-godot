@@ -7,6 +7,7 @@ extends Control
 ## Видимость задаёт Hud (сводка, срочность); прибор только считает свои альфы и рисует.
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
+const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const DIAMETER := 104.0
 const R := 42.0
 const WIDTH := 4.0
@@ -17,7 +18,7 @@ const STAMINA_SPAN := deg_to_rad(110.0)
 const BRAKE_FROM := deg_to_rad(55.0)       # справа: снизу (55°) вверх (−55°)
 const BRAKE_SPAN := deg_to_rad(-110.0)
 const MIN_SPEED := 1.0          # м/с: ниже тормоз не показывается
-const CAPTION := Vector2(154.0, 24.0)
+const CAPTION := Vector2(174.0, 24.0)
 
 # силы
 var value := 1.0
@@ -121,6 +122,7 @@ func _draw() -> void:
 	if brake_alpha > 0.01:
 		_draw_brake(c, a * brake_alpha)
 	if riding and _ride_alpha > 0.01:
+		draw_texture_rect(UiIcons.SPEED, Rect2(c + Vector2(-7.0, -33.0), Vector2(14.0, 14.0)), false, Color(HudStyle.MUTED, 0.72 * a))
 		HudStyle.centered(self, c + Vector2(0, 8), str(roundi(absf(speed) * 3.6)), 28, Color(HudStyle.CREAM, a))
 		HudStyle.centered(self, c + Vector2(0, 24), "км/ч", 10, Color(HudStyle.MUTED, a))
 	else:
@@ -170,4 +172,5 @@ func _draw_brake(c: Vector2, a: float) -> void:
 	if danger or slipping:
 		var box := Rect2(Vector2(DIAMETER + 8.0, c.y - CAPTION.y * 0.5), CAPTION)
 		draw_style_box(_warning_box, box)
-		HudStyle.centered(self, box.get_center() + Vector2(0, 5), "Отпустите тормоз" if danger else "Потеря сцепления", 13, Color(color, a))
+		draw_texture_rect(UiIcons.ALERT, Rect2(Vector2(box.position.x + 8.0, box.get_center().y - 7.0), Vector2(14.0, 14.0)), false, Color(color, a))
+		HudStyle.centered(self, box.get_center() + Vector2(9, 5), "Отпустите тормоз" if danger else "Потеря сцепления", 13, Color(color, a))

@@ -15,6 +15,8 @@ signal marker_requested(at: Vector2)
 const Data = preload("res://scripts/ui/local_map_data.gd")
 const Paint = preload("res://scripts/ui/map_paint.gd")
 const Journal = preload("res://scripts/game/map_journal.gd")
+const UiIcons = preload("res://scripts/ui/ui_icons.gd")
+const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const TILE := GameConfig.TILE
 const PICK := 17.0
 const MIN_SCALE := 0.06
@@ -35,6 +37,7 @@ var heading := 0.0
 var goal := Vector2.INF
 var quest := Vector2.INF
 var quest_color := Color.WHITE
+var quest_kind := ""
 var move_hint := ""
 var _data: Data
 var _base: Control
@@ -134,6 +137,7 @@ func set_source(source: Data) -> void:
 	player = Vector2.INF
 	goal = Vector2.INF
 	quest = Vector2.INF
+	quest_kind = ""
 	_last_revision = -1
 	_fog = null
 	_fog_texture = null
@@ -536,11 +540,17 @@ func _draw_overlay() -> void:
 	_draw_pins()
 	if not park:
 		if goal.is_finite():
-			_overlay.draw_circle(world_to_screen(goal), 10.0, Color("#cc822c"), false, 2.5, true)
+			var at := world_to_screen(goal)
+			_overlay.draw_circle(at, 11.5, Color("#fff9e9"), true, -1.0, true)
+			_overlay.draw_circle(at, 9.5, HudStyle.SURFACE, true, -1.0, true)
+			_overlay.draw_arc(at, 9.5, 0.0, TAU, 24, Color("#cc822c"), 2.0, true)
+			_overlay.draw_texture_rect(UiIcons.map_icon("goal"), Rect2(at - Vector2.ONE * 6.5, Vector2.ONE * 13.0), false, HudStyle.AMBER)
 		if quest.is_finite():
 			var at := world_to_screen(quest)
-			_overlay.draw_rect(Rect2(at - Vector2.ONE * 6.0, Vector2.ONE * 12.0), Color("#244648"))
-			_overlay.draw_rect(Rect2(at - Vector2.ONE * 4.0, Vector2.ONE * 8.0), quest_color)
+			_overlay.draw_circle(at, 11.5, Color("#fff9e9"), true, -1.0, true)
+			_overlay.draw_circle(at, 9.5, HudStyle.SURFACE, true, -1.0, true)
+			_overlay.draw_arc(at, 9.5, 0.0, TAU, 24, quest_color, 2.0, true)
+			_overlay.draw_texture_rect(UiIcons.quest_small(quest_kind), Rect2(at - Vector2.ONE * 6.5, Vector2.ONE * 13.0), false, quest_color)
 
 
 func _draw_track() -> void:
@@ -558,6 +568,14 @@ func _draw_leg(points: PackedVector2Array) -> void:
 	_track.draw_polyline(points, Paint.TRACE, 3.1 / _stroke_scale, true)
 
 
+static func _pin_color(kind: String) -> Color:
+	match kind:
+		"peak": return Color("#866038")
+		"lake": return Color("#2f6d8c")
+		"site": return Color("#316760")
+		_: return Color("#5f507a")
+
+
 func _draw_pins() -> void:
 	var labels: Array[Rect2] = []
 	var font: Font = _park_font if _styled() else ThemeDB.fallback_font
@@ -569,15 +587,20 @@ func _draw_pins() -> void:
 			continue
 		var focused: bool = place.key == hover.get("key")
 		var here := park and i == 0
-		var color := Color("#c14930") if here else (Color("#355b45") if _styled() else Color("#466768"))
+		var kind := str(place.get("kind", "settlement"))
+		var color := Color("#c14930") if here else _pin_color(kind)
+		var halo := 10.0 if _styled() else 8.5
+		var radius := 8.2 if _styled() else 6.8
+		var icon_size := 12.0 if _styled() else 10.0
 		if focused:
-			_overlay.draw_circle(at, 12, Color(color, 0.25), true, -1.0, true)
-		_overlay.draw_circle(at, 8 if _styled() else 6, Color("#fff9e9"), true, -1.0, true)
-		_overlay.draw_circle(at, 5.5 if _styled() else 3.5, color, true, -1.0, true)
+			_overlay.draw_circle(at, halo + 4.5, Color(color, 0.28), true, -1.0, true)
+		_overlay.draw_circle(at, halo, Color("#fff9e9"), true, -1.0, true)
+		_overlay.draw_circle(at, radius, color, true, -1.0, true)
+		_overlay.draw_texture_rect(UiIcons.map_icon(kind), Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, Color.WHITE)
 		var title: String = "Вы здесь" if here else place.name
 		var width := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var x := clampf(at.x, width * 0.5 + 10.0, maxf(width * 0.5 + 10.0, size.x - width * 0.5 - 10.0))
-		for offset: float in [-12.0, 25.0]:
+		for offset: float in [-15.0, 27.0]:
 			var label_at := Vector2(x, at.y + offset)
 			var rect := Rect2(label_at - Vector2(width * 0.5, fs), Vector2(width, fs + 4)).grow(4.0)
 			if rect.position.y < 0.0 or rect.end.y >= size.y or labels.any(func(other: Rect2) -> bool: return other.intersects(rect)):

@@ -120,7 +120,7 @@ func _build_header(data: Dictionary) -> void:
 	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	badge.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(8, 8), false))
-	badge.add_child(UiIcons.rect(UiIcons.QUESTS.tour, 20, HudStyle.MINT))
+	badge.add_child(UiIcons.rect(UiIcons.JOURNAL, 20, HudStyle.MINT))
 	head.add_child(badge)
 	var title_box := HBoxContainer.new()
 	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -148,14 +148,15 @@ func _build_header(data: Dictionary) -> void:
 	var group := ButtonGroup.new()
 	_tab_path = _tab("Путь", UiIcons.QUESTS.tour, 114, group, seg_row)
 	var album_caption := "Альбом  %d/%d" % [done_pages, pages.size()] if not pages.is_empty() else "Альбом"
-	_tab_album = _tab(album_caption, UiIcons.QUESTS.photo, 152, group, seg_row)
+	_tab_album = _tab(album_caption, UiIcons.ALBUM, 152, group, seg_row)
 	_tab_path.pressed.connect(func() -> void: _select(false))
 	_tab_album.pressed.connect(func() -> void: _select(true))
 	var close_hint := str(data.get("close_hint", "J / Esc"))
 	if not close_hint.is_empty():
 		head.add_child(HudStyle.chip(close_hint))
 	_close = Button.new()
-	_close.text = "✕ Закрыть"
+	_close.icon = UiIcons.CLOSE
+	_close.text = "Закрыть"
 	_close.custom_minimum_size = Vector2(124, 44)
 	_close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_close.pressed.connect(func() -> void: closed.emit())
@@ -432,7 +433,7 @@ func _pill(text: String, group_index: int, group: ButtonGroup, parent: Container
 	btn.toggle_mode = true
 	btn.button_group = group
 	btn.theme_type_variation = &"PillButton"
-	btn.custom_minimum_size.y = 34
+	btn.custom_minimum_size.y = 44
 	btn.pressed.connect(func() -> void:
 		_album_filter = group_index
 		_rebuild_album_grid()
@@ -658,7 +659,8 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 	if gidx >= 0 and gidx < groups.size():
 		head.add_child(HudStyle.chip(str(groups[gidx]), HudStyle.MINT))
 	var close_btn := Button.new()
-	close_btn.text = "✕ Закрыть"
+	close_btn.icon = UiIcons.CLOSE
+	close_btn.text = "Закрыть"
 	close_btn.custom_minimum_size = Vector2(124, 44)
 	close_btn.pressed.connect(func() -> void: close_lightbox())
 	head.add_child(close_btn)
