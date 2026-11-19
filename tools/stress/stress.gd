@@ -809,6 +809,8 @@ func _group_world() -> void:
 		_place(heavy_view)
 		heavy = await _case("world.view_" + name, "Мир: " + heavy_view.title, HOLD, _look.bind(heavy_view), {}, base_for_toggles or extras)
 		await _shot(name, relight)
+		if "--veg-tris" in args:
+			_veg_tris(game.vegetation, name)
 		var at := _look.bind(heavy_view)
 		var cut := func(nodes: Array) -> Array: return [_show.bind(nodes, false), _show.bind(nodes, true)]
 		var buildings: Array = [game.get_node("Settlements"), game.get_node("Structures")]
@@ -875,8 +877,12 @@ func _group_world() -> void:
 			# 15.11: цена частей теней солнца (дальность, атлас, фильтр, смешивание каскадов, двусторонние тени)
 		] + _shadow_parts(sun, game, relight) + [
 			["msaa", "сглаживание MSAA", func() -> void: root.msaa_3d = Viewport.MSAA_DISABLED, func() -> void: root.msaa_3d = msaa],
+			# 19.11: умолчание 4x → 2x; при базе 2x строка ничего не меняет
+			["msaa2", "MSAA 4x (2x вместо него)", func() -> void: root.msaa_3d = Viewport.MSAA_2X, func() -> void: root.msaa_3d = msaa],
 			["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
 			["vegetation", "ближняя растительность", _show.bind([game.vegetation], false), _show.bind([game.vegetation], true)],
+			# 19.11: ковёр травы (GroundCarpet) отдельно от остальной ближней растительности — его доля в треугольниках
+			["carpet", "ковёр травы", _show_carpet.bind(game.vegetation, false), _show_carpet.bind(game.vegetation, true)],
 			["far_forest", "дальний лес", _show.bind(far, false), _show.bind(far, true)],
 			["terrain", "рельеф", _show.bind([game.get_node("Terrain")], false), _show.bind([game.get_node("Terrain")], true)],
 			["outer", "местность за краем области", _show.bind([game.outer], false), _show.bind([game.outer], true)],
@@ -1102,6 +1108,81 @@ func _reload(seed_text: String, size: int) -> void:
 	main._free_game()
 	await _frames(30)
 	_memory("after_free2", "Мир выгружен второй раз")
+
+
+## 19.11: --veg-tris — треугольники ближней растительности по видам (экземпляры × треугольники сетки) с учётом
+## дальности видимости узла; тень — узлы, попадающие в проход теней (у теневых копий — только в него)
+const _UNDER_NAMES := ["FERN", "MOSS", "MUSHROOM", "HERB", "GRASS", "BUSH", "SAPLING", "PINE", "FLOWERS", "HIGH_GRASS", "YOUNG",
+	"YOUNG_PINE", "MEADOW", "FORBS", "SEDGE", "STIPA", "FIREWEED", "HAZEL", "HAZEL_TALL"]
+func _veg_tris(layer: VegetationLayer, view: String) -> void:
+	var labels := {}
+	for u: Dictionary in layer.understory:
+		var b: int = u.base
+		labels[u.node] = ("under_" + _UNDER_NAMES[b]) if b < _UNDER_NAMES.size() else "floor_%d" % b
+	if layer.carpet != null:
+		for entry: Dictionary in layer.carpet.layers:
+			for part: Dictionary in entry.nodes.values():
+				labels[part.node] = "carpet_" + String(entry.name)
+	var cam := layer.get_viewport().get_camera_3d()
+	var eye := cam.global_position
+	var rows := {}
+	var tri_cache := {}
+	var stack: Array[Node] = [layer]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		stack.append_array(n.get_children())
+		if not (n is MultiMeshInstance3D) or not n.is_visible_in_tree() or n.multimesh == null or n.multimesh.mesh == null:
+			continue
+		var node := n as MultiMeshInstance3D
+		var mm: MultiMesh = node.multimesh
+		var d := eye.distance_to(node.global_transform * mm.get_aabb().get_center())
+		if node.visibility_range_end > 0.0 and d > node.visibility_range_end + node.visibility_range_end_margin:
+			continue
+		if d < node.visibility_range_begin:
+			continue
+		var count := mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count
+		if count <= 0:
+			continue
+		var mesh: Mesh = mm.mesh
+		if not tri_cache.has(mesh):
+			var t := 0
+			for i in mesh.get_surface_count():
+				var arr := mesh.surface_get_arrays(i)
+				var idx: Variant = arr[Mesh.ARRAY_INDEX]
+				t += (idx as PackedInt32Array).size() / 3 if idx != null and not (idx as PackedInt32Array).is_empty() else (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+			tri_cache[mesh] = t
+		var tris: int = tri_cache[mesh]
+		var label: String = labels.get(node, "")
+		if label == "":
+			if node.has_meta("stream_tree"):
+				label = "tree_lvl%s" % str(node.get_meta("level", "?"))
+			elif mm.mesh == layer.grass.mesh if layer.grass != null else false:
+				label = "grass"
+			else:
+				label = "other"
+		var mode := "только тень" if node.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY else ("с тенью" if node.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF else "")
+		var key := "%s %s" % [label, mode]
+		var r: Array = rows.get(key, [0, 0, 0])
+		r[0] += 1
+		r[1] += count
+		r[2] += count * tris
+		rows[key] = r
+	var keys := rows.keys()
+	keys.sort_custom(func(a: String, b: String) -> bool: return rows[a][2] > rows[b][2])
+	var total := 0
+	for k: String in keys: total += rows[k][2]
+	print("VEG_TRIS %s всего %d в дальности (вид: узлов, экземпляров, треугольников)" % [view, total])
+	for k: String in keys.slice(0, 40):
+		print("VEG_TRIS  %-34s %5d %8d %9d" % [k, rows[k][0], rows[k][1], rows[k][2]])
+
+
+func _show_carpet(layer: VegetationLayer, on: bool) -> void:
+	if layer == null or layer.carpet == null:
+		return
+	for entry: Dictionary in layer.carpet.layers:
+		for part: Dictionary in entry.nodes.values():
+			if is_instance_valid(part.node):
+				part.node.visible = on
 
 
 func _show(nodes: Array, on: bool) -> void:
