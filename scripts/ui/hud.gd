@@ -24,9 +24,11 @@ const SUMMARY_FADE := 0.24
 const SUMMARY_HINT_TIME := 5.0
 const LEFT_MARGIN := 18.0  # левая колонка: отступ от края и зазор между карточками (с 19.11.2026)
 const LEFT_GAP := 10.0
+const LEFT_WIDTH := 282.0  # 19.11.2026: ширина левой колонки постоянна (как у сведений о месте), от соседей не зависит
 const TOAST_TIME := 3.5 # сколько сообщение висит на экране (с)
 const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
-const TOAST_QUEUE := 3 # сколько сообщений ждут в очереди, старые отбрасываются
+const TOAST_QUEUE := 2 # сколько сообщений ждут в очереди, старые отбрасываются (19.11.2026: было 3)
+const TOAST_REPEAT := 20.0 # 19.11.2026: то же сообщение раньше этого срока (с) не повторяется
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
@@ -123,6 +125,7 @@ var _toast_icon: TextureRect
 var _toast_panel_style: StyleBoxFlat
 var _toast_fill_style: StyleBoxFlat
 var _toast_kind: StringName = &"info"
+var _toast_seen := {}  # текст → время показа (мс): повтор того же сообщения не мелькает снова
 var _clock_minute := -1
 
 # Состояние игрока для отрисовки карт
@@ -322,7 +325,9 @@ func _style_summary() -> void:
 	HudStyle.label($LockHint/Text, 13, HudStyle.MUTED)
 	_reticle.draw.connect(_draw_reticle)
 
-	_toast_panel_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 9))
+	# 19.11.2026: плотнее по высоте — сообщение тонкой полосой, а не карточкой
+	_toast_panel_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 7))
+	$Toast/Stack.add_theme_constant_override("separation", 5)
 	_toast_panel_style.border_width_left = 3
 	_toast_panel_style.corner_radius_top_left = 6
 	_toast_panel_style.corner_radius_bottom_left = 6
@@ -332,6 +337,10 @@ func _style_summary() -> void:
 	$Toast/Stack/Line.add_child(_toast_icon)
 	$Toast/Stack/Line.move_child(_toast_icon, 0)
 	HudStyle.label(toast_label, 14)
+	# 19.11.2026: строка с переносом по словам не может стать уже колонки: иначе при узкой ширине каждое слово уходит
+	# на свою строку, а карточка вытягивается вверх и сама обратно не сжимается
+	var line_box: HBoxContainer = $Toast/Stack/Line
+	toast_label.custom_minimum_size.x = LEFT_WIDTH - _toast_panel_style.get_margin(SIDE_LEFT) 		- _toast_panel_style.get_margin(SIDE_RIGHT) - 17.0 - line_box.get_theme_constant("separation")
 	_toast_time.add_theme_stylebox_override("background", HudStyle.panel(HudStyle.RECESS, HudStyle.RECESS, 1, Vector2.ZERO, false))
 	_toast_fill_style = HudStyle.panel(HudStyle.MINT, HudStyle.MINT, 1, Vector2.ZERO, false)
 	_toast_time.add_theme_stylebox_override("fill", _toast_fill_style)
@@ -371,6 +380,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	_apply_reveal()
 	_toast_queue.clear()
 	_toast_kinds.clear()
+	_toast_seen.clear()
 	_toast_left = 0.0
 	$Toast.modulate.a = 0.0
 
@@ -401,6 +411,7 @@ func clear_world() -> void:
 	bike_shown = false
 	_toast_queue.clear()
 	_toast_kinds.clear()
+	_toast_seen.clear()
 	_toast_left = 0.0
 	$Toast.modulate.a = 0.0
 	set_hints([], [])
@@ -1081,7 +1092,7 @@ func set_bike(x: float, z: float, shown: bool) -> void:
 ## Пока одно уведомление на экране, следующие ждут в очереди,
 ## чтобы не затирать друг друга (например, сразу два открытия поселений)
 func toast(text: String, kind: StringName = &"info") -> void:
-	if text.is_empty():
+	if text.is_empty() or _repeated(text, kind):
 		return
 	if _toast_left > 0.0:
 		# Одинаковое событие может прийти повторно, пока другое сообщение стоит между ним и очередью.
@@ -1099,6 +1110,8 @@ func toast(text: String, kind: StringName = &"info") -> void:
 
 ## Контекстное предупреждение идёт следующим, сохраняя текущий кадр и остальные события.
 func toast_now(text: String, kind: StringName = &"info") -> void:
+	if _repeated(text, kind):
+		return
 	if _toast_left <= 0.0:
 		toast(text, kind)
 	elif not text.is_empty() and toast_label.text != text:
@@ -1114,9 +1127,27 @@ func toast_now(text: String, kind: StringName = &"info") -> void:
 			_toast_kinds.resize(TOAST_QUEUE)
 
 
+## 19.11.2026: то же сообщение, показанное меньше TOAST_REPEAT секунд назад (или стоящее сейчас на экране), не повторяется.
+## Предупреждения — ответ на действие игрока (сесть, сфотографировать): их повтор по времени не глушится
+func _repeated(text: String, kind: StringName) -> bool:
+	if _toast_left > 0.0 and toast_label.text == text:
+		return true
+	if kind == &"warning":
+		return false
+	var shown: int = _toast_seen.get(text, -1)
+	return shown >= 0 and Time.get_ticks_msec() - shown < TOAST_REPEAT * 1000.0
+
+
 func _show_toast(text: String, kind: StringName = &"info") -> void:
 	toast_label.text = text
+	var now := Time.get_ticks_msec()
+	if _toast_seen.size() > 32:
+		for key: String in _toast_seen.keys():
+			if now - int(_toast_seen[key]) >= TOAST_REPEAT * 1000.0:
+				_toast_seen.erase(key)
+	_toast_seen[text] = now
 	_apply_toast_style(kind, text)
+	_fit_toast()
 	$Toast.modulate.a = 0.0
 	_toast_left = TOAST_TIME
 	_toast_time.value = 1.0
@@ -1154,17 +1185,17 @@ func _apply_toast_style(kind: StringName, text: String) -> void:
 		_toast_icon.modulate = accent
 
 
-## 19.11.2026: левая колонка — сведения о месте, под ними задание, под ним сообщение; одна ширина, один зазор.
-## Каждый кадр из _apply_reveal, поэтому только сравнения: свойства пишутся, лишь когда что-то сдвинулось
+## 19.11.2026: левая колонка — сведения о месте, под ними задание, под ним сообщение; одна ширина LEFT_WIDTH, один зазор.
+## Ширина постоянная: прежде она бралась у карточки места, и любая её смена переносила текст сообщения заново.
+## Только сравнения: свойства пишутся, лишь когда что-то сдвинулось
 func _layout_left_column() -> void:
-	var width := _info_panel.size.x
 	var y := LEFT_MARGIN
 	if _info_panel.visible:
 		y += _info_panel.size.y + LEFT_GAP
-	_column(tracker, y, width)
+	_column(tracker, y, LEFT_WIDTH)
 	if tracker.visible:
 		y += tracker.size.y + LEFT_GAP
-	_column($Toast, y, width)
+	_column($Toast, y, LEFT_WIDTH)
 
 
 static func _column(panel: Control, y: float, width: float) -> void:
@@ -1173,6 +1204,15 @@ static func _column(panel: Control, y: float, width: float) -> void:
 	width = maxf(width, panel.get_combined_minimum_size().x)  # иначе контейнер вернёт свой минимум и запись пойдёт каждый кадр
 	if panel.size.x != width:
 		panel.size.x = width
+
+
+## 19.11.2026: карточка сообщения по высоте ровно под текст. Контейнер сам только растёт: после длинного сообщения
+## короткое стояло в высокой пустой карточке. Ширина колонки постоянна, поэтому перенос строк известен сразу
+func _fit_toast() -> void:
+	var toast_panel: PanelContainer = $Toast
+	var fit := Vector2(LEFT_WIDTH, 0.0)  # высота 0 — Control сам поднимет её до минимума под текст
+	if toast_panel.size != fit:
+		toast_panel.size = fit
 
 
 func _input(event: InputEvent) -> void:

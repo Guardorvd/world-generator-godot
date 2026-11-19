@@ -411,6 +411,25 @@ func _run() -> void:
 	hud.toast_now("Груз разбит\nПосылка повреждена", &"warning")
 	await create_timer(0.25).timeout
 	await _shot("hud_toast_warning")
+	# 19.11.2026: карточка сообщения — постоянной ширины колонки и по высоте под текст (после длинного короткое не стоит
+	# в высокой пустой карточке); тот же текст в течение TOAST_REPEAT не повторяется
+	var toast_card: Control = hud.get_node("Toast")
+	hud._toast_left = 0.0
+	hud.toast_now("Новое место: «Старая мельница у брода», заброшенная мельница. Отмечено на карте; до ближайшей деревни около двух километров по лесной дороге")
+	await process_frame
+	await process_frame
+	var tall := toast_card.size.y
+	hud._toast_left = 0.0
+	hud.toast_now("Велосипед ждёт рядом с костром")
+	await process_frame
+	await process_frame
+	_check(is_equal_approx(toast_card.size.x, Hud.LEFT_WIDTH) and toast_card.size.y < tall
+		and toast_card.size.y <= toast_card.get_combined_minimum_size().y + 0.5,
+		"сообщение: ширина %.0f, высота %.0f после длинного %.0f — по тексту" % [toast_card.size.x, toast_card.size.y, tall])
+	await _shot("hud_toast_short")
+	hud._toast_left = 0.0
+	hud.toast("Велосипед ждёт рядом с костром")
+	_check(hud._toast_left == 0.0, "то же сообщение сразу не повторяется")
 	hud._toast_left = 0.0
 	hud.get_node("Toast").hide()
 	hud.set_hints([["Shift", "Сильнее"], ["Пробел", "Прыжок"], ["F", "Слезть"], ["Y", "Поставить велосипед"]], [["F", "Доска «Ольховка»"]])
