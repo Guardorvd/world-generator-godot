@@ -64,8 +64,11 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 		for gap: Dictionary in surface.road_refinement.gaps:
 			bypasses.append(gap.bypass)
 	var f := fields(w, bypasses)
+	var part_us := Time.get_ticks_usec()
 	if surface != null:
 		f.massifs = RockMassif.seated(f.massifs, surface)
+	w.generation_profile.veg_seated_ms = (Time.get_ticks_usec() - part_us) / 1000.0
+	part_us = Time.get_ticks_usec()
 	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
 	# С 12.2 ряды чанков считаются на всех ядрах (Parallel.bands), каждый в свой список; списки склеиваются
 	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.
@@ -91,6 +94,8 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 			list.sort_custom(by_y)
 		return st
 	var rows := Parallel.bands(CH, job, 1)
+	w.generation_profile.veg_chunks_ms = (Time.get_ticks_usec() - part_us) / 1000.0
+	part_us = Time.get_ticks_usec()
 	var chunks: Array[PackedInt32Array] = []
 	chunks.resize(CW * CH)
 	var ox := PackedFloat64Array()
@@ -118,6 +123,7 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	w.obj_s = os
 	w.chunks = chunks
 	w.obj_count = ox.size()
+	w.generation_profile.veg_merge_ms = (Time.get_ticks_usec() - part_us) / 1000.0
 
 
 ## Поля стартовой области для place_chunk (stride W, угол 0, 0)
@@ -136,7 +142,9 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 	var forest := w.noise_field("forest")
 	var stony := w.noise_field("cost") # тот же шум, что и у стоимости троп: россыпи валунов пятнами
 	var lines := w.trails if bypasses.is_empty() else w.trails + bypasses
+	var clear_us := Time.get_ticks_usec()
 	var dist_path := path_clearance(W, H, lines, w.tunnels)
+	w.generation_profile.veg_clearance_ms = (Time.get_ticks_usec() - clear_us) / 1000.0
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
 	village.resize(N)
@@ -179,7 +187,9 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
 		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
 	# Скальные массивы всего плана — один раз, а не заново в каждом чанке (RockMassif.near).
+	var sites_us := Time.get_ticks_usec()
 	out.massifs = RockMassif.sites(w.seed_num, 0, 0, W, H, out, 0, 0, W, w.path_mask)
+	w.generation_profile.veg_massif_sites_ms = (Time.get_ticks_usec() - sites_us) / 1000.0
 	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return out
 

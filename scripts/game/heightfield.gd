@@ -352,6 +352,25 @@ func _build_ride() -> bool:
 			native_ride = false
 			return false
 		_ride = script.new()
+	return _fill_ride(_ride)
+
+
+## Отдельный снимок опоры C# (RideGround) для потока генерации: его Ground/Depth/GroundDepth дают то же, что
+## ground_at/depth_at этого рельефа сейчас (сверка — stress --verify-ride). Не связан с _ride главного потока;
+## после смены опоры (ground_changed) устаревает — берётся заново. null — нет C# или данных.
+func ride_snapshot() -> Object:
+	var w := world
+	if w == null or hv.size() != w.N or w.lake.size() != w.N or w.filled.size() != w.N or Grid.fast_grid() == null:
+		return null
+	var script: Script = load("res://scripts/core/RideGround.cs")
+	if script == null:
+		return null
+	var ride: Object = script.new()
+	return ride if _fill_ride(ride) else null
+
+
+func _fill_ride(ride: Object) -> bool:
+	var w := world
 	var keys := PackedInt32Array()
 	var patch_h := PackedFloat32Array()
 	var road_h := 0
@@ -363,7 +382,7 @@ func _build_ride() -> bool:
 			var hs: PackedFloat32Array = r.patches[key].h
 			if hs.size() != area:
 				push_error("RideGround: участок сетки дорог %d не %d высот — физика на GDScript" % [key, area])
-				_ride.Invalidate()
+				ride.Invalidate()
 				return false
 			keys.append(key)
 			patch_h.append_array(hs)
@@ -389,9 +408,9 @@ func _build_ride() -> bool:
 		rails.append(1 if s.get("rails", false) else 0)
 		geo.append_array([s.ax, s.az, s.ay, s.bx, s.bz, s.by, s.half, s.len, s.ux, s.uz, s.arch])
 	sine_start.append(sines.size())
-	if not _ride.Build(w.W, w.H, TILE, HS, GameConfig.LAKE_DROP, hv, road_h, keys, patch_h, r != null,
+	if not ride.Build(w.W, w.H, TILE, HS, GameConfig.LAKE_DROP, hv, road_h, keys, patch_h, r != null,
 			cells, ids, tunnel, rails, geo, sine_start, sines, _seg_pts, _pair_cells, _pair_segs, w.lake, w.filled):
-		push_error("RideGround: " + _ride.Error() + " — физика на GDScript")
+		push_error("RideGround: " + ride.Error() + " — физика на GDScript")
 		return false
 	return true
 

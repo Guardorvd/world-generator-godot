@@ -657,14 +657,15 @@ static func outcrop_solids(xf: Transform3D, form: int) -> PackedFloat32Array:
 
 ## Опора любого камня мира на Heightfield: Vector4(земля или основание выхода, нормаль/ось);
 ## x = INF — камень не ставится. Общая для отрисовки, препятствий и раскладки подлеска.
-static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
+## ride — снимок опоры C# этого рельефа (Heightfield.ride_snapshot) для потоков генерации: те же пробы в разы быстрее
+static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int, ride: Object = null) -> Vector4:
 	if is_outcrop(v):
 		var key := Vector4(x, z, scale, v)
 		heights.rock_seats_lock.lock()
 		var known: Variant = heights.rock_seats.get(key)
 		heights.rock_seats_lock.unlock()
 		if known != null: return known
-		var found := _outcrop_seat_live(heights, x, z, scale, v)
+		var found := _outcrop_seat_live(heights, x, z, scale, v, ride)
 		heights.rock_seats_lock.lock()
 		# Evict a batch of old results: bounded memory without copying all keys
 		# on every new rock. Recalculation is deterministic and safe after eviction.
@@ -682,7 +683,7 @@ static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int)
 	return Vector4(ground, normal.x, normal.y, normal.z)
 
 
-static func _outcrop_seat_live(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
+static func _outcrop_seat_live(heights: Heightfield, x: float, z: float, scale: float, v: int, ride: Object = null) -> Vector4:
 	var world := heights.world
 	var width := world.W
 	var height := world.H
@@ -694,6 +695,9 @@ static func _outcrop_seat_live(heights: Heightfield, x: float, z: float, scale: 
 			if index < path.size() and path[index] > 0: return Vector2(INF, INF)
 		var refinement := heights.road_refinement
 		if refinement != null and refinement.weight_at(px, pz, width) > 0.08: return Vector2(INF, INF)
+		if ride != null:
+			var fast: Vector2 = ride.GroundDepth(px, pz)
+			if not is_nan(fast.x): return fast
 		return heights.ground_depth_at(px, pz), x, z, scale, Vector2(world.world_origin) * GameConfig.TILE, v)
 
 

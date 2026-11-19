@@ -333,6 +333,17 @@ public partial class RideGround : RefCounted
 		return DepthIn(s, x, z, feet);
 	}
 
+	/// <summary>
+	/// Heightfield.ground_depth_at одним вызовом: (грунт, глубина без мостов), как Vector2 GDScript (float32).
+	/// Вне снимка — (NaN, NaN): тогда считает GDScript.
+	/// </summary>
+	public Godot.Vector2 GroundDepth(double x, double z)
+	{
+		var s = Volatile.Read(ref _snap);
+		if (s == null || !Inside(s, x, z)) return new Godot.Vector2(float.NaN, float.NaN);
+		return new Godot.Vector2((float)GroundIn(s, x, z), (float)DepthIn(s, x, z, double.NegativeInfinity));
+	}
+
 	/// <summary>Heightfield.immersion_at.</summary>
 	public double Immersion(double x, double z, double feet)
 	{

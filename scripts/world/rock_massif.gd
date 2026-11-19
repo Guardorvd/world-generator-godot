@@ -176,15 +176,22 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 	return out
 
 
+## false — пробы опоры массивов на GDScript (эталон для сверки)
+static var allow_fast_seat := true
+
+
 ## Только опёртые массивы закрывают место для подлеска и питают осыпь.
 static func seated(candidates: PackedFloat32Array, surface: Heightfield) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	var tile := GameConfig.TILE
+	# Пробы опоры — снимком C# (RideGround): в потоке генерации ground_at/depth_at идут на GDScript (~15 мкс),
+	# а массивов сотни по ~100 проб. Результат тот же; null — прежний путь.
+	var ride := surface.ride_snapshot() if allow_fast_seat else null
 	for at in range(0, candidates.size(), STRIDE):
 		var x := candidates[at] * tile
 		var z := candidates[at + 1] * tile
 		var v := int(candidates[at + 2])
-		var pose := RockModels.seat(surface, x, z, candidates[at + 3] * 1.2, v)
+		var pose := RockModels.seat(surface, x, z, candidates[at + 3] * 1.2, v, ride)
 		if pose.x == INF: continue
 		var item := candidates.slice(at, at + STRIDE)
 		var down := Vector2(pose.y, pose.w)
