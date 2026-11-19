@@ -6,7 +6,8 @@ extends SceneTree
 ## RoadRefinement с 16.11.2026 только на C#: их проверяет tools/road_golden.gd (хеши), здесь они лишь готовят рельеф для mesh.
 ## Выбор стартовой области и океан с сухими ложбинами (relief) — на настоящем рельефе плана 768 нескольких сидов
 ## (только этапы relief и ocean, без остальной генерации), --seeds a,b,c — свои сиды.
-##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,relief,rivers,mesh] [--dir <папка кэша>]
+## Стоимости природных маршрутов (rides, RideRoutes.cost_fields) — на синтетических полях.
+##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only fields,relief,rides,rivers,mesh] [--dir <папка кэша>]
 ## Лимит 240 с (watchdog). Код 1 при любом расхождении.
 
 const SEED := "Север-1234"
@@ -46,6 +47,8 @@ func run() -> void:
 		verify_fields()
 	if wanted("relief"):
 		verify_relief()
+	if wanted("rides"):
+		verify_rides()
 	if (wanted("rivers") or wanted("mesh")) and not verify_saved_world():
 		quit(1)
 		return
@@ -284,3 +287,40 @@ func _crop(h: PackedFloat32Array, W: int, at: Vector2i, side: int) -> PackedFloa
 	for y in side:
 		out.append_array(h.slice((at.y + y) * W + at.x, (at.y + y) * W + at.x + side))
 	return out
+
+
+## Стоимости природных маршрутов (RideRoutes.cost_fields): GDScript и C# на синтетических полях с INF, сетью,
+## реками, лесом и равными высотами в блоке (при равенстве остаётся первая клетка), побайтно
+func verify_rides() -> void:
+	for size: Vector2i in [Vector2i(1, 1), Vector2i(37, 53), Vector2i(301, 247)]:
+		var w := WorldData.new()
+		w.W = size.x
+		w.H = size.y
+		w.N = w.W * w.H
+		w.seed_num = 4242
+		w.cost.resize(w.N)
+		w.biome.resize(w.N)
+		w.slope.resize(w.N)
+		var river := PackedByteArray()
+		river.resize(w.N)
+		var mask := PackedByteArray()
+		mask.resize(w.N)
+		var hv := PackedFloat32Array()
+		hv.resize(w.N)
+		for i in w.N:
+			var r := WGRandom.hash2(i % w.W, i / w.W, w.seed_num)
+			w.cost[i] = INF if r < 0.05 else 0.3 + r * 9.0
+			w.biome[i] = int(r * 997.0) % Biomes.LIST.size()
+			w.slope[i] = fmod(r * 13.0, 0.3)
+			mask[i] = int(r * 57.0) % 4
+			hv[i] = floorf(r * 8.0) * 5.0 # много равных высот
+			river[i] = int(fmod(r * 31.0, 1.0) < 0.1)
+		w.river = river
+		var net := RideRoutes._net_mask(mask)
+		check(net == Grid.fast_grid().BytesAtLeast(mask, 2), "%s: маска сети побайтно" % size)
+		var dist := Grid.distance_field(w.W, w.H, net)
+		var slow := RideRoutes.cost_fields(w, hv, net, dist, null)
+		var fast := RideRoutes.cost_fields(w, hv, net, dist, Grid.fast_grid())
+		check(slow.cost.to_byte_array() == PackedFloat32Array(fast.cost).to_byte_array()
+			and slow.wood.to_byte_array() == PackedFloat32Array(fast.wood).to_byte_array()
+			and slow.block == PackedInt32Array(fast.block), "%s: стоимости маршрутов и вершины блоков побайтно" % size)

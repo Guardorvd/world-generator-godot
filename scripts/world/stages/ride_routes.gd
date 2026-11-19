@@ -91,42 +91,16 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var W := w.W
 	var hv := surface.hv
 	# Расстояние до готовой сети (дороги, тропы, горные тропы) — одна проходка C#
-	var net := PackedByteArray()
-	net.resize(w.N)
-	var mask := w.path_mask # свойство WorldData: в цикле — локальная ссылка
-	for i in w.N:
-		if mask[i] >= 2: net[i] = 1
+	var fast := Grid.fast_grid()
+	var net: PackedByteArray = fast.BytesAtLeast(w.path_mask, 2) if fast != null else _net_mask(w.path_mask)
 	var dist := Grid.distance_field(W, w.H, net)
-	# Стоимость маршрута: та же местность, рядом с сетью дороже (и сама сеть: протоптанная дешевизна не тянет вдоль дороги)
-	var cost := PackedFloat32Array()
-	cost.resize(w.N)
-	var wood := PackedFloat32Array()
-	wood.resize(w.N)
-	var base := w.cost
-	var biome := w.biome
-	var slope := w.slope
-	var river := w.river_cells()
-	# В том же проходе — самая высокая клетка каждого блока BLOCK×BLOCK (кандидаты в виртуальные вершины)
+	# Стоимость маршрута: та же местность, рядом с сетью дороже (и сама сеть: протоптанная дешевизна не тянет вдоль дороги);
+	# в том же проходе — самая высокая клетка каждого блока BLOCK×BLOCK (кандидаты в виртуальные вершины)
+	var fields := cost_fields(w, hv, net, dist, fast)
+	var cost: PackedFloat32Array = fields.cost
+	var wood: PackedFloat32Array = fields.wood
+	var block: PackedInt32Array = fields.block
 	var bw := ceili(float(W) / BLOCK)
-	var block := PackedInt32Array()
-	block.resize(bw * ceili(float(w.H) / BLOCK))
-	block.fill(-1)
-	var wooded := PackedByteArray()
-	wooded.resize(Biomes.LIST.size())
-	for b: int in WOODED: wooded[b] = 1
-	for i in w.N:
-		var c: float = base[i]
-		if c == INF:
-			cost[i] = INF
-			wood[i] = INF
-			continue
-		if net[i] != 0: c = maxf(c, 2.0) # протоптанная тропа 0,3 — как обычная земля
-		if dist[i] < NEAR_R: c *= NEAR_MUL
-		if river[i] != 0: c *= RIVER_MUL # реку — поперёк, коротким бродом, а не по руслу
-		cost[i] = c
-		wood[i] = c if wooded[biome[i]] != 0 else c * OPEN_MUL
-		var b := (i / W / BLOCK) * bw + (i % W) / BLOCK
-		if slope[i] < TOP_SLOPE and (block[b] < 0 or hv[i] > hv[block[b]]): block[b] = i
 	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
 	var anchors := _anchors(w, hv, on_axis, cost)
 	stats.anchors = anchors.size()
@@ -243,6 +217,53 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	stats.km = snappedf(stats.km, 0.01)
 	stats.climb_km = snappedf(stats.climb_km, 0.01)
 	stats.ms = (Time.get_ticks_usec() - started) / 1000.0
+
+
+static func _net_mask(mask: PackedByteArray) -> PackedByteArray:
+	var net := PackedByteArray()
+	net.resize(mask.size())
+	for i in mask.size():
+		if mask[i] >= 2: net[i] = 1
+	return net
+
+
+## Стоимости маршрутов {cost, wood, block}: cost — местность, у сети (net, dist < NEAR_R) и реки дороже; wood — лесная
+## линия (открытая земля дороже в OPEN_MUL); block — самая высокая клетка блока BLOCK×BLOCK положе TOP_SLOPE (-1 — нет).
+## fast — FastGrid (копия RideCostFields, побайтно то же; сверка — tools/dod_verify.gd -- --only rides) или null
+static func cost_fields(w: WorldData, hv: PackedFloat32Array, net: PackedByteArray, dist: PackedFloat32Array, fast: Object) -> Dictionary:
+	var wooded := PackedByteArray()
+	wooded.resize(Biomes.LIST.size())
+	for b: int in WOODED: wooded[b] = 1
+	if fast != null:
+		return fast.RideCostFields(w.W, w.H, w.cost, net, dist, w.river_cells(), w.biome, wooded, w.slope, hv, BLOCK,
+			NEAR_R, NEAR_MUL, RIVER_MUL, OPEN_MUL, TOP_SLOPE)
+	var W := w.W
+	var cost := PackedFloat32Array()
+	cost.resize(w.N)
+	var wood := PackedFloat32Array()
+	wood.resize(w.N)
+	var base := w.cost
+	var biome := w.biome
+	var slope := w.slope
+	var river := w.river_cells()
+	var bw := ceili(float(W) / BLOCK)
+	var block := PackedInt32Array()
+	block.resize(bw * ceili(float(w.H) / BLOCK))
+	block.fill(-1)
+	for i in w.N:
+		var c: float = base[i]
+		if c == INF:
+			cost[i] = INF
+			wood[i] = INF
+			continue
+		if net[i] != 0: c = maxf(c, 2.0) # протоптанная тропа 0,3 — как обычная земля
+		if dist[i] < NEAR_R: c *= NEAR_MUL
+		if river[i] != 0: c *= RIVER_MUL # реку — поперёк, коротким бродом, а не по руслу
+		cost[i] = c
+		wood[i] = c if wooded[biome[i]] != 0 else c * OPEN_MUL
+		var b := (i / W / BLOCK) * bw + (i % W) / BLOCK
+		if slope[i] < TOP_SLOPE and (block[b] < 0 or hv[i] > hv[block[b]]): block[b] = i
+	return {cost = cost, wood = wood, block = block}
 
 
 ## Точки готовой сети примерно через ANCHOR_STEP клеток: {i, h (м), mountain — на горной тропе}. Не на сооружениях

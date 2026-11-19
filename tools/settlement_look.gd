@@ -10,6 +10,7 @@ extends SceneTree
 ##   -- --seeds a,b,c   свои сиды (по умолчанию CONTROL)
 ##   -- --legacy        прежний отбор (StageLandmarks.legacy: полный водный член, без поправки на удалённость)
 ##   -- --roads         ещё дороги
+##   -- --profile       с --roads: время частей этапа путей (generation_profile: *_ms, parts_ms, поиск)
 ##   -- --tag <имя>     суффикс файлов, например _old
 ##   -- --surface <папка> --roads   сохранить поверхность после подгонки дорог для mountain_detail_look
 ## Лимит 240 с.
@@ -61,6 +62,9 @@ func _run() -> void:
 			t = Time.get_ticks_usec()
 			StageTrails.run(w, func(_p: float, _l: String) -> void: pass)
 			row.roads = _roads(w, placed, (Time.get_ticks_usec() - t) / 1000.0)
+			if "--profile" in OS.get_cmdline_user_args():
+				_print_profile(seed_text, w.generation_profile)
+				print("  отпечаток путей %s: %s" % [seed_text, _roads_print(w)])
 			row.after = _describe(w, land)
 			if not surface_dir.is_empty():
 				RoadSurface.run(w)
@@ -237,3 +241,35 @@ func _map(w: WorldData, roads: bool) -> Image:
 				if x >= 0 and y >= 0 and x < img.get_width() and y < img.get_height():
 					img.set_pixel(x, y, Color.BLACK if absi(dx) == 2 or absi(dy) == 2 else col)
 	return img
+
+
+## Время частей этапа путей, по убыванию: где уходит время StageTrails
+func _print_profile(seed_text: String, gp: Dictionary) -> void:
+	var rows := []
+	for key: String in gp:
+		if key.ends_with("_ms") and (gp[key] is float or gp[key] is int):
+			rows.append([float(gp[key]), key])
+	for key: String in gp.get("parts_ms", {}):
+		rows.append([float(gp.parts_ms[key]), "parts." + key])
+	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+	print("  время путей %s:" % seed_text)
+	for r: Array in rows:
+		if r[0] >= 20.0:
+			print("    %8.0f мс  %s" % [r[0], r[1]])
+	for key: String in gp:
+		if key.ends_with("_search") or key.ends_with("_details") or key == "rides":
+			print("    %s %s" % [key, JSON.stringify(gp[key])])
+
+
+## Отпечаток результата путей: те же ли пути, сооружения, связи и маршруты (сверка рефакторинга было/стало)
+func _roads_print(w: WorldData) -> String:
+	var links := []
+	for st: SettlementData in w.settlements:
+		links.append([st.i, st.connections])
+	var spans := []
+	for st: Variant in w.bridges + w.tunnels:
+		spans.append(inst_to_dict(st) if st is Object else st)
+	var parts := PackedStringArray()
+	for part: Variant in [w.trails, w.path_mask, spans, links, w.road_rides]:
+		parts.append(var_to_bytes(part).hex_encode().md5_text().left(8))
+	return " ".join(parts)
