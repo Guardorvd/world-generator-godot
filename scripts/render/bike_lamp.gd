@@ -4,9 +4,7 @@ const LAMP_TILT := 0.09
 const BEAM_LENGTH := 9.0 # длина видимого луча (м)
 const BEAM_RADIUS := 2.0 # его радиус на дальнем конце (м)
 var _enabled := false
-var _lens_on: StandardMaterial3D
-var _lens_off: StandardMaterial3D
-var _lens: MeshInstance3D
+var _lens_material: StandardMaterial3D
 var _beam: SpotLight3D
 var _beam_mesh: MeshInstance3D
 var _halo: MeshInstance3D
@@ -35,28 +33,23 @@ func _ready() -> void:
 	body.material_override = body_mat
 	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(body)
-	_lens_off = StandardMaterial3D.new()
-	_lens_off.albedo_color = Color(0.75, 0.78, 0.8)
-	_lens_off.roughness = 0.1
-	_lens_off.metallic = 0.6
-	_lens_on = StandardMaterial3D.new()
-	_lens_on.albedo_color = Color(1.0, 0.95, 0.85)
-	_lens_on.emission_enabled = true
-	_lens_on.emission = Color(1.0, 0.9, 0.72)
-	_lens_on.emission_energy_multiplier = 6.0
-	_lens = MeshInstance3D.new()
+	# Один вариант материала для обоих состояний. Переключение меняет только параметры.
+	_lens_material = StandardMaterial3D.new()
+	_lens_material.emission_enabled = true
+	_lens_material.emission = Color(1.0, 0.9, 0.72)
+	var lens := MeshInstance3D.new()
 	var lens_mesh := CylinderMesh.new()
 	lens_mesh.top_radius = 0.029
 	lens_mesh.bottom_radius = 0.029
 	lens_mesh.height = 0.006
 	lens_mesh.radial_segments = 12
 	lens_mesh.rings = 1
-	_lens.mesh = lens_mesh
-	_lens.material_override = _lens_off
-	_lens.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
-	_lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_lens.position = Vector3(0.0, 0.0, -0.044)
-	add_child(_lens)
+	lens.mesh = lens_mesh
+	lens.material_override = _lens_material
+	lens.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+	lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	lens.position = Vector3(0.0, 0.0, -0.044)
+	add_child(lens)
 	# Один конус освещает дорогу и ближнюю обочину. Рассеяние у стекла рисуется отдельно.
 	_beam = SpotLight3D.new()
 	_beam.name = "Beam"
@@ -116,8 +109,11 @@ func set_enabled(on: bool) -> void:
 		_halo.visible = on
 	if is_instance_valid(_beam_mesh):
 		_beam_mesh.visible = on
-	if is_instance_valid(_lens):
-		_lens.material_override = _lens_on if on else _lens_off
+	if _lens_material != null:
+		_lens_material.albedo_color = Color(1.0, 0.95, 0.85) if on else Color(0.75, 0.78, 0.8)
+		_lens_material.roughness = 1.0 if on else 0.1
+		_lens_material.metallic = 0.0 if on else 0.6
+		_lens_material.emission_energy_multiplier = 6.0 if on else 0.0
 
 
 func is_enabled() -> bool:

@@ -198,6 +198,14 @@ func _memory(key: String, title: String) -> void:
 		objects = int(Performance.get_monitor(Performance.OBJECT_COUNT)), nodes = int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))}
 
 
+static func _pipeline_counts() -> Vector4i:
+	return Vector4i(
+		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_MESH)),
+		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_SURFACE)),
+		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_DRAW)),
+		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_CANVAS)))
+
+
 ## Кадры в течение seconds; step(t, dt) — что делать в каждом кадре (камера, подгрузка), его время идёт в work_ms.
 func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var vp := root.get_viewport_rid()
@@ -214,8 +222,8 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var began := Time.get_ticks_usec()
 	var last := began
 	var dt := 1.0 / 60.0
-	var draw_pipelines := int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_DRAW))
-	var previous_pipelines := draw_pipelines
+	var initial_pipelines := _pipeline_counts()
+	var previous_pipelines := initial_pipelines
 	var live := keep and game != null and not game.paused
 	var previous_ticks: Dictionary = game.tick_us.duplicate() if live else {}
 	while Time.get_ticks_usec() - began < seconds * 1000000.0:
@@ -231,7 +239,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 		clock += dt
 		last = now
 		if keep:
-			var pipelines := int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_DRAW))
+			var pipelines := _pipeline_counts()
 			var compiled := pipelines - previous_pipelines
 			previous_pipelines = pipelines
 			ms.append(dt * 1000.0)
@@ -249,7 +257,8 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 			if dt > 0.0167 and spike_cause.is_valid() and (spikes.size() < 5 or dt * 1000.0 > spikes[-1].ms):
 				var spike := {t = snappedf((now - began) / 1000000.0, 0.01), ms = snappedf(dt * 1000.0, 0.1), work_ms = snappedf(worked, 0.1),
 					gpu_ms = snappedf(gpu[gpu.size() - 1], 0.1), cpu_ms = snappedf(cpu[cpu.size() - 1], 0.1),
-					draw_pipelines = compiled, cause = spike_cause.call()}
+					mesh_pipelines = compiled.x, surface_pipelines = compiled.y, draw_pipelines = compiled.z,
+					canvas_pipelines = compiled.w, cause = spike_cause.call()}
 				if live:
 					var tick_parts := {}
 					for part: String in game.tick_us:
@@ -268,7 +277,11 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 		return {}
 	var out := Report.stats(ms, gpu, cpu, work, calls, prims)
 	if out.frames > 0:
-		out.draw_pipelines = previous_pipelines - draw_pipelines
+		var compiled := previous_pipelines - initial_pipelines
+		out.mesh_pipelines = compiled.x
+		out.surface_pipelines = compiled.y
+		out.draw_pipelines = compiled.z
+		out.canvas_pipelines = compiled.w
 		out.physics_ms = snappedf(physics / out.frames, 0.01)
 		out.peak_video_mb = snappedf(peak_video / 1048576.0, 0.1)
 		out.worst = spikes
@@ -286,7 +299,11 @@ func _case(name: String, title: String, seconds: float, step := Callable(), extr
 	case_end = Time.get_ticks_msec()
 	c.setup_s = setup_s
 	c.cold_max_ms = warm.ms.max if warm.get("frames", 0) > 0 else 0.0 # худший кадр прогрева: шейдеры и первая догрузка
+	c.cold_mesh_pipelines = warm.get("mesh_pipelines", 0)
+	c.cold_surface_pipelines = warm.get("surface_pipelines", 0)
 	c.cold_draw_pipelines = warm.get("draw_pipelines", 0)
+	c.cold_canvas_pipelines = warm.get("canvas_pipelines", 0)
+	c.cold_worst = warm.get("worst", [])
 	c.name = name
 	c.title = title
 	c.group = name.get_slice(".", 0)
@@ -734,6 +751,7 @@ func _group_world() -> void:
 	preload("res://scripts/game/opening_route.gd").fixed_seed = 1
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
+	main.startup_render_frames = main.LOAD_WARMUP_FRAMES
 	await _frames(3)
 	DisplayServer.window_set_size(Dev.WINDOW_SIZE)
 	_unlock_frames()
@@ -904,7 +922,7 @@ func _group_world() -> void:
 	# игра без паузы: логика, физика, HUD и звук; сначала игрок стоит, потом едет (руль и газ — нажатия действий)
 	await _play("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD, Callable())
 	await _play("world.play_ride", "Мир: езда с физикой велосипеда", MOVE, _drive)
-	# разгон и резкое торможение: частицы, пыль и след тормоза (первое появление эффектов за игру — в прогреве)
+	# Торможение начинается после двух секунд разгона. Первый тормозной кадр попадает в основной замер.
 	await _play("world.play_brake", "Мир: разгон и резкое торможение", MOVE, _brake)
 	if _wanted("world.play_night"):
 		game.hour = 23.0
@@ -914,7 +932,7 @@ func _group_world() -> void:
 		await _play("world.play_night", "Мир: ночная езда с фарой", MOVE * 0.5, _drive)
 		game.bike_view.set_lamp(false)
 		game.hour = 12.0
-	if _wanted("world.travel") and views.has("forest"):
+	if _wanted("world.after_travel") and views.has("forest"):
 		await _travel(views.forest)
 
 	_memory("played", "После замеров в мире")

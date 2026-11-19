@@ -554,6 +554,20 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		services.resource_profile.save()
 
 
+## Вызывается на закрытом экране до первого игрового такта.
+func prepare_render_pipelines() -> Node3D:
+	brake_effects.prepare_track_pipeline()
+	var probes := Node3D.new()
+	probes.name = "RenderWarmup"
+	probes.position = to_local(camera.global_position - camera.global_basis.z * 2.0)
+	probes.add_child(navigation_line.make_pipeline_probe())
+	var mist: Node3D = local_mist.make_pipeline_probe()
+	if mist != null:
+		probes.add_child(mist)
+	add_child(probes)
+	return probes
+
+
 func _update_water(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
 	var uploaded := false
 	for offset in _water_streams.size():

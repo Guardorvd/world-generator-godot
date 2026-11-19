@@ -53,6 +53,19 @@ func set_quality(level: int, env: Environment) -> void:
 		_proxy_mesh.material = material
 
 
+## Прогреть формат текущего режима без запроса географии и изменения живых пятен.
+func make_pipeline_probe() -> Node3D:
+	if mode == Mode.OFF:
+		return null
+	var probe := _patch_node(Vector3.ONE)
+	# Скрытый меш участвует в Surface. Для compute-прохода нужен видимый объём с плотностью 0.
+	if probe is FogVolume:
+		probe.material.set_shader_parameter("density", 0.0)
+	else:
+		probe.hide()
+	return probe
+
+
 func update(at: Vector3, delta: float) -> void:
 	if mode == Mode.OFF or not visible:
 		return

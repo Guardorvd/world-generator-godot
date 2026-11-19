@@ -56,6 +56,7 @@ const BIRDS := ["res://resources/sounds/bird_1.wav", "res://resources/sounds/bir
 var game: Node # GameWorld; без типа, чтобы меню не тянуло скрипты игры при запуске
 var trail_lab: Node
 var busy := false
+var startup_render_frames := 0 # инструменты замера могут включить прогрев без записи прогресса
 var gen_thread: Thread
 var _load_started_ms := 0
 var _load_elapsed := -1
@@ -157,6 +158,7 @@ func _ready() -> void:
 	%Version.text = str(ProjectSettings.get_setting("application/config/version", "?"))
 	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
 	_progress_enabled = get_tree().current_scene == self
+	startup_render_frames = LOAD_WARMUP_FRAMES if _progress_enabled else 0
 	GameContext.scope.cache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
 	_setup_save_controls()
@@ -1652,11 +1654,20 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	# Рендер и стриминг работают под заставкой, физика ждёт начала перехода.
 	_set_progress(0.99, "Прогрев 3D-сцены")
 	phase_started = Time.get_ticks_usec()
-	var warmup_frames := LOAD_WARMUP_FRAMES if _progress_enabled and DisplayServer.get_name() != "headless" else 0
+	var warmup_frames := startup_render_frames if DisplayServer.get_name() != "headless" else 0
+	var pipeline_probe: Node3D
+	if warmup_frames > 0 and RenderingServer.get_current_rendering_method() == "forward_plus" \
+			and get_window().mode != Window.MODE_MINIMIZED:
+		pipeline_probe = game.prepare_render_pipelines()
 	for i in warmup_frames:
 		await get_tree().process_frame
+		if i == 1 and is_instance_valid(pipeline_probe):
+			pipeline_probe.queue_free()
+			pipeline_probe = null
 		if game == null or _load_cancel_requested or get_window().mode == Window.MODE_MINIMIZED:
 			break
+	if is_instance_valid(pipeline_probe):
+		pipeline_probe.queue_free()
 	loaded.timings.first_frames_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	if _load_cancel_requested or game == null:
 		_finish_load()

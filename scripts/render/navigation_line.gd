@@ -105,6 +105,16 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	material_override = material
 
 
+func make_pipeline_probe() -> MeshInstance3D:
+	var probe := MeshInstance3D.new()
+	probe.mesh = _route_mesh(PackedVector3Array([Vector3.ZERO, Vector3.RIGHT, Vector3.FORWARD]),
+		PackedColorArray([Color.TRANSPARENT, Color.TRANSPARENT, Color.TRANSPARENT]))
+	probe.material_override = material_override
+	probe.cast_shadow = cast_shadow
+	probe.hide()
+	return probe
+
+
 func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_serial += 1
 	_request = {}
@@ -323,15 +333,19 @@ func _publish_paint(geometry: Dictionary, here: Vector2, feet: float) -> void:
 	if geometry.vertices.is_empty():
 		mesh = null
 		return
+	var started := Time.get_ticks_usec()
+	mesh = _route_mesh(geometry.vertices, geometry.colors)
+	timings_us.paint_upload = Time.get_ticks_usec() - started
+
+
+static func _route_mesh(vertices: PackedVector3Array, colors: PackedColorArray) -> ArrayMesh:
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = geometry.vertices
-	arrays[Mesh.ARRAY_COLOR] = geometry.colors
-	var started := Time.get_ticks_usec()
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
 	var line := ArrayMesh.new()
 	line.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mesh = line
-	timings_us.paint_upload = Time.get_ticks_usec() - started
+	return line
 
 
 func can_arrive(at: Vector3) -> bool:

@@ -277,6 +277,18 @@ func setup() -> void:
 	clear()
 
 
+## ImmediateMesh получает формат вершин только после первой поверхности.
+func prepare_track_pipeline() -> void:
+	if _track_node.visible or _track_mesh.get_surface_count() != 0:
+		return
+	_track_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_track_vertex(Vector3.ZERO, Vector2.ZERO, Vector2.ZERO, Color.TRANSPARENT)
+	_add_track_vertex(Vector3.RIGHT, Vector2.RIGHT, Vector2.ZERO, Color.TRANSPARENT)
+	_add_track_vertex(Vector3.FORWARD, Vector2.DOWN, Vector2.ZERO, Color.TRANSPARENT)
+	_track_mesh.surface_end()
+	# Скрытую поверхность удалит первый такт _step_tracks или clear.
+
+
 func clear() -> void:
 	if not _ready_done:
 		setup()
