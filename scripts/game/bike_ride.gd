@@ -1270,8 +1270,9 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 	if contact_model:
 		# На земле пробел запускает тот же Q→E телом.
 		if _hop_buf > 0.0 and _hop_wait <= 0.0 and not airborne and _auto_hop < 0.0:
-			_hop_buf = 0.0
 			_auto_hop = 0.0
+			# 20.11: буфер нарочно живёт до конца фазы «тело назад»: если колёса сойдут с гребня раньше E, ветка
+			# ниже даст прыжок с запасом схода (иначе пробел перед кромкой пропадал — 14.1). Взлёт его обнуляет.
 			_hop_buf = HOP_BUFFER
 			# Новый пробел — новый прыжок: защёлка прошлого (_hop_used ждёт возврата тела в середину) его не съедает.
 			# Иначе пробел, нажатый перед приземлением после прыжка, давал только подъём переднего.
@@ -1279,8 +1280,11 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 		elif airborne and _hop_buf > 0.0 and _coyote > 0.0 and (_auto_hop < 0.0 or _auto_hop < AUTO_BACK) and not _hop_used:
 			# Малый запас после кромки: игрок нажал вовремя, хотя колёса уже потеряли опору.
 			_hop_buf = 0.0
-			_hop_front = HOP_FRONT * 0.5
-			_hop_front_v = 0.0
+			# 20.11: подготовка, уже набранная на земле (переднее поднято в окне HOP_LINK), не теряется: раньше сход
+			# с гребня посреди авто-Q→E всегда давал половинную подготовку, и прыжок с волны выходил ниже, чем с ровного.
+			var armed := _hop_link > 0.0
+			_hop_front = maxf(_hop_front if armed else 0.0, HOP_FRONT * 0.5)
+			_hop_front_v = _hop_front_v if armed else 0.0
 			_takeoff_hop()
 	elif _hop_buf > 0.0 and _hop_wait <= 0.0 and (not airborne or _coyote > 0.0):
 		_hop_buf = 0.0

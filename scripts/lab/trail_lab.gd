@@ -1363,7 +1363,8 @@ func _physics_process(dt: float) -> void:
 	var input_allowed := not editor.visible and not overview
 	var throttle := Input.get_axis("move_back", "move_forward") if input_allowed else 0.0
 	var turn := Input.get_axis("move_left", "move_right") if input_allowed else 0.0
-	if input_allowed and bike != null and bike.riding and not crash.active():
+	# под автопилотом удержание клавиш не копится: после его выключения руль начинается с нуля
+	if input_allowed and bike != null and bike.riding and not crash.active() and autopilot == null:
 		throttle = services.controls.bike_brake(throttle, dt)
 		turn = services.controls.bike_steer(turn, dt, bike.speed)
 	else:

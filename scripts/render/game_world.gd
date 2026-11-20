@@ -1544,9 +1544,6 @@ func _physics_process(dt: float) -> void:
 	_advance_clock(dt)
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-	if bike.riding:
-		st = services.controls.bike_steer(st, dt, bike.speed)
-		fw = services.controls.bike_brake(fw, dt)
 	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
 	var jump := Input.is_action_just_pressed("jump")
 	if _seat_id != "":
@@ -1569,10 +1566,18 @@ func _physics_process(dt: float) -> void:
 		jump = false
 	# при открытой карте руль, газ и прыжок не работают (велосипед катится по инерции)
 	var map_lock := show_map or _journal_open() or _plaque_open()
-	if time < _rescue_input_until or map_lock:
+	var input_lock := time < _rescue_input_until or map_lock
+	if input_lock:
 		fw = 0.0
 		st = 0.0
 		jump = false
+	# 20.11: удержание руля и тормоза с клавиатуры копится только от ввода игрока. Под картой, журналом и во вступлении
+	# (там руль ведёт сама дорога) оно сбрасывается, иначе после закрытия клавиша сразу давала набранную дугу.
+	if bike.riding and not _opening and not input_lock:
+		st = services.controls.bike_steer(st, dt, bike.speed)
+		fw = services.controls.bike_brake(fw, dt)
+	else:
+		services.controls.reset_motion()
 	if hud != null:
 		hud.set_ride_activity(bike.riding and not crash.active() and not _opening and not map_lock
 			and time >= _rescue_input_until and (fw < -0.01 or Input.is_action_pressed("run")))
@@ -1585,7 +1590,7 @@ func _physics_process(dt: float) -> void:
 		crashed = bike_controller.recover(dt, player, bike, crash, world, heights)
 	elif bike.riding:
 		var h0 := bike.heading
-		services.controls.read_bike_body(bike, not _opening and not show_map and time >= _rescue_input_until)
+		services.controls.read_bike_body(bike, not _opening and not input_lock)
 		fw = bike_controller.ride(dt, player, bike, world, heights, fw, st, Input.is_action_pressed("run") and not map_lock, jump, _opening)
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
 			_finish_opening()
