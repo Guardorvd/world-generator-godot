@@ -23,7 +23,9 @@ const WORK_LABELS := {
 	"world_save_auto": "Сохранение мира", "world_save_manual": "Ручное сохранение", "autosave_snapshot": "Подготовка автосохранения",
 	"gpu": "GPU", "render_cpu": "CPU отрисовки", "chunk_upload": "Передача чанков",
 	"pipeline_compilation": "Компиляции конвейеров", "dotnet_gc": "Пауза GC .NET",
-	"process_unmarked": "Неразмеченная работа _process",
+	"process_unmarked": "Неразмеченная работа _process", "gpu_next": "GPU следующего кадра",
+	"event_discovery": "Открыто место", "event_look_around": "Обзор с вышки или вершины", "event_crash": "Падение",
+	"event_photo": "Снимок",
 }
 
 
@@ -76,6 +78,9 @@ static func markdown(report: Dictionary) -> String:
 	lines.append("Кадров %d · 1 %% худших %.1f FPS · 0,1 %% худших %s FPS" % [s.frames, s.low1_fps, _number(s.low01_fps)])
 	lines.append("Время кадра p50 / p95 / p99 — %.2f / %.2f / %.2f мс. Худший кадр %.1f мс." % [s.ms.p50, s.ms.p95, s.ms.p99, s.ms.max])
 	lines.append("Рывков %d. Кадров дольше 16,7 / 33,3 / 100 мс — %d / %d / %d." % [s.hitches, s.over_16_7_ms, s.over_33_3_ms, s.over_100_ms])
+	# 20.11: при частоте экрана 60 Гц кадры около 16,7 мс колеблются вокруг порога — «пропуск» считается от полутора кадров экрана
+	lines.append("Пропущенных обновлений экрана (кадр дольше %.1f мс при %.0f Гц) — %d (%.1f %%)." % [
+		1.5 * 1000.0 / report.machine.refresh_hz, report.machine.refresh_hz, s.missed_refresh, 100.0 * s.missed_refresh / s.frames])
 	lines.append("Пики GPU / CPU отрисовки — %s / %s мс. Пики вызовов отрисовки / примитивов — %s / %s. Пик видеопамяти %s МБ." % [
 		_number(report.peaks.get("gpu_ms")), _number(report.peaks.get("render_cpu_ms")),
 		_number(report.peaks.get("draw_calls"), 0), _number(report.peaks.get("primitives"), 0), _number(report.peaks.get("video_mb"))])
@@ -140,7 +145,11 @@ static func _evidence(items: Array) -> String:
 	var parts := PackedStringArray()
 	for item: Dictionary in items:
 		var label: String = WORK_LABELS.get(item.part, item.part)
-		if item.has("ms"):
+		if item.part == "after_mode":
+			parts.append("после «%s» (%.1f с)" % [_label(item.from), item.held_s])
+		elif not item.has("ms") and not item.has("count"):
+			parts.append(label)
+		elif item.has("ms"):
 			parts.append("%s %.1f мс" % [label, item.ms])
 		else:
 			parts.append("%s ×%d" % [label, item.count])

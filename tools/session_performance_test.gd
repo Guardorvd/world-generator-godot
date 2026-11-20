@@ -55,6 +55,7 @@ func _run() -> void:
 	game.stream_coordinator.stats.frames += 1
 	game.stream_coordinator.stats.group_last_us[0] = 18_000
 	game.vegetation.phase_stats.last_us[5] = 16_000
+	game.note_perf_event("discovery", "1")
 	now += 120_000
 	session.sample(game, "pause", now)
 	# Кадр паузы не должен унаследовать работу стриминга.
@@ -133,6 +134,12 @@ func _check_report() -> void:
 	_check(row.context.light == "dusk" and row.context.biome == Biomes.LIST[Biomes.FOREST].name, "смена биома и закат видны в кадре")
 	_check(report.long_frames[1].stream_ms.is_empty() and report.context_groups.mode.has("pause"), "на паузе не повторяются счётчики подгрузки")
 	_check(report.dotnet_gc != null, "читаются счётчики GC")
+	var parts := func(r: Dictionary) -> Array: return r.evidence.map(func(e: Dictionary) -> String: return e.part)
+	_check("event_discovery" in parts.call(row) and report.events.any(func(e: Dictionary) -> bool: return e.kind == "discovery"),
+		"событие игры (открытие места) в кадре и в событиях")
+	var after: Array = report.long_frames[1].evidence.filter(func(e: Dictionary) -> bool: return e.part == "after_mode")
+	_check(after.size() == 1 and after[0].from == "gameplay" and after[0].held_s > 1.0, "кадр после смены режима знает, откуда и сколько там пробыли")
+	_check(s.missed_refresh == 2 and is_equal_approx(report.machine.refresh_hz, 60.0), "пропуски обновления экрана — от полутора кадров 60 Гц")
 
 
 func _check(ok: bool, label: String) -> bool:

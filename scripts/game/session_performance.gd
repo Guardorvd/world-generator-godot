@@ -5,6 +5,9 @@ static var dir := DIRECTORY
 const WINDOW_US := 1_000_000
 const TOP_FRAMES := 20
 const UNMARKED_MIN_MS := 2.0 # неразмеченная работа _process меньше этого в доказательства долгого кадра не идёт
+const GPU_EVIDENCE_MS := 1.0
+const AFTER_SWITCH_US := 600_000 # кадр в пределах 0,6 с после смены режима помечается этой сменой
+const MISSED_REFRESH := 1.5     # кадр дольше полутора кадров экрана — пропуск обновления экрана (видно глазом)
 const FrameStatistics := preload("res://scripts/core/frame_statistics.gd")
 const Report := preload("res://scripts/game/session_performance_report.gd")
 const CacheFile := preload("res://scripts/core/cache_file.gd")
@@ -51,6 +54,12 @@ var _baseline_by_mode := {}
 var _main_work: Array[Dictionary] = []
 var _sampling_us := 0
 var _sampling_peak_us := 0
+var _gpu_pending: Array[Dictionary] = []  # долгие кадры прошлого замера: ждут время GPU следующего кадра
+var _frame_events: Array[String] = []     # события игры в измеряемом кадре
+var _mode_since_us := 0
+var _last_switch := {}                    # {at_us, from, held_s}: последняя смена режима
+var _refresh_ms := 1000.0 / 60.0          # кадр экрана
+var _missed_refresh := 0
 
 
 func _init(game: Node, mode: String, now_us: int, loading := {}) -> void:
@@ -63,9 +72,14 @@ func _init(game: Node, mode: String, now_us: int, loading := {}) -> void:
 	_mode = mode
 	_viewport = game.get_viewport().get_viewport_rid()
 	_graphical = DisplayServer.get_name() != "headless"
+	_mode_since_us = now_us
 	if _graphical:
 		RenderingServer.viewport_set_measure_render_time(_viewport, true)
+		var refresh_hz := DisplayServer.screen_get_refresh_rate()
+		if refresh_hz >= 24.0:
+			_refresh_ms = 1000.0 / refresh_hz
 	_machine = {
+		refresh_hz = 1000.0 / _refresh_ms,
 		version = ProjectSettings.get_setting("application/config/version"),
 		engine = Engine.get_version_info().string, os = OS.get_name(),
 		cpu = OS.get_processor_name(), threads = OS.get_processor_count(),
@@ -111,7 +125,20 @@ func sample(game: Node, next_mode: String, now_us: int) -> void:
 	var over := Vector3i(int(ms > 16.7), int(ms > 33.3), int(ms > 100.0))
 	_over += over
 	_hitch_count += int(hitch)
+	_missed_refresh += int(ms > _refresh_ms * MISSED_REFRESH)
 	_measure(game)
+	# GPU-таймер отстаёт на кадр-два: время следующего кадра дописывается к прошлым долгим кадрам
+	for row: Dictionary in _gpu_pending:
+		row.render.gpu_next_ms = _render.gpu_ms
+		if _render.gpu_ms != null and _render.gpu_ms >= GPU_EVIDENCE_MS:
+			row.evidence.append({part = "gpu_next", ms = _render.gpu_ms})
+	_gpu_pending.clear()
+	# события игры этого кадра (открытие места, обзор, падение, снимок)
+	_frame_events.clear()
+	for event: Dictionary in game.take_perf_events():
+		event.t_s = _seconds(frame_start)
+		_events.append(event)
+		_frame_events.append(event.kind)
 	_window.frames += 1
 	_window.hitches += int(hitch)
 	_window.over += over
@@ -127,6 +154,7 @@ func sample(game: Node, next_mode: String, now_us: int) -> void:
 		var row := _frame_details(game, frame_start, ms, limit, hitch)
 		if long_frame:
 			_long_frames.append(row)
+			_gpu_pending.append(row)
 		if window_peak:
 			_window.max_ms = ms
 			_window.peak = {t_s = row.t_s, evidence = row.evidence, camera = row.camera}
@@ -139,7 +167,10 @@ func sample(game: Node, next_mode: String, now_us: int) -> void:
 	if now_us - _window.start_us >= WINDOW_US or _mode != next_mode:
 		_flush_window()
 	if _mode != next_mode:
-		_events.append({kind = "mode", t_s = _seconds(now_us), from = _mode, to = next_mode})
+		var held_s := (now_us - _mode_since_us) / 1000000.0
+		_events.append({kind = "mode", t_s = _seconds(now_us), from = _mode, to = next_mode, held_s = held_s})
+		_last_switch = {at_us = now_us, from = _mode, held_s = held_s}
+		_mode_since_us = now_us
 		_mode = next_mode
 		_context_due = now_us
 	var elapsed := Time.get_ticks_usec() - sampling_began
@@ -241,6 +272,11 @@ func _frame_details(game: Node, began_us: int, ms: float, limit: float, hitch: b
 			tick_ms[part] = float(_tick_delta[part]) / 1000.0
 	for row: Dictionary in _main_work:
 		evidence.append({part = row.kind, ms = row.duration_ms})
+	for kind: String in _frame_events:
+		evidence.append({part = "event_" + kind})
+	# 20.11: кадр вскоре после смены режима (закрыли карту, вышли из паузы) — откуда и сколько там пробыли
+	if not _last_switch.is_empty() and began_us - int(_last_switch.at_us) <= AFTER_SWITCH_US:
+		evidence.append({part = "after_mode", from = _last_switch.from, held_s = _last_switch.held_s})
 	_add_largest(evidence, tick_ms, "")
 	if _stream_active:
 		var stream: Dictionary = game.stream_coordinator.stats
@@ -329,7 +365,8 @@ func _flush_window() -> void:
 func _summary() -> Dictionary:
 	var n := _frames.size()
 	var out := {frames = n, fps = null, min_fps = null, max_fps = null, ms = {}, low1_fps = null, low01_fps = null,
-		hitches = _hitch_count, over_16_7_ms = _over.x, over_33_3_ms = _over.y, over_100_ms = _over.z}
+		hitches = _hitch_count, over_16_7_ms = _over.x, over_33_3_ms = _over.y, over_100_ms = _over.z,
+		missed_refresh = _missed_refresh}
 	if n == 0:
 		return out
 	_frames.sort()

@@ -146,6 +146,8 @@ var _hints_key := []  # от чего зависели последние под
 var _map_covers_world := false
 var _map_stream_origin := Vector2.INF
 var _adaptive := AdaptiveResolution.new()
+const PERF_EVENTS_MAX := 64
+var perf_events: Array[Dictionary] = [] # события игры для записи сессии (note_perf_event)
 var _adaptive_budget_ms := 0.0 # 0 — адаптивное разрешение недоступно (Compatibility, без окна, инструменты)
 var info_timer := 0.0
 const DISCOVERY_TICKS := 6   # такты физики между проверками открытий мест (10 раз в секунду)
@@ -1454,6 +1456,19 @@ func _tick_mark(part: String, t0: int) -> int:
 	return now
 
 
+## 20.11: событие игры для записи сессии (открытие места, обзор с вышки, падение, снимок). Запись забирает их
+## каждый кадр (take_perf_events); без записи (инструменты) очередь не растёт дальше PERF_EVENTS_MAX.
+func note_perf_event(kind: String, detail := "") -> void:
+	if perf_events.size() < PERF_EVENTS_MAX:
+		perf_events.append({kind = kind, detail = detail})
+
+
+func take_perf_events() -> Array[Dictionary]:
+	var taken := perf_events
+	perf_events = []
+	return taken
+
+
 func performance_mode() -> String:
 	if travel_active(): return "travel"
 	if paused: return "pause"
@@ -1701,6 +1716,7 @@ func _physics_process(dt: float) -> void:
 		for text: String in player.check_discoveries(world, hud.visited, hud.ride_log.places):
 			hud.toast(text, &"discovery")
 		if hud.visited.size() != known:
+			note_perf_event("discovery", str(hud.visited.size() - known))
 			hud.sync_map_places()
 			for pk in world.peaks:
 				var peak_id := WorldData.place_id("peak", pk.x, pk.y)
@@ -1979,6 +1995,7 @@ func _shake_on_landing(impact: float, soft: float) -> void:
 ## Седок упал (жёсткое приземление, удар в стену): велосипед и тело разлетаются (BikeCrash),
 ## после остановки игрок встаёт пешком; Y позволяет выбрать новое место для рамы
 func _crash() -> void:
+	note_perf_event("crash")
 	bike_controller.begin_crash(bike_view, bike, crash, heights)
 	# 12.3: хрупкий груз бьётся при падении
 	_hit_cargo(Quests.CARGO_CRASH_LOSS)
@@ -2356,6 +2373,7 @@ func _quest_arrived(place: Dictionary) -> bool:
 
 
 func _quest_photo(shot: Dictionary) -> void:
+	note_perf_event("photo", shot.get("place", ""))
 	interaction_service.photographed(shot)
 	# табличка обелиска в кадре вблизи (PhotoCamera.plaque_view ok): шаг серии «Летопись обелисков» (идёт рядом с активным)
 	if shot.get("plaque", "") != "":
@@ -2519,6 +2537,7 @@ func close_journal(capture := true) -> void:
 func _look_around(source: String, radius: float, from_text: String) -> void:
 	var explore := hud.explore
 	explore.scanned[source] = true
+	note_perf_event("look_around", source)
 	var eye := Vector3(player.x, player.feet + 1.7, player.z)
 	var found := explore.reveal_from(hud.all_places(), eye, radius, TILE, hud.is_open, heights.ground_at, _occluded)
 	# 20.11: первый обзор с вышки или вершины пополняет счёт магазина (один раз на источник в этом мире)
