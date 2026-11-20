@@ -249,6 +249,8 @@ func _journal_checks() -> void:
 	hud.visited[id] = true
 	hud.map_journal.read[id] = true
 	hud.explore.record_place_photo(id, shot_path)
+	# Фикстура меняет данные напрямую, поэтому явно обновляем индекс карты.
+	hud.sync_map_places()
 	var snapshot := hud.explore.save_state()
 	var restored := Exploration.new()
 	restored.restore(snapshot)
@@ -272,13 +274,17 @@ func _journal_checks() -> void:
 		"заезды: текущий первым, его трек выделен на карте")
 	hud.journal_panel._ride_buttons[1].emit_signal("pressed")
 	await process_frame
-	_check(hud.big_map.ride_legs.size() == 1 and hud.big_map.ride_legs[0] == past, "клик по прошлому заезду показывает его трек")
+	_check(hud.big_map.ride_legs.size() == 1 and hud.big_map.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed, "клик по прошлому заезду выбирает его и показывает трек")
 	await _shot("hud_journal_rides")
 	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()), "экран помещается в 1280×720")
 	await process_frame
 	if not hud.big_map.places.is_empty():
+		hud.big_map._center = Hud.Atlas.place_at(hud.big_map.places[0])
+		hud.big_map._update_base()
+		hud.big_map.refresh_overlay()
 		hud.big_map._set_hover(hud.big_map.places[0])
 	await _shot("hud_journal_path")
+	await process_frame
 	var atlas := hud.big_map
 	_check(atlas.places.size() > 0 and int(atlas.places[0].map_status) & Hud.Atlas.Status.PHOTO != 0
 		and hud.journal_panel._cache.has(shot_path), "место со снимком получает статус и миниатюру")
@@ -325,6 +331,13 @@ func _journal_checks() -> void:
 	await _shot("hud_album_narrow")
 	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()) and hud.journal_panel._album_columns() < 5,
 		"сетка альбома сужается вместе с планшетом")
+	var narrow_cards := hud.journal_panel._album_content.find_children("*", "Button", true, false)
+	if not narrow_cards.is_empty():
+		(narrow_cards[0] as Button).pressed.emit()
+		await _shot("hud_lightbox_narrow")
+		var modal := hud.journal_panel._lightbox.get_child(0) as Control
+		_check(root.get_visible_rect().encloses(modal.get_global_rect()), "снимок и управление помещаются на узком экране")
+		hud.journal_panel.close_lightbox()
 	root.content_scale_size = old_scale
 	root.size = old_size
 	await process_frame

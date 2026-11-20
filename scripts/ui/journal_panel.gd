@@ -7,8 +7,12 @@ const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const ShopPanel := preload("res://scripts/ui/shop_panel.gd")
 const MUTED := HudStyle.MUTED
-const CARD := Vector2(204, 168)
-const THUMB := Vector2(190, 86)
+const CARD := Vector2(248, 206)
+const THUMB := Vector2(230, 126)
+const INK := Color("#101e1c")
+const SURFACE := Color("#1a2c29")
+const LINE := Color("#455e55")
+const ACCENT := Color("#d2bd88")
 const Atlas := preload("res://scripts/ui/world_map_view.gd")
 enum Tab { MAP, PATH, ALBUM, SHOP }
 var active_tab := Tab.MAP
@@ -57,14 +61,14 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	theme = HudStyle.theme()
 	var background := StyleBoxFlat.new()
-	background.bg_color = Color("#14231f")
+	background.bg_color = INK
 	add_theme_stylebox_override("panel", background)
 	var margin := MarginContainer.new()
 	for edge in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + edge, 24 if edge in ["left", "right"] else 16)
+		margin.add_theme_constant_override("margin_" + edge, 32 if edge in ["left", "right"] else 20)
 	add_child(margin)
 	_box = VBoxContainer.new()
-	_box.add_theme_constant_override("separation", 8)
+	_box.add_theme_constant_override("separation", 12)
 	margin.add_child(_box)
 	_build_header()
 	_build_map()
@@ -171,29 +175,22 @@ func set_shortcuts(map_key: String, path_key: String, hint: String) -> void:
 
 func _build_header() -> void:
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 8)
+	head.add_theme_constant_override("separation", 12)
 	_box.add_child(head)
-	var emblem := UiIcons.rect(UiIcons.JOURNAL, 22, HudStyle.MINT)
+	var emblem := UiIcons.rect(UiIcons.JOURNAL, 25, ACCENT)
 	emblem.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	head.add_child(emblem)
 	var identity := VBoxContainer.new()
 	identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	identity.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	identity.add_theme_constant_override("separation", 0)
 	head.add_child(identity)
-	var title := _label("Полевой дневник", 21, identity, HudStyle.CREAM)
+	var eyebrow := _label("ПУТЕШЕСТВИЕ  /  ПОЛЕВОЙ АТЛАС", 11, identity, ACCENT)
+	eyebrow.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var title := _label("Дневник путешествия", 25, identity, HudStyle.CREAM)
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_seed = _label("", 13, identity, MUTED)
+	_seed = _label("", 13, head, MUTED)
+	_seed.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_seed.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 4)
-	head.add_child(tabs)
-	var group := ButtonGroup.new()
-	_tab_map = _tab("Карта", group, tabs, Tab.MAP)
-	_tab_path = _tab("Заезды", group, tabs, Tab.PATH)
-	_tab_album = _tab("Альбом", group, tabs, Tab.ALBUM)
-	_tab_shop = _tab("Магазин", group, tabs, Tab.SHOP)
-	_tab_shop.hide()
 	_close = Button.new()
 	_close.icon = UiIcons.CLOSE
 	_close.tooltip_text = "Закрыть"
@@ -202,14 +199,35 @@ func _build_header() -> void:
 	_close.pressed.connect(func() -> void: closed.emit())
 	head.add_child(_close)
 
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 4)
+	_box.add_child(tabs)
+	var group := ButtonGroup.new()
+	_tab_map = _tab("Карта", group, tabs, Tab.MAP)
+	_tab_path = _tab("Заезды", group, tabs, Tab.PATH)
+	_tab_album = _tab("Альбом", group, tabs, Tab.ALBUM)
+	_tab_shop = _tab("Магазин", group, tabs, Tab.SHOP)
+	_tab_shop.hide()
+
 
 func _tab(text: String, group: ButtonGroup, parent: Container, tab: Tab) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.toggle_mode = true
 	button.button_group = group
-	button.theme_type_variation = &"SegmentButton"
-	button.custom_minimum_size = Vector2(76, 44)
+	button.custom_minimum_size = Vector2(110, 44)
+	button.add_theme_font_size_override("font_size", 16)
+	var normal := HudStyle.panel(Color.TRANSPARENT, Color.TRANSPARENT, 0, Vector2(18, 8), false)
+	var hover := HudStyle.panel(Color("#263c37"), Color.TRANSPARENT, 0, Vector2(18, 8), false)
+	var selected := HudStyle.panel(Color("#32483e"), ACCENT, 0, Vector2(18, 8), false)
+	selected.set_border_width_all(0)
+	selected.border_width_bottom = 3
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", selected)
+	button.add_theme_stylebox_override("hover_pressed", selected)
+	button.add_theme_color_override("font_pressed_color", HudStyle.CREAM)
+	button.add_theme_color_override("font_hover_pressed_color", HudStyle.CREAM)
 	button.pressed.connect(_select.bind(tab))
 	parent.add_child(button)
 	return button
@@ -222,7 +240,7 @@ func _build_map() -> void:
 	_box.add_child(_map_page)
 	_map_row = BoxContainer.new()
 	_map_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_map_row.add_theme_constant_override("separation", 8)
+	_map_row.add_theme_constant_override("separation", 12)
 	_map_page.add_child(_map_row)
 	map_view = Atlas.new()
 	map_view.paper = true
@@ -235,8 +253,9 @@ func _build_map() -> void:
 	map_view.photo_thumbnail_requested.connect(_queue_photo)
 
 	_dock = PanelContainer.new()
-	_dock.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 8, Vector2(12, 12), false))
+	_dock.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 0, Vector2(18, 18), false))
 	_map_row.add_child(_dock)
+	_map_row.move_child(_dock, 0)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.follow_focus = true
@@ -251,7 +270,7 @@ func _build_map() -> void:
 	var inspector := VBoxContainer.new()
 	inspector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_details.add_child(inspector)
-	_label("Ориентир", 13, inspector, HudStyle.MINT)
+	_label("ОРИЕНТИР", 12, inspector, ACCENT)
 	_place_title = _label("", 18, inspector, HudStyle.CREAM)
 	_place_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_place_detail = _label("", 14, inspector, MUTED)
@@ -261,7 +280,7 @@ func _build_map() -> void:
 	var objective := VBoxContainer.new()
 	objective.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_details.add_child(objective)
-	_label("Текущее задание", 13, objective, HudStyle.MINT)
+	_label("ТЕКУЩЕЕ ЗАДАНИЕ", 12, objective, ACCENT)
 	_checklist = VBoxContainer.new()
 	_checklist.add_theme_constant_override("separation", 4)
 	objective.add_child(_checklist)
@@ -291,7 +310,9 @@ func _reflow() -> void:
 	_map_row.vertical = narrow
 	_details.vertical = not narrow
 	_dock_divider.visible = not narrow
-	_dock.custom_minimum_size = Vector2(0, 140) if narrow else Vector2(248, 0)
+	_seed.visible = not narrow
+	_dock.custom_minimum_size = Vector2(0, 180) if narrow else Vector2(320, 0)
+	_map_row.move_child(_dock, 1 if narrow else 0)
 	_dock.size_flags_vertical = Control.SIZE_FILL if narrow else Control.SIZE_EXPAND_FILL
 
 
@@ -312,6 +333,7 @@ func _select(tab: Tab) -> void:
 	_map_page.visible = tab == Tab.MAP or tab == Tab.PATH
 	map_view.visible = _map_page.visible
 	_path_page.visible = tab == Tab.PATH
+	_details.visible = tab == Tab.MAP
 	_album_page.visible = tab == Tab.ALBUM
 	shop_panel.visible = tab == Tab.SHOP
 	if tab in [Tab.PATH, Tab.ALBUM] and _data.is_empty() and data_provider.is_valid():
@@ -325,9 +347,6 @@ func _select(tab: Tab) -> void:
 		map_view.show_ride([], Rect2())
 	_load_photos.clear()
 	set_process(false)
-	var focus := get_viewport().gui_get_focus_owner()
-	if tab != Tab.ALBUM and focus != null and is_ancestor_of(focus):
-		focus.release_focus()
 	if tab == Tab.SHOP:
 		shop_panel.open()
 	refresh_inspector(map_view.hover)
@@ -394,8 +413,9 @@ func _fill_checklist(data: Dictionary) -> void:
 func _fill_path(data: Dictionary) -> void:
 	_rides = data.get("rides", [])
 	_ride_buttons.clear()
-	_path_page.add_child(HSeparator.new())
-	_label("Заезды", 13, _path_page, HudStyle.MINT)
+	_label("ИСТОРИЯ МАРШРУТОВ", 12, _path_page, ACCENT)
+	_label("Ваши заезды", 22, _path_page, HudStyle.CREAM)
+	_label("Выберите заезд, чтобы увидеть его на карте", 13, _path_page, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _rides.is_empty():
 		_label("Заездов пока нет", 14, _path_page, MUTED)
 	var group := ButtonGroup.new()
@@ -407,7 +427,12 @@ func _fill_path(data: Dictionary) -> void:
 		button.text = "%s
 %s" % [ride.title, ride.summary]
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.custom_minimum_size.y = 52
+		button.custom_minimum_size.y = 64
+		button.add_theme_font_size_override("font_size", 15)
+		button.add_theme_stylebox_override("normal", HudStyle.panel(Color("#213631"), LINE, 0, Vector2(12, 8), false))
+		button.add_theme_stylebox_override("hover", HudStyle.panel(Color("#314a40"), ACCENT, 0, Vector2(12, 8), false))
+		button.add_theme_stylebox_override("pressed", HudStyle.panel(Color("#435b49"), ACCENT, 0, Vector2(12, 8), false))
+		button.add_theme_stylebox_override("hover_pressed", HudStyle.panel(Color("#4b6350"), ACCENT, 0, Vector2(12, 8), false))
 		button.tooltip_text = "Показать заезд на карте"
 		button.pressed.connect(_select_ride.bind(i))
 		_path_page.add_child(button)
@@ -417,7 +442,7 @@ func _fill_path(data: Dictionary) -> void:
 	_path_page.add_child(_ride_info)
 
 	_path_page.add_child(HSeparator.new())
-	_label("Всего за игру", 13, _path_page, HudStyle.MINT)
+	_label("ИТОГО ЗА ПУТЕШЕСТВИЕ", 12, _path_page, ACCENT)
 	_label("Велосипед · %s   Пешком · %s" % [Util.distance_text(data.get("bike", 0.0)), Util.distance_text(data.get("foot", 0.0))],
 		13, _path_page, HudStyle.CREAM).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_label("В пути · %s   Высшая точка · %d м" % [_duration(data.get("time", 0.0)), roundi(data.get("alt", 0.0))], 13, _path_page, MUTED)
@@ -443,13 +468,22 @@ func _select_ride(index: int) -> void:
 	if index >= _rides.size() or _ride_info == null or active_tab != Tab.PATH:
 		return
 	var ride: Dictionary = _rides[index]
+	for i in _ride_buttons.size():
+		_ride_buttons[i].set_pressed_no_signal(i == index)
 	for child: Node in _ride_info.get_children():
 		_ride_info.remove_child(child)
 		child.queue_free()
-	_label(ride.title + (" · идёт сейчас" if ride.current else ""), 16, _ride_info, HudStyle.CREAM)
-	_label("Велосипед · %s" % Util.distance_text(ride.bike), 14, _ride_info, HudStyle.CREAM)
-	_label("Пешком · %s" % Util.distance_text(ride.foot), 14, _ride_info, HudStyle.CREAM)
-	_label("В пути · %s   Высшая точка · %d м" % [_duration(ride.time), roundi(ride.alt)], 14, _ride_info, MUTED)
+	_label("ВЫБРАННЫЙ ЗАЕЗД", 12, _ride_info, ACCENT)
+	_label(ride.title + (" · идёт сейчас" if ride.current else ""), 17, _ride_info, HudStyle.CREAM)
+	var metrics := GridContainer.new()
+	metrics.columns = 2
+	metrics.add_theme_constant_override("h_separation", 8)
+	metrics.add_theme_constant_override("v_separation", 6)
+	_ride_info.add_child(metrics)
+	_metric(metrics, "ВЕЛОСИПЕД", Util.distance_text(ride.bike))
+	_metric(metrics, "ПЕШКОМ", Util.distance_text(ride.foot))
+	_metric(metrics, "В ПУТИ", _duration(ride.time))
+	_metric(metrics, "ВЫСШАЯ ТОЧКА", "%d м" % roundi(ride.alt))
 	_label("Снимков · %d   Заданий · %d" % [ride.photos, ride.quests], 14, _ride_info, MUTED)
 	var places: Array = ride.places
 	var where := "Места: " + ", ".join(PackedStringArray(places)) if not places.is_empty() else "Места: —"
@@ -457,6 +491,15 @@ func _select_ride(index: int) -> void:
 	if ride.legs.is_empty():
 		_label("Трека нет: стояли на месте", 13, _ride_info, MUTED)
 	map_view.show_ride(ride.legs, ride.bounds)
+
+
+func _metric(parent: GridContainer, caption: String, value: String) -> void:
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 0)
+	parent.add_child(box)
+	_label(caption, 11, box, MUTED)
+	_label(value, 17, box, HudStyle.CREAM)
 
 
 static func _duration(seconds: float) -> String:
@@ -521,6 +564,10 @@ func _pill(text: String, group_index: int, group: ButtonGroup, parent: Container
 	btn.toggle_mode = true
 	btn.button_group = group
 	btn.theme_type_variation = &"PillButton"
+	btn.add_theme_stylebox_override("normal", HudStyle.panel(SURFACE, LINE, 0, Vector2(14, 8), false))
+	btn.add_theme_stylebox_override("hover", HudStyle.panel(Color("#30463b"), ACCENT, 0, Vector2(14, 8), false))
+	btn.add_theme_stylebox_override("pressed", HudStyle.panel(Color("#435b49"), ACCENT, 0, Vector2(14, 8), false))
+	btn.add_theme_stylebox_override("hover_pressed", HudStyle.panel(Color("#4b6350"), ACCENT, 0, Vector2(14, 8), false))
 	btn.custom_minimum_size.y = 44
 	btn.pressed.connect(func() -> void:
 		_album_filter = group_index
@@ -554,7 +601,7 @@ func _rebuild_album_grid() -> void:
 		header.add_theme_constant_override("separation", 8)
 		_album_content.add_child(header)
 		header.add_child(UiIcons.rect(UiIcons.album_icon(g, str(mine[0].get("key", ""))), 18, HudStyle.MINT))
-		_label("%s · %d из %d" % [groups[g], done, mine.size()], 19, header, HudStyle.MINT)
+		_label("%s  /  %d из %d" % [groups[g], done, mine.size()], 20, header, HudStyle.CREAM)
 		var grid := GridContainer.new()
 		grid.columns = _album_columns()
 		grid.add_theme_constant_override("h_separation", 12)
@@ -586,6 +633,9 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		var btn := Button.new()
 		btn.custom_minimum_size = CARD
 		btn.theme_type_variation = &"CardButton"
+		btn.add_theme_stylebox_override("normal", HudStyle.panel(SURFACE, LINE, 0, Vector2(8, 8), false))
+		btn.add_theme_stylebox_override("hover", HudStyle.panel(Color("#293e35"), ACCENT, 0, Vector2(8, 8), false))
+		btn.add_theme_stylebox_override("pressed", HudStyle.panel(Color("#435b49"), ACCENT, 0, Vector2(8, 8), false))
 		btn.clip_contents = true
 		btn.tooltip_text = "Открыть крупно: «%s»" % page.title
 		btn.pressed.connect(func() -> void: _open_lightbox(page, opened_all, btn))
@@ -601,7 +651,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		var panel := PanelContainer.new()
 		panel.custom_minimum_size = CARD
 		panel.clip_contents = true
-		panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE.lerp(HudStyle.RECESS, 0.4), HudStyle.BORDER, 8, Vector2(8, 8), false))
+		panel.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 0, Vector2(9, 9), false))
 		panel.add_child(column)
 		root_ctrl = panel
 
@@ -615,7 +665,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		clip.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		clip.clip_children = CanvasItem.CLIP_CHILDREN_AND_DRAW
 		clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var clip_style := HudStyle.panel(HudStyle.SURFACE, HudStyle.SURFACE, 6, Vector2.ZERO, false)
+		var clip_style := HudStyle.panel(HudStyle.SURFACE, HudStyle.SURFACE, 0, Vector2.ZERO, false)
 		clip_style.set_border_width_all(0)
 		clip.add_theme_stylebox_override("panel", clip_style)
 		frame.add_child(clip)
@@ -659,7 +709,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		plate.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var pbg := HudStyle.RECESS if not done else HudStyle.RECESS.lerp(HudStyle.AMBER, 0.18)
-		plate.add_theme_stylebox_override("panel", HudStyle.panel(pbg, Color(HudStyle.BORDER, 0.45), 6, Vector2.ZERO, false))
+		plate.add_theme_stylebox_override("panel", HudStyle.panel(pbg, Color(HudStyle.BORDER, 0.45), 0, Vector2.ZERO, false))
 		frame.add_child(plate)
 		if not done:
 			var center := CenterContainer.new()
@@ -705,6 +755,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 	note.max_lines_visible = 2
 	note.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root_ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return root_ctrl
 
 
@@ -745,7 +796,8 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 	var modal := PanelContainer.new()
 	modal.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	modal.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	modal.custom_minimum_size = Vector2(820, 0)
+	var modal_width := minf(820.0, maxf(280.0, size.x - 48.0))
+	modal.custom_minimum_size = Vector2(modal_width, 0)
 	modal.add_theme_stylebox_override("panel", HudStyle.sheet(Vector2(20, 16)))
 	modal.mouse_filter = Control.MOUSE_FILTER_STOP
 	backdrop.add_child(modal)
@@ -772,7 +824,9 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 	head.add_child(close_btn)
 
 	var lore_text := str(page.get("text", ""))
-	var img_size := Vector2(560, 315) if not lore_text.is_empty() else Vector2(720, 405)
+	var image_width := minf(560.0 if not lore_text.is_empty() else 720.0, modal_width - 40.0)
+	var image_height := minf(image_width * 0.5625, maxf(100.0, size.y - (330.0 if not lore_text.is_empty() else 250.0)))
+	var img_size := Vector2(image_width, image_height)
 	var large_tex := _large_photo(str(page.shot.get("path", "")))
 	if large_tex != null:
 		var view := TextureRect.new()
@@ -811,7 +865,7 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 		vbox.add_child(lore_box)
 		var lore_lbl := _label(lore_text, 16, lore_box, HudStyle.CREAM)
 		lore_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		lore_lbl.custom_minimum_size.x = 750
+		lore_lbl.custom_minimum_size.x = maxf(200.0, modal_width - 72.0)
 
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 8)
