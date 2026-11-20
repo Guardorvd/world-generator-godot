@@ -4,6 +4,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/explore_check.gd
 
 const Journal := preload("res://scripts/game/map_journal.gd")
+const RideLog := preload("res://scripts/game/ride_log.gd")
 var failures := 0
 
 
@@ -13,6 +14,7 @@ func _initialize() -> void:
 	_stats_and_reveal()
 	_album()
 	_save()
+	_rides()
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
 
@@ -173,3 +175,47 @@ func _save() -> void:
 
 func var_to_bytes_and_back(state: Dictionary) -> Variant:
 	return bytes_to_var(var_to_bytes(state))
+
+
+## 20.11.2026: история заездов — заезд от входа до выхода, сохранение посреди заезда его не делит
+func _rides() -> void:
+	var j := Journal.new()
+	var e := Exploration.new()
+	var log := RideLog.new()
+	_walk(j, Vector2(100, 100), Vector2(1, 0), 6.0, 20.0)  # прошлое до заезда — не его
+	j.end_trip()
+	e.play_s = 100.0
+	log.begin(j, e, 2)
+	var at := _walk(j, Vector2(400, 400), Vector2(0, 1), 8.0, 30.0)
+	e.play_s = 130.0
+	e.photos = 1
+	log.tick(55.0)
+	log.places["peak:4:4"] = true
+	var now := log.snapshot(j, e, 3)
+	check(absf(now.foot - 240.0) < 15.0 and now.quests == 1 and now.photos == 1 and is_equal_approx(now.time, 30.0) and now.alt == 55.0,
+		"заезд считает только своё: путь, время, снимки, задания (%.0f м)" % now.foot)
+	var frame := RideLog.bounds(now)
+	check(not now.legs.is_empty() and frame.position.y >= 399.0 and frame.end.x < 401.0, "трек заезда — только после его начала")
+	var saved := log.save_state(j, e, 3)
+	check(RideLog.valid(saved) and RideLog.valid(var_to_bytes_and_back(saved)) and saved.entries.size() == 1, "сохранение проходит проверку")
+	_walk(j, at, Vector2(1, 0), 8.0, 10.0)
+	saved = log.save_state(j, e, 3)
+	check(saved.entries.size() == 1 and saved.entries[0].foot > now.foot, "повторное сохранение обновляет тот же заезд")
+	var next := RideLog.new()
+	next.restore(saved)
+	next.begin(j, e, 3)
+	var list := next.history(j, e, 3)
+	check(list.size() == 2 and list[0].current and not list[1].get("current", false) and list[1].foot > 0.0,
+		"после загрузки прошлый заезд в истории, новый — первым")
+	var idle := RideLog.new()
+	idle.begin(j, e, 3)
+	check(idle.save_state(j, e, 3).entries.is_empty(), "вход и сразу выход — без записи")
+	var long := [PackedVector2Array()]
+	for i in RideLog.MAX_POINTS * 3:
+		long[0].append(Vector2(i, 0))
+	var thin := RideLog._thin(long)
+	check(thin[0].size() <= RideLog.MAX_POINTS + 1 and thin[0][-1] == Vector2(RideLog.MAX_POINTS * 3 - 1, 0), "длинный трек прореживается, конец сохранён")
+	var bad := saved.duplicate(true)
+	bad.entries[0].legs = [PackedVector2Array([Vector2(INF, 0), Vector2.ZERO])]
+	check(not RideLog.valid(bad) and not RideLog.valid({}) and not RideLog.valid({entries = [1]}), "битые заезды отвергаются")
+	check(RideLog.date_text(0.0).length() > 5 and RideLog.duration_text(3725.0) == "1:02:05", "подписи даты и длительности")

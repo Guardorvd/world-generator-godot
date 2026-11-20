@@ -65,6 +65,8 @@ static func valid(d: Dictionary) -> bool:
 			return false
 	if d.has("atlas") and not preload("res://scripts/game/map_journal.gd").valid(d.atlas):
 		return false
+	if d.has("rides") and not preload("res://scripts/game/ride_log.gd").valid(d.rides):
+		return false
 	if d.has("explore") and not Exploration.valid_save(d.explore):
 		return false
 	if d.has("repairs") and not Repairables.valid_save(d.repairs):

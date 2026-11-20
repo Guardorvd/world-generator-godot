@@ -13,52 +13,141 @@ const REACH := 3.0 # м для установки
 const NO_CELL := Vector2i(-1, -1)
 
 
+## 20.11.2026: годные площадки у дорог зависят только от мира и доски — они считаются один раз на доску и кольцо
+## и хранятся в _cache; занятые маяками отсеиваются уже из готового списка (тот же порядок, тот же результат).
+## Сбор шёл по всем дорогам мира одним кадром (~0,35 с на мире 768) — у доски игра замирала. Теперь его заранее
+## понемногу делает prefetch (BoardDisplay при подъезде), а route лишь доделывает недособранное.
+static var _cache := {}       # "доска|кольцо" -> Array[Vector2i]
+static var _collectors := {}  # "доска|кольцо" -> недособранный Collector
+static var _world_id := 0
+
+
 static func route(w: WorldData, heights: Heightfield, here: Dictionary, occupied: Dictionary, prefer := Callable()) -> Array[Vector2i]:
 	if heights == null or w.path_mask.size() != w.N:
 		return []
-	for ring: Vector3 in RINGS:
-		var found := _route(w, heights, here, occupied, prefer, ring.x, ring.y, ring.z)
+	for ring in RINGS.size():
+		var candidates: Array[Vector2i] = []
+		for cell: Vector2i in _candidates(w, heights, here, ring, 0):
+			if not occupied.has(key(cell)):
+				candidates.append(cell)
+		var found := _triangle(candidates, Vector2(here.x, here.y), prefer, RINGS[ring].z)
 		if found.size() == COUNT:
 			return found
 	return []
 
 
-static func _route(w: WorldData, heights: Heightfield, here: Dictionary, occupied: Dictionary, prefer: Callable,
-		MIN_RADIUS: float, MAX_RADIUS: float, IDEAL: float) -> Array[Vector2i]:
-	var center := Vector2(here.x, here.y)
-	var candidates: Array[Vector2i] = []
-	var seen := {}
-	for trail: Dictionary in w.trails:
-		if trail.kind not in ["road", "trail", "mountain"]:
-			continue
+## Заранее собрать площадки доски here, пока не наступит deadline (Time.get_ticks_usec). true — всё собрано
+static func prefetch(w: WorldData, heights: Heightfield, here: Dictionary, deadline: int) -> bool:
+	if heights == null or w.path_mask.size() != w.N:
+		return true
+	for ring in RINGS.size():
+		if _candidates(w, heights, here, ring, deadline).is_empty() and not _cache.has(_cache_key(here, ring)):
+			return false
+	return true
+
+
+static func _cache_key(here: Dictionary, ring: int) -> String:
+	return "%s|%d" % [here.key, ring]
+
+
+## Площадки кольца ring; deadline 0 — досчитать сейчас. Пустой список и нет записи в _cache — сбор не закончен
+static func _candidates(w: WorldData, heights: Heightfield, here: Dictionary, ring: int, deadline: int) -> Array[Vector2i]:
+	if _world_id != w.get_instance_id():
+		_world_id = w.get_instance_id()
+		_cache.clear()
+		_collectors.clear()
+	var k := _cache_key(here, ring)
+	if _cache.has(k):
+		return _cache[k]
+	var collector: Collector = _collectors.get(k)
+	if collector == null:
+		var r: Vector3 = RINGS[ring]
+		collector = Collector.new(w, heights, Vector2(here.x, here.y), r.x, r.y)
+		_collectors[k] = collector
+	if not _collect(collector, deadline):
+		return []
+	_collectors.erase(k)
+	_cache[k] = collector.cells
+	return collector.cells
+
+
+## Состояние обхода дорог мира для _collect
+class Collector:
+	var w: WorldData
+	var heights: Heightfield
+	var center: Vector2
+	var min_radius: float
+	var max_radius: float
+	var cells: Array[Vector2i] = []
+	var _seen := {}
+	var _trail := 0
+	var _point := 1
+	var _next := 0.0
+	var _side := 0  # следующая из четырёх площадок у текущей точки выборки
+
+	func _init(world: WorldData, hf: Heightfield, at: Vector2, from: float, to: float) -> void:
+		w = world
+		heights = hf
+		center = at
+		min_radius = from
+		max_radius = to
+
+
+## Обход дорог мира с продолжением, пока не выйдет срок (проверяется после каждой площадки). true — обход закончен
+static func _collect(c: Collector, deadline: int) -> bool:
+	var w := c.w
+	var center := c.center
+	var reach := c.max_radius + OFFSETS[-1]
+	while c._trail < w.trails.size():
+		var trail: Dictionary = w.trails[c._trail]
 		var points: Array = trail.pts
-		var next := 0.0
-		for i in range(1, points.size()):
-			var a := Vector2(points[i - 1].x, points[i - 1].y)
-			var b := Vector2(points[i].x, points[i].y)
-			var span := a.distance_to(b)
-			if span < 0.001:
-				continue
-			var along := (b - a) / span
-			var side := Vector2(-along.y, along.x)
-			while next < span:
-				var road := a + along * next
-				next += ROAD_SAMPLE
-				if road.distance_to(center) > MAX_RADIUS + OFFSETS[-1]:
-					continue
-				for offset: float in OFFSETS:
-					for sign: float in [-1.0, 1.0]:
-						var target := (road + side * offset * sign).floor()
-						var cell := Vector2i(target)
-						target += Vector2(0.5, 0.5)
-						var distance := center.distance_to(target)
-						if cell in seen or distance < MIN_RADIUS or distance > MAX_RADIUS or occupied.has(key(cell)):
-							continue
-						if _off_road(w, cell) and _clear_pad(w, target) and _approach(w, heights, road, target):
-							seen[cell] = true
-							candidates.append(cell)
-			next -= span
-	return _triangle(candidates, center, prefer, IDEAL)
+		if trail.kind not in ["road", "trail", "mountain"] or c._point >= points.size():
+			c._trail += 1
+			c._point = 1
+			c._next = 0.0
+			continue
+		var a := Vector2(points[c._point - 1].x, points[c._point - 1].y)
+		var b := Vector2(points[c._point].x, points[c._point].y)
+		var span := a.distance_to(b)
+		if span < 0.001:
+			c._point += 1
+			continue
+		if Geometry2D.get_closest_point_to_segment(center, a, b).distance_to(center) > reach:
+			# весь отрезок дальше кольца: шаг выборки тот же, проверок нет
+			while c._next < span:
+				c._next += ROAD_SAMPLE
+			c._next -= span
+			c._point += 1
+			continue
+		var along := (b - a) / span
+		var side := Vector2(-along.y, along.x)
+		while c._next < span:
+			var road := a + along * c._next
+			if road.distance_to(center) <= reach:
+				# четыре площадки у точки (два отступа, две стороны); срок проверяется после каждой — проверка
+				# площадки у массива скал или в густом лесу долгая, по точке выборки кадр выходил до 26 мс
+				while c._side < 4:
+					var offset: float = OFFSETS[c._side / 2]
+					var sign := -1.0 if c._side % 2 == 0 else 1.0
+					c._side += 1
+					var target := (road + side * offset * sign).floor()
+					var cell := Vector2i(target)
+					target += Vector2(0.5, 0.5)
+					var distance := center.distance_to(target)
+					if cell in c._seen or distance < c.min_radius or distance > c.max_radius:
+						continue
+					if _off_road(w, cell) and _clear_pad(w, target) and _approach(w, c.heights, road, target):
+						c._seen[cell] = true
+						c.cells.append(cell)
+					if deadline > 0 and Time.get_ticks_usec() >= deadline:
+						return false
+			c._side = 0
+			c._next += ROAD_SAMPLE
+		c._next -= span
+		c._point += 1
+		if deadline > 0 and Time.get_ticks_usec() >= deadline:
+			return false
+	return true
 
 
 static func _off_road(w: WorldData, cell: Vector2i) -> bool:

@@ -16,6 +16,8 @@ extends SceneTree
 ##   --save-base — записать этот прогон как базу (base.json); без ключа прогон сравнивается с base.json, если она есть;
 ##   --compare <база.json> <новый.json> — только сравнить два отчёта (окно не нужно, ничего не меряется).
 ##   --travel-from-map — начать перенос с открытым атласом и проверить его закрытие при прибытии.
+## 20.11.2026: world.board — подъезд к доске (заблаговременный расчёт заданий, BOARD_PREPARE) и сборка щита, OFFERS_MS —
+##   цена отбора заданий по частям; world.play_map — карта (M) открывается и закрывается в игре без паузы.
 ## Итог: stress.json (все числа), stress.md (выводы и таблицы), строка STRESS_RESULT в консоли. Код 1 — прогон не завершён.
 ## Отчёт пишется после каждого замера: при зависании остаётся всё снятое. Лимит: 150 с без мира, 540 с с миром.
 
@@ -935,7 +937,13 @@ func _group_world() -> void:
 	var stops: Array = views.values()
 	await _case("world.jump", "Мир: перенос в другое место раз в 1,5 с", MOVE * 1.5, func(t: float, dt: float) -> void: _look(t, dt, stops[int(t / 1.5) % stops.size()]))
 
+	if _wanted("world.board"):
+		await _board_case()
+
 	# игра без паузы: логика, физика, HUD и звук; сначала игрок стоит, потом едет (руль и газ — нажатия действий)
+	await _play("world.play_map", "Мир: карта открывается и закрывается раз в секунду", MOVE, _toggle_map)
+	if game.show_map:
+		game.close_tablet(false)
 	await _play("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD, Callable())
 	await _play("world.play_ride", "Мир: езда с физикой велосипеда", MOVE, _drive)
 	# Торможение начинается после двух секунд разгона. Первый тормозной кадр попадает в основной замер.
@@ -1038,6 +1046,48 @@ func _drive(t: float, _dt: float) -> void:
 	else:
 		Input.action_release("move_left")
 		Input.action_release("move_right")
+
+
+## 20.11: карта (M) открыта с 0,3 по 1,3 с каждых двух секунд: открытие и закрытие попадают в замер по два раза,
+## первое открытие — в прогрев (cold_max_ms)
+func _toggle_map(t: float, _dt: float) -> void:
+	var want := fmod(t, 2.0) >= 0.3 and fmod(t, 2.0) < 1.3
+	if want != game.show_map:
+		game.toggle_map()
+
+
+## 20.11: щит ближней доски (карта и листки в SubViewport): камера стоит в 25 м от доски, окружение догружено;
+## сначала доска «за 120 м» (заблаговременный расчёт заданий), затем «близко» — сборка щита попадает в замер
+## без подгрузки мира вокруг; после замера OFFERS_MS — цена отбора заданий по частям (маяки уже в кэше)
+func _board_case() -> void:
+	var boards: Array = game.board_display.boards.call()
+	if boards.is_empty():
+		report.failed.append("в мире нет досок для замера щита")
+		return
+	var at: Transform3D = boards[0].at
+	var v := {pos = at * Vector3(0.0, 0.4, 25.0), target = at.origin}
+	_place(v)
+	await _settle(game.vegetation, _look.bind(v), 1.0, 3.0)
+	var bd := game.board_display
+	var step := func(t: float, dt: float) -> void:
+		_look(t, dt, v)
+		bd._next_check_ms = 0
+		bd.tick(at * Vector3(0.0, 0.0, 120.0 if t < 3.0 else 20.0))
+	# первые 3 с «за 120 м»: задания доски считаются заранее понемногу (BoardDisplay.prepare), затем щит у камеры
+	await _case("world.board", "Мир: подъезд к доске и сборка щита", MOVE + 1.0, step)
+	print("BOARD_PREPARE max_ms=%.2f frames=%d" % [bd.prepare_max_us / 1000.0, bd.prepare_frames])
+	var svc := game.interaction_service
+	var here := svc.target(game.world.place(WorldData.place_id("settlement", boards[0].place.x, boards[0].place.y)))
+	var clock_us := func(f: Callable) -> float:
+		var t0 := Time.get_ticks_usec()
+		f.call()
+		return (Time.get_ticks_usec() - t0) / 1000.0
+	var trip: Dictionary = svc.travel.call()
+	var prefer := svc.quests.prefer(here, trip)
+	print("OFFERS_MS all=%.1f places=%.1f travel=%.1f beacons=%.1f paint=%.1f" % [clock_us.call(func() -> void: svc.offers(boards[0].place)),
+		clock_us.call(func() -> void: svc.all_places.call()), clock_us.call(func() -> void: svc.travel.call()),
+		clock_us.call(func() -> void: load("res://scripts/game/beacon_sites.gd").route(game.world, game.heights, here, svc.quests.installed_beacons, prefer)),
+		clock_us.call(func() -> void: load("res://scripts/game/paint_targets.gd").route(game.world, game.heights, here, svc.quests.painted_objects, prefer))])
 
 
 ## Разгон 2 с, затем полный тормоз (move_back) до конца замера

@@ -28,10 +28,16 @@ static func _route(w: WorldData, heights: Heightfield, here: Dictionary, painted
 	var center := Vector2(here.x, here.y)
 	var best: Array[Dictionary] = []
 	var best_cost := INF
-	for road: Dictionary in w.trails:
+	var all_stations := _world_stations(w)
+	for r in w.trails.size():
+		var road: Dictionary = w.trails[r]
 		if road.kind not in ["road", "trail", "mountain"] or road.pts.size() < 2:
 			continue
-		var stations := _stations(road.pts)
+		# 20.11.2026: путь, все точки которого дальше NEAR_BOARD от доски, не подходит — его точки не перебираются
+		var reach: Rect2 = all_stations[r][1]
+		if not reach.grow(NEAR_BOARD).has_point(center):
+			continue
+		var stations: PackedVector2Array = all_stations[r][0]
 		var entry := 0
 		var entry_gap := NEAR_BOARD
 		for i in stations.size():
@@ -62,6 +68,23 @@ static func _route(w: WorldData, heights: Heightfield, here: Dictionary, painted
 						best_cost = cost
 					break
 	return best
+
+
+## 20.11.2026: точки путей мира через ROAD_SAMPLE и их рамка — один раз на мир (раньше заново при каждом открытии доски)
+static var _cached_stations: Array = []
+static var _cached_world := 0
+
+static func _world_stations(w: WorldData) -> Array:
+	if _cached_world != w.get_instance_id() or _cached_stations.size() != w.trails.size():
+		_cached_world = w.get_instance_id()
+		_cached_stations = []
+		for road: Dictionary in w.trails:
+			var stations := _stations(road.pts) if road.pts.size() >= 2 else PackedVector2Array()
+			var frame := Rect2(stations[0], Vector2.ZERO) if not stations.is_empty() else Rect2(-1e9, -1e9, 0, 0)
+			for at in stations:
+				frame = frame.expand(at)
+			_cached_stations.append([stations, frame])
+	return _cached_stations
 
 
 static func _stations(points: Array) -> PackedVector2Array:

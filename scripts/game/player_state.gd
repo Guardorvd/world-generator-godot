@@ -397,7 +397,8 @@ func ground_speed() -> float:
 
 
 ## Открытия: поселения, вершины и озёра (на берегу) рядом с игроком. Возвращает тексты новых открытий
-func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
+## seen (20.11.2026) — места, у которых игрок побывал в этом заезде (RideLog.places), и повторно тоже
+func check_discoveries(w: WorldData, visited: Dictionary, seen: Dictionary = {}) -> PackedStringArray:
 	var found := PackedStringArray()
 	var tx := x / TILE
 	var tz := z / TILE
@@ -406,30 +407,36 @@ func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 	for s in w.settlements:
 		if Grid.hypot(s.x - tx, s.y - tz) < 6.0:
 			var key := WorldData.place_id("settlement", s.x, s.y)
+			seen[key] = true
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Поселение «%s»" % s.name)
 	# 13.9+final: поселения соседних областей
 	if w.outer != null:
 		for s in w.outer.settlements:
+			if Grid.hypot(s.x - tx, s.y - tz) < 6.0:
+				seen[s.id] = true
 			if Grid.hypot(s.x - tx, s.y - tz) < 6.0 and not visited.has(s.id):
 				visited[s.id] = true
 				found.append("Поселение «%s»" % s.name)
 	for pk in w.peaks:
 		if Grid.hypot(pk.x - tx, pk.y - tz) < 2.5:
 			var key := WorldData.place_id("peak", pk.x, pk.y)
+			seen[key] = true
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Вы покорили вершину «%s»!" % pk.name)
 	for st in w.sites:
 		if Grid.hypot(st.x - tx, st.y - tz) < 4.0:
 			var key := WorldData.place_id("site", st.x, st.y)
+			seen[key] = true
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Новое место: «%s», %s" % [st.name, StageSites.TYPES[st.type].title])
 	var lk := w.lake_near(tx, tz, LAKE_REACH)
 	if lk >= 0:
 		var key := WorldData.place_id("lake", w.lakes[lk].x, w.lakes[lk].y)
+		seen[key] = true
 		if not visited.has(key):
 			visited[key] = true
 			found.append("Вы вышли к озеру: «%s»" % w.lakes[lk].name)

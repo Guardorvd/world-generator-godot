@@ -6,8 +6,8 @@ extends Control
 ## без перезаписи команд отрисовки. Раньше каждое движение мыши при перетаскивании заново записывало все участки
 ## и все линии дорог со сглаживанием — карта тормозила. Перезапись — когда пришли участки или сменился масштаб
 ## (толщина линий). paper — стиль карты нацпарка (бумага, тёплые цвета, засечки) для личной карты, park — доска
-## поселения (тот же стиль, без перетаскивания). У личной карты неисследованное закрыто бумагой (_fog): открыто
-## вокруг пройденного трека и открытых мест; отдаление — не дальше стартовой области.
+## поселения (тот же стиль, без перетаскивания). Личная карта показывает всю стартовую область (туман _fog выключен
+## FOG_OF_WAR с 20.11.2026), места — только открытые; отдаление — не дальше стартовой области.
 
 signal place_selected(place: Dictionary)
 signal marker_requested(at: Vector2)
@@ -33,6 +33,10 @@ const FOG_CELL := 16.0     # м на пиксель маски исследов�
 const FOG_TRACK := 260.0   # м открыто вокруг пройденного пути
 const FOG_PLACE := 160.0   # м открыто вокруг открытого места
 const FOG_STEP := 60.0     # м между отметками трека в маске
+## 20.11.2026: личная карта показывает всю стартовую область с рельефом и дорогами (просьба пользователя); места
+## (поселения, вершины, сооружения) по-прежнему появляются, только когда открыты. Туман неисследованного выключен
+const FOG_OF_WAR := false
+const RIDE_INK := Color("#d0582c")  # трек выбранного заезда
 
 var park := false
 var paper := false
@@ -42,6 +46,8 @@ var selected_place := {}
 var _show_photos := false
 var _photo_cache := {}
 var journal: Journal
+var ride_legs: Array = []    # 20.11.2026: трек выбранного заезда (вкладка «Заезды»): он ярче, остальной путь бледнее
+var _ride_frame := Rect2()
 var hover := {}
 var places: Array = []
 var player := Vector2.INF
@@ -58,11 +64,14 @@ var input_blocked := Callable()  # true — поверх карты вопрос
 var _pad_cross := false          # прицел в центре нарисован (геймпад): метка и выбор места — по нему
 var _data: Data
 var _base: Control
-var _tiles: Control
-var _lines: Control
+## 20.11.2026: слои в мировых метрах — Node2D, а не Control. Control отсекается движком по своему прямоугольнику
+## (размер 0 в начале координат): стоило углу области уйти за край экрана при перетаскивании или приближении —
+## подложка и трек пропадали, оставались бумага и дороги (сетки дорог — Node2D, их это не касалось)
+var _tiles: Node2D
+var _lines: Node2D
 var _atlas_clip: Control
 var _atlas_layers: Array[MeshInstance2D] = []
-var _track: Control
+var _track: Node2D
 var _track_window := Rect2()
 var _player_arrow: Node2D
 var _legend: Control
@@ -81,9 +90,10 @@ var _dragged := false
 var _base_dirty := false
 var _last_revision := -1
 var _park_font: SystemFont
+static var _serif: SystemFont
 var _fog: Image
 var _fog_texture: ImageTexture
-var _fog_node: Control      # слой бумаги в _base: свой шейдер размывает край маски
+var _fog_node: Node2D       # слой бумаги в _base: свой шейдер размывает край маски
 var _fog_legs := 0          # сколько отрезков трека уже открыто в маске
 var _fog_current_points := 0
 var _fog_current_leg := -1
@@ -100,12 +110,10 @@ func _ready() -> void:
 	_base = Control.new()
 	_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_base)
-	_tiles = Control.new()
-	_tiles.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tiles = Node2D.new()
 	_tiles.draw.connect(_draw_tiles)
 	_base.add_child(_tiles)
-	_lines = Control.new()
-	_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lines = Node2D.new()
 	_lines.draw.connect(_draw_base)
 	_base.add_child(_lines)
 	_atlas_clip = Control.new()
@@ -113,15 +121,13 @@ func _ready() -> void:
 	_atlas_clip.clip_contents = true
 	_lines.add_child(_atlas_clip)
 	_configure_atlas_strokes()
-	_fog_node = Control.new()
-	_fog_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fog_node = Node2D.new()
 	var fog_material := ShaderMaterial.new()
 	fog_material.shader = preload("res://resources/map_fog.gdshader")
 	_fog_node.material = fog_material
 	_fog_node.draw.connect(_draw_fog)
 	_base.add_child(_fog_node)
-	_track = Control.new()
-	_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_track = Node2D.new()
 	_track.draw.connect(_draw_track)
 	_base.add_child(_track)
 	_overlay = Control.new()
@@ -141,14 +147,23 @@ func _ready() -> void:
 	resized.connect(_reframe)
 	visibility_changed.connect(_visibility_changed)
 	if _styled():
-		_park_font = SystemFont.new()
-		_park_font.font_names = ["Georgia", "Noto Serif", "DejaVu Serif"]
+		if _serif == null:
+			_serif = SystemFont.new()
+			_serif.font_names = ["Georgia", "Noto Serif", "DejaVu Serif"]
+		_park_font = _serif # один шрифт на все карты: у новой карты доски глифы не растрируются заново
 	_visibility_changed()
 
 
 ## Бумажный стиль: доска поселения или личная карта
 func _styled() -> bool:
 	return park or paper
+
+
+## 20.11.2026: подложка из готового атласа стартовой области (текстура, рельеф шейдером, линии сетками) — у личной
+## карты и у карты доски. Раньше доска собирала участки подложки скриптом по клетке (64×64 с рельефом) и рисовала
+## все линии заново — у первой доски кадр стоял до 0,35 с.
+func _baked() -> bool:
+	return _styled() and _data != null and _data.atlas_texture != null
 
 
 func set_source(source: Data) -> void:
@@ -316,6 +331,9 @@ func _reframe() -> void:
 		_scale = clampf(minf(area.x / _fit.size.x, area.y / _fit.size.y), MIN_SCALE, MAX_SCALE)
 		# личная карта не отдаляется дальше, чем видна вся стартовая область
 		_min_scale = _scale if paper else MIN_SCALE
+	if not ride_legs.is_empty():
+		_frame_ride()
+		return
 	_update_base()
 	refresh_overlay()
 
@@ -329,8 +347,7 @@ func _refresh_base() -> void:
 	if _bounds.has_area():
 		frame = frame.intersection(_bounds.grow(-0.01) if paper else _bounds.grow(160.0))
 	var lines_changed := false
-	var baked_atlas := paper and _data.atlas_texture != null
-	if baked_atlas:
+	if _baked():
 		if _drawn_scale != _scale:
 			_update_atlas_width()
 		if _drawn_scale < 0.0:
@@ -366,7 +383,7 @@ func _world_rect() -> Rect2:
 
 
 func _configure_atlas_strokes() -> void:
-	var ready := paper and _data != null and _data.atlas_texture != null
+	var ready := _baked()
 	_atlas_clip.visible = ready
 	if not ready:
 		for layer in _atlas_layers:
@@ -389,7 +406,7 @@ func _configure_atlas_strokes() -> void:
 
 func _configure_relief() -> void:
 	_tiles.material = null
-	if not paper or _data == null or _data.atlas_relief.is_empty():
+	if not _styled() or _data == null or _data.atlas_relief.is_empty():
 		return
 	var relief := ShaderMaterial.new()
 	relief.shader = ATLAS_RELIEF
@@ -575,8 +592,8 @@ func _draw() -> void:
 func _draw_tiles() -> void:
 	if _data == null:
 		return
-	if paper and _data.atlas_texture != null:
-		_tiles.draw_texture_rect(_data.atlas_texture, _bounds, false, Color("#f3e5c5"))
+	if _baked():
+		_tiles.draw_texture_rect(_data.atlas_texture, Rect2(Vector2.ZERO, Vector2(_data.world.W, _data.world.H) * TILE), false, Color("#f3e5c5"))
 	else:
 		Paint.tiles(_tiles, _data, _styled())
 
@@ -584,9 +601,9 @@ func _draw_tiles() -> void:
 func _draw_base() -> void:
 	if _data == null:
 		return
-	if not paper or _data.atlas_texture == null:
+	if not _baked():
 		Paint.lines(_lines, _data, _stroke_scale, _styled())
-	if paper:
+	if _baked():
 		# за краем стартовой области — чистая бумага: соседние земли на личной карте не показываются
 		var plan := Rect2(Vector2.ZERO, Vector2(_data.world.W, _data.world.H) * TILE)
 		var far := 4000.0
@@ -613,7 +630,7 @@ func _park_grid() -> void:
 ## в маску по мере поступления, а не пересчитываются целиком
 func _update_fog() -> void:
 	_fog_pending = false
-	if not paper or _data == null or journal == null:
+	if not FOG_OF_WAR or not paper or _data == null or journal == null:
 		return
 	if _fog == null:
 		var w := _data.world
@@ -736,16 +753,45 @@ func _draw_overlay() -> void:
 func _draw_track() -> void:
 	if _data == null or journal == null:
 		return
+	var faded := not ride_legs.is_empty()
 	for leg: Dictionary in journal.legs:
 		if _track_window.intersects(leg.bounds.grow(1.0)):
-			_draw_leg(leg.points)
+			_draw_leg(leg.points, faded)
 	if journal.current.size() > 1 and _track_window.intersects(journal.current_bounds.grow(1.0)):
-		_draw_leg(journal.current)
+		_draw_leg(journal.current, faded)
+	for points: PackedVector2Array in ride_legs:
+		_track.draw_polyline(points, Color("#fffaff"), 7.0 / _stroke_scale, true)
+		_track.draw_polyline(points, RIDE_INK, 4.2 / _stroke_scale, true)
 
 
-func _draw_leg(points: PackedVector2Array) -> void:
+func _draw_leg(points: PackedVector2Array, faded := false) -> void:
+	if faded:
+		_track.draw_polyline(points, Color(Paint.TRACE, 0.35), 2.4 / _stroke_scale, true)
+		return
 	_track.draw_polyline(points, Color("#fffaff"), 5.5 / _stroke_scale, true)
 	_track.draw_polyline(points, Paint.TRACE, 3.1 / _stroke_scale, true)
+
+
+## 20.11.2026: показать заезд — его трек ярко, вид на всю его рамку (пустой список — обычный путь целиком)
+func show_ride(legs: Array, frame: Rect2) -> void:
+	ride_legs = legs
+	_ride_frame = frame if not legs.is_empty() else Rect2()
+	if _track != null:
+		_track.queue_redraw()
+	if not legs.is_empty():
+		_frame_ride()
+
+
+## Вид на рамку выбранного заезда (и после смены размера карты: список заездов сужает её)
+func _frame_ride() -> void:
+	if size.x < 2.0 or size.y < 2.0:
+		return
+	var area := (size - Vector2(80, 120)).max(Vector2.ONE * 40.0)
+	var fit := _ride_frame.grow(maxf(60.0, maxf(_ride_frame.size.x, _ride_frame.size.y) * 0.12))
+	_center = fit.get_center().clamp(_bounds.position, _bounds.end)
+	_scale = clampf(minf(area.x / maxf(fit.size.x, 1.0), area.y / maxf(fit.size.y, 1.0)), _min_scale, MAX_SCALE)
+	_update_base()
+	refresh_overlay()
 
 
 static func _pin_color(kind: String) -> Color:
@@ -889,6 +935,8 @@ func _draw_key(color: Color, font: Font) -> void:
 		return
 	var rows := [["Мой трек", "track"], ["Дорога", Paint.PAPER_STROKES[2]], ["Тропа", Paint.PAPER_STROKES[1]],
 		["Велотрасса", Paint.PAPER_STROKES[3]], ["Игрок", "player"], ["Цель", "goal"]]
+	if not ride_legs.is_empty():
+		rows.insert(1, ["Заезд", "ride"])
 	if bike.is_finite():
 		rows.append(["Велосипед", "bike"])
 	if quest.is_finite():
@@ -927,6 +975,9 @@ func _draw_key(color: Color, font: Font) -> void:
 		elif sample == "track":
 			_legend.draw_line(a, b, Color("#fffaff"), 5.5, true)
 			_legend.draw_line(a, b, Paint.TRACE, 3.1, true)
+		elif sample == "ride":
+			_legend.draw_line(a, b, Color("#fffaff"), 7.0, true)
+			_legend.draw_line(a, b, RIDE_INK, 4.2, true)
 		elif sample == "player":
 			_legend.draw_colored_polygon(PackedVector2Array([at + Vector2(0, -8), at + Vector2(6, 6), at + Vector2(0, 3), at + Vector2(-6, 6)]), Paint.BLUE)
 		elif sample in ["revealed", "visited", "photo", "quest_status"]:

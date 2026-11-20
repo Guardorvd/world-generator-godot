@@ -28,6 +28,9 @@ var _shown_quest := {}
 var _map_hint: Label
 var _tab_map: Button
 var _seed: Label
+var _rides: Array = []            # заезды открытой вкладки (Hud._ride_rows)
+var _ride_buttons: Array[Button] = []
+var _ride_info: VBoxContainer
 const SHORT_GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночь", "Обелиски"]
 
 var _box: VBoxContainer
@@ -97,6 +100,10 @@ func clear() -> void:
 		_path_page.remove_child(child)
 		child.queue_free()
 	_shown_quest = {}
+	_rides = []
+	_ride_buttons.clear()
+	_ride_info = null
+	map_view.show_ride([], Rect2())
 	_lightbox_return_focus = null
 	_cache.clear()
 	_large_cache.clear()
@@ -144,7 +151,7 @@ func cycle_tab(direction: int) -> void:
 
 func set_shortcuts(map_key: String, path_key: String, hint: String) -> void:
 	_tab_map.text = "Карта" if map_key.is_empty() else "Карта [%s]" % map_key
-	_tab_path.text = "Путь" if path_key.is_empty() else "Путь [%s]" % path_key
+	_tab_path.text = "Заезды" if path_key.is_empty() else "Заезды [%s]" % path_key
 	_map_hint.text = hint
 
 
@@ -169,7 +176,7 @@ func _build_header() -> void:
 	head.add_child(tabs)
 	var group := ButtonGroup.new()
 	_tab_map = _tab("Карта", group, tabs, Tab.MAP)
-	_tab_path = _tab("Путь", group, tabs, Tab.PATH)
+	_tab_path = _tab("Заезды", group, tabs, Tab.PATH)
 	_tab_album = _tab("Альбом", group, tabs, Tab.ALBUM)
 	_close = Button.new()
 	_close.icon = UiIcons.CLOSE
@@ -289,6 +296,8 @@ func _select(tab: Tab) -> void:
 	if tab == Tab.ALBUM and _album_scroll == null:
 		_fill_album(_data)
 	map_view.set_photo_pins(tab == Tab.PATH, _cache)
+	if tab != Tab.PATH:
+		map_view.show_ride([], Rect2())
 	_load_photos.clear()
 	set_process(false)
 	var focus := get_viewport().gui_get_focus_owner()
@@ -353,15 +362,39 @@ func _fill_checklist(data: Dictionary) -> void:
 		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 
+## 20.11.2026: вкладка «Заезды» — история игровых сессий (RideLog): список, у выбранного трек на карте, счётчики
+## и места; ниже — итог за всю игру (прежняя сводка пути)
 func _fill_path(data: Dictionary) -> void:
+	_rides = data.get("rides", [])
+	_ride_buttons.clear()
 	_path_page.add_child(HSeparator.new())
-	_label("Пройденный путь", 13, _path_page, HudStyle.MINT)
-	_label("Велосипед · %s" % Util.distance_text(data.get("bike", 0.0)), 14, _path_page, HudStyle.CREAM)
-	_label("Пешком · %s" % Util.distance_text(data.get("foot", 0.0)), 14, _path_page, HudStyle.CREAM)
-	var seconds := int(data.get("time", 0.0))
-	_label("В пути · %d:%02d:%02d" % [seconds / 3600, seconds / 60 % 60, seconds % 60], 14, _path_page, HudStyle.CREAM)
-	_label("Высшая точка · %d м" % roundi(data.get("alt", 0.0)), 14, _path_page, MUTED)
-	_label("Снимков · %d   Заданий · %d" % [data.get("photos", 0), data.get("quests", 0)], 14, _path_page, MUTED)
+	_label("Заезды", 13, _path_page, HudStyle.MINT)
+	if _rides.is_empty():
+		_label("Заездов пока нет", 14, _path_page, MUTED)
+	var group := ButtonGroup.new()
+	for i in _rides.size():
+		var ride: Dictionary = _rides[i]
+		var button := Button.new()
+		button.toggle_mode = true
+		button.button_group = group
+		button.text = "%s
+%s" % [ride.title, ride.summary]
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.custom_minimum_size.y = 52
+		button.tooltip_text = "Показать заезд на карте"
+		button.pressed.connect(_select_ride.bind(i))
+		_path_page.add_child(button)
+		_ride_buttons.append(button)
+	_ride_info = VBoxContainer.new()
+	_ride_info.add_theme_constant_override("separation", 4)
+	_path_page.add_child(_ride_info)
+
+	_path_page.add_child(HSeparator.new())
+	_label("Всего за игру", 13, _path_page, HudStyle.MINT)
+	_label("Велосипед · %s   Пешком · %s" % [Util.distance_text(data.get("bike", 0.0)), Util.distance_text(data.get("foot", 0.0))],
+		13, _path_page, HudStyle.CREAM).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_label("В пути · %s   Высшая точка · %d м" % [_duration(data.get("time", 0.0)), roundi(data.get("alt", 0.0))], 13, _path_page, MUTED)
+	_label("Снимков · %d   Заданий · %d" % [data.get("photos", 0), data.get("quests", 0)], 13, _path_page, MUTED)
 	for entry: Array in data.get("places", []):
 		_label("%s · %d / %d" % entry, 13, _path_page, MUTED)
 	var series: Dictionary = data.get("series", {})
@@ -373,6 +406,35 @@ func _fill_path(data: Dictionary) -> void:
 	if data.get("thanks", []).is_empty():
 		for name: Variant in data.get("helped", []):
 			_label(str(name), 13, _path_page, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if not _rides.is_empty():
+		_ride_buttons[0].set_pressed_no_signal(true)
+		_select_ride.call_deferred(0) # карта уже разложена: вид подгоняется под трек заезда
+
+
+## Выбранный заезд: трек на карте, вид на него, счётчики и места
+func _select_ride(index: int) -> void:
+	if index >= _rides.size() or _ride_info == null or active_tab != Tab.PATH:
+		return
+	var ride: Dictionary = _rides[index]
+	for child: Node in _ride_info.get_children():
+		_ride_info.remove_child(child)
+		child.queue_free()
+	_label(ride.title + (" · идёт сейчас" if ride.current else ""), 16, _ride_info, HudStyle.CREAM)
+	_label("Велосипед · %s" % Util.distance_text(ride.bike), 14, _ride_info, HudStyle.CREAM)
+	_label("Пешком · %s" % Util.distance_text(ride.foot), 14, _ride_info, HudStyle.CREAM)
+	_label("В пути · %s   Высшая точка · %d м" % [_duration(ride.time), roundi(ride.alt)], 14, _ride_info, MUTED)
+	_label("Снимков · %d   Заданий · %d" % [ride.photos, ride.quests], 14, _ride_info, MUTED)
+	var places: Array = ride.places
+	var where := "Места: " + ", ".join(PackedStringArray(places)) if not places.is_empty() else "Места: —"
+	_label(where, 13, _ride_info, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if ride.legs.is_empty():
+		_label("Трека нет: стояли на месте", 13, _ride_info, MUTED)
+	map_view.show_ride(ride.legs, ride.bounds)
+
+
+static func _duration(seconds: float) -> String:
+	var s := int(seconds)
+	return "%d:%02d:%02d" % [s / 3600, s / 60 % 60, s % 60]
 
 
 func _queue_photo(path: String) -> void:

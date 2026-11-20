@@ -236,13 +236,23 @@ func _redraw_marks() -> void:
 		_marks.queue_redraw()
 
 
+## 20.11.2026: скрытая мини-карта (открыта большая карта, фотоаппарат, панель) не забывает подложку. Раньше при
+## каждом показе она собиралась заново (участки, все линии со сглаживанием, вьюпорт) — закрытие карты давало пик
+## кадра. Теперь при показе только сдвиг окна и мелкие слои (путь, места, метки); полная пересборка — как обычно,
+## если игрок за это время отъехал дальше SHIFT_M.
 func _on_visibility_changed() -> void:
 	set_process(is_visible_in_tree())
-	if is_visible_in_tree():
+	if not is_visible_in_tree():
+		return
+	if not _anchor.is_finite():
 		refresh()
-	elif _data != null:
-		_data.release_view()
-		_anchor = Vector2.INF
+		return
+	_slide()
+	_route_canvas.queue_redraw()  # путь и места могли смениться, пока карта была скрыта
+	_places_canvas.queue_redraw()
+	_render()
+	_arrow.visible = _data != null and _position.is_finite()
+	_redraw_marks()
 
 
 ## Мировые метры (x, z) в координаты слоёв внутри круглого окна.

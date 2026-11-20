@@ -255,8 +255,25 @@ func _journal_checks() -> void:
 	snapshot.erase("place_photos")
 	_check(restored.place_photos.get(id) == shot_path and Exploration.valid_save(snapshot),
 		"снимок места переживает сохранение, прежний формат тоже читается")
+	# 20.11.2026: заезды — прошлый (из сохранения) и текущий
+	var past := PackedVector2Array()
+	for i in 30:
+		past.append(Vector2(260 + i * 14.0, 300 + sin(i * 0.4) * 40.0))
+	hud.ride_log.entries.append({start = 1795600000.0, end = 1795603600.0, time = 2400.0, bike = 6400.0, foot = 350.0, alt = 412.0,
+		photos = 2, quests = 1, places = [id], legs = [past]})
+	hud.ride_log.begin(hud.map_journal, hud.explore, 0)
+	for i in 60:
+		hud.map_journal.record(Vector2(520 + i * 4.0, 640 - i * 3.0), 0.3, true)
 	hud.show_tablet(Hud.Tablet.Tab.PATH)
 	_check(hud.journal_panel.visible and hud.journal_panel._path_page.visible and not hud.journal_panel._album_page.visible, "«Путешествие» открывается на вкладке «Путь»")
+	await process_frame
+	var rides: Array = hud.journal_panel._rides
+	_check(rides.size() == 2 and rides[0].current and hud.journal_panel._ride_buttons.size() == 2 and not hud.big_map.ride_legs.is_empty(),
+		"заезды: текущий первым, его трек выделен на карте")
+	hud.journal_panel._ride_buttons[1].emit_signal("pressed")
+	await process_frame
+	_check(hud.big_map.ride_legs.size() == 1 and hud.big_map.ride_legs[0] == past, "клик по прошлому заезду показывает его трек")
+	await _shot("hud_journal_rides")
 	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()), "экран помещается в 1280×720")
 	await process_frame
 	if not hud.big_map.places.is_empty():
@@ -414,9 +431,42 @@ func _run() -> void:
 		hud.map_journal.record(Vector2(400 + i * 8.0, 470 + sin(i * 0.3) * 30.0), 0.3, true)
 	hud.set_map_visible(true)
 	await create_timer(0.6).timeout
-	_check(hud.big_map._fog != null and hud.big_map._fog.get_pixelv(Vector2i(Vector2(512, 512) / hud.big_map.FOG_CELL)).a < 0.1
-		and hud.big_map._fog.get_pixel(0, 0).a > 0.9, "личная карта: у пути открыто, вдали бумага")
+	# 20.11.2026: вся стартовая область видна (рельеф и дороги), места — только открытые
+	_check(hud.big_map._fog == null, "личная карта: тумана нет, видна вся стартовая область")
 	await _shot("hud_big_map")
+	# перетаскивание мышью: настоящие события через окно, снимок посреди перетаскивания и после
+	var from := hud.big_map.get_global_rect().get_center()
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = from
+	press.global_position = from
+	Input.parse_input_event(press)
+	await process_frame
+	for i in 6:
+		var motion := InputEventMouseMotion.new()
+		motion.position = from + Vector2(25.0 * (i + 1), 12.0 * (i + 1))
+		motion.global_position = motion.position
+		motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+		Input.parse_input_event(motion)
+		await process_frame
+	await _shot("hud_big_map_drag")
+	var release := press.duplicate()
+	release.pressed = false
+	release.position = from + Vector2(150, 72)
+	release.global_position = release.position
+	Input.parse_input_event(release)
+	await process_frame
+	_check(hud.big_map._dragged == false and hud.big_map.visible and hud.journal_panel.active_tab == Hud.Tablet.Tab.MAP,
+		"перетаскивание: та же карта, вкладка не сменилась")
+	await _shot("hud_big_map_dragged")
+	# приближение: угол области за краем экрана — подложка и трек не должны пропадать (баг до 20.11.2026)
+	hud.big_map._zoom_at(hud.big_map.size * 0.5, 3.0)
+	hud.big_map._center = Vector2(600, 600)
+	hud.big_map._update_base()
+	await process_frame
+	await process_frame
+	await _shot("hud_big_map_zoom")
 	# 19.11.2026: «прыжок» на открытой карте возвращает обзор к игроку (геймпад и клавиатура без СКМ)
 	hud.big_map._center += Vector2(300, 200)
 	var jump := InputEventAction.new()

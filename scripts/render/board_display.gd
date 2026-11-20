@@ -24,16 +24,21 @@ const TEX := Vector2i(1024, 540)  # текстура щита: 1,8 × 0,95 м
 const FACE := Vector2(1.72, 0.9)  # прямоугольник поверх щита, м
 const FACE_Z := 0.071         # м перед серединой щита (щит толщиной 0,13 м)
 const BUILD_FRAMES := 40      # кадров на догрузку карты, потом рисуется как есть
+const PREPARE_M := 260.0      # м: ближе — задания доски заранее считаются понемногу (prepare), чтобы у щита не было паузы
+const PREPARE_US := 1500      # мкс на заблаговременный расчёт в кадр
 const NOTICE := Vector2(176, 404)
 
 var boards: Callable          # () -> Array досок {at, place, label}
 var offers: Callable          # (place) -> Array[QuestData], как для панели доски
 var pins: Callable            # (place) -> Array мест для карты, как для панели доски
+var prepare: Callable         # (place, deadline_usec) -> bool: заранее посчитать долгую часть offers; true — готово
 var quests: Quests
 var map_source: MapData       # общая подложка карты (Hud.map_data); у щита свой вид на неё
 var world: WorldData
 
 var builds := 0               # сколько раз щит перерисовывался (проверка tools/quest_look.gd)
+var prepare_max_us := 0       # самый долгий кадр заблаговременного расчёта заданий (замер tools/stress world.board)
+var prepare_frames := 0
 var _next_check_ms := 0
 var _board := {}              # доска, у которой сейчас щит
 var _key := ""                # что нарисовано: доска и ревизия заданий
@@ -46,14 +51,19 @@ var _frames_left := 0
 var _painted := false
 var _steps: Array[Callable] = []  # оставшиеся шаги сборки щита
 var _list: Array = []              # листки этого щита
+var _building := false             # щит собирается (шаги и ожидание карты)
+var _prepare_place: Variant = null # доска, для которой заранее считаются задания
+var _prepared := {}                # доски, у которых расчёт закончен
 
 
 func _ready() -> void:
 	set_process(false)
 
 
-func setup(w: WorldData, q: Quests, source: MapData, list: Callable, offers_of: Callable, pins_of: Callable) -> void:
+func setup(w: WorldData, q: Quests, source: MapData, list: Callable, offers_of: Callable, pins_of: Callable,
+		prepare_of := Callable()) -> void:
 	world = w
+	prepare = prepare_of
 	quests = q
 	map_source = source
 	boards = list
@@ -79,14 +89,22 @@ func tick(eye: Vector3) -> void:
 	var best := {}
 	var best_d := SHOW_M * SHOW_M
 	var keep_d := HIDE_M * HIDE_M
+	var warm := {}
+	var warm_d := PREPARE_M * PREPARE_M
 	for b: Dictionary in boards.call():
 		var d := eye.distance_squared_to(b.at.origin)
+		if d < warm_d and prepare.is_valid() and not _prepared.has(_place_key(b.place)):
+			warm = b
+			warm_d = d
 		if not _board.is_empty() and b.place == _board.place and d < keep_d:
 			best = b  # нынешняя держится до HIDE_M
 			break
 		if d < best_d:
 			best_d = d
 			best = b
+	if not warm.is_empty() and _prepare_place == null:
+		_prepare_place = warm.place
+		set_process(true)
 	if best.is_empty():
 		_release()
 		return
@@ -119,7 +137,8 @@ func _release() -> void:
 	_key = ""
 	if _quad != null:
 		_quad.visible = false
-	set_process(false)
+	_building = false
+	set_process(_prepare_place != null)
 	_steps.clear()
 	if _viewport != null:
 		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -178,6 +197,7 @@ func _build_content(place: Variant) -> void:
 	_painted = false
 	_frames_left = BUILD_FRAMES
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_building = true
 	set_process(true)
 
 
@@ -201,16 +221,17 @@ func _step_frame(root: Control, place: Variant) -> void:
 	_atlas.position = Vector2(4, 4)
 	_atlas.size = frame.size - Vector2(8, 8)
 	_atlas.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# подложка и дороги рисуются одним узлом под картой по её готовым данным (во вьюпорте щита слой подложки
-	# самой карты не выводится); от карты остаются значки, сетка и подписи, её собственный фон погашен
-	_paper = Control.new()
-	_paper.position = _atlas.position
-	_paper.size = _atlas.size
-	_paper.clip_contents = true
-	_paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_paper.draw.connect(_draw_paper)
-	frame.add_child(_paper)
-	_atlas.self_modulate.a = 0.0
+	# 20.11.2026: подложка — готовый атлас стартовой области (как у личной карты): текстура и сетки линий, без сборки
+	# участков скриптом. Без атласа (сборка без C#) — прежний путь: подложку и дороги рисует узел под картой
+	if map_source.atlas_texture == null:
+		_paper = Control.new()
+		_paper.position = _atlas.position
+		_paper.size = _atlas.size
+		_paper.clip_contents = true
+		_paper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_paper.draw.connect(_draw_paper)
+		frame.add_child(_paper)
+		_atlas.self_modulate.a = 0.0
 	frame.add_child(_atlas)
 	_atlas.configure_board(map_source, pins.call(place)) # у карты свой вид на общую подложку (Data.new(world, source))
 
@@ -241,6 +262,16 @@ func _step_notice(root: Control, place: Variant, i: int) -> void:
 
 ## Пока щит строится: шаги сборки по одному за кадр, потом ждём, пока карта соберёт участки, последний кадр — и всё замирает
 func _process(_delta: float) -> void:
+	if _prepare_place != null and not _building:
+		var t0 := Time.get_ticks_usec()
+		var done: bool = not prepare.is_valid() or prepare.call(_prepare_place, t0 + PREPARE_US)
+		prepare_max_us = maxi(prepare_max_us, Time.get_ticks_usec() - t0)
+		prepare_frames += 1
+		if done:
+			_prepared[_place_key(_prepare_place)] = true
+			_prepare_place = null
+			set_process(false)
+		return
 	if not _steps.is_empty():
 		var step: Callable = _steps.pop_front()
 		step.call()
@@ -267,7 +298,8 @@ func _draw_paper() -> void:
 
 
 func _freeze() -> void:
-	set_process(false)
+	_building = false
+	set_process(_prepare_place != null)
 	if _viewport == null:
 		return
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE

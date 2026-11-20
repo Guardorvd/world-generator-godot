@@ -483,6 +483,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 			places[p.key] = p
 		hud.visited = saved.visited.duplicate()
 		hud.map_journal.restore(saved.get("atlas", {}))
+		hud.ride_log.restore(saved.get("rides", {}))
 		hud.explore.restore(saved.get("explore", {}))
 		if not quests.restore_state(saved.quest, places, Rect2i(0, 0, world.W, world.H), world):
 			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
@@ -496,6 +497,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		var home := _nearest_village(Vector2(player.x, player.z) / TILE)
 		if not home.is_empty():
 			quests.accept(Quests.start(home))
+	hud.ride_log.begin(hud.map_journal, hud.explore, quests.done)  # 20.11.2026: заезд — от входа в мир до выхода
 	photo.photo_taken.connect(_quest_photo)
 	photo.photo_taken.connect(_album_photo)
 	photo.wanted_reach = Quests.SHOT_REACH_M
@@ -537,7 +539,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	board_display.setup(world, quests, hud.map_data,
 		func() -> Array: return _boards + (regions.boards if regions != null else []),
 		func(place: Variant) -> Array: return _offers(place),
-		func(place: Variant) -> Array: return hud.board_places(place))
+		func(place: Variant) -> Array: return hud.board_places(place),
+		func(place: Variant, deadline: int) -> bool: return interaction_service.prefetch(place, deadline))
 	bike_controller.message.connect(hud.toast.bind(&"warning"))
 	bike_controller.mount_changed.connect(_bike_mount_changed)
 	bike_controller.recovered.connect(func() -> void:
@@ -655,6 +658,7 @@ func save_state() -> Dictionary:
 	var state := {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		atlas = hud.map_journal.save_state(),
+		rides = hud.ride_log.save_state(hud.map_journal, hud.explore, quests.done),
 		explore = hud.explore.save_state(),
 		repairs = repairs.save_state(),
 		goal = hud.goal.get("key", ""),
@@ -1520,6 +1524,7 @@ func _physics_process(dt: float) -> void:
 	if not _opening and not crashed and not crash.active():
 		hud.map_journal.record(Vector2(player.x, player.z), dt, bike.riding)
 		hud.explore.tick(dt, player.feet)
+		hud.ride_log.tick(player.feet)
 	else:
 		hud.map_journal.end_trip()
 		# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
@@ -1528,7 +1533,7 @@ func _physics_process(dt: float) -> void:
 	if _discovery_tick >= DISCOVERY_TICKS:
 		_discovery_tick = 0
 		var known := hud.visited.size()
-		for text: String in player.check_discoveries(world, hud.visited):
+		for text: String in player.check_discoveries(world, hud.visited, hud.ride_log.places):
 			hud.toast(text, &"discovery")
 		if hud.visited.size() != known:
 			hud.sync_map_places()

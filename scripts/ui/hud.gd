@@ -19,6 +19,7 @@ const LocalMap = preload("res://scripts/ui/local_map.gd")
 const Atlas = preload("res://scripts/ui/world_map_view.gd")
 const MapData = preload("res://scripts/ui/local_map_data.gd")
 const Journal = preload("res://scripts/game/map_journal.gd")
+const RideLog = preload("res://scripts/game/ride_log.gd")
 const MINI := LocalMap.DIAMETER
 const SUMMARY_FADE := 0.24
 const SUMMARY_HINT_TIME := 5.0
@@ -52,6 +53,7 @@ var _compass_quest := {}
 var map_preview: Image
 var map_data: MapData
 var map_journal := Journal.new()
+var ride_log := RideLog.new()     # 20.11.2026: история заездов (вкладка «Заезды» дневника); сохранение — поле "rides"
 var explore := Exploration.new()  # открытое сверху, счётчики пути и альбом (с 18.11.2026); сохранение — поле "explore"
 const Tablet := preload("res://scripts/ui/journal_panel.gd")
 var journal_panel: Tablet
@@ -344,6 +346,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	map_data = MapData.new(w)
 	map_data.prepare_atlas()
 	map_journal = Journal.new()
+	ride_log = RideLog.new()
 	explore = Exploration.new()
 	if journal_panel != null:
 		journal_panel.clear()
@@ -382,6 +385,7 @@ func clear_world() -> void:
 	map_preview = null
 	map_data = null
 	map_journal = Journal.new()
+	ride_log = RideLog.new()
 	explore = Exploration.new()
 	if journal_panel != null:
 		journal_panel.clear()
@@ -783,7 +787,27 @@ func journey_data() -> Dictionary:
 		foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt,
 		photos = explore.photos, quests = quests.done if quests != null else 0, places = rows,
 		pages = pages, groups = Exploration.GROUPS, active_quest = active_quest,
-		series = series, thanks = thanks, helped = helped, track = track}
+		series = series, thanks = thanks, helped = helped, track = track, rides = _ride_rows()}
+
+
+## 20.11.2026: заезды для вкладки дневника, новые первыми: подписи, счётчики, названия мест и трек
+func _ride_rows() -> Array:
+	var out: Array = []
+	for entry: Dictionary in ride_log.history(map_journal, explore, quests.done if quests != null else 0):
+		if not entry.get("current", false) and not RideLog.meaningful(entry):
+			continue
+		var names: Array[String] = []
+		for id: String in entry.places:
+			var place := world.place(id) if world != null else {}
+			if not place.is_empty():
+				names.append(str(place.get("name", "")))
+		var distance: float = entry.bike + entry.foot
+		out.append({current = entry.get("current", false),
+			title = ("Сейчас" if entry.get("current", false) else RideLog.date_text(entry.start)),
+			summary = "%s · %s" % [Util.distance_text(distance), RideLog.duration_text(entry.time)],
+			bike = entry.bike, foot = entry.foot, time = entry.time, alt = entry.alt, photos = entry.photos,
+			quests = entry.quests, places = names, legs = entry.legs, bounds = RideLog.bounds(entry)})
+	return out
 
 
 ## Место текущего шага задания (метка на компасе и картах) или пусто
