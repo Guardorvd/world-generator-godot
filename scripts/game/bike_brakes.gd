@@ -17,6 +17,11 @@ const SHARE_LIMIT := 0.9 # долю другого колеса седок до�
 ## эту долю. Раньше переносил полностью (h/L ≈ 1,04 на единицу уклона): на 30 % на переднем оставалось 19 % веса,
 ## а поворот считается по переднему — на крутом подъёме руль почти не поворачивал. Спуск не меняется.
 const CLIMB_TRANSFER := 0.45
+## 20.11: положение корпуса (BikeRide.body_x, Q назад / E вперёд) на весь ход сдвигает центр масс на столько
+## для равновесия торможения: откинувшись назад, седок тормозит в полную силу на крутом спуске без перелёта
+## через руль, а с весом вперёд перелёт ближе. Нагрузки шин и запас сцепления не меняет: перенос веса корпусом
+## в них уже учтён (BikeRide.unweight), здесь только опрокидывающий момент.
+const RIDER_BACK_SHIFT := 0.25
 
 var pressure := 0.0
 var deceleration := 0.0
@@ -49,7 +54,8 @@ func reset() -> void:
 
 ## loads — нагрузки шин переднего и заднего колеса (BikeRide, модель двух контактов), доли веса; тогда запас каждого
 ## колеса — от его нагрузки, а не от front_load. Отрицательные — прежняя модель.
-func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true, loads := Vector2(-1.0, -1.0)) -> void:
+## rider_back — положение корпуса от −1 (вперёд) до 1 (назад), влияет только на перелёт через руль.
+func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true, loads := Vector2(-1.0, -1.0), rider_back := 0.0) -> void:
 	if dt <= 0.0 or not is_finite(dt): return
 	command = clampf(command, 0.0, 1.0) if grounded else 0.0
 	var previous := pressure
@@ -100,7 +106,8 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
 	# Пороги скорости и силы нажатия — плавные: у их границы перегрузка нарастает постепенно, а не включается сразу.
 	var near := smoothstep(MIN_TIP_SPEED - 2.0, MIN_TIP_SPEED + 2.0, speed) * smoothstep(HARD_BRAKE - 0.1, HARD_BRAKE + 0.05, minf(command, pressure))
-	var overload := (front_load - 1.0 - BALANCE_MARGIN) * near
+	var balance := front_load - clampf(rider_back, -1.0, 1.0) * RIDER_BACK_SHIFT / WHEELBASE
+	var overload := (balance - 1.0 - BALANCE_MARGIN) * near
 	var danger := grounded and overload > 0.0
 	if danger:
 		_overload_time += dt * near

@@ -1744,7 +1744,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope) + pump_accel
 	var loads := Vector2(tire_f * slick_f if contact_f() else 0.0, tire_r * slick_r if contact_r() else 0.0)
-	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, loads if contact_model else Vector2(-1.0, -1.0))
+	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, loads if contact_model else Vector2(-1.0, -1.0), body_x)
 	braking = 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона. Тормоз, зажатый на ходу,
 	# так и заканчивается стоянкой: задний ход — повторным нажатием (отпустить и снова держать).

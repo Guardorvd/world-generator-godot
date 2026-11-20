@@ -176,6 +176,17 @@ func run() -> void:
 		for i in 120: brakes.step(1.0 / 60.0, 1.0, pace, -0.35, 1.0, 0.0)
 		risks.append(brakes.risk)
 	check(absf(risks[0] - risks[1]) < 0.2, "T7 предупреждение у порога скорости: риск %.2f и %.2f" % risks)
+	# T7 (20.11): корпус назад (Q) снимает перелёт при полном тормозе на быстром крутом спуске, вперёд (E) — приближает
+	var poses: Array = []
+	for back: float in [0.0, 1.0, -1.0]:
+		var brakes = preload("res://scripts/game/bike_brakes.gd").new()
+		var first := -1.0
+		for i in 180:
+			brakes.step(1.0 / 60.0, 1.0, 15.0, -0.35, 1.0, 0.0, true, Vector2(-1.0, -1.0), back)
+			if brakes.tipped and first < 0.0: first = i / 60.0
+		poses.append([brakes.risk, first])
+	check(poses[0][1] > 0.0 and poses[1][0] == 0.0 and poses[1][1] < 0.0 and poses[2][1] > 0.0 and poses[2][1] < poses[0][1],
+		"T7 корпус на спуске 35%% при 15 м/с: прямо — перелёт за %.2f с, назад — риск %.2f без перелёта, вперёд — за %.2f с" % [poses[0][1], poses[1][0], poses[2][1]])
 	# T7: уверенный тормоз в пределах сцепления не звучит как юз
 	var confident := bike(8.0)
 	for i in 20: tick(confident, 0.0, false, 60, -0.6)
