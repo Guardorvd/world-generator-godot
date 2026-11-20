@@ -57,6 +57,7 @@ var ride_log := RideLog.new()     # 20.11.2026: история заездов (�
 var explore := Exploration.new()  # открытое сверху, счётчики пути и альбом (с 18.11.2026); сохранение — поле "explore"
 const Tablet := preload("res://scripts/ui/journal_panel.gd")
 var journal_panel: Tablet
+var _tablet_places_dirty := true
 var plaque_panel   # табличка обелиска: название и описание
 var minimap: LocalMap
 var controls: Controls = GameContext.scope.controls
@@ -195,6 +196,7 @@ func _ready() -> void:
 	big_map.controls = controls
 	big_map.input_blocked = func() -> bool: return _travel_dialog != null
 	big_map.place_selected.connect(_select_map_goal)
+	big_map.visibility_changed.connect(_sync_tablet_map)
 	big_map.marker_requested.connect(func(at: Vector2) -> void: _select_map_goal(marker_goal(at)))
 	journal_panel.closed.connect(func() -> void: map_close_requested.emit())
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
@@ -344,6 +346,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	_nearby.hide()
 	map_preview = map_image
 	map_data = MapData.new(w)
+	_tablet_places_dirty = true
 	map_data.prepare_atlas()
 	map_journal = Journal.new()
 	ride_log = RideLog.new()
@@ -434,9 +437,6 @@ func show_tablet(tab: Tablet.Tab) -> void:
 		big_map.selected_place = {}
 		big_map.hover = {}
 	journal_panel.open_tab(tab, world.seed_text if world != null else "")
-	if opening or tab != Tablet.Tab.ALBUM:
-		big_map.set_player(Vector2(px, pz), yaw)
-		sync_map_places()
 	_map_hint_pad = -1
 	_sync_map_hint()
 	_apply_reveal()
@@ -586,8 +586,17 @@ func map_place_count() -> int:
 
 func sync_map_places() -> void:
 	sync_minimap_places()
-	if not journal_panel.visible or world == null:
+	_tablet_places_dirty = true
+	_sync_tablet_map()
+
+
+func _sync_tablet_map() -> void:
+	if not big_map.is_visible_in_tree() or world == null:
 		return
+	big_map.set_player(Vector2(px, pz), yaw)
+	if not _tablet_places_dirty:
+		return
+	_tablet_places_dirty = false
 	var photos := explore.place_photos.duplicate()
 	for key: String in explore.album:
 		var shot: Dictionary = explore.album[key]
@@ -654,7 +663,7 @@ func _select_map_goal(place: Dictionary) -> void:
 
 func _sync_map_goal() -> void:
 	var id: String = goal.get("key", "")
-	var visible_pin := journal_panel.visible and big_map.places.any(func(place: Dictionary) -> bool: return place.key == id)
+	var visible_pin := not id.is_empty() and journal_panel.visible and big_map.places.any(func(place: Dictionary) -> bool: return place.key == id)
 	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or is_open(id) or visible_pin)
 	big_map.goal = Atlas.place_at(goal) if show_goal else Vector2.INF
 	var objective := quest_place()

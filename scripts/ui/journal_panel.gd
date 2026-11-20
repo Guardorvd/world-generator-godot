@@ -5,11 +5,12 @@ signal closed
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
+const ShopPanel := preload("res://scripts/ui/shop_panel.gd")
 const MUTED := HudStyle.MUTED
 const CARD := Vector2(204, 168)
 const THUMB := Vector2(190, 86)
 const Atlas := preload("res://scripts/ui/world_map_view.gd")
-enum Tab { MAP, PATH, ALBUM }
+enum Tab { MAP, PATH, ALBUM, SHOP }
 var active_tab := Tab.MAP
 var map_view: Atlas
 var data_provider := Callable()
@@ -42,6 +43,8 @@ var _album_filter := -1
 var _album_data := {}
 var _tab_path: Button
 var _tab_album: Button
+var _tab_shop: Button
+var shop_panel: ShopPanel
 var _cache := {}        # путь снимка -> уменьшенная ImageTexture | null
 var _large_cache := {}  # путь снимка -> крупная ImageTexture для лайтбокса | null
 var _close: Button
@@ -69,6 +72,10 @@ func _ready() -> void:
 	_album_page.add_theme_constant_override("separation", 8)
 	_album_page.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_box.add_child(_album_page)
+	shop_panel = ShopPanel.new()
+	shop_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	shop_panel.hide()
+	_box.add_child(shop_panel)
 	resized.connect(_reflow)
 	_reflow()
 	hide()
@@ -88,6 +95,7 @@ func clear() -> void:
 	close_lightbox()
 	hide()
 	map_view.hide()
+	shop_panel.hide()
 	for child: Node in _album_page.get_children():
 		_album_page.remove_child(child)
 		child.queue_free()
@@ -130,6 +138,12 @@ func close_lightbox() -> bool:
 	return true
 
 
+func dismiss_subpanel() -> bool:
+	if active_tab == Tab.SHOP:
+		return shop_panel.dismiss_purchase()
+	return close_lightbox()
+
+
 func open(data: Dictionary, album_tab := false) -> void:
 	clear()
 	_data = data
@@ -145,7 +159,7 @@ func open_tab(tab: Tab, seed_text: String) -> void:
 
 func cycle_tab(direction: int) -> void:
 	if _lightbox == null:
-		var tabs := [Tab.MAP, Tab.PATH, Tab.ALBUM]
+		var tabs := [Tab.MAP, Tab.PATH, Tab.ALBUM, Tab.SHOP] if _tab_shop.visible else [Tab.MAP, Tab.PATH, Tab.ALBUM]
 		_select(tabs[posmod(active_tab + direction, tabs.size())])
 
 
@@ -178,6 +192,8 @@ func _build_header() -> void:
 	_tab_map = _tab("Карта", group, tabs, Tab.MAP)
 	_tab_path = _tab("Заезды", group, tabs, Tab.PATH)
 	_tab_album = _tab("Альбом", group, tabs, Tab.ALBUM)
+	_tab_shop = _tab("Магазин", group, tabs, Tab.SHOP)
+	_tab_shop.hide()
 	_close = Button.new()
 	_close.icon = UiIcons.CLOSE
 	_close.tooltip_text = "Закрыть"
@@ -279,17 +295,26 @@ func _reflow() -> void:
 	_dock.size_flags_vertical = Control.SIZE_FILL if narrow else Control.SIZE_EXPAND_FILL
 
 
+func enable_shop(profile: ShopPanel.Progress) -> void:
+	shop_panel.set_profile(profile)
+	_tab_shop.show()
+
+
 func _select(tab: Tab) -> void:
+	if tab == Tab.SHOP and shop_panel.visible:
+		return
 	close_lightbox()
 	active_tab = tab
 	_tab_map.set_pressed_no_signal(tab == Tab.MAP)
 	_tab_path.set_pressed_no_signal(tab == Tab.PATH)
 	_tab_album.set_pressed_no_signal(tab == Tab.ALBUM)
-	_map_page.visible = tab != Tab.ALBUM
-	map_view.visible = tab != Tab.ALBUM
+	_tab_shop.set_pressed_no_signal(tab == Tab.SHOP)
+	_map_page.visible = tab == Tab.MAP or tab == Tab.PATH
+	map_view.visible = _map_page.visible
 	_path_page.visible = tab == Tab.PATH
 	_album_page.visible = tab == Tab.ALBUM
-	if tab != Tab.MAP and _data.is_empty() and data_provider.is_valid():
+	shop_panel.visible = tab == Tab.SHOP
+	if tab in [Tab.PATH, Tab.ALBUM] and _data.is_empty() and data_provider.is_valid():
 		_data = data_provider.call()
 	if tab == Tab.PATH and _path_page.get_child_count() == 0:
 		_fill_path(_data)
@@ -303,12 +328,14 @@ func _select(tab: Tab) -> void:
 	var focus := get_viewport().gui_get_focus_owner()
 	if tab != Tab.ALBUM and focus != null and is_ancestor_of(focus):
 		focus.release_focus()
+	if tab == Tab.SHOP:
+		shop_panel.open()
 	refresh_inspector(map_view.hover)
 	refresh_quest()
 
 
 func refresh_inspector(place: Dictionary) -> void:
-	if not visible:
+	if not _map_page.is_visible_in_tree():
 		return
 	if place.is_empty():
 		place = map_view.selected_place
@@ -338,7 +365,7 @@ func refresh_inspector(place: Dictionary) -> void:
 
 
 func refresh_quest() -> void:
-	if not visible or not quest_provider.is_valid():
+	if not _map_page.is_visible_in_tree() or not quest_provider.is_valid():
 		return
 	var data: Dictionary = quest_provider.call()
 	if data != _shown_quest or _checklist.get_child_count() == 0:

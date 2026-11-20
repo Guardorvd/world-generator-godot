@@ -3,6 +3,12 @@ extends SceneTree
 
 var _fails := 0
 
+class BackdropProbe extends "res://scripts/ui/menu_backdrop.gd":
+	var ticks := 0
+
+	func _process(_delta: float) -> void:
+		ticks += 1
+
 
 func _check(ok: bool, label: String) -> void:
 	print(("OK " if ok else "FAIL ") + label)
@@ -58,6 +64,7 @@ func _run() -> void:
 	carousel.force_animate_in_headless = true
 
 	await _test_main_and_carousel(main, carousel)
+	await _test_shop(main)
 	await _test_loading_and_cancellation(main)
 	await _test_pause_settings_and_live_preview(main)
 
@@ -72,6 +79,100 @@ func _run() -> void:
 
 	print("ui_choreography_test failures: ", _fails)
 	quit(1 if _fails else 0)
+
+
+func _test_shop(main: Node) -> void:
+	var previous_size := root.size
+	root.size = Vector2i(1280, 800)
+	var shop_button := main.get_node("%OpenShop") as Button
+	var backdrop := BackdropProbe.new()
+	main.add_child(backdrop)
+	main._backdrop = backdrop
+	main._backdrop_mode = "live"
+	main._progress_enabled = true
+	shop_button.pressed.emit()
+	var frozen_ticks := backdrop.ticks
+	await process_frame
+	await process_frame
+	var shop: Control = main._shop
+	_check(main._ui_stack.is_open("shop") and shop._rows.ember.has_focus() and shop._preview.texture != null,
+		"магазин в меню показывает стартовую расцветку и ставит фокус на неё")
+	_check(backdrop.process_mode == Node.PROCESS_MODE_DISABLED and backdrop.ticks == frozen_ticks,
+		"при открытом магазине фон не получает обновления кадра")
+	var preview: Texture2D = shop._preview.texture
+	await process_frame
+	_check(shop._preview.texture == preview and not shop.is_processing(), "витрина не обновляет превью в простое")
+	root.push_input(_pad_button(JOY_BUTTON_DPAD_DOWN))
+	_check(shop._rows.glacier.has_focus() and shop._selection == "glacier",
+		"крестовина выбирает на превью расцветку в фокусе")
+	root.push_input(_pad_button(JOY_BUTTON_DPAD_RIGHT))
+	_check(shop._goal_action.has_focus(), "вправо переводит фокус к цели, когда очков на покупку мало")
+	shop._rows.moss.pressed.emit()
+	_check(shop._action.disabled and shop._note.text.contains("50"), "магазин показывает, сколько очков не хватает")
+	_check(shop._rows.moss.button_pressed and not shop._rows.ember.button_pressed,
+		"подсвечена только расцветка на превью")
+	shop._goal_action.pressed.emit()
+	main._shop_progress.award("Тест-1000", ["start:home"])
+	_check(shop._goal_card.visible and shop._goal_bar.value == 20.0 and shop._goal_status.text.contains("Осталось 30"),
+		"выбранная цель показывает прогресс после задания")
+	shop._rows.glacier.pressed.emit()
+	_check(shop._goal_action.text == "Сменить цель" and main._shop_progress.purchase_goal == "moss",
+		"просмотр другой расцветки сам по себе не меняет цель")
+	shop._goal_action.pressed.emit()
+	_check(main._shop_progress.purchase_goal == "glacier" and shop._goal_bar.value == 20.0,
+		"смена цели переносит прогресс без списания очков")
+	shop._goal_action.pressed.emit()
+	_check(not shop._goal_card.visible and main._shop_progress.balance == 20, "цель можно снять без потери очков")
+	shop._rows.moss.pressed.emit()
+	shop._goal_action.pressed.emit()
+	main._shop_progress.award("Тест-1000", ["supplies:home>farm"])
+	_check(shop._goal_status.text.begins_with("Можно купить") and not shop._action.disabled, "цель отмечается доступной при достижении суммы")
+	shop._rows.night.pressed.emit()
+	_check(shop._note.text.contains("На «Мох» нужно будет ещё 50"), "покупка вне цели заранее показывает новый остаток до цели")
+	shop._rows.moss.pressed.emit()
+	shop._action.pressed.emit()
+	shop._action.pressed.emit()
+	await process_frame
+	_check(shop._cancel_buy.has_focus() and main._shop_progress.balance == 50 and not main._shop_progress.owns("moss"),
+		"повторный ввод на покупке не списывает очки, фокус стоит на отмене")
+	_check(shop.get_global_rect().encloses(shop._review_actions.get_global_rect())
+		and shop._note.get_theme_font_size("font_size") >= 16 and shop._note.text.contains("«Мох» за 50"),
+		"подтверждение и итог покупки видны в интерфейсе 1280×800")
+	var double_click := InputEventMouseButton.new()
+	double_click.position = shop._confirm_buy.get_global_rect().get_center()
+	double_click.button_index = MOUSE_BUTTON_LEFT
+	double_click.pressed = true
+	double_click.double_click = true
+	root.push_input(double_click, true)
+	var release := double_click.duplicate() as InputEventMouseButton
+	release.pressed = false
+	release.double_click = false
+	root.push_input(release, true)
+	_check(main._shop_progress.balance == 50 and shop._review_actions.visible,
+		"второй щелчок поверх появившейся кнопки подтверждения не списывает очки")
+	root.push_input(_pad_button(JOY_BUTTON_B))
+	_check(main._ui_stack.is_open("shop") and not shop._review_actions.visible and main._shop_progress.balance == 50,
+		"B отменяет покупку и оставляет магазин открытым")
+	shop._action.pressed.emit()
+	await process_frame
+	root.push_input(_pad_button(JOY_BUTTON_DPAD_RIGHT))
+	_check(shop._confirm_buy.has_focus(), "подтверждение доступно с крестовины")
+	shop._confirm_buy.pressed.emit()
+	shop._confirm_buy.pressed.emit()
+	_check(shop._action.text == "Надеть" and main._shop_progress.balance == 0 and not shop._goal_card.visible
+		and shop._collection.text.ends_with("2 из 4") and main._shop_progress.equipped == "ember"
+		and main._ui_audio.last_sound == &"confirm", "покупка пополняет коллекцию один раз и подтверждается звуком")
+	shop._action.pressed.emit()
+	_check(main._shop_progress.equipped == "moss", "купленную расцветку можно надеть")
+	root.push_input(_pad_button(JOY_BUTTON_B))
+	_check(main._ui_stack.is_open("menu") and shop_button.has_focus(), "возврат из магазина восстанавливает фокус меню")
+	await create_timer(0.24).timeout
+	_check(main._backdrop == backdrop and backdrop.ticks > frozen_ticks, "фон продолжает работу без пересоздания")
+	main._progress_enabled = false
+	main._backdrop = null
+	main._backdrop_mode = ""
+	backdrop.queue_free()
+	root.size = previous_size
 
 
 func _test_main_and_carousel(main: Node, carousel: Node) -> void:
@@ -300,6 +401,7 @@ func _test_pause_settings_and_live_preview(main: Node) -> void:
 	main.game = gw
 	gw.pause_requested.connect(main._toggle_pause)
 	main._show("", {instant = true})
+	main.hud.show()
 
 	# Регрессия Alt+Tab: открытый Дневник -> пауза -> Esc/E/J в GameWorld не должны закрывать его и красть мышь
 	gw.open_journal()
@@ -313,6 +415,12 @@ func _test_pause_settings_and_live_preview(main: Node) -> void:
 	root.push_input(_pad_button(JOY_BUTTON_RIGHT_SHOULDER))
 	_check(main.hud.journal_panel.active_tab == Hud.Tablet.Tab.ALBUM and not atlas.is_visible_in_tree(),
 		"5.3 RB переключает планшет с пути на альбом")
+	root.push_input(_pad_button(JOY_BUTTON_RIGHT_SHOULDER))
+	var shop: Control = main.hud.journal_panel.shop_panel
+	_check(main.hud.journal_panel.active_tab == Hud.Tablet.Tab.SHOP and not atlas.is_visible_in_tree()
+		and shop._rows.moss.has_focus() and shop._action.text == "Надето",
+		"RB открывает магазин в планшете с экипировкой из стартового меню (виден=%s, кнопка=%s)" % [
+			shop.is_visible_in_tree(), shop._action.text])
 	root.push_input(_action_event(&"journal"))
 	gw._captured_at = 0
 	_check(gw._journal_open() and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE,

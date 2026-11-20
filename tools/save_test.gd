@@ -3,6 +3,7 @@ extends SceneTree
 const Saves = preload("res://scripts/game/save_game.gd")
 const Quests = preload("res://scripts/game/quests.gd")
 const Main = preload("res://scripts/ui/main.gd")
+const ShopProgress = preload("res://scripts/game/shop_progress.gd")
 var failed := 0
 
 class SaveFixture extends Node:
@@ -114,6 +115,7 @@ func run() -> void:
 			for suffix: String in ["", ".bak"]:
 				if FileAccess.file_exists(path + suffix):
 					DirAccess.remove_absolute(path + suffix)
+	ShopProgress.Files.remove(Saves.dir.path_join("shop_progress.bin"))
 	DirAccess.remove_absolute(Saves.dir)
 	print("SAVE TEST failures: ", failed)
 	quit(1 if failed else 0)
@@ -161,14 +163,36 @@ func _test_marker_save(state: Dictionary) -> void:
 	check(not Saves.valid(orphan), "coordinates cannot silently attach to a different named target")
 	hud.free()
 
+func _arrive_for_quest(game: GameWorld) -> String:
+	var step := game.quests.step()
+	if step.is_empty():
+		return ""
+	var previous := Vector2(game.player.x, game.player.z)
+	game.player.x = step.place.x * GameConfig.TILE
+	game.player.z = step.place.y * GameConfig.TILE
+	var message := game.quests.tick(game._quest_arrived)
+	game._quest_progress(message)
+	game.player.x = previous.x
+	game.player.z = previous.y
+	return message
+
+
 func integration(main: Node) -> void:
 	print("Integration: generating one world")
 	GameContext.scope.cache.enabled = false
 	var loaded := WorldLoader.load_world("Север-1234", 256)
+	var profile := ShopProgress.new()
+	var profile_path := Saves.dir.path_join("shop_progress.bin")
 	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
+	game.shop_progress = profile
 	main.add_child(game)
 	game.start(loaded, main.hud)
 	game.set_paused(true)
+	check(game.quests.active.id.begins_with("start:") and game.quests.reward_points(game.quests.active.id) == 20,
+		"real world advertises the opening reward")
+	profile.set_purchase_goal("moss")
+	check(_arrive_for_quest(game).contains("«Мох» — 30") and profile.balance == 20,
+		"real world credits the opening reward and shows the remaining cost")
 	var places: Array = main.hud.all_places()
 	var towns := places.filter(func(p: Dictionary) -> bool: return p.kind == "settlement")
 	game.quests.accept(Quests._make("delivery", towns[0], [towns[1]]))
@@ -180,17 +204,24 @@ func integration(main: Node) -> void:
 	game.queue_free()
 	await process_frame
 	main.hud.clear_world()
+	profile = ShopProgress.new()
+	profile.load_profile(profile_path)
+	profile.set_purchase_goal("moss")
+	main.hud.journal_panel.enable_shop(profile)
 	game = load("res://scenes/game_world.tscn").instantiate()
+	game.shop_progress = profile
 	main.add_child(game)
 	game.start(loaded, main.hud, Saves.read_slot(snapshot.seed).data)
 	game.set_paused(true)
 	check(not game.opening_active(), "loading skips cinematic")
+	check(profile.balance == 20, "old world slot grants its completed opening reward to a fresh profile")
 	check(main.hud.visited.has(towns[0].key) and game.quests.cargo and game.quests.step().do == "carry", "live discoveries and delivery restored")
 	check(Vector2(game.player.x - snapshot.player.x, game.player.z - snapshot.player.z).length() < 0.1, "live player position restored")
 	check(absf(game.hour - snapshot.player.hour) < 0.01, "world time restored")
 	check(not game.bike.riding or (game.bike.can_mount(game.player) and not BikeRecovery.placement(game.world, game.heights,
 		Vector3(game.bike.x, game.bike.y, game.bike.z), game.bike.heading).is_empty()), "restored rider has a safe bicycle placement")
 	game.set_paused(false)
+	main.hud.show()
 	game.bike.speed = 0.0
 	game._open_settlement(towns[0].src)
 	check(game._settlement_open(), "settlement board opens after restore")
@@ -222,8 +253,62 @@ func integration(main: Node) -> void:
 	before = Vector3(game.player.x, game.player.feet, game.player.z)
 	game.travel_to(towns[1])
 	check(before == Vector3(game.player.x, game.player.feet, game.player.z), "restored cargo still blocks fast travel")
+	check(_arrive_for_quest(game).contains("«Мох» теперь можно купить") and profile.balance == 50 and not game.quests.cargo,
+		"restored delivery completes and announces that the goal is affordable")
+	game.toggle_map()
+	var tablet: Hud.Tablet = main.hud.journal_panel
+	var atlas: Hud.Atlas = tablet.map_view
+	await process_frame
+	atlas._scale *= 1.25
+	var scale_before := atlas._scale
+	var center_before := atlas._center
+	tablet.cycle_tab(-1)
+	check(tablet.active_tab == Hud.Tablet.Tab.SHOP and not atlas.is_processing() and root.disable_3d,
+		"shop uses the tablet and suspends atlas and world drawing")
+	var shop := tablet.shop_panel
+	check(shop._selection == "moss", "journal opens on the tracked goal")
+	shop._action.pressed.emit()
+	var back := InputEventAction.new()
+	back.action = &"back"
+	back.pressed = true
+	check(game._tablet_shortcut(back) and tablet.active_tab == Hud.Tablet.Tab.SHOP and profile.balance == 50
+		and not shop._review_actions.visible, "controller back cancels the purchase without closing the journal")
+	shop._action.pressed.emit()
+	tablet.cycle_tab(1)
+	tablet.cycle_tab(-1)
+	check(not shop._review_actions.visible and profile.balance == 50, "switching tabs cancels a pending purchase")
+	shop._action.pressed.emit()
+	shop._confirm_buy.pressed.emit()
+	var old_palette: PackedColorArray = game.bike_view._skin_mats[0].get_shader_parameter("palette")
+	check(profile.owns("moss") and profile.balance == 0 and old_palette == ShopProgress.Palette.colors("ember"),
+		"first purchase commits its cost and leaves the equipped skin alone")
+	shop._action.pressed.emit()
+	check(profile.equipped == "moss" and game.bike_view._skin_mats[0].get_shader_parameter("palette") == ShopProgress.Palette.colors("moss"),
+		"equipping in the journal updates the real bike and rider shader")
+	tablet.cycle_tab(1)
+	await process_frame
+	check(atlas.is_processing() and is_equal_approx(atlas._scale, scale_before) and atlas._center == center_before,
+		"returning from the shop preserves map zoom and position (processing=%s, scale=%f/%f, center=%s/%s)" % [
+			atlas.is_processing(), atlas._scale, scale_before, atlas._center, center_before])
+	game.toggle_map()
+	check(not root.disable_3d, "closing the tablet resumes world drawing")
+	var completed_snapshot := game.save_state()
+	check(Saves.write_slot(completed_snapshot, "manual") == OK, "save completed journey to manual slot")
 	game.set_paused(true)
 	snapshot.signature = "outdated"
 	check(not GameWorld.can_restore(snapshot, loaded.world), "changed world blocked")
+	game.queue_free()
+	await process_frame
+	main.hud.clear_world()
+	var reopened := ShopProgress.new()
+	reopened.load_profile(profile_path)
+	game = load("res://scenes/game_world.tscn").instantiate()
+	game.shop_progress = reopened
+	main.add_child(game)
+	game.start(loaded, main.hud, Saves.read_slot(completed_snapshot.seed, "manual").data)
+	game.set_paused(true)
+	check(reopened.balance == 0 and reopened.equipped == "moss" and reopened.purchase_goal == ""
+		and game.bike_view._skin_mats[0].get_shader_parameter("palette") == ShopProgress.Palette.colors("moss"),
+		"manual slot reload keeps the purchase, equipment and spent balance")
 	game.queue_free()
 	await process_frame

@@ -9,6 +9,7 @@ const Quests = preload("res://scripts/game/quests.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BeaconSites = Quests.BeaconSites
 const PaintTargets = Quests.PaintTargets
+const ShopProgress = preload("res://scripts/game/shop_progress.gd")
 
 var out := ""
 var failed := 0
@@ -150,6 +151,8 @@ func _by_kind(list: Array, kind: String) -> QuestData:
 
 func _logic() -> void:
 	var quests := Quests.new()
+	var shop := ShopProgress.new()
+	quests.completion_note = func(ids: Array) -> String: return " · +%d" % shop.award("quests", ids)
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
 	_check(kinds == ["beacons", "paint", "supplies", "supplies", "fragile", "repair", "obelisks"],
@@ -169,11 +172,13 @@ func _logic() -> void:
 	at = Vector2(180, 130)
 	_check(quests.tick(_arrived) == "", "без сумки приезд в поселение не засчитан")
 	_check(quests.pick_up() != "" and quests.cargo and quests.goal().name == "Каменка", "сумка за спиной, цель — поселение доставки")
+	_check(shop.balance == 0, "за взятие задания и сумки очков нет")
 	at = Vector2(150, 120)
 	_check(quests.tick(_arrived) == "" and quests.cargo, "по дороге шаг не закрывается")
 	at = Vector2(180, 130)
 	var text := quests.tick(_arrived)
 	_check(text.begins_with("Задание выполнено") and not quests.cargo and quests.active.is_empty() and quests.done == 1, "сумка доставлена — задание выполнено, сумки нет")
+	_check(shop.balance == 30 and text.ends_with("+30"), "после доставки награда сохранена и видна в сообщении")
 	_check(not _offers(quests).any(func(q: QuestData) -> bool: return q.id == delivery.id), "выполненная доставка больше не предлагается")
 	# снимок: только нужное место в прицеле, потом отвезти
 	var photo := Quests._make("photo", _place("Ольховка"), [_place("Седая"), _place("Каменка")])
@@ -267,7 +272,10 @@ func _series_quest() -> void:
 	var rest: Array = quests.series.steps.slice(quests.series.step).map(func(s: Dictionary) -> String: return s.place.key)
 	for k in rest.size() - 1:
 		quests.plaque_photographed(rest[k], 3.0)
+	var shop := ShopProgress.new()
+	quests.completion_note = func(ids: Array) -> String: return " · +%d" % shop.award("obelisks", ids)
 	var last := quests.plaque_photographed(rest[-1], 3.0)
+	_check(shop.balance == 80 and last.ends_with("+80"), "последняя табличка закрывает одну выплату за серию")
 	_check(last.begins_with("Летопись обелисков завершена") and quests.series.is_empty() and quests.series_done and quests.done == 1, "все таблички — серия выполнена, засчитана (%s)" % last)
 	_check(_by_kind(_offers(quests), "obelisks").is_empty() and quests.series_progress() == Vector2i.ZERO, "выполненная серия не предлагается снова")
 	var finished := Quests.new()
@@ -312,9 +320,75 @@ func _repair_quest() -> void:
 		by_place[p.key] = p
 	var kept := Quests.new()
 	_check(Quests.valid_save(road.save_state()) and kept.restore_state(road.save_state(), by_place) and kept.thanks.size() == 1, "благодарность сохраняется")
+	var shop := ShopProgress.new()
+	kept.completion_note = func(ids: Array) -> String: return " · +%d" % shop.award("repairs", ids)
+	kept.repaired_on_way(_place("Лавка у обрыва"), village)
 	_check(kept.thank(func(_id: String) -> bool: return false) == "" and kept.done == 0, "вдали от поселения не засчитано")
 	var thanked := kept.thank(func(id: String) -> bool: return id == village.key)
-	_check(thanked.contains("благодарит") and kept.done == 1 and kept.by_giver.get(village.key) == 1 and kept.thanks.is_empty(), "в поселении засчитано (%s)" % thanked)
+	_check(thanked.contains("благодарит") and kept.done == 2 and kept.by_giver.get(village.key) == 2 and kept.thanks.is_empty(), "в поселении засчитаны обе благодарности (%s)" % thanked)
+	_check(shop.balance == 60 and thanked.ends_with("+60"), "одна выплата за каждую благодарность")
+
+
+func _shop_save() -> void:
+	var shop := ShopProgress.new()
+	var equipment_events: Array[String] = []
+	shop.equipment_changed.connect(func(id: String) -> void: equipment_events.append(id))
+	var path := out.path_join("shop-%d.bin" % OS.get_process_id())
+	var legacy := shop._state.duplicate()
+	legacy.erase("purchase_goal")
+	var raw := var_to_bytes(legacy)
+	var legacy_bytes := raw.hex_encode().sha256_text().to_ascii_buffer()
+	legacy_bytes.append_array(raw)
+	_check(ShopProgress.Files.replace(path, legacy_bytes) == OK, "записан профиль магазина 1.0")
+	shop.load_profile(path)
+	_check(shop.load_error == OK and shop.purchase_goal == "", "профиль 1.0 открывается без цели")
+	_check(shop.set_purchase_goal("ember") != OK and shop.set_purchase_goal("moss") == OK and shop.remaining("moss") == 50,
+		"цель можно выбрать только среди покупных расцветок, которых ещё нет")
+	var goal_on_disk := ShopProgress.new()
+	goal_on_disk.load_profile(path)
+	_check(goal_on_disk.purchase_goal == "moss", "цель переживает перезапуск")
+	var completed := ["start:home", "supplies:home>farm"]
+	_check(shop.award("first", completed) == 50 and shop.award("first", completed) == 0,
+		"копия слота не выдаёт награды повторно")
+	_check(shop.award("second", ["start:other"]) == 0, "вступительное задание платит один раз на профиль")
+	_check(shop.buy("moss") == OK and shop.buy("moss") != OK and shop.balance == 0, "повторная покупка ничего не списывает")
+	_check(shop.purchase_goal == "", "покупка выбранной расцветки закрывает цель")
+	_check(equipment_events.is_empty(), "начисления и покупки не трогают материалы велосипеда")
+	_check(shop.equip("moss") == OK and shop.equip("moss") == OK and equipment_events == ["moss"],
+		"событие экипировки только при смене расцветки")
+	var loaded := ShopProgress.new()
+	loaded.load_profile(path)
+	_check(loaded.equipped == "moss" and loaded.owns("moss") and loaded.award("first", completed) == 0,
+		"покупка, выбор и история выплат переживают повторное чтение")
+	_check(loaded.award("second", ["supplies:home>farm"]) == 30, "одинаковые ID заказов в разных мирах оплачиваются отдельно")
+	var broken := FileAccess.open(path, FileAccess.WRITE)
+	broken.store_string("broken")
+	broken.close()
+	var backup := ShopProgress.new()
+	backup.load_profile(path)
+	_check(backup.owns("moss") and backup.equipped == "moss" and backup.balance == 0, "повреждённый основной файл заменяет резервная копия")
+	var blocked := path + ".tmp"
+	DirAccess.make_dir_absolute(blocked)
+	_check(backup.set_purchase_goal("glacier") != OK and backup.purchase_goal == "", "сбой записи сохраняет прежнюю цель")
+	_check(backup.award("second", ["supplies:home>farm"]) == -1 and backup.balance == 0, "ошибка записи оставляет баланс прежним")
+	DirAccess.remove_absolute(blocked)
+	_check(backup.retry_rewards() == 30 and backup.retry_rewards() == 0, "после ошибки награда безопасно записывается один раз")
+	backup.award("second", ["supplies:home>other"])
+	DirAccess.make_dir_absolute(blocked)
+	_check(backup.buy("night") != OK and backup.balance == 60 and not backup.owns("night"),
+		"сбой покупки сохраняет баланс и коллекцию")
+	DirAccess.remove_absolute(blocked)
+	ShopProgress.Files.remove(path)
+	var other_purchase := ShopProgress.new()
+	var intro_points := other_purchase.award("first", ["start:home"])
+	_check(not other_purchase.first_purchase_unlocked(intro_points), "вступление само по себе не обещает покупку")
+	var order_points := other_purchase.award("first", ["supplies:home>farm"])
+	_check(other_purchase.first_purchase_unlocked(order_points), "первая доступная расцветка отмечается при достижении цены")
+	var later_points := other_purchase.award("first", ["supplies:home>other"])
+	_check(not other_purchase.first_purchase_unlocked(later_points), "подсказка не повторяется, пока баланс выше порога")
+	other_purchase.set_purchase_goal("moss")
+	_check(other_purchase.buy("night") == OK and other_purchase.purchase_goal == "moss"
+		and other_purchase.remaining("moss") == 20, "покупка другого комплекта сохраняет цель и пересчитывает прогресс")
 
 
 ## Припасы: на вышку — только с верхней площадки, на хутор — у места; задание из старого сохранения грузится и заканчивается
@@ -649,6 +723,7 @@ func _build() -> BikeView:
 
 func _run() -> void:
 	_logic()
+	_shop_save()
 	_beacon_quest()
 	_paint_quest()
 	if "--logic-only" in OS.get_cmdline_user_args():

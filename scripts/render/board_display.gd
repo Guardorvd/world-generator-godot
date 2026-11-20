@@ -234,7 +234,8 @@ func _step_notice(root: Control, place: Variant, i: int) -> void:
 	var q: QuestData = _list[i]
 	var distance := Vector2(place.x, place.y).distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE
 	var active_id := quests.active.id if quests != null else ""
-	var note := QuestNotice.build(q, NOTICE, 1.0, Callable(), "ВЗЯТО" if q.id == active_id else "", distance)
+	var reward := quests.reward_points(q.id) if quests != null else 0
+	var note := QuestNotice.build(q, NOTICE, 1.0, Callable(), "ВЗЯТО" if q.id == active_id else "", distance, reward)
 	note.position = Vector2(460.0 + i * (NOTICE.x + 10.0), 100)
 	note.size = NOTICE
 	root.add_child(note)

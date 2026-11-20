@@ -187,7 +187,11 @@ func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
 		take.custom_minimum_size = Vector2(96, 44)
 		take.tooltip_text = "Взять задание: %s" % Quests.KINDS[q.kind].title.to_lower()
-		_label("Серия · обелисков: %d · идёт параллельно с другими заданиями" % q.steps.size(), 13, card, Quests.KINDS[q.kind].color)
+		var reward := quests.reward_points(q.id)
+		var meta := "Серия · обелисков: %d · идёт параллельно с другими заданиями" % q.steps.size()
+		if reward > 0:
+			meta += " · +%d очк." % reward
+		_label(meta, 13, card, Quests.KINDS[q.kind].color)
 		_label(q.text, 13, card, MUTED, CARD_W * 2.0)
 
 
@@ -213,6 +217,9 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		var card := _card(page, kind.color, true)
 		_label("Текущее задание · %s" % kind.title, 13, card, kind.color)
 		_titled(q, 18, card, CARD_W)
+		var reward := quests.reward_points(q.id)
+		if reward > 0:
+			_label("За завершение · +%d очк." % reward, 13, card, kind.color)
 		# шаги: пройденный — галочка, текущий — стрелка цвета задания, впереди — без знака
 		for i in q.steps.size():
 			var step := HBoxContainer.new()
@@ -254,7 +261,7 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 	page.add_child(row)
 	for q: QuestData in offers.slice(0, Quests.BOARD_OFFERS):
 		var distance := center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE
-		row.add_child(QuestNotice.build(q, NOTICE_SIZE, 1.0, func() -> void: quest_accepted.emit(q), "", distance))
+		row.add_child(QuestNotice.build(q, NOTICE_SIZE, 1.0, func() -> void: quest_accepted.emit(q), "", distance, quests.reward_points(q.id)))
 
 func _reset_drop_confirmation() -> void:
 	_drop_generation += 1

@@ -31,6 +31,7 @@ const NavigationLine = preload("res://scripts/render/navigation_line.gd")
 const PlaceNames = preload("res://scripts/render/place_names.gd")
 const PhotoCamera = preload("res://scripts/render/photo_camera.gd")
 const Quests = preload("res://scripts/game/quests.gd")
+const ShopProgress := preload("res://scripts/game/shop_progress.gd")
 const CargoBag = preload("res://scripts/render/cargo_bag.gd")
 const BeaconLayer = preload("res://scripts/render/beacon_layer.gd")
 const PaintLayer = preload("res://scripts/render/paint_layer.gd")
@@ -43,6 +44,7 @@ var bike_placement: BikePlacement
 var place_names: PlaceNames
 var photo: PhotoCamera
 var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
+var shop_progress: ShopProgress
 var _bag: Node3D         # сумка доставки у доски, пока её не взяли
 var _bag_label: Label3D  # подпись над ней
 var _beacon_layer: BeaconLayer
@@ -390,6 +392,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		return
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
+	if shop_progress != null:
+		shop_progress.equipment_changed.connect(bike_view.set_scheme)
+		bike_view.set_scheme(shop_progress.equipped)
 	brake_effects = BrakeEffects.new()
 	brake_effects.name = "BrakeEffects"
 	add_child(brake_effects)
@@ -470,6 +475,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	hud.travel_requested.connect(travel_to)
 	hud.map_close_requested.connect(close_tablet)
 	quests = Quests.new()
+	if shop_progress != null:
+		quests.reward_for = func(id: String) -> int: return shop_progress.reward(world.seed_text, id)
+		quests.completion_note = _quest_reward_note
 	_beacon_layer = BeaconLayer.new()
 	add_child(_beacon_layer)
 	_paint_layer = PaintLayer.new()
@@ -487,6 +495,10 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		hud.explore.restore(saved.get("explore", {}))
 		if not quests.restore_state(saved.quest, places, Rect2i(0, 0, world.W, world.H), world):
 			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
+		elif shop_progress != null:
+			var note := _quest_reward_note(saved.quest.completed.keys())
+			if not note.is_empty():
+				hud.toast("Награды за задания" + note, &"quest")
 		_quest_changed()
 		# Точка установки уже восстановлена из шага задания, её нет в каталоге мест.
 		if hud.goal.get("kind") not in Quests.FIELD_PLACES or hud.goal.key != saved.goal:
@@ -1254,7 +1266,7 @@ func _tablet_shortcut(event: InputEvent) -> bool:
 		else:
 			open_journal()
 	elif event.is_action_pressed("pause") or event.is_action_pressed("back"):
-		if not hud.journal_panel.close_lightbox():
+		if not hud.journal_panel.dismiss_subpanel():
 			close_tablet()
 	elif event is InputEventJoypadButton and event.pressed \
 			and event.button_index in [JOY_BUTTON_LEFT_SHOULDER, JOY_BUTTON_RIGHT_SHOULDER]:
@@ -1711,7 +1723,7 @@ func _process(delta: float) -> void:
 		return
 	if _live_veg_dirty:
 		_tick_live_vegetation()
-	if board_display != null:
+	if board_display != null and not _map_disabled_3d:
 		board_display.tick(Vector3(player.x, player.feet + GameConfig.EYE, player.z))
 	t0 = _tick_mark("frame_setup", t0)
 	tick_us.frames = tick_us.get("frames", 0) + 1
@@ -1728,10 +1740,11 @@ func _process(delta: float) -> void:
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := 1.0 if _placing_bike() or _settlement_open() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
-	if crash.active():
-		crash.draw()
-	else:
-		bike_view.draw(alpha, summary)
+	if not _map_disabled_3d:
+		if crash.active():
+			crash.draw()
+		else:
+			bike_view.draw(alpha, summary)
 	t0 = _tick_mark("frame_bike_view", t0)
 	_update_camera(alpha, delta)
 	_update_bike_placement(delta)
@@ -1752,9 +1765,9 @@ func _process(delta: float) -> void:
 			# 19.11.2026: в сообщения — только отказ («Проход к цели не найден»); «Расчёт маршрута…» не мелькает
 			if _navigation_status != "" and _navigation_status != NavigationLine.SEARCHING: hud.toast_now(_navigation_status)
 	t0 = _tick_mark("frame_route_ui", t0)
-	if place_names != null:
+	if place_names != null and not _map_disabled_3d:
 		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)
-	if _bag != null and _bag.visible:
+	if _bag != null and _bag.visible and not _map_disabled_3d:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
 		_bag_label.visible = summary and camera.global_position.distance_to(_bag.position) < 60.0
@@ -2091,6 +2104,26 @@ func _abandon_quest() -> void:
 
 func _quest_progress(text: String) -> void:
 	interaction_service.progress(text)
+
+
+func _quest_reward_note(ids: Array) -> String:
+	var points := shop_progress.award(world.seed_text, ids)
+	if points < 0:
+		return "\nОчки пока не сохранены. Магазин повторит запись при открытии."
+	if points == 0:
+		return ""
+	var note := " · +%d очк." % points
+	var target := shop_progress.purchase_goal
+	if target != "":
+		var scheme_name: String = ShopProgress.Palette.SCHEME_NAMES[target]
+		var remaining := shop_progress.remaining(target)
+		if remaining > 0:
+			note += "\nДо покупки комплекта «%s» — %d очк." % [scheme_name, remaining]
+		elif shop_progress.balance - points < int(ShopProgress.PRICES[target]):
+			note += "\n«%s» теперь можно купить в магазине." % scheme_name
+	elif shop_progress.first_purchase_unlocked(points):
+		note += "\nХватает на первую расцветку. Откройте «Магазин» в дневнике."
+	return note
 
 ## Лавка: сесть (камера ниже, взгляд вперёд по лавке, ходьба заперта до шага или прыжка). Только пешком, цела
 func _sit(item: Dictionary) -> void:

@@ -368,6 +368,12 @@ custom_minimum_size = Vector2(0, 44)
 theme_type_variation = &"MenuLink"
 text = "Все миры"
 
+[node name="OpenShop" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "Магазин"
+
 [node name="MenuSettings" type="Button" parent="UI/Root/Menu/Panel/Actions"]
 unique_name_in_owner = true
 size_flags_horizontal = 3

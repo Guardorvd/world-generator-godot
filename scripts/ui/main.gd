@@ -24,6 +24,7 @@ const Carousel := preload("res://scripts/ui/world_carousel.gd")
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
 const UiAudio := preload("res://scripts/ui/ui_audio.gd")
 const UiStack := preload("res://scripts/ui/ui_stack.gd")
+const ShopPanel := preload("res://scripts/ui/shop_panel.gd")
 
 
 class CancelFlag extends RefCounted:
@@ -98,6 +99,8 @@ var _parallax_tween: Tween
 var _menu_rng := RandomNumberGenerator.new()
 var _ui_audio: UiAudio
 var _ui_stack: UiStack
+var _shop: ShopPanel
+var _shop_progress: ShopPanel.Progress
 var _active_screen := ""
 var _pause_settings_btn: Button
 var _confirm_return_focus: Control
@@ -160,6 +163,10 @@ func _ready() -> void:
 	%Version.text = str(ProjectSettings.get_setting("application/config/version", "?"))
 	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
 	_progress_enabled = get_tree().current_scene == self
+	_shop_progress = GameContext.scope.shop if _progress_enabled else ShopPanel.Progress.new()
+	if _progress_enabled:
+		_shop_progress.load_profile(QuickTrails.saves_dir().path_join("shop_progress.bin"))
+	hud.journal_panel.enable_shop(_shop_progress)
 	startup_render_frames = LOAD_WARMUP_FRAMES if _progress_enabled else 0
 	GameContext.scope.cache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
@@ -184,7 +191,7 @@ func _ready() -> void:
 		b.button_group = tabs
 		b.pressed.connect(_show_seed_tab.bind(tab))
 	var carousel: Carousel = %Carousel
-	carousel.setup(%Start, [%OpenNew, %OpenWorlds, %MenuSettings, %MenuExit], %TrailLab)
+	carousel.setup(%Start, [%OpenNew, %OpenWorlds, %OpenShop, %MenuSettings, %MenuExit], %TrailLab)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
 	carousel.play_requested.connect(_on_start)
 	carousel.stepped.connect(func(dir: int) -> void: _play_ui(&"carousel_step", 1.04 if dir > 0 else 0.96))
@@ -203,9 +210,22 @@ func _ready() -> void:
 	add_child(_ui_audio)
 	_ui_stack = UiStack.new()
 	add_child(_ui_stack)
+	var shop_screen := MarginContainer.new()
+	shop_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for edge: String in ["left", "top", "right", "bottom"]:
+		shop_screen.add_theme_constant_override("margin_" + edge, 24)
+	shop_screen.hide()
+	%Menu.get_parent().add_child(shop_screen)
+	_shop = ShopPanel.new()
+	_shop.show_back = true
+	_shop.set_profile(_shop_progress)
+	_shop.closed.connect(_return_to_menu_screen)
+	shop_screen.add_child(_shop)
+	screens.shop = shop_screen
+	%OpenShop.pressed.connect(_open_shop)
 	_pause_settings_btn = get_node_or_null("UI/Root/Pause/Panel/Box/Settings") as Button
 	_ui_stack.setup(self, {menu = %Menu, new_world = %NewWorld, all_worlds = %AllWorlds,
-		loading = %Loading, pause = %Pause, settings = %Settings}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
+		loading = %Loading, pause = %Pause, settings = %Settings, shop = shop_screen}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
 	for launch_btn: Button in [%Start, %PlaySelected, %CreateWorld]:
 		launch_btn.set_meta(&"ui_sound_custom", true)
 	%FovSlider.drag_started.connect(func() -> void:
@@ -218,7 +238,9 @@ func _ready() -> void:
 	%VolumeSlider.drag_ended.connect(func(_changed: bool) -> void:
 		_volume_dragging = false
 		_play_ui(&"volume_tick"))
-	for subtree: Node in [%Menu, %AllWorlds, %NewWorld, %Loading, %Pause, %Settings]:
+	_shop.sound_requested.connect(_play_ui)
+	hud.journal_panel.shop_panel.sound_requested.connect(_play_ui)
+	for subtree: Node in [%Menu, %AllWorlds, %NewWorld, %Loading, %Pause, %Settings, _shop, hud.journal_panel.shop_panel]:
 		_ui_audio.bind_tree(subtree)
 	get_viewport().size_changed.connect(_fit_menu)
 	if _progress_enabled and DisplayServer.get_name() != "headless" and "--static-menu" not in OS.get_cmdline_user_args():
@@ -264,12 +286,14 @@ func _opener_focus(fallback: Control) -> Control:
 
 func _sync_backdrop_visibility(screen := _active_screen) -> void:
 	if screens.has("back") and screens.back != null:
-		screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading"] or (screen == "settings" and game == null)
+		screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading", "shop"] or (screen == "settings" and game == null)
 	if screen != "menu" and _startup_cover != null:
 		_lift_startup_cover()
 	if _progress_enabled:
 		var mode := "frozen" if screen == "loading" else ("live" if screens.has("back") and screens.back.visible else "")
 		_set_backdrop_mode(mode)
+		if _backdrop != null:
+			_backdrop.process_mode = Node.PROCESS_MODE_DISABLED if screen == "shop" else Node.PROCESS_MODE_INHERIT
 
 
 func _focus_screen_default(screen: String) -> void:
@@ -357,7 +381,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_resume()
 		get_viewport().set_input_as_handled()
 		return
-	if game == null and (_is_screen("new_world") or _is_screen("all_worlds")):
+	if _is_screen("shop") and _shop.dismiss_purchase():
+		get_viewport().set_input_as_handled()
+		return
+	if game == null and (_is_screen("new_world") or _is_screen("all_worlds") or _is_screen("shop")):
 		_return_to_menu_screen()
 		get_viewport().set_input_as_handled()
 
@@ -415,8 +442,20 @@ func _open_all_worlds() -> void:
 	_show("all_worlds")
 
 
+func _open_shop() -> void:
+	if not _is_screen("menu"):
+		return
+	_active_screen = "shop"
+	_ui_stack.push("shop", {
+		dimmer = 0.35, enter_duration = 0.20, sound = &"panel_open",
+		return_focus = %OpenShop,
+	})
+	_sync_backdrop_visibility("shop")
+	_shop.open()
+
+
 func _return_to_menu_screen() -> void:
-	if _ui_stack != null and (_ui_stack.is_open("new_world") or _ui_stack.is_open("all_worlds")):
+	if _ui_stack != null and (_ui_stack.is_open("new_world") or _ui_stack.is_open("all_worlds") or _ui_stack.is_open("shop")):
 		var popped := _ui_stack.pop({sound = &"panel_close", exit_duration = 0.14, reveal_duration = 0.16, dimmer_duration = 0.14})
 		_active_screen = popped.active
 		_sync_backdrop_visibility(_active_screen)
@@ -499,6 +538,8 @@ func _start_menu_backdrop(epoch: int) -> void:
 		_lift_startup_cover()
 		return
 	_backdrop = backdrop
+	if _is_screen("shop"):
+		backdrop.process_mode = Node.PROCESS_MODE_DISABLED
 	backdrop.prepared.connect(_reveal_menu_backdrop.bind(epoch))
 	backdrop.failed.connect(func(reason: String) -> void:
 		print("MENU_BACKDROP: ", reason)
@@ -1393,7 +1434,7 @@ func _process(delta: float) -> void:
 	if _is_screen("settings"):
 		_update_control_hint()
 	_flush_settings()
-	if _backdrop_mode == "live" and get_window().mode != Window.MODE_MINIMIZED:
+	if _backdrop_mode == "live" and not _is_screen("shop") and get_window().mode != Window.MODE_MINIMIZED:
 		_animate_menu(delta)
 	if _auto_save_task != -1 and WorkerThreadPool.is_task_completed(_auto_save_task):
 		_finish_auto_save()
@@ -1665,6 +1706,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	loaded.timings.ready_frame_wait_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	phase_started = Time.get_ticks_usec()
 	game = (load(GAME_SCENE) as PackedScene).instantiate()
+	game.shop_progress = _shop_progress
 	game.startup_input_locked = true
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)
@@ -1950,6 +1992,8 @@ func _save_current(slot := "auto", session_end := "") -> bool:
 	var began_us := Time.get_ticks_usec()
 	# Перед выходом или сменой мира новая запись должна идти после фоновой записи того же слота.
 	_finish_auto_save(false)
+	if _shop_progress != null:
+		_shop_progress.retry_rewards()
 	var err := Saves.write_slot(game.save_state(), slot)
 	if err == OK:
 		_saved_discoveries = hud.map_place_count()
@@ -1976,6 +2020,8 @@ func _finish_session(reason: String, save_began_us: int, save_ended_us: int) -> 
 
 func _queue_auto_save() -> void:
 	var began_us := Time.get_ticks_usec()
+	if _shop_progress != null:
+		_shop_progress.retry_rewards()
 	var state: Dictionary = game.save_state()
 	var result := {discoveries = hud.map_place_count(), error = ERR_BUSY, began_us = 0, ended_us = 0}
 	_auto_save_result = result

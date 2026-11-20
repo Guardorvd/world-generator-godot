@@ -101,10 +101,7 @@ func abandon() -> void:
 func progress(text: String) -> void:
 	if text.is_empty():
 		return
-	if quests.active.is_empty():
-		message.emit("Задание выполнено\n" + quests.last, &"quest")
-	else:
-		message.emit("Дальше: " + text, &"quest")
+	message.emit(text if quests.active.is_empty() else "Дальше: " + text, &"quest")
 
 
 ## Снимок: засчитать для задания или подсказать, почему не засчитан

@@ -22,7 +22,7 @@ static var _sheet_styles := {}  # толщина края -> StyleBoxFlat бум
 ## q — задание; size — размер листка, px; scale — множитель шрифтов и отступов (щит в мире — крупнее);
 ## take — нажатие «Взять» (пусто — без кнопки); stamp — надпись поверх (например «ВЗЯТО»), пусто — без неё;
 ## distance — до цели, м (меньше 0 — не писать)
-static func build(q: QuestData, size: Vector2, scale := 1.0, take := Callable(), stamp := "", distance := -1.0) -> Control:
+static func build(q: QuestData, size: Vector2, scale := 1.0, take := Callable(), stamp := "", distance := -1.0, reward := 0) -> Control:
 	var kind: Dictionary = Quests.KINDS.get(q.kind, Quests.KINDS.visit)
 	var holder := Control.new()
 	holder.custom_minimum_size = size
@@ -64,6 +64,8 @@ static func build(q: QuestData, size: Vector2, scale := 1.0, take := Callable(),
 	if distance >= 0.0:
 		meta.append(Util.distance_text(distance))
 	meta.append("шагов: %d" % q.steps.size())
+	if reward > 0:
+		meta.append("+%d очк." % reward)
 	_label(" · ".join(meta), 12 * scale, INK_SOFT, box)
 	var rule := ColorRect.new()
 	rule.color = Color(INK, 0.25)

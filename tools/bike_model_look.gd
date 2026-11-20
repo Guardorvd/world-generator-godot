@@ -98,7 +98,7 @@ func look() -> void:
 			for scheme: String in names:
 				bike.set_scheme(scheme)
 				ride(40, 6.0, 1.0, 5.0)
-				shots.append(await shot(Vector3(2.3, 0.95, 0.0), Vector3(0, 0.75, 0.0), 42.0) if row == 0 else await shot(Vector3(-1.5, 1.6, 1.9), Vector3(0, 0.95, 0.0), 42.0))
+				shots.append(await shot(Vector3(2.6, 0.95, 0.0), Vector3(0, 0.82, 0.0), 42.0) if row == 0 else await shot(Vector3(-1.5, 1.6, 1.9), Vector3(0, 0.95, 0.0), 42.0))
 		var schemes := Image.create(size.x * names.size(), size.y * 2, false, shots[0].get_format())
 		for i in shots.size():
 			schemes.blit_rect(shots[i], Rect2i(Vector2i.ZERO, size), Vector2i((i % names.size()) * size.x, (i / names.size()) * size.y))

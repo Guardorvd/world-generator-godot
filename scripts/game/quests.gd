@@ -12,6 +12,15 @@ extends RefCounted
 ## и «Летопись» (снять два места и привезти снимки). Доска по-прежнему предлагает до трёх заданий.
 
 signal changed  # взято, пройден шаг, выполнено или брошено: интерфейсу пора перерисоваться
+var reward_for := Callable()
+var completion_note := Callable()
+
+func reward_points(id: String) -> int:
+	return int(reward_for.call(id)) if reward_for.is_valid() else 0
+
+
+func _reward_note(ids: Array) -> String:
+	return str(completion_note.call(ids)) if completion_note.is_valid() else ""
 
 const BeaconSites = preload("res://scripts/game/beacon_sites.gd")
 const PaintTargets = preload("res://scripts/game/paint_targets.gd")
@@ -547,13 +556,14 @@ func plaque_photographed(place_id: String, distance := 0.0) -> String:
 	series.steps.insert(series.step, taken)
 	series.step += 1
 	if series.step >= series.steps.size():
+		var completed_id := series.id
 		last = series.title
 		_done[series.id] = true
 		series_done = true
 		done += 1
 		series = QuestData.new()
 		changed.emit()
-		return "Летопись обелисков завершена: все таблички сняты"
+		return "Летопись обелисков завершена: все таблички сняты" + _reward_note([completed_id])
 	changed.emit()
 	return "Табличка снята: «%s» · %d из %d" % [taken.place.name, series.step, series.steps.size()]
 
@@ -596,12 +606,15 @@ func repaired_on_way(place: Dictionary, village: Dictionary) -> String:
 ## задания «Ремонт». Возвращает сообщение или пусто
 func thank(arrived: Callable) -> String:
 	var texts := PackedStringArray()
+	var completed_ids: Array[String] = []
 	for id: String in thanks.keys():
 		var entry: Dictionary = thanks[id]
 		if not arrived.call(entry.village):
 			continue
 		thanks.erase(id)
-		_done["repair:%s>%s" % [entry.village, id]] = true
+		var completed_id := "repair:%s>%s" % [entry.village, id]
+		_done[completed_id] = true
+		completed_ids.append(completed_id)
 		done += 1
 		by_giver[entry.village] = by_giver.get(entry.village, 0) + 1
 		last = "Ремонт: %s" % entry.what
@@ -609,7 +622,7 @@ func thank(arrived: Callable) -> String:
 	if texts.is_empty():
 		return ""
 	changed.emit()
-	return "\n".join(texts)
+	return "\n".join(texts) + _reward_note(completed_ids)
 
 
 ## Поселения, где ждут благодарность: строки для счётчика задания
@@ -687,13 +700,14 @@ func _advance() -> String:
 		changed.emit()
 		return step_text()
 	last = active.title
+	var completed_id := active.id
 	_done[active.id] = true
 	done += 1
 	by_giver[active.giver] = by_giver.get(active.giver, 0) + 1
 	active = QuestData.new()
 	cargo = false
 	changed.emit()
-	return "Задание выполнено: %s" % last
+	return "Задание выполнено\n" + last + _reward_note([completed_id])
 
 
 ## Только адреса мест: src и данные мира берутся из текущего мира.
