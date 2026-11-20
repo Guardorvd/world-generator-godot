@@ -201,11 +201,7 @@ func _memory(key: String, title: String) -> void:
 
 
 static func _pipeline_counts() -> Vector4i:
-	return Vector4i(
-		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_MESH)),
-		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_SURFACE)),
-		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_DRAW)),
-		int(Performance.get_monitor(Performance.PIPELINE_COMPILATIONS_CANVAS)))
+	return preload("res://scripts/core/frame_statistics.gd").pipeline_counts()
 
 
 ## Кадры в течение seconds; step(t, dt) — что делать в каждом кадре (камера, подгрузка), его время идёт в work_ms.

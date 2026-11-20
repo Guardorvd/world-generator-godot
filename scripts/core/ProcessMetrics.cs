@@ -7,6 +7,10 @@ using Godot;
 public partial class ProcessMetrics : RefCounted
 {
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+
+    public Vector4I CaptureGc() => new(GC.CollectionCount(0), GC.CollectionCount(1),
+        GC.CollectionCount(2), (int)GC.GetTotalPauseDuration().TotalMilliseconds);
+
     public Godot.Collections.Dictionary Capture()
     {
         using var process = Process.GetCurrentProcess();

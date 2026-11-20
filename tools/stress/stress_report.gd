@@ -4,6 +4,7 @@ extends RefCounted
 
 const NOISE_FPS := 15.0    # % — как в docs/CONTROL.md: меньше считается шумом
 const NOISE_COUNT := 10.0  # % — вызовы отрисовки и память
+const FrameStatistics := preload("res://scripts/core/frame_statistics.gd")
 
 
 static func _r(v: float, step := 0.01) -> float:
@@ -18,7 +19,7 @@ static func _mean(a: PackedFloat32Array) -> float:
 
 
 static func _at(sorted: PackedFloat32Array, share: float) -> float:
-	return sorted[mini(sorted.size() - 1, int(sorted.size() * share))] if sorted.size() > 0 else 0.0
+	return FrameStatistics.percentile(sorted, share)
 
 
 ## Статистика одного замера. ms — время кадров по часам; gpu/cpu — время отрисовки вьюпорта; work — время
@@ -31,11 +32,10 @@ static func stats(ms: PackedFloat32Array, gpu: PackedFloat32Array, cpu: PackedFl
 	var s := ms.duplicate()
 	s.sort()
 	var median := _at(s, 0.5)
-	var worst := maxi(1, n / 100)
 	var hitches := 0 # рывки: кадр вдвое длиннее обычного и дольше 8 мс
 	var over := [0, 0, 0]
 	for v in ms:
-		hitches += int(v > maxf(8.0, median * 2.0))
+		hitches += int(v > FrameStatistics.hitch_limit(median))
 		over[0] += int(v > 16.7)
 		over[1] += int(v > 33.3)
 		over[2] += int(v > 100.0)
@@ -46,14 +46,14 @@ static func stats(ms: PackedFloat32Array, gpu: PackedFloat32Array, cpu: PackedFl
 	var out := {
 		frames = n,
 		fps = _r(1000.0 / maxf(_mean(ms), 0.001), 0.1),
-		low1_fps = _r(1000.0 / maxf(_mean(s.slice(n - worst)), 0.001), 0.1),
+		low1_fps = FrameStatistics.tail_fps(s, 100),
 		ms = {min = _r(s[0]), avg = _r(_mean(ms)), p50 = _r(median), p95 = _r(_at(s, 0.95)), p99 = _r(_at(s, 0.99)), max = _r(s[n - 1])},
 		hitches = hitches, over_16_7 = over[0], over_33_3 = over[1], over_100 = over[2],
 		gpu_ms = _r(_at(g, 0.5)), render_cpu_ms = _r(_at(c, 0.5)),
 		draw_calls = roundi(calls / n), primitives = roundi(prims / n),
 	}
 	if n >= 1000:
-		out.low01_fps = _r(1000.0 / maxf(_mean(s.slice(n - maxi(1, n / 1000))), 0.001), 0.1)
+		out.low01_fps = FrameStatistics.tail_fps(s, 1000)
 	if not work.is_empty():
 		var w := work.duplicate()
 		w.sort()

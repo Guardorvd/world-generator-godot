@@ -17,6 +17,7 @@ const GAME_SCENE := "res://scenes/game_world.tscn"
 const TRAIL_LAB_SCENE := "res://scenes/trail_lab.tscn"
 const GAME_SCRIPT := "res://scripts/render/game_world.gd"
 const Saves := preload("res://scripts/game/save_game.gd")
+const SessionPerformance := preload("res://scripts/game/session_performance.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
@@ -78,6 +79,7 @@ var _save_status: Label
 var _load_manual: Button
 var _saved_discoveries := 0
 var _progress_enabled := false # инструменты не записывают пользовательский прогресс
+var _session_performance: SessionPerformance
 var display_options: DisplayOptions
 var _confirm: ConfirmationDialog   # открытое подтверждение (выход, меню, загрузка)
 var _save_due := -1       # когда записать изменённые настройки (мс), -1 — нечего
@@ -1293,6 +1295,18 @@ func _open_storage() -> void:
 	_ask("Хранилище миров", body, "Очистить", true, _on_clear_cache, %Storage)
 	_confirm.get_ok_button().disabled = u.worlds == 0
 	_confirm.cancel_button_text = "Закрыть"
+	_confirm.add_button("Отчёты FPS", true, "session_reports")
+	_confirm.custom_action.connect(_open_session_reports)
+
+
+func _open_session_reports(_action: StringName) -> void:
+	var folder := ProjectSettings.globalize_path(SessionPerformance.dir)
+	var err := DirAccess.make_dir_recursive_absolute(folder)
+	if err == OK:
+		err = OS.shell_open(folder)
+	if err != OK:
+		_close_confirm()
+		_message("Не удалось открыть отчёты FPS", "%s\n%s" % [folder, error_string(err)])
 
 
 func _on_clear_cache() -> void:
@@ -1370,6 +1384,8 @@ func _fit_menu() -> void:
 
 
 func _process(delta: float) -> void:
+	if _session_performance != null:
+		_session_performance.sample(game, _session_mode(), Time.get_ticks_usec())
 	if _ui_stack != null:
 		_ui_stack.tick()
 	if display_options != null:
@@ -1387,6 +1403,12 @@ func _process(delta: float) -> void:
 			_queue_auto_save()
 	if busy:
 		_tick_loading(delta)
+
+
+func _session_mode() -> String:
+	if DisplayServer.get_name() != "headless" and get_window().mode == Window.MODE_MINIMIZED: return "background"
+	if _active_screen == "settings": return "settings"
+	return game.performance_mode()
 
 
 func _tick_loading(delta: float) -> void:
@@ -1475,8 +1497,10 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	if not catalog_error.is_empty():
 		_message("Каталог моделей не подготовлен", catalog_error)
 		return
+	var save_began_us := Time.get_ticks_usec()
 	if not _save_current():
 		return
+	var save_ended_us := Time.get_ticks_usec()
 	_pending_save = {}
 	if not slot.is_empty():
 		var result := Saves.read_slot(seed_text, slot)
@@ -1486,6 +1510,7 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 		_pending_save = result.data
 		if result.backup:
 			_message("Резервная копия", "Основное сохранение повреждено. Загружается предыдущая исправная копия.")
+	_finish_session("switch_world", save_began_us, save_ended_us)
 	busy = true
 	_progress_target = 0.0
 	bar.value = 0.0
@@ -1703,6 +1728,12 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	game.sync_mouse_mode()
 	_fade_hud(not game.opening_active(), 0.22 if _progress_enabled else 0.0)
 	loaded.timings.published_us = Time.get_ticks_usec()
+	if _progress_enabled:
+		var phases := loaded.timings.duplicate()
+		phases.erase("published_us")
+		var loading := {duration_ms = loaded.timings.published_us / 1000.0 - _load_started_ms,
+			from_cache = loaded.from_cache, phases = phases}
+		_session_performance = SessionPerformance.new(game, _session_mode(), loaded.timings.published_us, loading)
 
 
 func _cancel_hud_fade() -> void:
@@ -1864,7 +1895,7 @@ func _close_confirm() -> void:
 
 
 func _back_to_menu() -> void:
-	if not _save_current():
+	if not _save_current("auto", "menu"):
 		return
 	_cancel_hud_fade()
 	_free_game()
@@ -1880,7 +1911,7 @@ func _exit_game() -> void:
 	if busy:
 		_cancel_loading(true)
 		return
-	if not _save_current():
+	if not _save_current("auto", "exit"):
 		return
 	if _save_due >= 0:
 		# настройка изменена меньше чем 400 мс назад: на диск ещё не записана
@@ -1913,24 +1944,49 @@ func _has_save(seed_text: String) -> bool:
 	return false
 
 
-func _save_current(slot := "auto") -> bool:
+func _save_current(slot := "auto", session_end := "") -> bool:
 	if game == null or game.quests == null or not _progress_enabled:
 		return true
+	var began_us := Time.get_ticks_usec()
 	# Перед выходом или сменой мира новая запись должна идти после фоновой записи того же слота.
 	_finish_auto_save(false)
 	var err := Saves.write_slot(game.save_state(), slot)
 	if err == OK:
 		_saved_discoveries = hud.map_place_count()
+	if _session_performance != null:
+		var ended_us := Time.get_ticks_usec()
+		if err == OK and not session_end.is_empty():
+			_finish_session(session_end, began_us, ended_us)
+		else:
+			_session_performance.work("world_save_" + slot, began_us, ended_us, error_string(err))
 	return _report_save(err, slot)
 
 
+func _finish_session(reason: String, save_began_us: int, save_ended_us: int) -> void:
+	if _session_performance == null:
+		return
+	var report := _session_performance.finish(reason, save_began_us, save_ended_us)
+	_session_performance = null
+	if report.json_error != OK or report.markdown_error != OK:
+		push_warning("Отчёт FPS %s: JSON %s, Markdown %s" % [
+			report.path, error_string(report.json_error), error_string(report.markdown_error)])
+	else:
+		print("Отчёт FPS сохранён: ", ProjectSettings.globalize_path(report.path + ".md"))
+
+
 func _queue_auto_save() -> void:
+	var began_us := Time.get_ticks_usec()
 	var state: Dictionary = game.save_state()
-	var result := {discoveries = hud.map_place_count(), error = ERR_BUSY}
+	var result := {discoveries = hud.map_place_count(), error = ERR_BUSY, began_us = 0, ended_us = 0}
 	_auto_save_result = result
 	_save_elapsed = 0.0
+	if _session_performance != null:
+		_session_performance.work("autosave_snapshot", began_us, Time.get_ticks_usec())
 	_auto_save_task = WorkerThreadPool.add_task(func() -> void:
-		result.error = Saves.write_slot(state), false, "Автосохранение")
+		result.began_us = Time.get_ticks_usec()
+		result.error = Saves.write_slot(state)
+		result.ended_us = Time.get_ticks_usec(),
+		false, "Автосохранение")
 
 
 func _finish_auto_save(report := true) -> void:
@@ -1941,6 +1997,8 @@ func _finish_auto_save(report := true) -> void:
 	var err: Error = _auto_save_result.error
 	if err == OK:
 		_saved_discoveries = _auto_save_result.discoveries
+	if _session_performance != null:
+		_session_performance.work("autosave_write", _auto_save_result.began_us, _auto_save_result.ended_us, error_string(err), true)
 	_auto_save_result = {}
 	if report:
 		_report_save(err, "auto")

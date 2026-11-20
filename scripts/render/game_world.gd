@@ -1113,8 +1113,10 @@ func _finish_travel(message: String, from_board: bool, kind: StringName = &"info
 ## Рельеф, вода и растительность готовятся в фоне и передаются порциями. false — мир закрыт во время ожидания.
 func _travel_load(destination: Vector3, heading: float) -> bool:
 	if chunk_source == null:
+		var began := Time.get_ticks_usec()
 		stream_coordinator.force_terrain(destination, NEAR)
 		stream_coordinator.force_vegetation(destination)
+		_tick_mark("frame_travel_apply", began)
 		return true
 	var at := Vector2(destination.x, destination.z)
 	while vegetation.busy():
@@ -1139,6 +1141,7 @@ func _travel_load(destination: Vector3, heading: float) -> bool:
 	while true:
 		await get_tree().process_frame
 		if not is_inside_tree() or is_queued_for_deletion(): return false
+		var began := Time.get_ticks_usec()
 		if _travel_task != -1 and WorkerThreadPool.is_task_completed(_travel_task):
 			WorkerThreadPool.wait_for_task_completion(_travel_task)
 			_travel_task = -1
@@ -1155,6 +1158,7 @@ func _travel_load(destination: Vector3, heading: float) -> bool:
 			ready = ready and outer.arrival_ready(outdoor_keys)
 		var finished := _travel_task == -1 and ready and not uploaded and vegetation.travel_present(at, budget.deadline_usec)
 		budget.deadline_usec = 0
+		_tick_mark("frame_travel_apply", began)
 		if finished: break
 
 	vegetation.travel_end(at)
@@ -1374,7 +1378,7 @@ func _notification(what: int) -> void:
 ## одна (1/60 с), поэтому разгон, прыжки и полёт одинаковы при любом FPS, и за такт не проскочить стену.
 ## При FPS ниже 60 за кадр проходит несколько тактов, ниже 7,5 (8 тактов за кадр) игра замедляется,
 ## чтобы не захлебнуться
-## Время частей такта физики и кадра, мкс накопленно (читает tools/stress; сбрасывает он же)
+## Накопленное время частей физики и кадра, мкс. Читают отчёт игровой сессии и tools/stress.
 var tick_us := {}
 
 
@@ -1382,6 +1386,95 @@ func _tick_mark(part: String, t0: int) -> int:
 	var now := Time.get_ticks_usec()
 	tick_us[part] = tick_us.get(part, 0) + now - t0
 	return now
+
+
+func performance_mode() -> String:
+	if travel_active(): return "travel"
+	if paused: return "pause"
+	if show_map: return "map"
+	if _journal_open(): return "journal"
+	if _plaque_open(): return "plaque"
+	if _settlement_open(): return "settlement"
+	if photo.active: return "photo"
+	return "opening" if _opening else "gameplay"
+
+
+func performance_camera() -> Dictionary:
+	var at := camera.global_position
+	var forward := -camera.global_basis.z
+	return {xyz_m = [at.x, at.y, at.z], forward = [forward.x, forward.y, forward.z],
+		fov = camera.fov, far_m = camera.far}
+
+
+func performance_settings() -> Dictionary:
+	var settings := services.settings.display_state()
+	var resolution: Vector2i = settings.resolution
+	var window_size := get_window().size
+	settings.resolution = [resolution.x, resolution.y]
+	settings.window_px = [window_size.x, window_size.y]
+	settings.max_fps = Engine.max_fps
+	return settings
+
+
+func performance_context() -> Dictionary:
+	var at := Vector2(player.x, player.z) / TILE
+	var region := world.region_at(Vector2i(floori(at.x), floori(at.y)))
+	var biome: int = world.tile_info(at.x, at.y).get("biome", -1)
+	var solar := DayCycle.solar_hour(hour)
+	var light := "night"
+	if solar >= 5.0 and solar < 7.0:
+		light = "dawn"
+	elif solar >= 17.0 and solar < 19.0:
+		light = "dusk"
+	elif solar >= 7.0 and solar < 17.0:
+		light = "day"
+	var nearest := _performance_settlement(at)
+	var cam_at := camera.global_position
+	var forward := -camera.global_basis.z
+	var heading := Vector2(forward.x, forward.z).normalized()
+	var drop: Variant = null
+	var view := "other"
+	var far_at := Vector2(cam_at.x, cam_at.z) + heading * 240.0
+	if not world.tile_info(far_at.x / TILE, far_at.y / TILE).is_empty():
+		drop = cam_at.y - heights.base_ground_at(far_at.x, far_at.y)
+		if drop >= 24.0 and forward.y > -0.45 and forward.y < 0.45:
+			var near_at := Vector2(cam_at.x, cam_at.z) + heading * 60.0
+			if heights.base_ground_at(near_at.x, near_at.y) < cam_at.y + 6.0:
+				view = "vista"
+	return {
+		player_xyz_m = [player.x, player.feet, player.z], camera = performance_camera(),
+		biome = Biomes.LIST[biome].name if biome >= 0 and biome < Biomes.LIST.size() else "",
+		region = [region.x, region.y], hour = hour, clock_day = floori(_clock_hour / 24.0), light = light,
+		sunlight = day.sunlight, mist = day.local_mist, view = view, terrain_drop_240_m = drop,
+		settlement = nearest.get("name", ""), settlement_id = nearest.get("id", ""),
+		settlement_m = nearest.get("distance_m"), settlement_zone = nearest.get("zone", "far"),
+		movement = "riding" if bike.riding else "walking", bike_speed_m_s = bike.speed if bike.riding else 0.0,
+		world_rendering = not _map_disabled_3d,
+	}
+
+
+func _performance_settlement(at: Vector2) -> Dictionary:
+	const SEARCH_METERS := 450.0
+	var best_distance := pow(SEARCH_METERS / TILE, 2.0)
+	var best_id := ""
+	var best_name := ""
+	for settlement: SettlementData in world.settlements:
+		var distance := at.distance_squared_to(Vector2(settlement.x, settlement.y))
+		if distance < best_distance:
+			best_distance = distance
+			best_id = WorldData.place_id("settlement", settlement.x, settlement.y)
+			best_name = settlement.name
+	if world.outer != null:
+		for settlement: Dictionary in world.region_places().list:
+			var distance := at.distance_squared_to(Vector2(settlement.x, settlement.y))
+			if distance < best_distance:
+				best_distance = distance
+				best_id = settlement.id
+				best_name = settlement.name
+	if best_id.is_empty():
+		return {}
+	var meters := sqrt(best_distance) * TILE
+	return {id = best_id, name = best_name, distance_m = meters, zone = "near" if meters <= 110.0 else "approach"}
 
 
 func _restore_clock(saved: Dictionary) -> void:
@@ -1609,16 +1702,18 @@ func _process(delta: float) -> void:
 		if hud != null: hud.note_interaction_target("")
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
+	var t0 := Time.get_ticks_usec()
 	hud.lock_hint.visible = (not paused and not _opening and not has_cursor_overlay() and not photo.active
 		and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 	if paused:
 		_tick_paused_preview(delta)
+		_tick_mark("frame_paused_preview", t0)
 		return
 	if _live_veg_dirty:
 		_tick_live_vegetation()
 	if board_display != null:
 		board_display.tick(Vector3(player.x, player.feet + GameConfig.EYE, player.z))
-	var t0 := Time.get_ticks_usec()
+	t0 = _tick_mark("frame_setup", t0)
 	tick_us.frames = tick_us.get("frames", 0) + 1
 	hud.set_summary_blocked(_opening or crash.active() or _placing_bike())
 	var summary := hud.summary_visible()
@@ -1680,6 +1775,7 @@ func _process(delta: float) -> void:
 
 	if ambient != null and not _map_disabled_3d:
 		ambient.update(delta, camera.global_position, day.sunlight)
+	t0 = _tick_mark("frame_ambient", t0)
 	var decor_deadline := -1
 	# While the atlas covers the world, defer visual uploads around the same spot.
 	# Resume normal streaming if the rider coasts far enough to need new collision data.
@@ -1691,6 +1787,7 @@ func _process(delta: float) -> void:
 		if _ocean != null:
 			_ocean.position = Vector3(pos.x, 0.0, pos.z)
 		update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta, decor_deadline)
+	t0 = _tick_mark("frame_lights_mist", t0)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta
