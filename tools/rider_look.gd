@@ -134,6 +134,18 @@ func look() -> void:
 	advance(24)
 	save([await shot(Vector3(-2.0, 1.65, -1.65), Vector3(0.0, 1.05, -0.12))], "rider_watch", 1)
 	bike.watch_requested = false
+	# 20.11: пассивное поглощение гребня без зажатого пампа — слева обычная езда накатом, справа гребень
+	var absorb: Array[Image] = []
+	reset(11.0)
+	advance(40)
+	absorb.append(await shot(side, mid))
+	reset(11.0)
+	advance(20)
+	state._pump_absorb_v = BikeRide.PUMP_ABSORB_V * BikeRide.PUMP_PASSIVE
+	advance(12)
+	absorb.append(await shot(side, mid))
+	state._pump_absorb_v = 0.0
+	save(absorb, "rider_absorb", 2)
 	reset()
 	advance(872)
 	anim.append(await shot(Vector3(1.6, 1.5, -2.0), Vector3(0, 1.1, -0.05)))

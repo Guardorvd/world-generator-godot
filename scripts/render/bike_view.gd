@@ -140,6 +140,9 @@ var _rotor_mat_f: ShaderMaterial
 var _rotor_mat_r: ShaderMaterial
 var _heat_f := 0.0
 var _heat_r := 0.0
+var _absorb := 0.0 # 20.11: сглаженное пассивное поглощение гребня (BikeRide.crest_absorb)
+const ABSORB_CROUCH := 0.06 # м приседа на полном поглощении (ручной памп — до 0,065 по pump_motion)
+const ABSORB_STAND := 0.4   # насколько седок уходит ниже обычной стойки (ручной памп — 0,5)
 var heat_source: BrakeEffects = null # GameWorld и Trail Lab: один расчёт нагрева дисков на такт
 var _shudder_phase := 0.0
 var lamp: Lamp
@@ -406,7 +409,13 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var stand_target := (maxf(climb, sprint) - descent if not b.airborne else -0.65) if continuous else 0.0
 	if not b.airborne and b.riding and absf(b.pump_motion) > 0.01:
 		stand_target = minf(stand_target, -absf(b.pump_motion) * 0.5)
-	_stand = lerpf(_stand, stand_target, 1.0 - exp(-dt * (4.0 if absf(stand_target) > absf(_stand) else 2.5))) if continuous else 0.0
+	# 20.11: пассивное поглощение гребня (памп не зажат): ноги и руки сгибаются навстречу гребню, слабее ручного пампа.
+	# Набирается быстро (гребень короткий), отпускается мягче — без щелчка позы на каждой волне.
+	var absorb_goal := b.crest_absorb if continuous and not b.airborne else 0.0
+	_absorb = lerpf(_absorb, absorb_goal, Util.damp(18.0 if absorb_goal > _absorb else 6.0, dt)) if continuous else 0.0
+	if _absorb > 0.01:
+		stand_target = minf(stand_target, -_absorb * ABSORB_STAND)
+	_stand =lerpf(_stand, stand_target, 1.0 - exp(-dt * (4.0 if absf(stand_target) > absf(_stand) else 2.5))) if continuous else 0.0
 	var up := maxf(_stand, 0.0)
 	# Передний толчок подаёт плечи назад, задний — вперёд. В воздухе и на месте реакции нет.
 	var road_shift := clampf((b.squash_fv - b.squash_rv) * 0.004, -0.012, 0.012)
@@ -472,6 +481,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var base_crouch := rough + air_crouch + _jump_prep * 0.058 + braking * 0.04 * (1.0 - _landing * 0.5) + pedal_bob + active_effort * smoothstep(0.0, 0.12, slope) * 0.02 - rebound * 0.020
 	var crouch := base_crouch + shock_crouch + maxf(body, 0.0) * 0.07
 	crouch += b.pump_motion * 0.065 if not b.airborne else 0.0
+	crouch += _absorb * ABSORB_CROUCH
 	# ручной памп: поглощение (Q на волне) сгибает руки и ноги, продавливание (E) выпрямляет их в велосипед
 	crouch -= b.pump_body * 0.15 if not b.airborne else 0.0
 	# Опережение взглядом: учитываем руль, скорость поворота руля, угловую скорость дуги (_yaw_rate), крен и угол сноса (slip).
@@ -656,6 +666,7 @@ func snap(b: BikeRide) -> void:
 	_torso_shock_vel = 0.0
 	_heat_f = 0.0
 	_heat_r = 0.0
+	_absorb = 0.0
 	_shudder_phase = 0.0
 	tick(b)
 	for i in STATE_SIZE:

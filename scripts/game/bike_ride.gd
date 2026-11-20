@@ -355,6 +355,9 @@ var hop_preparing: bool:
 ## Отрыв этого полёта — банни-хоп (Q→E или пробел), а не сход с кромки.
 var hop_used: bool:
 	get: return _hop_used
+## 20.11: доля пассивного поглощения гребня ногами (без зажатого пампа) 0..PUMP_PASSIVE — для позы седока.
+var crest_absorb: float:
+	get: return 0.0 if pump_pressed else clampf(_pump_absorb_v / PUMP_ABSORB_V, 0.0, 1.0)
 ## Угловая скорость курса, рад/с.
 var yaw_rate: float:
 	get: return _yaw_rate
