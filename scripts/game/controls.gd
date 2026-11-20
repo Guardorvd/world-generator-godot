@@ -72,6 +72,17 @@ func label(action: StringName) -> String:
 	return ""
 
 
+## 20.11: все кнопки действия текущего устройства через « / » (памп — ЛКМ и ПКМ)
+func labels(action: StringName) -> String:
+	var names := PackedStringArray()
+	for event in InputMap.action_get_events(action):
+		if joypad and event is InputEventJoypadButton:
+			names.append(button(event.button_index))
+		elif not joypad and event is InputEventMouseButton:
+			names.append({MOUSE_BUTTON_LEFT: "ЛКМ", MOUSE_BUTTON_RIGHT: "ПКМ"}.get(event.button_index, "Мышь"))
+	return " / ".join(names) if not names.is_empty() else label(action)
+
+
 ## 14.1: отдача в руки — только на геймпаде, с которого играют. weak — лёгкий мотор, strong — тяжёлый, 0..1
 func rumble(weak: float, strong: float, seconds: float) -> void:
 	if joypad:

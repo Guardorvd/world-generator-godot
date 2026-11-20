@@ -702,13 +702,15 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 		pump_active = 0.0
 	# 30.10: ручная работа телом больше не выключает памп — она и есть памп (ниже). Автоматика уступает ей место
 	# плавно; целиком памп снимают только прыжок, тормоз, занос и отрыв.
-	var blocked := hop or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_used or throttle < -0.05 or brake_pressure > 0.1 or absf(slip) > 0.12
+	var jumping := hop or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_used
+	var blocked := jumping or throttle < -0.05 or brake_pressure > 0.1 or absf(slip) > 0.12
 	var body_work := clampf(absf(body_x) / 0.3 + absf(body_v) / 1.2, 0.0, 1.0)
 	if blocked or airborne or _fresh:
 		_pump_wait = PUMP_PAUSE
 	# пауза после приземления и ручного действия — только для толчка автоматики: гребень сразу после посадки тоже
 	# поглощается, иначе на скорости велосипед не возвращался на волны до конца серии
-	var ready := pump_enabled and riding and not crashed and not airborne and not blocked
+	# 20.11: пассивное поглощение ногами снимает только прыжок — с тормозом и в заносе гребень гасится так же
+	var ready := pump_enabled and riding and not crashed and not airborne and not (blocked if manual else jumping)
 	ready = ready and speed > 2.0 and _on_f < 0 and _on_r < 0
 	ready = ready and heights.immersion_at(x, z, y) < 0.03
 	var motion := 0.0

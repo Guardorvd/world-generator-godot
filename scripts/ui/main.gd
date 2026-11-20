@@ -2112,7 +2112,7 @@ func _control_rows() -> Array:
 		[c.label(&"run"), "бег, рывок на велосипеде"], [c.label(&"jump"), "прыжок"],
 	]
 	if not pad:
-		rows.append([c.label(&"bike_pump"), "памп на велосипеде (держать)"])
+		rows.append([c.labels(&"bike_pump"), "памп на велосипеде (держать)"])
 		rows.append(["%s → %s" % [c.label(&"bike_back"), c.label(&"bike_forward")], "баннихоп"])
 	rows.append([c.label(&"interact"), "взаимодействовать, сесть / слезть"])
 	rows.append([c.label(&"flashlight"), "фонарик"])
