@@ -2181,13 +2181,25 @@ func _hit_cargo(loss: int) -> void:
 	if not hit.broken:
 		hud.update_tracker() # шаг тот же — только процент в трекере; разбитый груз обновляет задание через Quests.changed
 	hud.pulse_cargo()
-	hud.toast_now(("Груз разбит\n" if hit.broken else "") + str(hit.text), &"warning")
+	if hit.broken or int(hit.hp) + loss >= 100:
+		hud.toast_now(("Груз разбит\n" if hit.broken else "") + str(hit.text), &"warning")
 
-## 20.11: награда магазина за исследование (страницы альбома, первый обзор, ремонт по пути) — заметка к тосту или пусто
+## 20.11: награда магазина за исследование (страницы альбома, первый обзор, ремонт по пути) — заметка к тосту или пусто.
+## Короче заметки задания: только очки и, когда цель или первая расцветка стали доступны, одна строка об этом
 func _explore_reward(ids: Array) -> String:
 	if shop_progress == null or ids.is_empty():
 		return ""
-	return _quest_reward_note(ids)
+	var points := shop_progress.award(world.seed_text, ids)
+	if points <= 0:
+		return "" if points == 0 else "\nОчки пока не сохранены. Магазин повторит запись при открытии."
+	var note := " · +%d очк." % points
+	var target := shop_progress.purchase_goal
+	if target != "":
+		if shop_progress.remaining(target) == 0 and shop_progress.balance - points < int(ShopProgress.PRICES[target]):
+			note += "\n«%s» теперь можно купить в магазине." % ShopProgress.Palette.SCHEME_NAMES[target]
+	elif shop_progress.first_purchase_unlocked(points):
+		note += "\nХватает на первую расцветку. Откройте «Магазин» в дневнике."
+	return note
 
 ## Лавка: сесть (камера ниже, взгляд вперёд по лавке, ходьба заперта до шага или прыжка). Только пешком, цела
 func _sit(item: Dictionary) -> void:
@@ -2594,10 +2606,8 @@ func _bike_impacts() -> void:
 		audio.land(bike.x, bike.z, bike.y, land)
 		# 20.11: жёсткая посадка (сильнее порога тряски) выбивает грунт из-под обоих колёс; обычные прыжки — без частиц
 		if land > LAND_BURST and not bike.crashed:
-			var forward := Vector3(-sin(bike.heading), 0.0, -cos(bike.heading)) * BikeRide.HUB
 			var energy := clampf((land - LAND_BURST) / 6.0, 0.0, 1.0) * 0.7
-			brake_effects.emit_burst(Vector3(bike.x, bike.y, bike.z) + forward, world, heights, energy, bike.heading)
-			brake_effects.emit_burst(Vector3(bike.x, bike.y, bike.z) - forward, world, heights, energy, bike.heading)
+			brake_effects.emit_burst(Vector3(bike.x, bike.y, bike.z), world, heights, energy, bike.heading, BikeRide.HUB)
 		weak = clampf(land / 10.0, 0.0, 0.6)
 		strong = clampf((land - 4.0) / 8.0, 0.0, 1.0)
 	var knock := maxf(wheel.x, wheel.y)

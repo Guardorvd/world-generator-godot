@@ -91,7 +91,8 @@ func set_purchase_goal(id: String) -> Error:
 	return err
 
 
-func buy(id: String) -> Error:
+## wear — сразу надеть купленное (20.11: «Купить и надеть» — одна запись профиля, а не две)
+func buy(id: String, wear := false) -> Error:
 	if not PRICES.has(id) or owns(id) or balance < PRICES[id]:
 		return ERR_INVALID_PARAMETER
 	var next := _state.duplicate()
@@ -100,8 +101,13 @@ func buy(id: String) -> Error:
 	next.owned[id] = true
 	if next.purchase_goal == id:
 		next.purchase_goal = ""
+	wear = wear and Palette.SCHEMES.has(id)
+	if wear:
+		next.equipped = id
 	var err := _commit(next)
 	if err == OK:
+		if wear:
+			equipment_changed.emit(id)
 		changed.emit()
 	return err
 

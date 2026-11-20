@@ -770,11 +770,10 @@ func _buy_reviewed() -> void:
 		return
 	var id := _purchase_id
 	_purchase_id = ""
-	if _profile.buy(id) == OK:
-		# 20.11: купленный комплект сразу надевается (одно действие вместо двух); если запись не удалась — он в коллекции
-		var worn := _profile.equip(id) == OK
+	if _profile.buy(id, true) == OK:
+		# 20.11: купленный комплект сразу надевается — одно действие и одна запись профиля
 		_rows[id].grab_focus()
-		_note.text = ("«%s» куплен и надет." if worn else "«%s» добавлен в коллекцию. Нажмите «Надеть», чтобы применить.") % _name.text
+		_note.text = "«%s» куплен и надет." % _name.text
 		Style.pulse(_status, Style.MINT)
 		sound_requested.emit(&"confirm")
 	else:

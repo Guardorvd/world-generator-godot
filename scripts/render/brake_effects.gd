@@ -474,8 +474,9 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 
 
 ## 20.11: разовый выброс грунта от удара (жёсткое приземление, падение) в точке pos: осколки и клубы по покрытию
-## под ней; energy 0..1 — сила (число частиц и размах). Берёт частицы из тех же колец, памяти не выделяет.
-func emit_burst(pos: Vector3, w: WorldData, h: Heightfield, energy: float, heading: float) -> void:
+## под ней; energy 0..1 — сила (число частиц и размах). spread > 0 — под обоими колёсами: точки на spread вперёд и
+## назад по ходу, покрытие и наклон оцениваются один раз. Берёт частицы из тех же колец, памяти не выделяет.
+func emit_burst(pos: Vector3, w: WorldData, h: Heightfield, energy: float, heading: float, spread := 0.0) -> void:
 	if not _ready_done:
 		setup()
 	if h == null or not pos.is_finite():
@@ -487,17 +488,23 @@ func emit_burst(pos: Vector3, w: WorldData, h: Heightfield, energy: float, headi
 	var origin := Vector3(pos.x, ground_y, pos.z)
 	var n_up := _ground_normal(h, pos.x, pos.z, ground_y)
 	var right := Vector3(cos(heading), 0.0, -sin(heading))
+	var along := Vector3(-sin(heading), 0.0, -cos(heading)) * spread
+	var points := 2 if spread > 0.0 else 1
 	var debris := roundi(lerpf(4.0, 14.0, energy) * (0.3 if surf_kind == SURF_WOOD else 1.0))
-	for k in debris:
-		# разлёт во все стороны вдоль земли: случайное направление в плоскости склона
-		var a := _rng.randf() * TAU
-		var flat := Vector3(cos(a), 0.0, sin(a))
-		var spray := (flat - n_up * flat.dot(n_up)) * (1.0 + 1.6 * energy)
-		_spawn_debris(origin, n_up, spray, right, 4.0, 0.5 + 0.5 * energy, pal, false)
 	var puffs := roundi(lerpf(2.0, 4.0, energy))
-	for k in puffs:
-		var a := _rng.randf() * TAU
-		_spawn_plume(origin, n_up, Vector3(cos(a), 0.0, sin(a)), right, 0.0, 3.0, 0.45 + 0.4 * energy, pal)
+	for p in points:
+		# точка удара у колеса — на касательной к склону плоскости: высота по наклону, без второй выборки рельефа
+		var off := along if p == 0 else -along
+		var at := origin + off + Vector3.UP * (-n_up.dot(off) / maxf(n_up.y, 0.2))
+		for k in debris:
+			# разлёт во все стороны вдоль земли: случайное направление в плоскости склона
+			var a := _rng.randf() * TAU
+			var flat := Vector3(cos(a), 0.0, sin(a))
+			var spray := (flat - n_up * flat.dot(n_up)) * (1.0 + 1.6 * energy)
+			_spawn_debris(at, n_up, spray, right, 4.0, 0.5 + 0.5 * energy, pal, false)
+		for k in puffs:
+			var a := _rng.randf() * TAU
+			_spawn_plume(at, n_up, Vector3(cos(a), 0.0, sin(a)), right, 0.0, 3.0, 0.45 + 0.4 * energy, pal)
 
 
 ## Брызги с высоты метки, с остановкой на грунте под ней.

@@ -57,7 +57,7 @@ var _dip := 0.0         # проседание камеры при призем�
 var _dip_v := 0.0
 var seated := false     # игрок сидит на лавке (GameWorld): камера опускается на SEAT_DROP
 var _seat_drop := 0.0
-var _fov_kick := 0.0    # 20.11: толчок обзора при падении, градусы; гаснет сам (tick_effects)
+var _fov_kick := 0.0    # 20.11: толчок обзора при падении, градусы; гаснет сам по кадрам (update)
 var _fov_kick_shown := 0.0 # какая доля толчка сейчас в camera.fov: плавное следование идёт без неё
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
 var _cam_lead := 0.0    # 12.7: доворот камеры внутрь поворота, рад (только пока мышь не трогали)
@@ -114,6 +114,8 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	if photo_active:
 		fov_goal = photo_fov
+	if _fov_kick != 0.0:
+		_fov_kick = _fov_kick * exp(-FOV_KICK_DECAY * dt) if _fov_kick > 0.02 else 0.0
 	var kick := _fov_kick if settings.head_bob and not photo_active else 0.0
 	camera.fov = lerpf(camera.fov - _fov_kick_shown, fov_goal, _smooth(FOV_RESPONSE_PHOTO if photo_active else FOV_RESPONSE, dt)) + kick
 	_fov_kick_shown = kick
@@ -182,5 +184,4 @@ func tick_effects(dt: float) -> void:
 	_dip_v += (-DIP_SPRING * _dip - DIP_DAMP * _dip_v) * dt
 	_dip = clampf(_dip + _dip_v * dt, DIP_MIN, DIP_MAX)
 	_trauma = maxf(0.0, _trauma - dt * TRAUMA_DECAY)
-	_fov_kick *= exp(-FOV_KICK_DECAY * dt)
 	_seat_drop = move_toward(_seat_drop, SEAT_DROP if seated else 0.0, SEAT_RATE * dt)

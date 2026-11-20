@@ -213,10 +213,8 @@ func _run() -> void:
 ## только этот случай: -- --burst
 func _burst() -> void:
 	_reset_scenario(RoadSurface.DIRT, Biomes.GRASS, Color(0.36, 0.28, 0.2), 0.0)
-	var fwd := Vector3(0, 0, -BikeRide.HUB)
-	var at := Vector3(bike.x, bike.y, bike.z)
-	effects.emit_burst(at + fwd, world, ground, 0.7, bike.heading)
-	effects.emit_burst(at - fwd, world, ground, 0.7, bike.heading)
+	# как в игре: один вызов на оба колеса (покрытие и наклон оцениваются один раз)
+	effects.emit_burst(Vector3(bike.x, bike.y, bike.z), world, ground, 0.7, bike.heading, BikeRide.HUB)
 	var alive := 0
 	for i in BrakeEffects.DEBRIS_COUNT:
 		alive += int(effects._d_life[i] > 0.0)
