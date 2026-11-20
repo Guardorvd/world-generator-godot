@@ -6,6 +6,7 @@ uniform bool rock = false;
 uniform float stripe_height = 1.22;
 uniform float stripe_width = 0.135;
 uniform float offset_m = 0.016;
+uniform float fade : hint_range(0.0, 1.0) = 1.0;
 varying vec3 relative_position;
 
 void vertex() {
@@ -29,6 +30,14 @@ void fragment() {
 			+ sin(relative_position.x * 57.0 - relative_position.z * 51.0) * 0.004;
 		if (abs(h + edge) > stripe_width) {
 			discard;
+		}
+		// Полоса проявляется из середины к краям, сохраняя непрозрачность краски.
+		if (fade < 1.0) {
+			float grain = 0.5 + 0.5 * sin(relative_position.x * 49.0 + relative_position.z * 63.0);
+			float reveal = mix(abs(h + edge) / stripe_width, grain, 0.18);
+			if (fade <= 0.0 || reveal > fade) {
+				discard;
+			}
 		}
 		float brush = sin(h * 110.0 + relative_position.x * 21.0) * 0.026;
 		ALBEDO = vec3(0.86, 0.22 + brush, 0.048);

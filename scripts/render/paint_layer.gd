@@ -12,11 +12,23 @@ var _item := {}
 
 
 func sync(painted: Dictionary, goal: Dictionary) -> void:
-	for id: String in painted:
-		if _painted.has(id):
-			continue
-		var place := PaintTargets.resolve(vegetation.world, id)
-		_painted[id] = _overlay(place, false) if not place.is_empty() else null
+	if _highlight != null and painted.has(_active_key):
+		var marker := _highlight.get_child(0) as Label3D
+		marker.hide()
+		marker.queue_free()
+		var material := _highlight.material_override as ShaderMaterial
+		material.set_shader_parameter("highlight", false)
+		material.set_shader_parameter("offset_m", 0.016)
+		_painted[_active_key] = _highlight
+		_highlight = null
+		_active_key = ""
+		_item = {}
+	# В текущем мире метки только добавляются. Поиск по чанкам нужен для загрузки сохранения.
+	if painted.size() != _painted.size():
+		for id: String in painted:
+			if not _painted.has(id):
+				var place := PaintTargets.resolve(vegetation.world, id)
+				_painted[id] = _overlay(place, false) if not place.is_empty() else null
 	var key: String = goal.key if goal.get("kind") == "paint" else ""
 	if key == _active_key:
 		return
@@ -57,6 +69,23 @@ func item(eye: Vector3, reach: float) -> Dictionary:
 		return {}
 	var offset: Vector3 = (eye - _item.at.origin).abs() - _item.half
 	return _item if offset.max(Vector3.ZERO).length_squared() <= reach * reach else {}
+
+
+## Проявить свежую метку и вернуть точку брызг на обращённой к игроку стороне.
+func reveal(id: String, eye: Vector3) -> Vector3:
+	var node: MeshInstance3D = _painted.get(id)
+	if node == null:
+		return Vector3.INF
+	var material := node.material_override as ShaderMaterial
+	material.set_shader_parameter("fade", 0.0)
+	node.create_tween().tween_method(
+		func(value: float) -> void: material.set_shader_parameter("fade", value),
+		0.0, 1.0, 0.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	var box := node.global_transform * node.mesh.get_aabb()
+	var at := box.get_center()
+	at.y = node.global_position.y + float(material.get_shader_parameter("stripe_height"))
+	var direction := Vector3(eye.x - at.x, 0.0, eye.z - at.z).normalized()
+	return at + direction * Vector3(box.size.x, 0.0, box.size.z) * 0.46
 
 
 func _overlay(place: Dictionary, highlight: bool) -> MeshInstance3D:

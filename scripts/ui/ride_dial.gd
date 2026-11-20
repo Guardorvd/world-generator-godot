@@ -18,6 +18,7 @@ const STAMINA_SPAN := deg_to_rad(110.0)
 const BRAKE_FROM := deg_to_rad(55.0)       # справа: снизу (55°) вверх (−55°)
 const BRAKE_SPAN := deg_to_rad(-110.0)
 const MIN_SPEED := 1.0          # м/с: ниже тормоз не показывается
+const PUMP_FLASH_TIME := 0.42
 
 # силы
 var value := 1.0
@@ -37,6 +38,7 @@ var risk := 0.0
 var skid := 0.0
 var brake_alpha := 0.0
 var _ride_alpha := 0.0
+var _pump_flash := 0.0
 var alert: BrakeAlert  # подпись об опасном торможении под прицелом (ставит Hud)
 var _t := 0.0
 var _drawn := false
@@ -91,7 +93,13 @@ func set_ride(bike: BikeRide, allowed: bool) -> void:
 	else:
 		brake_alpha = move_toward(brake_alpha, 1.0 if braking else 0.0, dt * (6.0 if braking else 3.0))
 	_ride_alpha = move_toward(_ride_alpha, 1.0 if allowed and riding else 0.0, dt * 5.0)
+	_pump_flash = maxf(0.0, _pump_flash - dt) if allowed and riding and not bike.airborne else 0.0
 	_redraw()
+
+
+func pulse_pump() -> void:
+	_pump_flash = PUMP_FLASH_TIME
+	queue_redraw()
 
 
 func _face_alpha() -> float:
@@ -119,6 +127,12 @@ func _draw() -> void:
 		return
 	var c := Vector2.ONE * DIAMETER * 0.5
 	HudStyle.dial_face(self, c, DIAMETER * 0.5 - 2.0, a)
+	if _pump_flash > 0.0:
+		var progress := 1.0 - _pump_flash / PUMP_FLASH_TIME
+		var angle := lerpf(-2.35, -0.79, progress)
+		var glow := smoothstep(0.0, 0.36, progress) * (1.0 - smoothstep(0.36, 1.0, progress)) * a
+		draw_arc(c, R + 5.0, angle - 0.37, angle + 0.37, 20, Color(HudStyle.MINT, glow * 0.5), 4.0, true)
+		draw_arc(c, R + 5.0, angle - 0.25, angle + 0.25, 16, Color(HudStyle.CREAM, glow), 1.6, true)
 	_draw_stamina(c, a)
 	if brake_alpha > 0.01:
 		_draw_brake(c, a * brake_alpha)

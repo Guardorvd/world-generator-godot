@@ -63,6 +63,7 @@ var _land: AudioStreamPlayer
 var _crash: AudioStreamPlayer  # 20.11: падение седока — удар, звяк рамы и шорох скольжения
 var _bottom: AudioStreamPlayer # пробой подвески — свой голос: приземление его не глушит
 var _knock: AudioStreamPlayer  # удар колеса о кромку
+var _pump: AudioStreamPlayer
 var _steps := {}            # поверхность -> AudioStreamPlayer
 var _goal := {}             # петля -> громкость, к которой она стремится, 0..1
 var _level := {}            # петля -> текущая громкость 0..1
@@ -148,6 +149,10 @@ func _ready() -> void:
 	_crash.bus = WORLD_BUS
 	_crash.stream = _random(["crash_impact"], 1.06, 1.0)
 	add_child(_crash)
+	_pump = AudioStreamPlayer.new()
+	_pump.bus = WORLD_BUS
+	_pump.stream = _random(["pump_suspension"], 1.06, 0.0)
+	add_child(_pump)
 
 
 func _exit_tree() -> void:
@@ -206,7 +211,7 @@ func set_ducked(on: bool, duration := 0.18) -> void:
 	if _duck_tween != null and _duck_tween.is_valid():
 		_duck_tween.kill()
 		_duck_tween = null
-	for p: AudioStreamPlayer in [_roll, _grit, _tick, _chain]:
+	for p: AudioStreamPlayer in [_roll, _grit, _tick, _chain, _pump]:
 		if p != null:
 			p.stream_paused = on
 	var lpf := AudioServer.get_bus_effect(idx, 0) as AudioEffectLowPassFilter if AudioServer.get_bus_effect_count(idx) > 0 else null
@@ -260,6 +265,11 @@ func bottom_out(impact: float) -> void:
 func crash(impact: float) -> void:
 	_crash.volume_db = DB_LAND - 6.0 + clampf((impact - 4.0) / 8.0, 0.0, 1.0) * 5.0
 	_crash.play()
+
+
+func pump_compression(accel: float) -> void:
+	_pump.volume_db = lerpf(-27.0, -23.0, smoothstep(0.6, 1.8, accel))
+	_pump.play()
 
 
 ## Удар колеса о кромку (корень, камень, бревно) со скоростью impact, м/с: короткий стук обода и шины, звонче

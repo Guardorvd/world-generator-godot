@@ -364,6 +364,7 @@ def main():
     write_wav("lamp_switch", lamp_switch(hit_rng))
     write_wav("discovery_chime", discovery_chime(hit_rng))
     write_wav("quest_complete", quest_complete(hit_rng))
+    write_wav("pump_suspension", pump_suspension(random.Random(2027)))
 
 
 def ui_hover(rng):
@@ -465,6 +466,14 @@ def fork_bottom(rng):
     # металл: негармоничные призвуки, быстро гаснут, тише удара
     mix(out, ring(0.18, 1130.0, 45, 1.0, ((1.0, 0.5), (1.47, 0.35), (2.31, 0.2))), int(RATE * 0.004), 0.32)
     return fade(out, 1, 60)
+
+
+def pump_suspension(rng):
+    """Тихий шелест подвески под нагрузкой, без стука отбойника."""
+    out = [0.0] * int(RATE * 0.18)
+    mix(out, bandpass(burst(155, 48, rng, 18), 680.0, 0.85), 0, 1.0)
+    mix(out, lowpass(burst(115, 28, rng, 15), 320.0), 0, 0.5)
+    return fade(out, 6, 34)
 
 
 def rim_knock(rng):

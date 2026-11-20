@@ -141,7 +141,6 @@ var _d_vel := PackedVector3Array()
 var _d_rot := PackedVector3Array()
 var _d_spin := PackedVector3Array()
 var _d_scale := PackedVector3Array()
-var _d_color := PackedColorArray()
 var _d_custom := PackedColorArray() # r = age, g = kind, b = seed, a = glow
 var _d_life := PackedFloat32Array()
 var _d_max_life := PackedFloat32Array()
@@ -154,7 +153,6 @@ var _p_pos := PackedVector3Array()
 var _p_vel := PackedVector3Array()
 var _p_size0 := PackedFloat32Array()
 var _p_size1 := PackedFloat32Array()
-var _p_color := PackedColorArray()
 var _p_custom := PackedColorArray() # r = age, g = kind, b = seed, a = density
 var _p_life := PackedFloat32Array()
 var _p_max_life := PackedFloat32Array()
@@ -252,7 +250,6 @@ func setup() -> void:
 	_d_rot.resize(DEBRIS_COUNT)
 	_d_spin.resize(DEBRIS_COUNT)
 	_d_scale.resize(DEBRIS_COUNT)
-	_d_color.resize(DEBRIS_COUNT)
 	_d_custom.resize(DEBRIS_COUNT)
 	_d_life.resize(DEBRIS_COUNT)
 	_d_max_life.resize(DEBRIS_COUNT)
@@ -263,7 +260,6 @@ func setup() -> void:
 	_p_vel.resize(PLUME_COUNT)
 	_p_size0.resize(PLUME_COUNT)
 	_p_size1.resize(PLUME_COUNT)
-	_p_color.resize(PLUME_COUNT)
 	_p_custom.resize(PLUME_COUNT)
 	_p_life.resize(PLUME_COUNT)
 	_p_max_life.resize(PLUME_COUNT)
@@ -356,8 +352,10 @@ func tick(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 		_t_WasActive[0] = false
 		_t_WasActive[1] = false
 
-	_step_debris(dt)
-	_step_plumes(dt)
+	if _debris_mm.visible:
+		_step_debris(dt)
+	if _plume_mm.visible:
+		_step_plumes(dt)
 	_step_tracks(dt)
 
 
@@ -502,7 +500,7 @@ func emit_burst(pos: Vector3, w: WorldData, h: Heightfield, energy: float, headi
 		_spawn_plume(origin, n_up, Vector3(cos(a), 0.0, sin(a)), right, 0.0, 3.0, 0.45 + 0.4 * energy, pal)
 
 
-## Определяет тип поверхности под колесом с учётом брода, настила моста, дорожного полотна и биома.
+## Брызги с высоты метки, с остановкой на грунте под ней.
 func emit_paint(pos: Vector3, eye: Vector3, ground_y: float) -> void:
 	var outward := Vector3(eye.x - pos.x, 0.0, eye.z - pos.z).normalized()
 	if outward.is_zero_approx():
@@ -602,9 +600,10 @@ func _spawn_debris(origin: Vector3, n_up: Vector3, spray_dir: Vector3, w_right: 
 	_d_rot[i] = Vector3(_rng.randf() * TAU, _rng.randf() * TAU, _rng.randf() * TAU)
 	_d_spin[i] = Vector3(_rng.randf_range(-14.0, 14.0), _rng.randf_range(-14.0, 14.0), _rng.randf_range(-14.0, 14.0))
 
+	var color: Color
 	if is_spark:
 		_d_scale[i] = Vector3(0.32, 0.32, 2.6) * _rng.randf_range(0.65, 1.25)
-		_d_color[i] = Color(1.0, 0.78, 0.32, 1.0)
+		color = Color(1.0, 0.78, 0.32, 1.0)
 		_d_custom[i] = Color(0.0, 3.0, _rng.randf(), _rng.randf_range(0.85, 1.4))
 		_d_max_life[i] = _rng.randf_range(0.18, 0.38)
 		_d_bounce[i] = 0.62
@@ -613,13 +612,14 @@ func _spawn_debris(origin: Vector3, n_up: Vector3, spray_dir: Vector3, w_right: 
 		_d_scale[i] = base_sc * _rng.randf_range(0.55, 1.35) * (0.65 + 0.50 * intensity)
 		var c1: Color = pal.debris1
 		var c2: Color = pal.debris2
-		_d_color[i] = c1.lerp(c2, _rng.randf())
+		color = c1.lerp(c2, _rng.randf())
 		_d_custom[i] = Color(0.0, float(pal.debris_kind), _rng.randf(), 0.0)
 		_d_max_life[i] = _rng.randf_range(0.32, 0.68) * (0.75 + 0.35 * intensity)
 		_d_bounce[i] = float(pal.bounce)
 
 	_d_life[i] = _d_max_life[i]
 	_d_ground[i] = origin.y + 0.012
+	_debris_mm.multimesh.set_instance_color(i, color)
 	_debris_mm.visible = true
 
 
@@ -637,16 +637,18 @@ func _spawn_plume(origin: Vector3, n_up: Vector3, move_dir: Vector3, w_right: Ve
 	_p_size0[i] = base_s
 	_p_size1[i] = base_s * _rng.randf_range(2.2, 3.5) * (1.0 + clampf(speed * 0.04, 0.0, 0.5))
 	var col: Color = pal.plume
-	_p_color[i] = Color(col.r * _rng.randf_range(0.92, 1.08), col.g * _rng.randf_range(0.92, 1.08), col.b * _rng.randf_range(0.92, 1.08), col.a)
+	var color := Color(col.r * _rng.randf_range(0.92, 1.08), col.g * _rng.randf_range(0.92, 1.08), col.b * _rng.randf_range(0.92, 1.08), col.a)
 	_p_custom[i] = Color(0.0, float(pal.plume_kind), _rng.randf(), clampf(0.55 + 0.75 * intensity, 0.30, 1.35))
 	_p_max_life[i] = _rng.randf_range(0.48, 0.95) * (0.75 + 0.45 * intensity)
 	_p_life[i] = _p_max_life[i]
+	_plume_mm.multimesh.set_instance_color(i, color)
 	_plume_mm.visible = true
 
 
 func _step_debris(dt: float) -> void:
 	var any_alive := false
 	var zero_xf := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3.ZERO)
+	var drag := 1.0 - minf(0.9, 1.4 * dt)
 	for i in DEBRIS_COUNT:
 		var rem := _d_life[i]
 		if rem <= 0.0:
@@ -662,7 +664,7 @@ func _step_debris(dt: float) -> void:
 		var age := clampf(1.0 - rem / max_l, 0.0, 1.0)
 
 		_d_vel[i].y -= 12.5 * dt
-		_d_vel[i] *= (1.0 - minf(0.9, 1.4 * dt))
+		_d_vel[i] *= drag
 		_d_pos[i] += _d_vel[i] * dt
 		if _d_pos[i].y < _d_ground[i] and _d_vel[i].y < 0.0:
 			_d_pos[i].y = _d_ground[i]
@@ -677,8 +679,6 @@ func _step_debris(dt: float) -> void:
 		_debris_mm.multimesh.set_instance_transform(i, Transform3D(basis, _d_pos[i]))
 		var c := _d_custom[i]
 		c.r = age
-		_d_custom[i] = c
-		_debris_mm.multimesh.set_instance_color(i, _d_color[i])
 		_debris_mm.multimesh.set_instance_custom_data(i, c)
 	_debris_mm.visible = any_alive
 
@@ -686,6 +686,7 @@ func _step_debris(dt: float) -> void:
 func _step_plumes(dt: float) -> void:
 	var any_alive := false
 	var zero_xf := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3.ZERO)
+	var drag := exp(-dt * 2.8)
 	for i in PLUME_COUNT:
 		var rem := _p_life[i]
 		if rem <= 0.0:
@@ -701,7 +702,7 @@ func _step_plumes(dt: float) -> void:
 		var age := clampf(1.0 - rem / max_l, 0.0, 1.0)
 
 		# Клуб быстро тормозится в воздухе и медленно всплывает
-		_p_vel[i] *= exp(-dt * 2.8)
+		_p_vel[i] *= drag
 		_p_vel[i].y += 0.18 * dt * (1.0 - age)
 		_p_pos[i] += _p_vel[i] * dt
 
@@ -709,8 +710,6 @@ func _step_plumes(dt: float) -> void:
 		_plume_mm.multimesh.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * sz), _p_pos[i]))
 		var c := _p_custom[i]
 		c.r = age
-		_p_custom[i] = c
-		_plume_mm.multimesh.set_instance_color(i, _p_color[i])
 		_plume_mm.multimesh.set_instance_custom_data(i, c)
 	_plume_mm.visible = any_alive
 
@@ -763,8 +762,9 @@ func _step_tracks(dt: float) -> void:
 			has_segments = true
 
 	if not has_segments:
-		_track_mesh.clear_surfaces()
-		_track_node.visible = false
+		if _track_mesh.get_surface_count() > 0:
+			_track_mesh.clear_surfaces()
+			_track_node.hide()
 		_mesh_wait = 0.0
 		return
 	_mesh_wait += dt

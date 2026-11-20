@@ -143,6 +143,10 @@ static func star(filled: bool) -> Texture2D:
 	return STAR_FILLED if filled else STAR
 
 
+static func reward_token() -> Texture2D:
+	return _svg("<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v10M7 12h10\"/>", 2.3)
+
+
 static func quest(kind: String) -> Texture2D:
 	if kind == "obelisks":
 		return obelisk(0)

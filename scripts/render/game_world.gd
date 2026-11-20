@@ -49,6 +49,7 @@ var shop_progress: ShopProgress
 var _gear_changed := false # 20.11: в дневнике надели другой комплект — при возвращении в мир велосипед коротко «проявляется»
 var _bag: Node3D         # сумка доставки у доски, пока её не взяли
 var _bag_label: Label3D  # подпись над ней
+var _bag_pickup: Tween
 var _beacon_layer: BeaconLayer
 var _paint_layer: PaintLayer
 var _quest_goal := ""    # key места, которое задание поставило целью на компасе
@@ -132,6 +133,7 @@ const REPAIR_TICK_SECONDS := 0.45
 const REPAIR_TIME_EPSILON := 0.000001
 var _fix_target := ""
 var _fix_elapsed := 0.0
+var _pump_feedback_latched := false
 var paused := false
 var show_map := false
 var _hints_key := []  # от чего зависели последние подсказки (_update_hints)
@@ -1620,6 +1622,8 @@ func _physics_process(dt: float) -> void:
 			_shake_on_landing(player.land_impact, 10.0)
 			audio.land(player.x, player.z, player.feet, player.land_impact)
 			player.land_impact = 0.0
+	if bike.pump_pressed or _pump_feedback_latched:
+		_tick_pump_feedback(not _opening and not input_lock and not crash.active())
 	_tick_yaw = yaw - yaw0
 	t0 = _tick_mark("bike", t0)
 	water_effects.tick(dt, player, bike, _prev, heights)
@@ -1779,7 +1783,7 @@ func _process(delta: float) -> void:
 	t0 = _tick_mark("frame_route_ui", t0)
 	if place_names != null and not _map_disabled_3d:
 		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)
-	if _bag != null and _bag.visible and not _map_disabled_3d:
+	if _bag != null and _bag.visible and _bag_pickup == null and not _map_disabled_3d:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
 		_bag_label.visible = summary and camera.global_position.distance_to(_bag.position) < 60.0
@@ -2036,7 +2040,8 @@ func _aim() -> Dictionary:
 		for plate: Dictionary in _plaques:
 			if eye.distance_squared_to(plate.at.origin) < REACH * REACH:
 				items.append({kind = "plaque", id = plate.id, at = plate.at, half = Vector3(plate.size.x * 0.5 + 0.1, plate.size.y * 0.5 + 0.1, 0.25)})
-	if _bag != null and _bag.visible and not bike.riding and eye.distance_squared_to(_bag.position) < REACH * REACH:
+	if _bag != null and _bag.visible and _bag_pickup == null and not bike.riding \
+			and eye.distance_squared_to(_bag.position) < REACH * REACH:
 		var at := _bag.transform
 		at.origin += at.basis * Vector3(0.0, 0.0, CargoBag.SIZE.z * 0.5)
 		items.append({kind = "cargo", at = at, half = CargoBag.SIZE * 0.5 + Vector3(0.05, 0.08, 0.05)})
@@ -2069,9 +2074,28 @@ func interact() -> void:
 	match _target.get("kind", ""):
 		"board": _open_settlement(_target.place)
 		"bike": toggle_bike()
-		"cargo": _quest_progress(quests.pick_up())
-		"beacon": _quest_progress(quests.install_beacon(_target.id))
-		"paint": _quest_progress(quests.paint_object(_target.id))
+		"cargo":
+			var text := quests.pick_up()
+			if not text.is_empty():
+				_animate_bag_pickup()
+				_quest_progress(text)
+		"beacon":
+			var id: String = _target.id
+			var text := quests.install_beacon(id)
+			if not text.is_empty():
+				_beacon_layer.animate_install(id)
+				services.controls.rumble(0.25, 0.35, 0.10)
+				_quest_progress(text)
+		"paint":
+			var id: String = _target.id
+			var text := quests.paint_object(id)
+			if not text.is_empty():
+				var eye := camera.global_position
+				var at := _paint_layer.reveal(id, eye)
+				if at.is_finite():
+					brake_effects.emit_paint(at, eye, heights.ground_at(at.x, at.z))
+				services.controls.rumble(0.18, 0.0, 0.06)
+				_quest_progress(text)
 		"bench": _sit(_target)
 		"plaque": _read_plaque(_target)
 		"repair": pass # чинят удержанием (_tick_repair), с заданием и без
@@ -2197,6 +2221,7 @@ func _tick_repair(dt: float) -> void:
 		var last_tick := floorf(Repairables.HOLD_TIME / REPAIR_TICK_SECONDS)
 		var work_pitch := remap(work_tick, 1.0, last_tick, 0.9, 1.25)
 		hud.pulse_repair(work_pitch)
+		brake_effects.emit_repair(repair_layer.work_position(id), repair_layer.kind(id) == "cairn", false)
 		services.controls.rumble(0.12, 0.0, 0.055)
 
 
@@ -2212,6 +2237,7 @@ func _complete_repair(id: String) -> void:
 	_fix_target = ""
 	_fix_elapsed = 0.0
 	repair_layer.repair(id)
+	brake_effects.emit_repair(repair_layer.work_position(id), repair_layer.kind(id) == "cairn", true)
 	hud.finish_repair()
 	services.controls.rumble(0.35, 0.5, 0.12)
 	var text := quests.repaired(id)
@@ -2302,9 +2328,12 @@ func _sync_delivery_bag() -> void:
 				board = b
 				break
 	if board.is_empty():
-		if _bag != null:
+		if _bag != null and _bag_pickup == null:
 			_bag.hide()
 		return
+	if _bag_pickup != null:
+		_bag_pickup.kill()
+		_bag_pickup = null
 	if _bag == null:
 		_bag = CargoBag.build()
 		add_child(_bag)
@@ -2323,6 +2352,15 @@ func _sync_delivery_bag() -> void:
 	at.y = heights.ground_at(at.x, at.z) + CargoBag.SIZE.y * 0.5 + 0.03
 	_bag.transform = Transform3D(face.basis.rotated(Vector3.UP, 0.4), at)
 	_bag.show()
+
+
+func _animate_bag_pickup() -> void:
+	_bag_label.hide()
+	_bag.show()
+	_bag_pickup = CargoBag.animate_pickup(_bag)
+	_bag_pickup.finished.connect(func() -> void:
+		_bag.hide()
+		_bag_pickup = null)
 
 
 func _close_settlement(capture := true) -> void:
@@ -2486,6 +2524,17 @@ func _update_camera(alpha: float, dt: float) -> void:
 ## просит больше, чем держат колёса) и снос — как юз. Нажатая кнопка сама по себе блокировку не изображает.
 func _bike_skid_sound() -> float:
 	return maxf(bike.braking * (0.3 + 0.7 * bike.brakes.skid), smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65)
+
+
+func _tick_pump_feedback(allowed: bool) -> void:
+	if not allowed or not bike.riding or bike.crashed or bike.airborne or not bike.pump_pressed \
+			or bike.pump_active <= 0.0 or bike.pump_wave >= 0.0 or bike.pump_accel < 0.25:
+		_pump_feedback_latched = false
+		return
+	if not _pump_feedback_latched and bike.pump_accel > 0.6:
+		_pump_feedback_latched = true
+		audio.pump_compression(bike.pump_accel)
+		hud.pulse_pump()
 
 
 ## Удары велосипеда за такт — три отдельных события, ни одно не подавляет другое:

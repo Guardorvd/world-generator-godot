@@ -6,6 +6,14 @@ extends RefCounted
 const SIZE := Vector3(0.36, 0.46, 0.2)
 
 
+static func animate_pickup(bag: Node3D) -> Tween:
+	var lift := bag.create_tween().set_parallel()
+	lift.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	lift.tween_property(bag, "position", bag.position + Vector3.UP * 0.32, 0.18)
+	lift.tween_property(bag, "scale", bag.scale * 0.12, 0.18)
+	return lift
+
+
 static func build() -> Node3D:
 	var root := Node3D.new()
 	root.name = "CargoBag"

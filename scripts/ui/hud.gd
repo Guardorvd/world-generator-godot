@@ -142,8 +142,12 @@ var _toast_kinds: Array[StringName] = []
 var _toast_icon: TextureRect
 var _toast_panel_style: StyleBoxFlat
 var _toast_fill_style: StyleBoxFlat
+var _toast_accent := HudStyle.MUTED
+var _toast_reward := false
+var _toast_flash := 0.0
 var _toast_kind: StringName = &"info"
 var _toast_seen := {}  # текст → время показа (мс): повтор того же сообщения не мелькает снова
+static var _toast_points_pattern := RegEx.create_from_string(r" · \+[1-9][0-9]* очк\.")
 var _clock_minute := -1
 
 # Состояние игрока для отрисовки карт
@@ -326,6 +330,7 @@ func _style_summary() -> void:
 	_toast_panel_style.corner_radius_bottom_left = 6
 	_toast_panel_style.content_margin_left = 14
 	$Toast.add_theme_stylebox_override("panel", _toast_panel_style)
+	$Toast.draw.connect(_draw_toast_accent)
 	_toast_icon = UiIcons.rect(UiIcons.INFO, 17, HudStyle.MUTED)
 	$Toast/Stack/Line.add_child(_toast_icon)
 	$Toast/Stack/Line.move_child(_toast_icon, 0)
@@ -1189,6 +1194,13 @@ func set_ride_activity(active: bool) -> void:
 	_ride_activity = active
 
 
+func pulse_pump() -> void:
+	if view_mode == View.HIDDEN or not _summary_allowed():
+		return
+	_ride.pulse_pump()
+	_ride_peek_left = maxf(_ride_peek_left, 0.5)
+
+
 func _tick_ride_peek(delta: float) -> void:
 	if view_mode != View.LIGHT or not _summary_allowed():
 		_ride_activity = false
@@ -1353,6 +1365,7 @@ func _show_toast(text: String, kind: StringName = &"info") -> void:
 	$Toast.modulate.a = 0.0
 	_toast_left = TOAST_TIME
 	_toast_time.value = 1.0
+	_animate_toast(0.0)
 
 
 ## 20.11: тихий отклик путешествия: открытие места, снимок в альбом и шаг задания — кварта, выполненное задание —
@@ -1386,7 +1399,11 @@ func _apply_toast_style(kind: StringName, text: String) -> void:
 			else:
 				accent = quest_color()
 				tex = UiIcons.quest(quests.active.kind)
+	_toast_reward = _toast_points_pattern.search(text) != null
+	if _toast_reward:
+		tex = UiIcons.reward_token()
 	_toast_kind = kind
+	_toast_accent = accent
 	if _toast_panel_style != null:
 		_toast_panel_style.border_color = Color(accent, 0.9)
 		$Toast.queue_redraw()
@@ -1395,7 +1412,25 @@ func _apply_toast_style(kind: StringName, text: String) -> void:
 		_toast_fill_style.border_color = accent
 	if _toast_icon != null:
 		_toast_icon.texture = tex
-		_toast_icon.modulate = accent
+		_toast_icon.modulate = HudStyle.AMBER if _toast_reward else accent
+
+
+func _animate_toast(age: float) -> void:
+	var panel: PanelContainer = $Toast
+	var appear := clampf(age / 0.14, 0.0, 1.0)
+	panel.scale = Vector2.ONE * Tween.interpolate_value(0.96, 0.04, appear, 1.0, Tween.TRANS_CUBIC, Tween.EASE_OUT)
+	_toast_flash = smoothstep(0.0, 0.10, age) * (1.0 - smoothstep(0.10, 0.30, age))
+	panel.queue_redraw()
+	_toast_icon.pivot_offset = _toast_icon.size * 0.5
+	var reward_pop := sin(PI * age / 0.32) if _toast_reward and age < 0.32 else 0.0
+	_toast_icon.scale = Vector2.ONE * (1.0 + reward_pop * 0.28)
+
+
+func _draw_toast_accent() -> void:
+	if _toast_flash > 0.0:
+		var panel: PanelContainer = $Toast
+		var color := _toast_accent.lerp(Color.WHITE, 0.55)
+		panel.draw_rect(Rect2(0.0, 6.0, 3.0, maxf(0.0, panel.size.y - 12.0)), Color(color, _toast_flash))
 
 
 ## 19.11.2026: левая колонка — сведения о месте, под ними задание, под ним сообщение; одна ширина LEFT_WIDTH, один зазор.
@@ -1465,7 +1500,10 @@ func _process(delta: float) -> void:
 		_toast_hidden_for = 0.0
 	if _toast_left <= 0.0:
 		return
+	var previous_age := TOAST_TIME - _toast_left
 	_toast_left -= delta
+	if previous_age < 0.32:
+		_animate_toast(TOAST_TIME - _toast_left)
 	_toast_time.value = clampf(_toast_left / TOAST_TIME, 0.0, 1.0)
 	$Toast.modulate.a = smoothstep(0.0, 0.18, TOAST_TIME - _toast_left) * smoothstep(0.0, TOAST_FADE, _toast_left)
 	if _toast_left > 0.0:

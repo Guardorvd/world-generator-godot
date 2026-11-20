@@ -35,25 +35,39 @@ func position_of(id: String) -> Vector3:
 	return _specs[id].at.origin if _specs.has(id) else Vector3.INF
 
 
+func work_position(id: String) -> Vector3:
+	var box: Dictionary = _specs[id].box
+	return box.at.origin - Vector3.UP * minf(box.half.y, 0.28)
+
+
 func repair(id: String) -> void:
 	if not _specs.has(id):
 		return
+	var was_broken := repairs.is_broken(id)
 	repairs.repair(id)
-	if _specs[id].dynamic:
+	if was_broken and _specs[id].dynamic:
 		_show(id)
+		var node: Node3D = _nodes.get(id)
+		if node != null:
+			node.scale = Vector3.ONE * 0.92
+			node.create_tween().tween_property(node, "scale", Vector3.ONE, 0.18) \
+				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 
 func _show(id: String) -> void:
 	var spec: Dictionary = _specs[id]
 	if _nodes.has(id):
+		_nodes[id].hide()
 		_nodes[id].queue_free()
 		_nodes.erase(id)
 	var lods: Array = spec.broken if repairs.is_broken(id) else spec.ok
 	var batch := MeshBatch.new()
+	var local_at := Transform3D(spec.at.basis, Vector3.ZERO)
 	for level in lods.size():
-		batch.add_lod(lods[level], spec.at, [_material], level, spec.tints, level <= 1)
+		batch.add_lod(lods[level], local_at, [_material], level, spec.tints, level <= 1)
 	var node := batch.build("Repair")
 	if node != null:
+		node.position = spec.at.origin
 		add_child(node)
 		_nodes[id] = node
 
