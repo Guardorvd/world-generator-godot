@@ -154,6 +154,11 @@ func _shot(name: String, cam_offset: Vector3, look_offset: Vector3) -> void:
 
 
 func _run() -> void:
+	if "--burst" in OS.get_cmdline_user_args():
+		await _burst()
+		print("brake_look: снимки сохранены в ", out, " | ошибок: ", fails)
+		quit(1 if fails > 0 else 0)
+		return
 	# 1. Гравий: прямое экстренное торможение
 	_reset_scenario(RoadSurface.GRAVEL, Biomes.GRASS, Color(0.50, 0.46, 0.39), 14.5)
 	_simulate(48, -1.0, 0.0, 5.5)
@@ -202,3 +207,26 @@ func _run() -> void:
 
 	print("brake_look: снимки сохранены в ", out, " | ошибок: ", fails)
 	quit(1 if fails > 0 else 0)
+
+
+## 20.11: разовый выброс грунта от жёсткой посадки (BrakeEffects.emit_burst) — под обоими колёсами, по покрытию;
+## только этот случай: -- --burst
+func _burst() -> void:
+	_reset_scenario(RoadSurface.DIRT, Biomes.GRASS, Color(0.36, 0.28, 0.2), 0.0)
+	var fwd := Vector3(0, 0, -BikeRide.HUB)
+	var at := Vector3(bike.x, bike.y, bike.z)
+	effects.emit_burst(at + fwd, world, ground, 0.7, bike.heading)
+	effects.emit_burst(at - fwd, world, ground, 0.7, bike.heading)
+	var alive := 0
+	for i in BrakeEffects.DEBRIS_COUNT:
+		alive += int(effects._d_life[i] > 0.0)
+	_check(alive >= 16 and effects._debris_mm.visible and effects._plume_mm.visible, "Жёсткая посадка выбивает грунт и пыль (осколков %d)" % alive)
+	for i in 8:
+		effects.tick(DT, bike, world, ground)
+	await _shot("burst_landing_dirt", Vector3(-2.2, 1.0, 1.6), Vector3(0.0, 0.3, 0.0))
+	for i in 90:
+		effects.tick(DT, bike, world, ground)
+	alive = 0
+	for i in BrakeEffects.DEBRIS_COUNT:
+		alive += int(effects._d_life[i] > 0.0)
+	_check(alive == 0, "Через полторы секунды осколки угасли (осталось %d)" % alive)

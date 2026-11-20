@@ -119,6 +119,11 @@ const PALETTES := {
 	}
 }
 
+const PAINT_DROPS := {
+	debris1 = Color("#f27b28"), debris2 = Color("#c74414"),
+	debris_scale = Vector3(0.68, 0.92, 0.68), debris_kind = 2.0, bounce = 0.0,
+}
+
 ## Нагрев переднего и заднего тормозного диска (0..1), передаётся в BikeView.
 var heat_f := 0.0
 var heat_r := 0.0
@@ -468,6 +473,61 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 		_emit_accum_p[wheel_idx] -= float(p_spawns)
 		for k in p_spawns:
 			_spawn_plume(contact_pos, n_up, tangent_fwd * move_sign, side_vec, side_throw, speed, intensity, pal)
+
+
+## 20.11: разовый выброс грунта от удара (жёсткое приземление, падение) в точке pos: осколки и клубы по покрытию
+## под ней; energy 0..1 — сила (число частиц и размах). Берёт частицы из тех же колец, памяти не выделяет.
+func emit_burst(pos: Vector3, w: WorldData, h: Heightfield, energy: float, heading: float) -> void:
+	if not _ready_done:
+		setup()
+	if h == null or not pos.is_finite():
+		return
+	energy = clampf(energy, 0.0, 1.0)
+	var surf_kind := _classify_surface(w, h, pos.x, pos.z, pos.y)
+	var pal: Dictionary = PALETTES.get(surf_kind, PALETTES[SURF_GRAVEL])
+	var ground_y := h.surface_at(pos.x, pos.z, pos.y + 0.25)
+	var origin := Vector3(pos.x, ground_y, pos.z)
+	var n_up := _ground_normal(h, pos.x, pos.z, ground_y)
+	var right := Vector3(cos(heading), 0.0, -sin(heading))
+	var debris := roundi(lerpf(4.0, 14.0, energy) * (0.3 if surf_kind == SURF_WOOD else 1.0))
+	for k in debris:
+		# разлёт во все стороны вдоль земли: случайное направление в плоскости склона
+		var a := _rng.randf() * TAU
+		var flat := Vector3(cos(a), 0.0, sin(a))
+		var spray := (flat - n_up * flat.dot(n_up)) * (1.0 + 1.6 * energy)
+		_spawn_debris(origin, n_up, spray, right, 4.0, 0.5 + 0.5 * energy, pal, false)
+	var puffs := roundi(lerpf(2.0, 4.0, energy))
+	for k in puffs:
+		var a := _rng.randf() * TAU
+		_spawn_plume(origin, n_up, Vector3(cos(a), 0.0, sin(a)), right, 0.0, 3.0, 0.45 + 0.4 * energy, pal)
+
+
+## Определяет тип поверхности под колесом с учётом брода, настила моста, дорожного полотна и биома.
+func emit_paint(pos: Vector3, eye: Vector3, ground_y: float) -> void:
+	var outward := Vector3(eye.x - pos.x, 0.0, eye.z - pos.z).normalized()
+	if outward.is_zero_approx():
+		outward = Vector3.FORWARD
+	var right := outward.cross(Vector3.UP)
+	for k in 8:
+		_spawn_debris(pos, Vector3.UP, outward * 0.85, right, 2.8, 0.42, PAINT_DROPS, false)
+		var i := posmod(_d_cursor - 1, DEBRIS_COUNT)
+		_d_ground[i] = minf(ground_y, pos.y)
+		_d_life[i] = 0.28
+		_d_max_life[i] = _d_life[i]
+
+
+func emit_repair(pos: Vector3, stony: bool, finished: bool) -> void:
+	var palette: Dictionary = PALETTES[SURF_STONE if stony else SURF_WOOD]
+	for k in (9 if finished else 4):
+		var angle := _rng.randf() * TAU
+		var direction := Vector3(cos(angle), 0.0, sin(angle))
+		_spawn_debris(pos, Vector3.UP, direction, direction.cross(Vector3.UP),
+			3.5 if finished else 2.0, 0.55 if finished else 0.28, palette, false)
+	if finished:
+		for k in 3:
+			var angle := k * TAU / 3.0
+			var direction := Vector3(cos(angle), 0.0, sin(angle))
+			_spawn_plume(pos, Vector3.UP, direction, direction.cross(Vector3.UP), 0.0, 2.0, 0.55, PALETTES[SURF_GRAVEL])
 
 
 ## Определяет тип поверхности под колесом с учётом брода, настила моста, дорожного полотна и биома.

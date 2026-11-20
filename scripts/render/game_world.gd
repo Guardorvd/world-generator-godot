@@ -22,6 +22,7 @@ const TILE := GameConfig.TILE
 ## Рельеф, готовый сразу при старте и переносе (м). Дальше в тумане части догружаются по одной за кадр:
 ## на 900 м туман уже скрывает больше 80 % цвета, а за секунды загрузки игрок проходит считанные метры.
 const NEAR := PlanTerrain.RADIUS / 2.0
+const LAND_BURST := 6.0 # 20.11: м/с, посадка жёстче этого выбивает грунт из-под колёс (тот же порог, что у тряски)
 const REACH := 3.5     # предметы дальше этого от глаз игрока (м) не выбираются взглядом
 const OpeningRoute = preload("res://scripts/game/opening_route.gd")
 const OPENING_PASS := 1.6
@@ -1927,8 +1928,11 @@ func _crash() -> void:
 	var broken := quests.crashed() if quests != null else ""
 	if not broken.is_empty():
 		hud.toast_now("Груз разбит\n" + broken, &"warning")
-	if bike.land_impact <= 0.0:
-		audio.land(bike.x, bike.z, bike.y, 12.0) # удар в стену: глухой стук, как от жёсткой посадки
+	# 20.11: падение звучит своим ударом с шорохом скольжения (прежде — стук приземления), из-под седока
+	# летит грунт, обзор коротко вздрагивает шире. Остановки времени (hit-stop) нет: она сбила бы физику и стриминг.
+	audio.crash(maxf(bike.land_impact, 8.0))
+	brake_effects.emit_burst(Vector3(bike.x, bike.y, bike.z), world, heights, 1.0, bike.heading)
+	camera_controller.kick_fov(2.0)
 	pitch = -0.35
 	_dip_v -= 3.0
 	_trauma = 1.0
@@ -2444,6 +2448,7 @@ func toggle_flashlight() -> void:
 		hud.toast_now("Подойдите к велосипеду, чтобы переключить фару", &"warning")
 		return
 	bike_view.set_lamp(not bike_view.lamp_on())
+	hud.interaction_audio.play(&"lamp_switch")
 
 
 ## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания
@@ -2470,10 +2475,16 @@ func _bike_impacts() -> void:
 	var trauma := 0.0
 	var weak := 0.0
 	var strong := 0.0
-	_shake_on_landing(land, 6.0)
+	_shake_on_landing(land, LAND_BURST)
 	if land > 0.0:
 		dip = clampf(land - 2.5, 0.0, 8.0) * 0.12
 		audio.land(bike.x, bike.z, bike.y, land)
+		# 20.11: жёсткая посадка (сильнее порога тряски) выбивает грунт из-под обоих колёс; обычные прыжки — без частиц
+		if land > LAND_BURST and not bike.crashed:
+			var forward := Vector3(-sin(bike.heading), 0.0, -cos(bike.heading)) * BikeRide.HUB
+			var energy := clampf((land - LAND_BURST) / 6.0, 0.0, 1.0) * 0.7
+			brake_effects.emit_burst(Vector3(bike.x, bike.y, bike.z) + forward, world, heights, energy, bike.heading)
+			brake_effects.emit_burst(Vector3(bike.x, bike.y, bike.z) - forward, world, heights, energy, bike.heading)
 		weak = clampf(land / 10.0, 0.0, 0.6)
 		strong = clampf((land - 4.0) / 8.0, 0.0, 1.0)
 	var knock := maxf(wheel.x, wheel.y)

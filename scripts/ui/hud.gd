@@ -1348,10 +1348,22 @@ func _show_toast(text: String, kind: StringName = &"info") -> void:
 				_toast_seen.erase(key)
 	_toast_seen[text] = now
 	_apply_toast_style(kind, text)
+	_toast_chime(kind, text)
 	_fit_toast()
 	$Toast.modulate.a = 0.0
 	_toast_left = TOAST_TIME
 	_toast_time.value = 1.0
+
+
+## 20.11: тихий отклик путешествия: открытие места, снимок в альбом и шаг задания — кварта, выполненное задание —
+## неспешное трезвучие; предупреждения и справка звучат как прежде (без звука)
+func _toast_chime(kind: StringName, text: String) -> void:
+	if interaction_audio == null:
+		return
+	if kind == &"quest" and (text.begins_with("Задание выполнено") or text.begins_with("Награды")):
+		interaction_audio.play(&"quest_complete")
+	elif kind == &"discovery" or kind == &"album" or kind == &"quest":
+		interaction_audio.play(&"discovery_chime")
 
 
 func _apply_toast_style(kind: StringName, text: String) -> void:

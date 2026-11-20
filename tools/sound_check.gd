@@ -3,6 +3,7 @@ extends SceneTree
 ## WorldAudio в мире выбирает поверхность шагов и слышит воду. Запуск:
 ##   godot --headless --script res://tools/sound_check.gd
 
+const DB_MAX := -3.0 # 20.11: удары не громче этого
 const LOOPS := ["wind", "water", "surf", "fire", "roll", "grit", "freewheel", "chain"]
 
 class AudioWorld extends WorldData:
@@ -107,6 +108,17 @@ func _isolated(ok: bool) -> void:
 		a.update(Vector3(16, 0, 16), 0.0, false, 1.0 / 60.0)
 	print("river: water %.1f dB" % a._water.volume_db)
 	ok = ok and a._water.volume_db <= -20.9 and a._water.volume_db > -23.0
+	# 20.11: свои короткие звуки ударов и откликов: есть, не петли, разумной длины; голоса ударов играют без ошибок
+	for n: String in ["fork_bottom", "rim_knock", "crash_impact", "lamp_switch", "discovery_chime", "quest_complete"]:
+		var s: AudioStreamWAV = load("res://resources/sounds/%s.wav" % n)
+		var good := s != null and s.loop_mode == AudioStreamWAV.LOOP_DISABLED and s.get_length() > 0.04 and s.get_length() < 2.0
+		print("%-15s %.2f с %s" % [n, s.get_length() if s != null else 0.0, "" if good else "ОШИБКА"])
+		ok = ok and good
+	a.bottom_out(2.0)
+	a.wheel_knock(1.5, true)
+	a.crash(9.0)
+	ok = ok and a._bottom.volume_db < DB_MAX and a._knock.volume_db < DB_MAX and a._crash.volume_db < DB_MAX
+	print("удары: пробой %.1f дБ, кромка %.1f, падение %.1f" % [a._bottom.volume_db, a._knock.volume_db, a._crash.volume_db])
 	a.set_paused(true)
 	for p: Node in a.get_children():
 		if p in a._goal:

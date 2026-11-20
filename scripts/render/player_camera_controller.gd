@@ -44,6 +44,7 @@ const SEAT_DROP := 0.55        # сидя на лавке глаза ниже, �
 const SEAT_RATE := 1.4          # и опускаются и встают за доли секунды, м/с
 const TRAUMA_GAIN := 0.08       # тряска на 1 м/с удара сверх мягкого
 const TRAUMA_DECAY := 1.6       # затухание тряски, доля в секунду
+const FOV_KICK_DECAY := 10.0    # 20.11: 1/с, толчок обзора при падении гаснет за ~0,3 с
 var settings: GameSettings
 var heights: Heightfield
 var yaw := 0.0       # смотрим на север, на костёр
@@ -56,6 +57,8 @@ var _dip := 0.0         # проседание камеры при призем�
 var _dip_v := 0.0
 var seated := false     # игрок сидит на лавке (GameWorld): камера опускается на SEAT_DROP
 var _seat_drop := 0.0
+var _fov_kick := 0.0    # 20.11: толчок обзора при падении, градусы; гаснет сам (tick_effects)
+var _fov_kick_shown := 0.0 # какая доля толчка сейчас в camera.fov: плавное следование идёт без неё
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
 var _cam_lead := 0.0    # 12.7: доворот камеры внутрь поворота, рад (только пока мышь не трогали)
 var _speed_rush := 0.0
@@ -111,7 +114,9 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	if photo_active:
 		fov_goal = photo_fov
-	camera.fov = lerpf(camera.fov, fov_goal, _smooth(FOV_RESPONSE_PHOTO if photo_active else FOV_RESPONSE, dt))
+	var kick := _fov_kick if settings.head_bob and not photo_active else 0.0
+	camera.fov = lerpf(camera.fov - _fov_kick_shown, fov_goal, _smooth(FOV_RESPONSE_PHOTO if photo_active else FOV_RESPONSE, dt)) + kick
+	_fov_kick_shown = kick
 	var shake := _trauma * _trauma if settings.head_bob else 0.0
 	var t := lerpf(_prev_time, time, alpha)
 	var jolt := Vector3(sin(t * 41.0), sin(t * 37.0 + 1.7), sin(t * 29.0 + 3.1)) * shake
@@ -152,6 +157,10 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 func auto_follow(time: float) -> float:
 	return smoothstep(FOLLOW_START, FOLLOW_FULL, time - _looked_at)
 
+## 20.11: резкий короткий толчок обзора (падение): мгновенно шире на degrees, возвращается за ~0,3 с
+func kick_fov(degrees: float) -> void:
+	_fov_kick = degrees
+
 func shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
 		_trauma = minf(1.0, _trauma + (impact - soft) * TRAUMA_GAIN)
@@ -173,4 +182,5 @@ func tick_effects(dt: float) -> void:
 	_dip_v += (-DIP_SPRING * _dip - DIP_DAMP * _dip_v) * dt
 	_dip = clampf(_dip + _dip_v * dt, DIP_MIN, DIP_MAX)
 	_trauma = maxf(0.0, _trauma - dt * TRAUMA_DECAY)
+	_fov_kick *= exp(-FOV_KICK_DECAY * dt)
 	_seat_drop = move_toward(_seat_drop, SEAT_DROP if seated else 0.0, SEAT_RATE * dt)

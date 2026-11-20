@@ -17,6 +17,10 @@ const SOUNDS := {
 	&"repair_work": {path = "res://resources/sounds/step_wood_1.wav", db = -19.0},
 	&"repair_reset": {path = "res://resources/sounds/ui_panel_close.wav", db = -16.0},
 	&"repair_done": {path = "res://resources/sounds/step_wood_3.wav", db = -8.0},
+	# 20.11: тихие отклики путешествия (тосты HUD) и тумблер фары
+	&"discovery_chime": {path = "res://resources/sounds/discovery_chime.wav", db = -19.0},
+	&"quest_complete": {path = "res://resources/sounds/quest_complete.wav", db = -16.0},
+	&"lamp_switch": {path = "res://resources/sounds/lamp_switch.wav", db = -17.0},
 }
 
 var suppress_focus_sound := false

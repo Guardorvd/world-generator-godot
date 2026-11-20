@@ -356,6 +356,15 @@ def main():
     write_wav("ui_error_deny", ui_error_deny(ui_rng))
     write_wav("ui_volume_tick", ui_volume_tick(ui_rng))
 
+    # 20.11: удары велосипеда и тихие отклики событий (свой генератор: прежние файлы не меняются ни на байт)
+    hit_rng = random.Random(2011)
+    write_wav("fork_bottom", fork_bottom(hit_rng))
+    write_wav("rim_knock", rim_knock(hit_rng))
+    write_wav("crash_impact", crash_impact(hit_rng))
+    write_wav("lamp_switch", lamp_switch(hit_rng))
+    write_wav("discovery_chime", discovery_chime(hit_rng))
+    write_wav("quest_complete", quest_complete(hit_rng))
+
 
 def ui_hover(rng):
     """Тихий деревянный отклик при наведении или смене фокуса"""
@@ -430,6 +439,92 @@ def ui_volume_tick(_rng):
     """Нейтральный чистый тон проверки громкости"""
     out = tone(0.075, 440.0, 440.0, harm=0.08)
     return fade(out, 4, 24)
+
+
+
+# ---------- 20.11: удары велосипеда и отклики событий ----------
+
+def ring(seconds, f, decay_ms, attack_ms=4.0, partials=((1.0, 1.0),)):
+    """Затухающий звон: сумма синусов (множитель частоты, громкость) с мягкой атакой и спадом"""
+    n = int(RATE * seconds)
+    a = max(1, int(RATE * attack_ms / 1000))
+    out = []
+    for i in range(n):
+        t = i / RATE
+        env = (math.sin(0.5 * math.pi * i / a) ** 2 if i < a else 1.0) * math.exp(-t * 1000.0 / decay_ms)
+        out.append(env * sum(g * math.sin(TAU * f * m * t) for m, g in partials))
+    return out
+
+
+def fork_bottom(rng):
+    """Пробой вилки: глухой удар резинового отбойника и короткий металлический отзвук ног вилки"""
+    n = int(RATE * 0.3)
+    out = [0.0] * n
+    mix(out, thump(160, 130, 85, 38), 0, 1.0)
+    mix(out, lowpass(burst(60, 14, rng, 1.0), 1400.0), 0, 0.45)
+    # металл: негармоничные призвуки, быстро гаснут, тише удара
+    mix(out, ring(0.18, 1130.0, 45, 1.0, ((1.0, 0.5), (1.47, 0.35), (2.31, 0.2))), int(RATE * 0.004), 0.32)
+    return fade(out, 1, 60)
+
+
+def rim_knock(rng):
+    """Удар колеса о кромку: сухой щелчок обода и короткий тупой отзвук шины"""
+    n = int(RATE * 0.14)
+    out = [0.0] * n
+    mix(out, bandpass(burst(30, 7, rng, 0.5), 1900.0, 2.2), 0, 0.7)
+    mix(out, thump(90, 210, 140, 22), 0, 0.9)
+    mix(out, ring(0.08, 820.0, 18, 0.5, ((1.0, 0.6), (2.6, 0.25))), 0, 0.25)
+    return fade(out, 1, 40)
+
+
+def crash_impact(rng):
+    """Падение: тяжёлый удар тела и рамы, звяк рамы и шорох скольжения по земле"""
+    n = int(RATE * 0.95)
+    out = [0.0] * n
+    mix(out, thump(320, 95, 45, 90), 0, 1.0)
+    mix(out, lowpass(burst(160, 40, rng, 2.0), 900.0), 0, 0.8)
+    mix(out, ring(0.25, 690.0, 60, 1.0, ((1.0, 0.5), (1.63, 0.3), (2.71, 0.18))), int(RATE * 0.012), 0.25)
+    # скольжение: шорох в полосе 900 Гц, медленно стихает
+    m = int(RATE * 0.75)
+    scrape = bandpass(pink(m, rng), 900.0, 0.9)
+    env = smooth_noise(m, 18.0, rng)
+    for i in range(m):
+        t = i / m
+        scrape[i] *= (0.5 + 0.5 * env[i]) * (math.sin(0.5 * math.pi * min(1.0, t * 8.0)) ** 2) * (1.0 - t) ** 1.5
+    mix(out, scrape, int(RATE * 0.06), 2.2)
+    return fade(out, 1, 120)
+
+
+def lamp_switch(rng):
+    """Тумблер фары: два сухих коротких щелчка (нажатие и фиксация)"""
+    n = int(RATE * 0.06)
+    out = [0.0] * n
+    mix(out, bandpass(burst(10, 2.5, rng, 0.3), 3200.0, 2.5), 0, 0.8)
+    mix(out, bandpass(burst(12, 3.0, rng, 0.3), 2400.0, 2.5), int(RATE * 0.018), 0.6)
+    return fade(out, 0.5, 15)
+
+
+# мягкий щипок: основной тон и немного октавы и дуодецимы, как у калимбы
+PLUCK = ((1.0, 1.0), (2.0, 0.18), (3.0, 0.05))
+
+
+def discovery_chime(_rng):
+    """Открытие места: тихая чистая кварта вверх, второй тон вступает позже и звучит дольше"""
+    n = int(RATE * 1.4)
+    out = [0.0] * n
+    mix(out, ring(1.0, 523.25, 380, 6.0, PLUCK), 0, 0.6)
+    mix(out, ring(1.25, 698.46, 520, 6.0, PLUCK), int(RATE * 0.14), 0.55)
+    return fade(out, 2, 250)
+
+
+def quest_complete(_rng):
+    """Задание выполнено: неспешное мажорное трезвучие снизу вверх, без звонкой верхушки"""
+    n = int(RATE * 1.8)
+    out = [0.0] * n
+    for k, f in enumerate((392.0, 493.88, 587.33)):
+        mix(out, ring(1.5 - k * 0.15, f, 600 - k * 60, 8.0, PLUCK), int(RATE * 0.12 * k), 0.5)
+    mix(out, ring(1.4, 196.0, 700, 20.0, ((1.0, 1.0), (2.0, 0.1))), 0, 0.25)
+    return fade(out, 2, 350)
 
 
 if __name__ == "__main__":

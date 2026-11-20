@@ -60,6 +60,7 @@ var _db := {}               # петля -> наибольшая громкос�
 var _fire: AudioStreamPlayer3D
 var _bird: AudioStreamPlayer3D
 var _land: AudioStreamPlayer
+var _crash: AudioStreamPlayer  # 20.11: падение седока — удар, звяк рамы и шорох скольжения
 var _bottom: AudioStreamPlayer # пробой подвески — свой голос: приземление его не глушит
 var _knock: AudioStreamPlayer  # удар колеса о кромку
 var _steps := {}            # поверхность -> AudioStreamPlayer
@@ -136,13 +137,17 @@ func _ready() -> void:
 	add_child(_land)
 	_bottom = AudioStreamPlayer.new()
 	_bottom.bus = WORLD_BUS
-	_bottom.stream = _random(["land"], 1.08, 1.0)
+	_bottom.stream = _random(["fork_bottom"], 1.08, 1.0) # 20.11: свой звук вместо приземления на высокой ноте
 	add_child(_bottom)
 	_knock = AudioStreamPlayer.new()
 	_knock.bus = WORLD_BUS
-	_knock.stream = _random(["land"], 1.12, 2.0)
+	_knock.stream = _random(["rim_knock"], 1.12, 2.0)
 	_knock.max_polyphony = 2
 	add_child(_knock)
+	_crash = AudioStreamPlayer.new()
+	_crash.bus = WORLD_BUS
+	_crash.stream = _random(["crash_impact"], 1.06, 1.0)
+	add_child(_crash)
 
 
 func _exit_tree() -> void:
@@ -243,11 +248,18 @@ func tick(player: PlayerState, riding: bool) -> void:
 		_play_step(player.x, player.z, player.feet, DB_STEP + run * 3.0)
 
 
-## 12.7: пробой вилки (удар в упор со скоростью impact, м/с) — короткий глухой стук выше и тише приземления
+## 12.7: пробой вилки (удар в упор со скоростью impact, м/с) — глухой стук отбойника с коротким металлическим
+## отзвуком, тише приземления (20.11: свой звук fork_bottom вместо приземления на высокой ноте)
 func bottom_out(impact: float) -> void:
-	_bottom.volume_db = DB_LAND - 14.0 + clampf((impact - 0.8) / 2.0, 0.0, 1.0) * 6.0
-	_bottom.pitch_scale = 1.7
+	_bottom.volume_db = DB_LAND - 12.0 + clampf((impact - 0.8) / 2.0, 0.0, 1.0) * 6.0
+	_bottom.pitch_scale = 1.0
 	_bottom.play()
+
+
+## 20.11: падение седока — один удар с шорохом скольжения; impact (м/с) — сила удара
+func crash(impact: float) -> void:
+	_crash.volume_db = DB_LAND - 6.0 + clampf((impact - 4.0) / 8.0, 0.0, 1.0) * 5.0
+	_crash.play()
 
 
 ## Удар колеса о кромку (корень, камень, бревно) со скоростью impact, м/с: короткий стук обода и шины, звонче
@@ -256,7 +268,7 @@ func wheel_knock(impact: float, front: bool) -> void:
 	if impact < 0.4:
 		return
 	_knock.volume_db = DB_LAND - 18.0 + clampf(impact / 5.0, 0.0, 1.0) * 12.0
-	_knock.pitch_scale = 1.35 if front else 1.1
+	_knock.pitch_scale = 1.1 if front else 0.88
 	_knock.play()
 
 
