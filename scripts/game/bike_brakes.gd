@@ -5,7 +5,11 @@ const WHEELBASE := GameConfig.BIKE_WHEELBASE
 const COM_HEIGHT := 1.1
 const RIDER_RESPONSE := 0.55
 const SURGE_DECAY := 0.7
-const TIP_ANGLE := 0.32
+## 20.11: предупреждение перелёта читается по раме: за OVERLOAD_GRACE заднее колесо приподнимается на WARN_LIFT
+## (было 0,04 рад ≈ 2°, не видно). Порог опрокидывания поднят на ту же добавку (0,32 → 0,38), поэтому время от конца
+## предупреждения до перелёта прежнее; 0,38 рад (22°) ещё ниже точки равновесия над передней осью (~26°).
+const WARN_LIFT := 0.10
+const TIP_ANGLE := 0.38
 const MIN_TIP_SPEED := 14.0
 # Arcade balance assistance: ordinary emergency stops stay safe, sustained
 # overload on a fast steep descent still allows a readable, avoidable pitch-over.
@@ -113,7 +117,7 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 		_overload_time += dt * near
 		if _overload_time <= OVERLOAD_GRACE:
 			# Small visual warning first; no hidden angular momentum during the grace period.
-			lift = move_toward(lift, 0.04 * _overload_time / OVERLOAD_GRACE, dt * 0.08)
+			lift = move_toward(lift, WARN_LIFT * _overload_time / OVERLOAD_GRACE, dt * WARN_LIFT * 2.0)
 			_pitch_rate = 0.0
 		else:
 			var torque := overload * normal_g * WHEELBASE
