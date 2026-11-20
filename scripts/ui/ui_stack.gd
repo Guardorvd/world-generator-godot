@@ -224,6 +224,21 @@ func _set_interactive(node: Control, interactive: bool) -> void:
 		node.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_INHERITED if interactive else Control.MOUSE_BEHAVIOR_DISABLED
 
 
+static func set_panel_base_scale(panel: Control, base_scale: float) -> void:
+	panel.set_meta(&"_ui_base_scale", base_scale)
+	var factor := float(panel.get_meta(&"_ui_scale_factor")) if panel.has_meta(&"_ui_scale_factor") else 1.0
+	_set_panel_scale_factor(factor, panel)
+
+
+static func _set_panel_scale_factor(factor: float, panel: Control) -> void:
+	if not is_instance_valid(panel):
+		return
+	panel.set_meta(&"_ui_scale_factor", factor)
+	panel.pivot_offset = panel.size * 0.5
+	var base := float(panel.get_meta(&"_ui_base_scale")) if panel.has_meta(&"_ui_base_scale") else 1.0
+	panel.scale = Vector2.ONE * base * factor
+
+
 func _kill_screen_tween(screen: String) -> void:
 	if _screen_tweens.has(screen):
 		var tw: Variant = _screen_tweens[screen]
@@ -258,6 +273,9 @@ func _reset_hidden(screen: String) -> void:
 	node.visible = false
 	node.modulate.a = 1.0
 	_set_screen_offset_y(0.0, node)
+	var panel := node.get_node_or_null("Panel") as Control
+	if panel != null and panel.has_meta(&"_ui_base_scale"):
+		_set_panel_scale_factor(1.0, panel)
 	_set_interactive(node, true)
 
 
@@ -271,9 +289,16 @@ func _animate_enter(screen: String, opts: Dictionary) -> void:
 	_set_interactive(node, true)
 	if not should_animate(opts):
 		node.modulate.a = 1.0
+		var instant_panel := node.get_node_or_null("Panel") as Control
+		if instant_panel != null and instant_panel.has_meta(&"_ui_base_scale"):
+			_set_panel_scale_factor(1.0, instant_panel)
 		_set_screen_offset_y(0.0, node)
 		return
 	var dur := float(opts.get("enter_duration", 0.20))
+	var panel := node.get_node_or_null("Panel") as Control
+	if panel != null and opts.has("enter_scale"):
+		if not was_visible:
+			_set_panel_scale_factor(float(opts.enter_scale), panel)
 	var dy := _safe_offset_y(node, float(opts.get("offset_y", 16.0)))
 	var start_y := node.offset_top if was_visible else dy
 	if not was_visible:
@@ -282,6 +307,9 @@ func _animate_enter(screen: String, opts: Dictionary) -> void:
 	var tw := create_tween()
 	_screen_tweens[screen] = tw
 	tw.set_parallel(true)
+	if panel != null and opts.has("enter_scale"):
+		var factor := float(panel.get_meta(&"_ui_scale_factor")) if panel.has_meta(&"_ui_scale_factor") else 1.0
+		tw.tween_method(_set_panel_scale_factor.bind(panel), factor, 1.0, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_property(node, "modulate:a", 1.0, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_method(_set_screen_offset_y.bind(node), start_y, 0.0, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.set_parallel(false)
@@ -297,23 +325,33 @@ func _animate_exit(screen: String, opts: Dictionary) -> void:
 	_kill_screen_tween(screen)
 	if not node.visible:
 		node.modulate.a = 1.0
+		var hidden_panel := node.get_node_or_null("Panel") as Control
+		if hidden_panel != null and hidden_panel.has_meta(&"_ui_base_scale"):
+			_set_panel_scale_factor(1.0, hidden_panel)
 		_set_screen_offset_y(0.0, node)
 		_set_interactive(node, true)
 		return
 	if not should_animate(opts):
 		node.visible = false
 		node.modulate.a = 1.0
+		var instant_panel := node.get_node_or_null("Panel") as Control
+		if instant_panel != null and instant_panel.has_meta(&"_ui_base_scale"):
+			_set_panel_scale_factor(1.0, instant_panel)
 		_set_screen_offset_y(0.0, node)
 		_set_interactive(node, true)
 		return
 	_set_interactive(node, false)
 	var dur := float(opts.get("exit_duration", 0.14))
+	var panel := node.get_node_or_null("Panel") as Control
 	var dy := _safe_offset_y(node, float(opts.get("exit_offset_y", 12.0)))
 	var cur_a := clampf(node.modulate.a, 0.0, 1.0)
 	var eff_dur := maxf(0.05, dur * cur_a)
 	var tw := create_tween()
 	_screen_tweens[screen] = tw
 	tw.set_parallel(true)
+	if panel != null and opts.has("exit_scale"):
+		var factor := float(panel.get_meta(&"_ui_scale_factor")) if panel.has_meta(&"_ui_scale_factor") else 1.0
+		tw.tween_method(_set_panel_scale_factor.bind(panel), factor, float(opts.exit_scale), eff_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_property(node, "modulate:a", 0.0, eff_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_method(_set_screen_offset_y.bind(node), node.offset_top, dy, eff_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.set_parallel(false)
@@ -322,6 +360,8 @@ func _animate_exit(screen: String, opts: Dictionary) -> void:
 			_screen_tweens.erase(screen)
 		node.visible = false
 		node.modulate.a = 1.0
+		if panel != null and panel.has_meta(&"_ui_scale_factor"):
+			_set_panel_scale_factor(1.0, panel)
 		_set_screen_offset_y(0.0, node)
 		_set_interactive(node, true))
 

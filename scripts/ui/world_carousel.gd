@@ -4,6 +4,7 @@ signal world_selected(seed_text: String)
 signal play_requested
 signal create_requested(seed_text: String)
 signal preview_ready(seed_text: String, texture: Texture2D)
+signal map_changed
 signal stepped(direction: int)
 signal favorite_requested(seed_text: String, source: Control)
 
@@ -130,6 +131,37 @@ func set_preview(seed_text: String, texture: Texture2D) -> void:
 		if entry.seed == seed_text:
 			entry.texture = texture if texture != null else _generated.get(seed_text)
 			return
+
+## Меняет только состояние звезды, не прерывая подготовку карты или анимацию карусели.
+func set_favorite(seed_text: String, favorite: bool) -> void:
+	for i in _entries.size():
+		if _entries[i].seed == seed_text:
+			_entries[i].favorite = favorite
+			if i == _index:
+				_favorite.icon = Icons.star(favorite)
+				_favorite.tooltip_text = "Убрать из избранного" if favorite else "Добавить в избранное"
+			return
+
+
+## Дисковые данные изменились: не позволяем старой задаче вернуть устаревшую карту.
+func invalidate_preview(seed_text := "") -> void:
+	if _thread != null and (seed_text.is_empty() or _loading_seed == seed_text) and _cancel_flag != null:
+		_cancel_flag.cancel()
+	if seed_text.is_empty():
+		_generated.clear()
+		_derived.clear()
+		_derived_order.clear()
+		_provisional_derived.clear()
+		_preview_errors.clear()
+	else:
+		_generated.erase(seed_text)
+		_derived.erase(seed_text)
+		_derived_order.erase(seed_text)
+		_provisional_derived.erase(seed_text)
+		_preview_errors.erase(seed_text)
+	for entry: Dictionary in _entries:
+		if seed_text.is_empty() or entry.seed == seed_text:
+			entry.texture = null
 
 func generated_preview(seed_text: String) -> Texture2D:
 	return _generated.get(seed_text)
@@ -288,6 +320,7 @@ func _refresh_map(animate := false) -> void:
 		_hint.text = "География без дорог и 3D"
 	if _mode > 0 and tex == null and not seed_text.is_empty() and entry.get("map_ready", false) and not _derived.has(seed_text) and _thread == null:
 		_start_job(seed_text, "cached")
+	map_changed.emit()
 
 func _set_map_texture(texture: Texture2D, animate: bool) -> void:
 	if _map.texture == texture: return

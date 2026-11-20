@@ -180,7 +180,6 @@ func _test_shop(main: Node) -> void:
 
 func _test_main_and_carousel(main: Node, carousel: Node) -> void:
 	var open_worlds := main.get_node("%OpenWorlds") as Button
-	var open_new := main.get_node("%OpenNew") as Button
 	var dimmer := main.get_node("%Dimmer") as ColorRect
 
 	_check(not dimmer.visible and is_equal_approx(dimmer.color.a, 0.0), "5.1 Dimmer скрыт в главном меню")
@@ -190,8 +189,8 @@ func _test_main_and_carousel(main: Node, carousel: Node) -> void:
 	await process_frame
 	await process_frame
 	await create_timer(0.04).timeout
-	_check(main._ui_stack.is_open("all_worlds"), "5.1 AllWorlds добавлен в стек")
-	_check(dimmer.visible and dimmer.color.a > 0.0 and dimmer.color.a <= 0.36, "5.1 Dimmer поднимает alpha к 0.35 над Backdrop")
+	_check(main._ui_stack.is_open("world_hub"), "5.1 WorldHub добавлен в стек")
+	_check(dimmer.visible and dimmer.color.a > 0.0 and dimmer.color.a <= 0.46, "5.1 Dimmer поднимает alpha к 0.45 над Backdrop")
 	_check(main._ui_audio.last_sound == &"panel_open", "5.1 открытие AllWorlds играет panel_open")
 
 	# Немедленная отмена в середине открытия через Joypad B возвращает фокус на OpenWorlds
@@ -202,16 +201,10 @@ func _test_main_and_carousel(main: Node, carousel: Node) -> void:
 	await create_timer(0.24).timeout
 	_check(not main.get_node("%AllWorlds").visible and not dimmer.visible and is_equal_approx(dimmer.color.a, 0.0), "5.1 после отката AllWorlds и Dimmer полностью скрыты")
 
-	# Создание открывается из общего экрана миров и возвращает фокус в него.
+	# Поле создания находится в общем экране и получает стартовый фокус.
 	main._open_all_worlds()
 	await create_timer(0.22).timeout
-	open_new.grab_focus()
-	main._open_new_world()
-	await create_timer(0.05).timeout
-	_check(main._ui_stack.is_open("new_world"), "5.1 NewWorld открыт поверх AllWorlds")
-	root.push_input(_pad_button(JOY_BUTTON_B))
-	_check(main._ui_stack.is_open("all_worlds") and open_new.has_focus(), "5.1 B из NewWorld возвращает фокус на OpenNew")
-	await create_timer(0.24).timeout
+	_check(main._ui_stack.is_open("world_hub") and main.get_node("%SeedEdit").has_focus(), "5.1 поле создания находится в WorldHub и получает фокус")
 	root.push_input(_pad_button(JOY_BUTTON_B))
 	await create_timer(0.24).timeout
 

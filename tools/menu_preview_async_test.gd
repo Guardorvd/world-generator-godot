@@ -6,14 +6,32 @@ func check(condition: bool, message: String) -> void:
 func _initialize() -> void:
 	_run.call_deferred()
 func _run() -> void:
+	root.size = Vector2i(1280, 720)
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 	await process_frame
 	var carousel = main.get_node("%Carousel")
 	check(not carousel.is_processing(), "витрина не опрашивает поток в простое")
 	var entries: Array[Dictionary] = [{seed = "preview-async-test", texture = null, map_ready = false}]
-	carousel.set_entries(entries, "preview-async-test")
-	carousel._request_preview()
+	main._world_cards["preview-async-test"] = {seed = "preview-async-test", saved = false, summary = "", ready = false, map_ready = false}
+	main._carousel_seeds.assign(["preview-async-test"])
+	main._selected_seed = "preview-async-test"
+	main._previews["preview-async-test"] = null
+	main._update_carousel()
+	main._open_all_worlds()
+	await process_frame
+	await process_frame
+	var build_button: Button = main.get_node("%HubBuildPreview")
+	check(build_button.is_visible_in_tree(), "из инспектора можно запросить карту нового мира")
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.position = build_button.get_global_rect().get_center()
+	click.global_position = click.position
+	click.pressed = true
+	root.push_input(click)
+	click = click.duplicate()
+	click.pressed = false
+	root.push_input(click)
 	check(carousel._thread != null and carousel.is_processing() and not carousel._build_preview.visible, "явный запрос запускает фоновую подготовку")
 	var frames := 0
 	var deadline := Time.get_ticks_msec() + 30000
@@ -22,6 +40,7 @@ func _run() -> void:
 		await process_frame
 	check(carousel._thread == null and frames > 1 and not carousel.is_processing(), "интерфейс обновляется во время вычислений и не опрашивает поток после завершения")
 	check(carousel.generated_preview("preview-async-test") != null and main._previews.get("preview-async-test") != null, "готовый рельеф передаётся меню")
+	check(main.get_node("%Preview").texture != null and not build_button.is_visible_in_tree(), "готовая карта и состояние кнопки обновляются в инспекторе")
 	check(carousel._derived.get("preview-async-test", []).size() == 2, "атлас и высоты сохраняются для выбора")
 	for i in range(12):
 		carousel._remember_maps("test-map-%d" % i, [])

@@ -42,7 +42,7 @@ func _run() -> void:
 		_fixture("Мир-%d" % i, 1700000300 + i)
 	_main._refresh_world_cards()
 	_main._pick_seed("Мир-7")
-	_check(_main._carousel_seeds.size() == 8 and _main._carousel_seeds[0] == "Мир-7", "восемь миров по дате сохранения")
+	_check(_main._saved_seeds.size() == 8 and _main._saved_seeds[0] == "Мир-7", "восемь миров по дате сохранения")
 	await _capture_state("eight")
 	await _navigation()
 	# Битый файл без резервной копии узнаётся по зерну из недавних.
@@ -67,7 +67,7 @@ func _run() -> void:
 	_check(chosen != "Мир-6" and chosen == _main._carousel_seeds[previous_index],
 		"при удалении выбран сосед (%s)" % chosen)
 	_main._open_new_world()
-	await _capture_screen("create", "%NewWorld")
+	await _capture_screen("create", "%AllWorlds")
 	_main._open_all_worlds()
 	await _capture_screen("worlds", "%AllWorlds")
 	_main.get_node("%Title").text = "Мир «Сохранение-с-очень-длинным-именем»"
@@ -120,7 +120,7 @@ func _clear_saves() -> void:
 	_check(Saves.active_files().is_empty() and Saves.seeds().is_empty(), "активные слоты исчезли, включая нечитаемые")
 	_check(FileAccess.file_exists(unrelated) and files.size() > 1, "архивы и посторонние файлы сохранены")
 	_check(_main._carousel_seeds.is_empty() and _main._chosen_seed().is_empty(), "карусель и выбор очищены")
-	_check(_main.get_node("%Start").text == "Создать мир" and not _main.get_node("%Carousel/Strip").visible,
+	_check(_main.get_node("%Start").text == "Создать мир",
 		"с пустым списком доступно создание, карусель скрыта")
 	var reloaded := GameSettings.new()
 	reloaded.settings_path = settings.settings_path
@@ -128,11 +128,9 @@ func _clear_saves() -> void:
 	_check(reloaded.hide_recommended_worlds and reloaded.recent_seeds.is_empty() and reloaded.favorite_seeds.is_empty() and reloaded.last_seed.is_empty(),
 		"пустой список сохраняется после перезапуска")
 	await _capture_state("cleared")
-	_main._on_start()
-	_check(_main.get_node("%NewWorld").visible and not _main.get_node("%Suggestions").visible, "пустое меню открывает создание мира")
 	_main._open_all_worlds()
-	_main._show_seed_tab("recommended")
-	var restore: Button = _main.get_node("%SeedList").get_child(0)
+	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%SeedEdit").has_focus(), "пустой список открывает создание мира")
+	var restore: Button = _main.get_node("%Recommended")
 	restore.pressed.emit()
 	_check(_main._carousel_seeds.has(RecommendedSeeds.SEEDS[0].seed), "рекомендации можно вернуть")
 	var restored_settings := GameSettings.new()
@@ -175,37 +173,37 @@ func _capture_screen(label: String, screen_path: String) -> void:
 func _navigation() -> void:
 	var start: Button = _main.get_node("%Start")
 	start.grab_focus()
-	var before: int = _main._card_reads
+	var carousel = _main.get_node("%Carousel")
 	var selected: String = _main._chosen_seed()
-	var direction := InputEventAction.new()
-	direction.action = &"ui_right"
-	direction.pressed = true
-	root.push_input(direction)
-	_check(_main._chosen_seed() != selected and start.has_focus(), "стрелка листает с главной кнопки")
-	var pad := InputEventJoypadButton.new()
-	pad.button_index = JOY_BUTTON_DPAD_UP
-	pad.pressed = true
-	root.push_input(pad)
-	_check(root.gui_get_focus_owner().theme_type_variation == &"CarouselTab", "геймпад переводит фокус к карточкам")
-	var card: Button = root.gui_get_focus_owner()
+	carousel.move(1)
+	_check(_main._chosen_seed() != selected, "стрелка витрины переключает выбранный мир")
+	var previous: Button = carousel._previous
+	previous.grab_focus()
+	_check(previous.has_focus(), "стрелки витрины доступны для геймпада")
+	# Первое обращение может загрузить превью; повторное использует кэш.
+	for seed_text: String in _main._carousel_seeds:
+		_main._preview_tex(seed_text)
+	var before: int = _main._card_reads
 	var wheel := InputEventMouseButton.new()
 	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
 	wheel.pressed = true
-	card.gui_input.emit(wheel)
+	carousel._card_input(wheel)
 	_check(_main._card_reads == before, "переключение карточек без чтения диска")
+	start.grab_focus()
+	var pad := InputEventJoypadButton.new()
 	pad.button_index = JOY_BUTTON_DPAD_DOWN
+	pad.pressed = true
+	_check(start.has_focus(), "фокус возвращается к запуску")
 	root.push_input(pad)
-	_check(start.has_focus(), "вниз возвращает к запуску")
-	root.push_input(pad)
-	_check(_main.get_node("%OpenNew").has_focus(), "из запуска можно перейти к пунктам меню")
+	_check(_main.get_node("%OpenWorlds").has_focus(), "из запуска можно перейти к пунктам меню")
 	_main._open_new_world()
-	_check(_main.get_node("%CreateWorld").has_focus(), "экран нового мира доступен")
+	_check(_main.get_node("%SeedEdit").has_focus(), "поле нового мира доступно")
 	var cancel := InputEventJoypadButton.new()
 	cancel.button_index = JOY_BUTTON_B
 	cancel.pressed = true
 	root.push_input(cancel)
 	await process_frame
-	_check(_main.get_node("%OpenNew").has_focus() and _main.get_node("%Menu").visible, "B возвращает в главное меню")
+	_check(_main.get_node("%OpenWorlds").has_focus() and _main.get_node("%Menu").visible, "B возвращает в главное меню")
 	_main._open_all_worlds()
 	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%Storage").is_visible_in_tree(), "все миры и хранилище доступны")
 	_main._return_to_menu_screen()

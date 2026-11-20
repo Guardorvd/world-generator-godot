@@ -624,6 +624,56 @@ theme_override_constants/separation = 14
 theme_type_variation = &"TitleLabel"
 text = "Миры и создание"
 
+[node name="SeedRow" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box"]
+layout_mode = 2
+
+
+[node name="SeedEdit" type="LineEdit" parent="UI/Root/AllWorlds/Panel/Box/SeedRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Создать или найти по зерну…"
+max_length = 32
+clear_button_enabled = true
+
+
+[node name="Dice" type="Button" parent="UI/Root/AllWorlds/Panel/Box/SeedRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+tooltip_text = "Случайное зерно"
+icon = ExtResource("4_dice")
+icon_alignment = 1
+
+
+[node name="CreateWorld" type="Button" parent="UI/Root/AllWorlds/Panel/Box/SeedRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 44)
+theme_type_variation = &"PrimaryButton"
+text = "Создать"
+icon = ExtResource("6_play")
+
+
+[node name="Infinite" type="CheckBox" parent="UI/Root/AllWorlds/Panel/Box"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+tooltip_text = "Выключено — мир это стартовая область: дальний рельеф виден, но выехать за край нельзя.
+Включено — за краем готовятся соседние области и по ним можно ездить."
+text = "Бесконечная генерация"
+
+
+[node name="InfiniteWarning" type="Label" parent="UI/Root/AllWorlds/Panel/Box"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.8, 0.25, 1)
+theme_override_font_sizes/font_size = 13
+text = "! Не доделано: соседние области работают плохо"
+autowrap_mode = 3
+
+
 [node name="Columns" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box"]
 layout_mode = 2
 size_flags_vertical = 3
@@ -635,29 +685,13 @@ size_flags_horizontal = 3
 size_flags_stretch_ratio = 1.2
 
 [node name="WorldsLabel" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_type_variation = &"SectionLabel"
 text = "Ваши миры"
 
-[node name="OpenNew" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 44)
-layout_mode = 2
-theme_type_variation = &"MenuLink"
-text = "+ Создать мир"
-
 [node name="SeedTabs" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 layout_mode = 2
-
-[node name="Saved" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 44)
-layout_mode = 2
-size_flags_horizontal = 3
-theme_type_variation = &"TabButton"
-theme_override_font_sizes/font_size = 14
-toggle_mode = true
-text = "Сохранения"
 
 [node name="Recent" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
@@ -667,7 +701,17 @@ size_flags_horizontal = 3
 theme_type_variation = &"TabButton"
 theme_override_font_sizes/font_size = 14
 toggle_mode = true
-text = "Недавние"
+text = "Все"
+
+[node name="Saved" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "С сохранением"
 
 [node name="Favorites" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
@@ -677,10 +721,11 @@ size_flags_horizontal = 3
 theme_type_variation = &"TabButton"
 theme_override_font_sizes/font_size = 14
 toggle_mode = true
-text = "Избранное"
+text = "Избранные"
 
 [node name="Recommended" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
+visible = false
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 size_flags_horizontal = 3
@@ -689,11 +734,20 @@ theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "От автора"
 
+[node name="HubEmpty" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_type_variation = &"CaptionLabel"
+text = "Здесь появятся ваши миры"
+autowrap_mode = 3
+
 [node name="SeedScroll" type="ScrollContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 custom_minimum_size = Vector2(0, 240)
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
+follow_focus = true
 
 [node name="SeedList" type="VBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedScroll"]
 unique_name_in_owner = true
@@ -712,26 +766,80 @@ layout_mode = 2
 theme_type_variation = &"SectionLabel"
 text = "Выбранный мир"
 
-[node name="PreviewFrame" type="PanelContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
+[node name="MapModes" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
+layout_mode = 2
+
+[node name="HubRelief" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapModes"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
+toggle_mode = true
+text = "Рельеф"
+
+[node name="HubAtlas" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapModes"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
+toggle_mode = true
+text = "Атлас"
+
+[node name="HubHeights" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapModes"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
+toggle_mode = true
+text = "Высоты"
+
+[node name="MapSquare" type="AspectRatioContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
+custom_minimum_size = Vector2(170, 170)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 3
+
+[node name="PreviewFrame" type="PanelContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapSquare"]
 custom_minimum_size = Vector2(0, 140)
 layout_mode = 2
 size_flags_vertical = 3
 theme_type_variation = &"InsetPanel"
 
-[node name="Preview" type="TextureRect" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/PreviewFrame"]
+[node name="Preview" type="TextureRect" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapSquare/PreviewFrame"]
 unique_name_in_owner = true
 layout_mode = 2
 expand_mode = 1
 stretch_mode = 5
 
-[node name="PreviewHint" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/PreviewFrame"]
+[node name="PreviewHint" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapSquare/PreviewFrame"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_type_variation = &"CaptionLabel"
 text = "Карта мира появится после первого запуска"
 horizontal_alignment = 1
-vertical_alignment = 1
+vertical_alignment = 0
 autowrap_mode = 3
+
+[node name="HubBuildPreview" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/MapSquare/PreviewFrame/PreviewHint"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -78.0
+offset_top = -50.0
+offset_right = 78.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 13
+text = "Построить карту"
+tooltip_text = "Подготовить географию без дорог и 3D"
 
 [node name="ChoiceRow" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
 layout_mode = 2
@@ -831,104 +939,6 @@ vertical_alignment = 1
 [node name="WorldsBack" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Bottom"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(112, 40)
-text = "Назад"
-
-[node name="NewWorld" type="CenterContainer" parent="UI/Root"]
-unique_name_in_owner = true
-visible = false
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="Panel" type="PanelContainer" parent="UI/Root/NewWorld"]
-custom_minimum_size = Vector2(488, 0)
-layout_mode = 2
-theme_type_variation = &"MenuGlass"
-
-[node name="Box" type="VBoxContainer" parent="UI/Root/NewWorld/Panel"]
-layout_mode = 2
-theme_override_constants/separation = 16
-
-[node name="Title" type="Label" parent="UI/Root/NewWorld/Panel/Box"]
-theme_type_variation = &"TitleLabel"
-text = "Новый мир"
-
-[node name="NewWorld" type="PanelContainer" parent="UI/Root/NewWorld/Panel/Box"]
-layout_mode = 2
-theme_type_variation = &"SectionPanel"
-
-[node name="NewBox" type="VBoxContainer" parent="UI/Root/NewWorld/Panel/Box/NewWorld"]
-layout_mode = 2
-
-[node name="NewTitle" type="Label" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
-layout_mode = 2
-theme_type_variation = &"SectionLabel"
-text = "Зерно мира"
-
-[node name="SeedRow" type="HBoxContainer" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
-layout_mode = 2
-
-[node name="SeedEdit" type="LineEdit" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-placeholder_text = "любое слово или число"
-max_length = 32
-clear_button_enabled = true
-
-[node name="Dice" type="Button" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow"]
-custom_minimum_size = Vector2(44, 44)
-layout_mode = 2
-tooltip_text = "Случайное зерно"
-icon = ExtResource("4_dice")
-icon_alignment = 1
-
-[node name="SeedHelp" type="Label" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
-custom_minimum_size = Vector2(300, 0)
-layout_mode = 2
-theme_type_variation = &"CaptionLabel"
-text = "Введите зерно. Одно и то же зерно создаёт один и тот же мир."
-autowrap_mode = 3
-
-[node name="Infinite" type="CheckBox" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
-unique_name_in_owner = true
-visible = false
-layout_mode = 2
-tooltip_text = "Выключено — мир это стартовая область: дальний рельеф виден, но выехать за край нельзя.
-Включено — за краем готовятся соседние области и по ним можно ездить."
-text = "Бесконечная генерация"
-
-[node name="InfiniteWarning" type="Label" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
-unique_name_in_owner = true
-visible = false
-custom_minimum_size = Vector2(300, 0)
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.8, 0.25, 1)
-theme_override_font_sizes/font_size = 13
-text = "! Не доделано: соседние области работают плохо"
-autowrap_mode = 3
-
-[node name="Author" type="Label" parent="UI/Root/NewWorld/Panel/Box"]
-unique_name_in_owner = true
-theme_type_variation = &"SectionLabel"
-text = "Миры от автора"
-
-[node name="Suggestions" type="VBoxContainer" parent="UI/Root/NewWorld/Panel/Box"]
-unique_name_in_owner = true
-
-[node name="CreateWorld" type="Button" parent="UI/Root/NewWorld/Panel/Box"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 52)
-theme_type_variation = &"PrimaryButton"
-text = "Создать мир"
-icon = ExtResource("6_play")
-
-[node name="NewBack" type="Button" parent="UI/Root/NewWorld/Panel/Box"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 40)
 text = "Назад"
 
 [node name="Loading" type="Control" parent="UI/Root"]
@@ -1804,18 +1814,16 @@ text = "Готово"
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/DaySlider" to="." method="_on_day_changed"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/StartHourSlider" to="." method="_on_start_hour_changed"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/RandomHour" to="." method="_on_random_hour_toggled"]
-[connection signal="text_submitted" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
-[connection signal="text_changed" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_changed"]
-[connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/Dice" to="." method="_on_dice_pressed"]
+[connection signal="text_submitted" from="UI/Root/AllWorlds/Panel/Box/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
+[connection signal="text_changed" from="UI/Root/AllWorlds/Panel/Box/SeedRow/SeedEdit" to="." method="_on_seed_changed"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/SeedRow/Dice" to="." method="_on_dice_pressed"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Side/ChoiceRow/Star" to="." method="_on_star_selected"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Side/PlaySelected" to="." method="_on_start"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/Storage" to="." method="_open_storage"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/ClearAllSaves" to="." method="_clear_all_saves"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/WorldsBack" to="." method="_return_to_menu_screen"]
-[connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/CreateWorld" to="." method="_on_create_world"]
-[connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/NewBack" to="." method="_return_to_menu_screen"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/SeedRow/CreateWorld" to="." method="_on_create_world"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Start" to="." method="_on_start"]
-[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/OpenNew" to="." method="_open_new_world"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Actions/OpenWorlds" to="." method="_open_all_worlds"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Actions/MenuSettings" to="." method="_open_settings"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Actions/MenuExit" to="." method="_exit_game"]
