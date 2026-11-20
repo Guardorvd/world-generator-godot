@@ -16,7 +16,7 @@ extends SceneTree
 ##   --save-base — записать этот прогон как базу (base.json); без ключа прогон сравнивается с base.json, если она есть;
 ##   --compare <база.json> <новый.json> — только сравнить два отчёта (окно не нужно, ничего не меряется).
 ##   --travel-from-map — начать перенос с открытым атласом и проверить его закрытие при прибытии.
-## 20.11.2026: world.board — подъезд к доске (заблаговременный расчёт заданий, BOARD_PREPARE) и сборка щита, OFFERS_MS —
+## 20.11.2026: world.board — сборка щита доски у камеры (с отбором заданий), OFFERS_MS —
 ##   цена отбора заданий по частям; world.play_map — карта (M) открывается и закрывается в игре без паузы.
 ## Итог: stress.json (все числа), stress.md (выводы и таблицы), строка STRESS_RESULT в консоли. Код 1 — прогон не завершён.
 ## Отчёт пишется после каждого замера: при зависании остаётся всё снятое. Лимит: 150 с без мира, 540 с с миром.
@@ -1057,8 +1057,8 @@ func _toggle_map(t: float, _dt: float) -> void:
 
 
 ## 20.11: щит ближней доски (карта и листки в SubViewport): камера стоит в 25 м от доски, окружение догружено;
-## сначала доска «за 120 м» (заблаговременный расчёт заданий), затем «близко» — сборка щита попадает в замер
-## без подгрузки мира вокруг; после замера OFFERS_MS — цена отбора заданий по частям (маяки уже в кэше)
+## первую секунду доска «за 60 м», затем «близко» — сборка щита (с отбором заданий) попадает в замер без подгрузки
+## мира вокруг; после замера OFFERS_MS — цена отбора заданий по частям
 func _board_case() -> void:
 	var boards: Array = game.board_display.boards.call()
 	if boards.is_empty():
@@ -1072,10 +1072,8 @@ func _board_case() -> void:
 	var step := func(t: float, dt: float) -> void:
 		_look(t, dt, v)
 		bd._next_check_ms = 0
-		bd.tick(at * Vector3(0.0, 0.0, 120.0 if t < 3.0 else 20.0))
-	# первые 3 с «за 120 м»: задания доски считаются заранее понемногу (BoardDisplay.prepare), затем щит у камеры
-	await _case("world.board", "Мир: подъезд к доске и сборка щита", MOVE + 1.0, step)
-	print("BOARD_PREPARE max_ms=%.2f frames=%d" % [bd.prepare_max_us / 1000.0, bd.prepare_frames])
+		bd.tick(at * Vector3(0.0, 0.0, 60.0 if t < 1.0 else 20.0))
+	await _case("world.board", "Мир: щит доски строится у камеры", MOVE, step)
 	var svc := game.interaction_service
 	var here := svc.target(game.world.place(WorldData.place_id("settlement", boards[0].place.x, boards[0].place.y)))
 	var clock_us := func(f: Callable) -> float:

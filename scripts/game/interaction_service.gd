@@ -64,13 +64,11 @@ func offers(village: Variant, catalog: Variant = null) -> Array:
 	return Quests.board_pick(offers_all(village, catalog), here_key, quests.done, quests.active.id) # 19.11.2026
 
 
-## 20.11.2026: заранее, до срока deadline (Time.get_ticks_usec), собрать площадки маяков доски village — самую долгую
-## часть offers (BeaconSites). true — готово, offers у этой доски больше не задержит кадр
-func prefetch(village: Variant, deadline: int) -> bool:
-	if world == null or heights == null:
-		return true
-	var here := target(world.place(WorldData.place_id("settlement", village.x, village.y)))
-	return BeaconSites.prefetch(world, heights, here, deadline)
+## 20.11.2026: указатели путей мира для маяков и меток краской — при загрузке, а не у первой доски
+func warm() -> void:
+	if world != null:
+		BeaconSites.warm(world)
+		PaintTargets.warm(world)
 
 
 ## Все предложения доски village (Quests.offers) — до отбора трёх листков

@@ -526,6 +526,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	interaction_service.is_broken = repairs.is_broken
 	interaction_service.world = world
 	interaction_service.heights = heights
+	interaction_service.warm()
 	interaction_service.all_places = hud.all_places
 	interaction_service.visited = hud.visited
 	interaction_service.travel = func() -> Dictionary:
@@ -539,8 +540,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	board_display.setup(world, quests, hud.map_data,
 		func() -> Array: return _boards + (regions.boards if regions != null else []),
 		func(place: Variant) -> Array: return _offers(place),
-		func(place: Variant) -> Array: return hud.board_places(place),
-		func(place: Variant, deadline: int) -> bool: return interaction_service.prefetch(place, deadline))
+		func(place: Variant) -> Array: return hud.board_places(place))
 	bike_controller.message.connect(hud.toast.bind(&"warning"))
 	bike_controller.mount_changed.connect(_bike_mount_changed)
 	bike_controller.recovered.connect(func() -> void:

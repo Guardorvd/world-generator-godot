@@ -74,6 +74,11 @@ static func _route(w: WorldData, heights: Heightfield, here: Dictionary, painted
 static var _cached_stations: Array = []
 static var _cached_world := 0
 
+## Подготовить точки путей заранее (GameWorld при загрузке)
+static func warm(w: WorldData) -> void:
+	_world_stations(w)
+
+
 static func _world_stations(w: WorldData) -> Array:
 	if _cached_world != w.get_instance_id() or _cached_stations.size() != w.trails.size():
 		_cached_world = w.get_instance_id()
