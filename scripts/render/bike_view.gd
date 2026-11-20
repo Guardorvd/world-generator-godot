@@ -140,6 +140,7 @@ var _rotor_mat_f: ShaderMaterial
 var _rotor_mat_r: ShaderMaterial
 var _heat_f := 0.0
 var _heat_r := 0.0
+var heat_source: BrakeEffects = null # GameWorld и Trail Lab: один расчёт нагрева дисков на такт
 var _shudder_phase := 0.0
 var lamp: Lamp
 var _skin_mats: Array[ShaderMaterial] = []
@@ -345,9 +346,14 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_STEER] -= sin(_cur[S_CRANK]) * maxf(_stand, 0.0) * 0.07 * (1.0 - smoothstep(4.0, 9.0, absf(b.speed)))
 	# Нагрев тормозных дисков от мощности трения колодок и охлаждение встречным потоком воздуха
 	var spd := absf(b.speed)
-	var next_heat := BrakeEffects.step_rotor_heat(b, dt, _heat_f, _heat_r)
-	_heat_f = next_heat.x
-	_heat_r = next_heat.y
+	# 20.11: нагрев считает BrakeEffects (искры у диска); вид берёт его значение, свой расчёт — только на стендах без эффектов
+	if heat_source != null:
+		_heat_f = heat_source.heat_f
+		_heat_r = heat_source.heat_r
+	else:
+		var next_heat := BrakeEffects.step_rotor_heat(b, dt, _heat_f, _heat_r)
+		_heat_f = next_heat.x
+		_heat_r = next_heat.y
 	_cur[S_HEAT_F] = _heat_f
 	_cur[S_HEAT_R] = _heat_r
 	# Мелкая высокочастотная вибрация вилки и ручек тормоза при насыщении сцепления (skid)
@@ -394,7 +400,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 		sprint = maxf(sprint, smoothstep(0.0, 0.5, b.surge) * smoothstep(0.3, 0.7, effort) * SURGE_STAND)
 	var descent := smoothstep(0.06, 0.16, -slope) * (1.0 - effort) * smoothstep(4.0, 8.0, absf(b.speed))
 	# Фаза 1 прыжка — подготовка (preload): сжатие перед отрывом (буфер прыжка, авто-хоп, рывок Q или волна).
-	var prep_raw := (0.85 if b._hop_buf > 0.0 or b.body_back or (b._auto_hop >= 0.0 and b._auto_hop < BikeRide.AUTO_BACK) else 0.0) + maxf(0.0, b.body_v) * 0.22 + clampf(b.lift_f / 0.12, 0.0, 0.65)
+	var prep_raw := (0.85 if b.hop_preparing or b.body_back else 0.0) + maxf(0.0, b.body_v) * 0.22 + clampf(b.lift_f / 0.12, 0.0, 0.65)
 	var prep_goal := clampf(prep_raw, 0.0, 1.0) if continuous and not b.airborne else 0.0
 	_jump_prep = lerpf(_jump_prep, prep_goal, Util.damp(22.0 if prep_goal > _jump_prep else 10.0, dt)) if continuous else 0.0
 	var stand_target := (maxf(climb, sprint) - descent if not b.airborne else -0.65) if continuous else 0.0
@@ -430,7 +436,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	# Фазы прыжка: 2) отрыв (_takeoff), 3) полёт (airborne), 4) приземление (_landing), 5) восстановление (_recovery).
 	_takeoff *= exp(-dt * 9.5)
 	if continuous and b.airborne and not _was_airborne:
-		_takeoff = 1.0 if (b.vy > 0.0 or _jump_prep > 0.1 or b._hop_used) else 0.65
+		_takeoff = 1.0 if (b.vy > 0.0 or _jump_prep > 0.1 or b.hop_used) else 0.65
 		_jump_prep = 0.0
 	_was_airborne = b.airborne
 	_landing *= exp(-dt * 5.5)
@@ -472,7 +478,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var steer_vel := clampf((b.steer - _prev_steer) / maxf(dt, 0.001), -6.0, 6.0) if continuous else 0.0
 	_prev_steer = b.steer
 	var turn_pace := maxf(smoothstep(0.2, 3.0, absf(b.speed)), smoothstep(0.05, 0.25, absf(b.steer)))
-	var dir_signal := -b.steer * 0.27 - steer_vel * 0.018 + b._yaw_rate * 0.11 + b.lean * 0.16 - b.slip * 0.32
+	var dir_signal := -b.steer * 0.27 - steer_vel * 0.018 + b.yaw_rate * 0.11 + b.lean * 0.16 - b.slip * 0.32
 	var look := clampf(dir_signal * turn_pace, -0.46, 0.46)
 	# 11.11: стоянка. Велосипед стоит без тяги — седок сходит с седла вперёд и ставит ногу на землю
 	# со стороны наклона (по умолчанию левую); тяга или ход возвращают ногу на педаль.

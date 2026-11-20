@@ -398,6 +398,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	brake_effects = BrakeEffects.new()
 	brake_effects.name = "BrakeEffects"
 	add_child(brake_effects)
+	bike_view.heat_source = brake_effects
 	ambient = AmbientParticles.new()
 	ambient.name = "AmbientParticles"
 	add_child(ambient)
@@ -1622,9 +1623,7 @@ func _physics_process(dt: float) -> void:
 	if not crash.active():
 		bike_view.watch_requested = hud.summary_visible() and not _opening and not show_map and not photo.active
 		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.surging(fw))
-	bike.land_impact = 0.0
-	bike.wheel_impact = Vector2()
-	bike.bottom_out = 0.0
+	bike.clear_tick_events()
 	t0 = _tick_mark("effects", t0)
 	audio.tick(player, bike.riding)
 	t0 = _tick_mark("audio", t0)

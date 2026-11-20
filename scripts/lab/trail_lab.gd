@@ -177,6 +177,7 @@ func _ready() -> void:
 	view = preload("res://scenes/bike.tscn").instantiate() as BikeView
 	add_child(view)
 	add_child(brake_effects)
+	view.heat_source = brake_effects
 	add_child(crash)
 	add_child(camera)
 	camera.current = true
@@ -1410,8 +1411,9 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		controller.stamina.tick_foot(dt, run and moving)
 		player.land_impact = 0.0
 	if not crash.active():
-		view.tick(bike, dt, throttle, bike.riding and controller.stamina.surging(throttle))
+		# порядок как в игре: нагрев дисков считают эффекты, вид его берёт
 		brake_effects.tick(dt, bike, w, heights)
+		view.tick(bike, dt, throttle, bike.riding and controller.stamina.surging(throttle))
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])
 	if trial != null:
@@ -1419,13 +1421,10 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		trial_hud.present(trial)
 		if trial.phase in [Trial.Phase.FINISHED, Trial.Phase.FAILED]: Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	recorder.tick(self, dt, throttle, turn, run, jump)
-	bike.landing_info = {}
 	if bike.land_impact > 0.0: last_land_impact = bike.land_impact
 	if bike.bottom_out > 0.0: last_bottom_out = bike.bottom_out
 	# These are one-tick events. Leaving them latched repeats the rider's landing animation.
-	bike.land_impact = 0.0
-	bike.wheel_impact = Vector2()
-	bike.bottom_out = 0.0
+	bike.clear_tick_events()
 
 func _shaping_report() -> String:
 	var stats: Dictionary = heights.road_refinement.trail_shaping.get(routes[lane].id, {})

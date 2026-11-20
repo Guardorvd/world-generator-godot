@@ -345,6 +345,25 @@ var bottom_out := 0.0  # 12.7: скорость удара вилки в упо�
 var braking := 0.0     # 12.7: резкое торможение на скорости 0..1 (для хруста покрытия)
 var fallen := false # рама остаётся в физической позе до ручной посадки
 var fallen_transform := Transform3D.IDENTITY
+## 20.11: для вида и записи заездов — состояние прыжка и поворота без доступа к внутренним полям.
+## Пробел нажат и ждёт или идёт фаза «тело назад» авто-Q→E (подготовка видна у седока).
+var hop_preparing: bool:
+	get: return _hop_buf > 0.0 or (_auto_hop >= 0.0 and _auto_hop < AUTO_BACK)
+## Отрыв этого полёта — банни-хоп (Q→E или пробел), а не сход с кромки.
+var hop_used: bool:
+	get: return _hop_used
+## Угловая скорость курса, рад/с.
+var yaw_rate: float:
+	get: return _yaw_rate
+
+
+## 20.11: одноразовые события такта (приземление, удары колёс, пробой) — читатели такта (вид, звук, камера, запись)
+## их уже получили; один сброс для игры и Trail Lab вместо двух ручных копий.
+func clear_tick_events() -> void:
+	landing_info = {}
+	land_impact = 0.0
+	wheel_impact = Vector2()
+	bottom_out = 0.0
 
 
 ## Найти место рядом с игроком, начиная справа. null, если рама нигде не помещается.
@@ -890,8 +909,12 @@ class Footing:
 	var technical := 0.0
 
 
+var _footing := Footing.new() # 20.11: один на велосипед, живёт только внутри подшага (не выделяется 120 раз в секунду)
+
+
 func _read_footing(turn: float, w: WorldData, heights: Heightfield) -> Footing:
-	var f := Footing.new()
+	var f := _footing
+	f.grip = 0.85 # остальные поля ниже пишутся всегда
 	# Резерв поворота в тормозе — по фактическому положению руля (оно догоняет ввод с той же скоростью, что и курс)
 	# и по боковой силе, которую шины держат сейчас: на выходе из дуги руль уже прямо, а снос ещё гасится.
 	# Раньше — по сырому вводу: на входе резерв появлялся раньше поворота, на выходе исчезал раньше сноса.
@@ -1528,7 +1551,8 @@ static func _bump(d: float) -> float:
 func _step_suspension(dt: float, load := 0.0, contact_accel := 0.0) -> void:
 	var target := -0.035 if airborne else load
 	var shift := 0.0 if airborne else contact_accel * PITCH_LOAD
-	var ticks := maxi(1, ceili(dt * SUB_HZ))
+	# step() уже дробит шаг до 1/SUB_HZ; допуск тот же, что там, — погрешность деления не даёт лишнего витка
+	var ticks := ceili(dt * SUB_HZ) if dt > 1.0 / SUB_HZ + 0.000001 else 1
 	var h := dt / ticks
 	var f := Vector2(squash_f, squash_fv)
 	var r := Vector2(squash_r, squash_rv)
