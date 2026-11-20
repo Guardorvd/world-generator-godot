@@ -54,6 +54,8 @@ var _track_layer: Button
 var _photo_layer: Button
 var _tab_map: Button
 var _seed: Label
+var _goal_badge: Label # 20.11: цель покупки в шапке дневника на всех вкладках: «Цель: Ледник · 35 / 50»
+var _shop_profile: ShopPanel.Progress
 var _rides: Array = []            # заезды открытой вкладки (Hud._ride_rows)
 var _ride_buttons: Array[Button] = []
 var _ride_info: VBoxContainer
@@ -230,6 +232,10 @@ func _build_header() -> void:
 	eyebrow.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	var title := _label("Дневник путешествия", 25, identity, HudStyle.CREAM)
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_goal_badge = _label("", 13, head, HudStyle.AMBER)
+	_goal_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_goal_badge.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_goal_badge.hide()
 	_seed = _label("", 13, head, MUTED)
 	_seed.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_seed.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -389,6 +395,24 @@ func _reflow() -> void:
 func enable_shop(profile: ShopPanel.Progress) -> void:
 	shop_panel.set_profile(profile)
 	_tab_shop.show()
+	if _shop_profile != profile:
+		if _shop_profile != null:
+			_shop_profile.changed.disconnect(_refresh_goal_badge)
+		_shop_profile = profile
+		profile.changed.connect(_refresh_goal_badge)
+	_refresh_goal_badge()
+
+
+func _refresh_goal_badge() -> void:
+	var id := _shop_profile.purchase_goal if _shop_profile != null and _shop_profile.load_error == OK else ""
+	_goal_badge.visible = id != ""
+	if id == "":
+		return
+	var price: int = ShopPanel.Progress.PRICES[id]
+	var have := mini(_shop_profile.balance, price)
+	_goal_badge.text = "Цель: %s · %d / %d" % [ShopPanel.Progress.Palette.SCHEME_NAMES[id], have, price]
+	_goal_badge.add_theme_color_override("font_color", HudStyle.MINT if have >= price else HudStyle.AMBER)
+	_goal_badge.tooltip_text = "Можно купить в магазине" if have >= price else "Не хватает %d очк." % (price - have)
 
 
 func _select(tab: Tab) -> void:

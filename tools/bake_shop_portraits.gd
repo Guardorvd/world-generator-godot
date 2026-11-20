@@ -44,6 +44,9 @@ func _bake() -> void:
 		bike.tick(state, DT, 1.0, false)
 	bike.draw(1.0)
 	for id: String in preload("res://scripts/render/bike_palette.gd").SCHEMES:
+		# 20.11: готовые портреты не переснимаются (новая расцветка — только свои два файла); всё заново — -- --all
+		if FileAccess.file_exists("res://resources/shop/%s_side.png" % id) and not "--all" in OS.get_cmdline_user_args():
+			continue
 		bike.set_scheme(id)
 		for view in 2:
 			camera.position = Vector3(3.2, 1.35, 0.0) if view == 0 else Vector3(-2.8, 1.8, -2.7)

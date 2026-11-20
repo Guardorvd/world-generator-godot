@@ -87,7 +87,7 @@ func _run() -> void:
 	_check(panel.dismiss_purchase() and profile.balance == 50, "отмена сохраняет баланс")
 	panel._activate()
 	panel._buy_reviewed()
-	_check(profile.owns("moss") and profile.balance == 0 and profile.equipped == "ember" and panel._note.text.contains("Надеть"), "покупка отдельно от экипировки")
+	_check(profile.owns("moss") and profile.balance == 0 and profile.equipped == "moss" and panel._note.text.contains("куплен и надет"), "покупка сразу надевает комплект (20.11)")
 	panel._activate()
 	_check(profile.equipped == "moss" and panel._status.text == "НАДЕТО" and not panel._compare_mode and not panel._compare_button.visible, "экипировка обновляет состояние и закрывает сравнение")
 	var equip_message := panel._note.text
@@ -143,6 +143,12 @@ func _run() -> void:
 	_check(tablet_shop._action.has_focus(), "навигация вправо от края коллекции ведёт к действию")
 	tablet_shop._rows.glacier.grab_focus()
 	await _capture("tablet")
+	# 20.11: цель покупки видна в шапке дневника на всех вкладках
+	var kept_goal := profile.purchase_goal
+	profile.set_purchase_goal("glacier")
+	_check(journal._goal_badge.visible and journal._goal_badge.text == "Цель: Ледник · %d / 50" % mini(profile.balance, 50), "цель покупки в шапке дневника")
+	profile.set_purchase_goal(kept_goal)
+	_check(journal._goal_badge.visible == (kept_goal != ""), "бейдж цели следует за сменой цели")
 	tablet_shop._activate()
 	_check(tablet_shop._review_actions.visible and journal.dismiss_subpanel() and profile.balance == 70, "отмена покупки в планшете не закрывает вкладку")
 	tablet_shop._activate()

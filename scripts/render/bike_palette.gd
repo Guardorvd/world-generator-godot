@@ -17,8 +17,13 @@ const SCHEMES := {
 	"glacier": ["e8ecef", "2f7fb8", "2f7fb8", "1d4f78", "23303a", "e8ecef", "23272b"],
 	"moss": ["55704a", "d9c27a", "c98a3a", "8a5a2a", "2f3a2c", "d9d2bf", "c2a25a"],
 	"night": ["2b3036", "e0562c", "e0562c", "2b3036", "1c2126", "2b3036", "c9ced2"],
+	# 20.11: второй ряд магазина
+	"lingon": ["9e2a3a", "efe2c4", "efe2c4", "9e2a3a", "26262c", "efe2c4", "2a2d31"],
+	"fog": ["8f9c92", "e6e1d1", "5d7884", "3c535d", "2a3236", "dde2dc", "b39d74"],
+	"copper": ["b2643a", "1f3d36", "1f3d36", "b2643a", "1a2422", "d6cbb5", "c49650"],
 }
-const SCHEME_NAMES := {"ember": "Закат", "glacier": "Ледник", "moss": "Мох", "night": "Ночь"}
+const SCHEME_NAMES := {"ember": "Закат", "glacier": "Ледник", "moss": "Мох", "night": "Ночь",
+	"lingon": "Брусника", "fog": "Туман", "copper": "Медь"}
 
 
 static func colors(scheme := "ember") -> PackedColorArray:

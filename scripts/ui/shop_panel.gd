@@ -393,7 +393,8 @@ func open() -> void:
 		reward_result = _profile.retry_rewards()
 	if _previews.is_empty():
 		for id: String in _rows:
-			var preview := load(PREVIEW_DIR + id + ".jpg") as Texture2D
+			# 20.11: у расцветок второго ряда только портреты, без отдельной картинки
+			var preview := load(PREVIEW_DIR + id + ".jpg") as Texture2D if ResourceLoader.exists(PREVIEW_DIR + id + ".jpg") else null
 			_previews[id] = preview
 			_portraits[id] = [load(PREVIEW_DIR + id + "_side.png"), load(PREVIEW_DIR + id + "_angle.png")]
 			_card_images[id].texture = _portrait_crop(_portraits[id][0] if _portraits[id][0] != null else preview)
@@ -619,7 +620,7 @@ func _show_selection() -> void:
 		_action.text = "Надето"
 		_action.disabled = true
 		if _profile.needs_first_purchase() and _profile.balance == 0:
-			_note.text = "Очки за расцветки можно заработать заданиями поселений."
+			_note.text = "Очки за расцветки дают задания поселений, новые страницы альбома, обзор с вышек и ремонт по пути."
 	elif _profile.owns(_selection):
 		_action.text = "Надеть"
 	else:
@@ -628,20 +629,20 @@ func _show_selection() -> void:
 		var remaining := _profile.remaining(_selection)
 		_action.disabled = remaining > 0
 		if _action.disabled:
-			_note.text = "Очки дают за задания поселений."
+			_note.text = "Очки дают за задания, новые страницы альбома, обзор с вышек и вершин и ремонт по пути."
 		else:
-			_note.text = "После покупки комплект можно будет надеть."
+			_note.text = "После покупки комплект сразу наденется."
 	if reviewing:
 		var price: int = Progress.PRICES[_purchase_id]
 		_confirm_buy.disabled = _action.disabled or _profile.owns(_purchase_id) or _profile.load_error != OK
 		_review_title.text = "«%s»  ·  %s" % [Progress.Palette.SCHEME_NAMES[_purchase_id], _points(price)]
-		_confirm_buy.text = "Купить за %s" % _points(price)
+		_confirm_buy.text = "Купить и надеть · %s" % _points(price)
 		if _confirm_buy.disabled:
 			_review_balance.text = "Текущий баланс: %s" % _points(_profile.balance)
 			_note.text = "Покупка недоступна. Отмените и проверьте комплект."
 		else:
 			_review_balance.text = "Баланс: %s  →  %s" % [_points(_profile.balance), _points(_profile.balance - price)]
-			_note.text = "После покупки комплект можно будет надеть."
+			_note.text = "После покупки комплект сразу наденется."
 			var other_goal := _profile.purchase_goal
 			if other_goal != "" and other_goal != _purchase_id and _profile.balance - price < int(Progress.PRICES[other_goal]):
 				_note.text += " На «%s» потребуется ещё %s." % [Progress.Palette.SCHEME_NAMES[other_goal], _points(int(Progress.PRICES[other_goal]) - (_profile.balance - price))]
@@ -745,8 +746,10 @@ func _buy_reviewed() -> void:
 	var id := _purchase_id
 	_purchase_id = ""
 	if _profile.buy(id) == OK:
+		# 20.11: купленный комплект сразу надевается (одно действие вместо двух); если запись не удалась — он в коллекции
+		var worn := _profile.equip(id) == OK
 		_rows[id].grab_focus()
-		_note.text = "«%s» добавлен в коллекцию. Нажмите «Надеть», чтобы применить." % _name.text
+		_note.text = ("«%s» куплен и надет." if worn else "«%s» добавлен в коллекцию. Нажмите «Надеть», чтобы применить.") % _name.text
 		Style.pulse(_status, Style.MINT)
 		sound_requested.emit(&"confirm")
 	else:

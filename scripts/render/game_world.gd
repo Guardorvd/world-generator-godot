@@ -46,6 +46,7 @@ var place_names: PlaceNames
 var photo: PhotoCamera
 var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
 var shop_progress: ShopProgress
+var _gear_changed := false # 20.11: в дневнике надели другой комплект — при возвращении в мир велосипед коротко «проявляется»
 var _bag: Node3D         # сумка доставки у доски, пока её не взяли
 var _bag_label: Label3D  # подпись над ней
 var _beacon_layer: BeaconLayer
@@ -395,6 +396,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(bike_view)
 	if shop_progress != null:
 		shop_progress.equipment_changed.connect(bike_view.set_scheme)
+		shop_progress.equipment_changed.connect(func(_id: String) -> void: _gear_changed = true)
 		bike_view.set_scheme(shop_progress.equipped)
 	brake_effects = BrakeEffects.new()
 	brake_effects.name = "BrakeEffects"
@@ -1025,6 +1027,10 @@ func close_tablet(capture := true) -> void:
 	show_map = false
 	hud.set_map_visible(false)
 	_resume_map_rendering()
+	if _gear_changed:
+		_gear_changed = false
+		bike_view.play_placement_appearance()
+		audio.bike_placed()
 	if capture:
 		sync_mouse_mode()
 
@@ -2134,6 +2140,12 @@ func _quest_reward_note(ids: Array) -> String:
 		note += "\nХватает на первую расцветку. Откройте «Магазин» в дневнике."
 	return note
 
+## 20.11: награда магазина за исследование (страницы альбома, первый обзор, ремонт по пути) — заметка к тосту или пусто
+func _explore_reward(ids: Array) -> String:
+	if shop_progress == null or ids.is_empty():
+		return ""
+	return _quest_reward_note(ids)
+
 ## Лавка: сесть (камера ниже, взгляд вперёд по лавке, ходьба заперта до шага или прыжка). Только пешком, цела
 func _sit(item: Dictionary) -> void:
 	var seat := repair_layer.seat(item.id)
@@ -2208,7 +2220,8 @@ func _complete_repair(id: String) -> void:
 		return
 	var place := world.place(id)
 	if not place.is_empty():
-		hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)), &"quest")
+		# 20.11: починка по пути сразу пополняет счёт; благодарность в поселении — как задание «Ремонт»
+		hud.toast(quests.repaired_on_way(InteractionService.target(place), _thanks_village(place)) + _explore_reward(["fix:" + id]), &"quest")
 
 
 ## Поселение, где отблагодарят за ремонт по пути: ближайшее к месту на открытой земле (InteractionService.target) или пусто
@@ -2379,10 +2392,12 @@ func _look_around(source: String, radius: float, from_text: String) -> void:
 	explore.scanned[source] = true
 	var eye := Vector3(player.x, player.feet + 1.7, player.z)
 	var found := explore.reveal_from(hud.all_places(), eye, radius, TILE, hud.is_open, heights.ground_at, _occluded)
+	# 20.11: первый обзор с вышки или вершины пополняет счёт магазина (один раз на источник в этом мире)
+	var note := _explore_reward(["scan:" + source])
 	if found.is_empty():
-		hud.toast("%s новых мест не видно" % from_text)
+		hud.toast("%s новых мест не видно%s" % [from_text, note], &"discovery" if not note.is_empty() else &"info")
 	else:
-		hud.toast("%s видно новых мест: %d" % [from_text, found.size()], &"discovery")
+		hud.toast("%s видно новых мест: %d%s" % [from_text, found.size(), note], &"discovery")
 	hud.sync_map_places()
 
 
@@ -2399,13 +2414,22 @@ func _album_photo(shot: Dictionary) -> void:
 	# 18.11.2026: место засчитывается только вблизи (Exploration.ALBUM_REACH), приближение не помогает
 	var far := not place.is_empty() and float(shot.get("dist", 0.0)) > Exploration.album_reach(place.kind)
 	var keys := Exploration.classify({} if far else place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
+	var fresh: Array = []
+	for key: String in keys:
+		if not hud.explore.album.has(key):
+			fresh.append(key)
 	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true), hud.ride_log.session_start())
 	var photographed: String = shot.get("plaque", "")
 	if photographed.is_empty() and not far:
 		photographed = place.get("id", "")
 	hud.explore.record_place_photo(photographed, str(shot.get("path", "")))
 	if not titles.is_empty():
-		hud.toast("Новая страница альбома: «%s»" % "», «".join(titles), &"album")
+		# 20.11: новые страницы альбома пополняют счёт магазина: ночное явление дороже обычной страницы
+		var ids: Array = []
+		for key: String in fresh:
+			if hud.explore.album.has(key):
+				ids.append(("sky:" if key.begins_with("night:") else "album:") + key)
+		hud.toast("Новая страница альбома: «%s»%s" % ["», «".join(titles), _explore_reward(ids)], &"album")
 	if far:
 		for key: String in Exploration.classify(place, -1, {}):
 			if not hud.explore.album.has(key):

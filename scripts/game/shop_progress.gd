@@ -7,10 +7,14 @@ signal equipment_changed(scheme: String)
 const Palette := preload("res://scripts/render/bike_palette.gd")
 const Files := preload("res://scripts/core/cache_file.gd")
 const DEFAULT_SCHEME := "ember"
-const PRICES := {"ember": 0, "glacier": 50, "moss": 50, "night": 50}
+## 20.11: второй ряд — дорогие расцветки, чтобы очки работали дольше первых заданий
+const PRICES := {"ember": 0, "glacier": 50, "moss": 50, "night": 50, "lingon": 120, "fog": 150, "copper": 200}
+## Задания (вид до двоеточия) и, с 20.11, исследование: новая страница альбома (album), ночное явление в альбоме (sky),
+## первый обзор с вышки или вершины (scan), ремонт по пути (fix; благодарность поселения платит как задание repair)
 const REWARDS := {
 	start = 20, supplies = 30, repair = 30, fragile = 40, beacons = 50, paint = 50,
 	obelisks = 80, visit = 30, tour = 30, delivery = 30, photo = 30, chronicle = 30,
+	album = 5, sky = 15, scan = 10, fix = 10,
 }
 const FORMAT := 1
 const MAX_FILE_BYTES := 8 * 1024 * 1024
