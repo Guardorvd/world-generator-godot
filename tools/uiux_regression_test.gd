@@ -13,9 +13,14 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
+	var test_dir := "res://.godot/uiux_regression_test"
+	DirAccess.make_dir_recursive_absolute(test_dir)
+	GameContext.scope.settings.settings_path = test_dir.path_join("settings.cfg")
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 	var hud: Hud = main.get_node("%Hud")
+	# Магазин не участвует в сценарии: не начинать фоновую загрузку портретов перед завершением теста.
+	hud.journal_panel._tab_shop.hide()
 	main.get_node("%Menu").hide()
 	hud.show()
 	var world := WorldData.new()
@@ -25,7 +30,9 @@ func _run() -> void:
 	var map := Image.create(8, 8, false, Image.FORMAT_RGB8)
 	hud.set_world(world, map)
 	await process_frame
-	check(hud.summary_visible(), "сводка видна при старте")
+	check(not hud.summary_visible() and hud.view_mode == Hud.View.LIGHT, "при старте включён лёгкий вид HUD")
+	await _toggle_hud()
+	check(hud.summary_visible(), "переключение открывает полную сводку")
 	await _toggle_hud()
 	await create_timer(Hud.SUMMARY_FADE + 0.04).timeout
 	hud.set_hints([], [["F", "Сесть"]])
@@ -40,7 +47,9 @@ func _run() -> void:
 	hud.set_photo_mode(false)
 	hud.set_summary_blocked(false)
 	await _toggle_hud()
-	check(hud.summary_visible(), "сводка остаётся после отпускания")
+	check(not hud.summary_visible() and hud.view_mode == Hud.View.LIGHT, "после скрытого вида возвращается лёгкий HUD")
+	await _toggle_hud()
+	check(hud.summary_visible(), "полная сводка остаётся после отпускания")
 	await _toggle_hud()
 	check(not hud.summary_visible(), "повторное нажатие скрывает сводку")
 	hud.set_goal(Hud.marker_goal(Vector2(3, 4)))
@@ -53,7 +62,7 @@ func _run() -> void:
 	check(hud.goal.kind == "marker" and hud.goal.x != 3, "Ctrl-клик ставит свободную метку")
 	var close_count := [0]
 	hud.map_close_requested.connect(func() -> void: close_count[0] += 1)
-	(hud.big_map.get_child(0) as Button).pressed.emit()
+	hud.journal_panel._close.pressed.emit()
 	check(close_count[0] == 1, "кнопка закрытия карты отправляет запрос")
 	var game: GameWorld = preload("res://scenes/game_world.tscn").instantiate()
 	root.add_child(game)

@@ -61,7 +61,6 @@ func _run() -> void:
 
 	main._ui_stack.force_animate_in_headless = true
 	var carousel := main.get_node("%Carousel")
-	carousel.force_animate_in_headless = true
 
 	await _test_main_and_carousel(main, carousel)
 	await _test_shop(main)
@@ -103,17 +102,18 @@ func _test_shop(main: Node) -> void:
 	await process_frame
 	_check(shop._preview.texture == preview and not shop.is_processing(), "витрина не обновляет превью в простое")
 	root.push_input(_pad_button(JOY_BUTTON_DPAD_DOWN))
-	_check(shop._rows.glacier.has_focus() and shop._selection == "glacier",
-		"крестовина выбирает на превью расцветку в фокусе")
+	_check(shop._rows.lingon.has_focus() and shop._selection == "lingon",
+		"крестовина выбирает на превью расцветку следующего ряда")
+	shop._rows.night.grab_focus()
 	root.push_input(_pad_button(JOY_BUTTON_DPAD_RIGHT))
 	_check(shop._goal_action.has_focus(), "вправо переводит фокус к цели, когда очков на покупку мало")
 	shop._rows.moss.pressed.emit()
-	_check(shop._action.disabled and shop._note.text.contains("50"), "магазин показывает, сколько очков не хватает")
+	_check(shop._action.disabled and shop._price_caption.text.contains("Не хватает 50"), "магазин показывает, сколько очков не хватает")
 	_check(shop._rows.moss.button_pressed and not shop._rows.ember.button_pressed,
 		"подсвечена только расцветка на превью")
 	shop._goal_action.pressed.emit()
 	main._shop_progress.award("Тест-1000", ["start:home"])
-	_check(shop._goal_card.visible and shop._goal_bar.value == 20.0 and shop._goal_status.text.contains("Осталось 30"),
+	_check(not shop._goal_card.visible and is_equal_approx(shop._price_bar.value, 0.4) and shop._price_caption.text.contains("Не хватает 30"),
 		"выбранная цель показывает прогресс после задания")
 	shop._rows.glacier.pressed.emit()
 	_check(shop._goal_action.text == "Сменить цель" and main._shop_progress.purchase_goal == "moss",
@@ -128,7 +128,10 @@ func _test_shop(main: Node) -> void:
 	main._shop_progress.award("Тест-1000", ["supplies:home>farm"])
 	_check(shop._goal_status.text.begins_with("Можно купить") and not shop._action.disabled, "цель отмечается доступной при достижении суммы")
 	shop._rows.night.pressed.emit()
-	_check(shop._note.text.contains("На «Мох» нужно будет ещё 50"), "покупка вне цели заранее показывает новый остаток до цели")
+	shop._action.pressed.emit()
+	_check(shop._review_card.visible and shop._note.text.contains("Мох") and shop._note.text.contains("50"),
+		"подтверждение покупки вне цели показывает новый остаток до цели")
+	shop.dismiss_purchase()
 	shop._rows.moss.pressed.emit()
 	shop._action.pressed.emit()
 	shop._action.pressed.emit()
@@ -136,7 +139,7 @@ func _test_shop(main: Node) -> void:
 	_check(shop._cancel_buy.has_focus() and main._shop_progress.balance == 50 and not main._shop_progress.owns("moss"),
 		"повторный ввод на покупке не списывает очки, фокус стоит на отмене")
 	_check(shop.get_global_rect().encloses(shop._review_actions.get_global_rect())
-		and shop._note.get_theme_font_size("font_size") >= 16 and shop._note.text.contains("«Мох» за 50"),
+		and shop._review_title.text.contains("Мох") and shop._review_balance.text.contains("50"),
 		"подтверждение и итог покупки видны в интерфейсе 1280×800")
 	var double_click := InputEventMouseButton.new()
 	double_click.position = shop._confirm_buy.get_global_rect().get_center()
@@ -155,12 +158,12 @@ func _test_shop(main: Node) -> void:
 		"B отменяет покупку и оставляет магазин открытым")
 	shop._action.pressed.emit()
 	await process_frame
-	root.push_input(_pad_button(JOY_BUTTON_DPAD_RIGHT))
+	root.push_input(_pad_button(JOY_BUTTON_DPAD_DOWN))
 	_check(shop._confirm_buy.has_focus(), "подтверждение доступно с крестовины")
 	shop._confirm_buy.pressed.emit()
 	shop._confirm_buy.pressed.emit()
-	_check(shop._action.text == "Надеть" and main._shop_progress.balance == 0 and not shop._goal_card.visible
-		and shop._collection.text.ends_with("2 из 4") and main._shop_progress.equipped == "ember"
+	_check(shop._action.text == "Надето" and main._shop_progress.balance == 0 and not shop._goal_card.visible
+		and shop._collection.text == "2 / 7 открыто" and main._shop_progress.equipped == "moss"
 		and main._ui_audio.last_sound == &"confirm", "покупка пополняет коллекцию один раз и подтверждается звуком")
 	shop._action.pressed.emit()
 	_check(main._shop_progress.equipped == "moss", "купленную расцветку можно надеть")
@@ -199,37 +202,34 @@ func _test_main_and_carousel(main: Node, carousel: Node) -> void:
 	await create_timer(0.24).timeout
 	_check(not main.get_node("%AllWorlds").visible and not dimmer.visible and is_equal_approx(dimmer.color.a, 0.0), "5.1 после отката AllWorlds и Dimmer полностью скрыты")
 
-	# То же для NewWorld -> OpenNew
+	# Создание открывается из общего экрана миров и возвращает фокус в него.
+	main._open_all_worlds()
+	await create_timer(0.22).timeout
 	open_new.grab_focus()
 	main._open_new_world()
 	await create_timer(0.05).timeout
-	_check(main._ui_stack.is_open("new_world"), "5.1 NewWorld открыт поверх Menu")
+	_check(main._ui_stack.is_open("new_world"), "5.1 NewWorld открыт поверх AllWorlds")
 	root.push_input(_pad_button(JOY_BUTTON_B))
-	_check(main._ui_stack.is_open("menu") and open_new.has_focus(), "5.1 B из NewWorld возвращает фокус на OpenNew")
+	_check(main._ui_stack.is_open("all_worlds") and open_new.has_focus(), "5.1 B из NewWorld возвращает фокус на OpenNew")
+	await create_timer(0.24).timeout
+	root.push_input(_pad_button(JOY_BUTTON_B))
 	await create_timer(0.24).timeout
 
-	# WorldCarousel: направленный сдвиг и устойчивость к быстрому спаму
+	# Переключение не сдвигает дочерний элемент контейнера и выдерживает быстрый ввод.
 	var step_dirs: Array[int] = []
 	carousel.stepped.connect(func(d: int) -> void: step_dirs.append(d))
 	var card := carousel._card as Control
+	var card_position := card.position
 	var before_ticks := int(main._ui_audio.play_counts.get(&"carousel_step", 0))
 	carousel.move(1)
 	_check(step_dirs.size() == 1 and step_dirs[0] == 1, "5.1 WorldCarousel move(1) шлёт stepped(1)")
 	_check(int(main._ui_audio.play_counts.get(&"carousel_step", 0)) > before_ticks, "5.1 переключение карусели играет carousel_step")
-	await create_timer(0.03).timeout
-	_check(card.position.x < -0.5, "5.1 старая карточка уезжает влево (-24 * dir)")
-	await create_timer(0.09).timeout
-	_check(card.position.x > 0.5, "5.1 новая карточка въезжает справа (+24 * dir -> 0)")
-
-	# Быстрый спам переключений убивает прошлый Tween и чисто доходит до 0 / alpha=1
 	carousel.move(1)
-	await process_frame
+	carousel.move(-1)
 	carousel.move(-1)
 	await process_frame
-	carousel.move(-1)
-	await create_timer(0.35).timeout
-	_check(is_zero_approx(card.position.x) and is_equal_approx(card.modulate.a, 1.0) and carousel._fade == null,
-		"5.1 после быстрого спама карусель чисто останавливается в 0 с alpha=1")
+	_check(card.position.is_equal_approx(card_position) and is_equal_approx(card.modulate.a, 1.0),
+		"5.1 быстрые переключения не нарушают вёрстку контейнера")
 
 	# _seed_row без «кнопки внутри кнопки» + отклик при заполненном избранном (12)
 	main._open_all_worlds()
@@ -279,9 +279,9 @@ func _test_loading_and_cancellation(main: Node) -> void:
 	_check(loading.visible and is_zero_approx(loading.modulate.a) and cancel.has_focus(),
 		"5.2 Loading проявляется из прозрачного состояния и получает фокус")
 	await create_timer(0.22).timeout
-	var bottom_left := panel.position + Vector2(0.0, panel.size.y)
-	_check(bottom_left.is_equal_approx(Vector2(48.0, loading.size.y - 48.0)),
-		"5.2 карточка Loading привязана к левому нижнему углу с отступом 48")
+	var showcase: Control = main.get_node("%Carousel")
+	_check(is_equal_approx(panel.offset_left, showcase.offset_left) and is_equal_approx(panel.offset_top, showcase.offset_top),
+		"5.2 карточка Loading совпадает по положению с витриной карты")
 
 	main._set_progress(0.8, "Фаза 2")
 	_check(is_zero_approx(main.bar.value) and previous_step.visible and previous_step.text == "Фаза 1",

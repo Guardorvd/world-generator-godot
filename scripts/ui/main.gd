@@ -191,10 +191,22 @@ func _ready() -> void:
 		b.button_group = tabs
 		b.pressed.connect(_show_seed_tab.bind(tab))
 	var carousel: Carousel = %Carousel
-	carousel.setup(%Start, [%OpenNew, %OpenWorlds, %OpenShop, %MenuSettings, %MenuExit], %TrailLab)
+	carousel.setup(%Start, [%OpenWorlds, %OpenShop, %MenuSettings, %MenuExit], %TrailLab)
+	carousel.favorite_requested.connect(_on_star)
+	%OpenWorlds.icon = UiIcons.ALBUM
+	%OpenShop.icon = UiIcons.BAG
+	%MenuSettings.icon = UiIcons.INFO
+	%MenuExit.icon = UiIcons.EXIT
+	for button: Button in [%OpenWorlds, %OpenShop, %MenuSettings, %MenuExit]:
+		button.expand_icon = true
+		button.add_theme_constant_override("icon_max_width", 22)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
 	carousel.play_requested.connect(_on_start)
-	carousel.stepped.connect(func(dir: int) -> void: _play_ui(&"carousel_step", 1.04 if dir > 0 else 0.96))
+	carousel.create_requested.connect(func(seed_text: String) -> void:
+		if not busy and _is_screen("menu"): _launch_seed(seed_text))
+	carousel.preview_ready.connect(func(seed_text: String, texture: Texture2D) -> void:
+		_previews[seed_text] = texture)
+	carousel.stepped.connect(func(dir: int) -> void: _play_ui(&"carousel_step", 1.06 if dir > 0 else 0.94))
 	for item: Dictionary in RecommendedSeeds.SEEDS:
 		var button := Button.new()
 		button.text = item.seed
@@ -399,7 +411,7 @@ static func _is_back_press(event: InputEvent) -> bool:
 func _open_new_world() -> void:
 	var opener := _opener_focus(%OpenNew)
 	seed_edit.text = random_seed()
-	if _ui_stack != null and _is_screen("menu"):
+	if _ui_stack != null and (_is_screen("menu") or _is_screen("all_worlds")):
 		_active_screen = "new_world"
 		_ui_stack.push("new_world", {
 			dimmer = 0.35,
@@ -860,6 +872,13 @@ func _preview_tex(seed_text: String) -> Texture2D:
 		_card_reads += 1
 		var img := GameContext.scope.cache.preview(seed_text, not QuickTrails.active()) if GameContext.scope.cache.enabled else null
 		_previews[seed_text] = ImageTexture.create_from_image(img) if img != null else null
+		if img != null:
+			var carousel := get_node_or_null("%Carousel") as Carousel
+			if carousel != null: carousel.promote_cached(seed_text)
+	if _previews[seed_text] == null:
+		var carousel := get_node_or_null("%Carousel") as Carousel
+		if carousel != null:
+			return carousel.generated_preview(seed_text)
 	return _previews[seed_text]
 
 
@@ -872,6 +891,7 @@ func _read_world_card(seed_text: String) -> Dictionary:
 	var corrupt := data.is_empty() and _has_save(seed_text)
 	var cache := GameContext.scope.cache
 	var ready := cache.enabled and (cache.has(seed_text) or (not QuickTrails.active() and cache.has_bundled(seed_text)))
+	var map_ready := cache.enabled and (cache.ready_layers(seed_text) >= 2 or (not QuickTrails.active() and cache.has_bundled(seed_text)))
 	var summary := "Откроется быстро." if ready else "Мир создастся при запуске, около минуты."
 	var saved_at := -1
 	if not data.is_empty():
@@ -880,7 +900,8 @@ func _read_world_card(seed_text: String) -> Dictionary:
 	elif corrupt:
 		summary = "Сохранение не читается. Мир можно создать заново."
 	return {seed = seed_text, saved = not data.is_empty(), saved_at = saved_at,
-		corrupt = corrupt, manual = not manual.data.is_empty(), ready = ready, summary = summary}
+		corrupt = corrupt, manual = not manual.data.is_empty(), ready = ready, map_ready = map_ready, summary = summary,
+		visited = data.visited.size() if not data.is_empty() else 0}
 
 
 func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
@@ -904,8 +925,6 @@ func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
 	for seed_text: String in _saved_seeds + settings.recent_seeds + settings.favorite_seeds + known:
 		if seed_text != deleted and seed_text not in _carousel_seeds:
 			_carousel_seeds.append(seed_text)
-		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
-			break
 	if deleted == _selected_seed and not deleted.is_empty():
 		_selected_seed = _carousel_seeds[mini(previous_index, _carousel_seeds.size() - 1)] if not _carousel_seeds.is_empty() else ""
 	elif _selected_seed.is_empty() and not _carousel_seeds.is_empty():
@@ -913,8 +932,6 @@ func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
 	elif not _world_cards.has(_selected_seed):
 		_selected_seed = _carousel_seeds[0] if not _carousel_seeds.is_empty() else ""
 	if not _selected_seed.is_empty() and _selected_seed not in _carousel_seeds:
-		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
-			_carousel_seeds.pop_back()
 		_carousel_seeds.append(_selected_seed)
 	if not _is_screen("new_world"):
 		seed_edit.text = _selected_seed
@@ -926,7 +943,8 @@ func _update_carousel() -> void:
 	var entries: Array[Dictionary] = []
 	for seed_text: String in _carousel_seeds:
 		var entry: Dictionary = _world_cards[seed_text].duplicate()
-		entry.texture = _preview_tex(seed_text)
+		entry.texture = _preview_tex(seed_text) if seed_text == _selected_seed else _previews.get(seed_text)
+		entry.favorite = seed_text in GameContext.scope.settings.favorite_seeds
 		entries.append(entry)
 	(%Carousel as Carousel).set_entries(entries, _selected_seed)
 
@@ -1172,11 +1190,10 @@ func _select_world(seed_text: String) -> void:
 	if not _is_screen("new_world"):
 		seed_edit.text = seed_text
 	if not seed_text.is_empty() and seed_text not in _carousel_seeds:
-		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
-			_carousel_seeds.pop_back()
 		_carousel_seeds.push_front(seed_text)
 		_update_carousel()
 	else:
+		(%Carousel as Carousel).set_preview(seed_text, _preview_tex(seed_text))
 		(%Carousel as Carousel).show_world(seed_text, true)
 	_update_selection()
 
@@ -1190,7 +1207,15 @@ func _update_selection() -> void:
 	var state: Dictionary = _world_cards.get(seed_text, {})
 	var corrupt: bool = state.get("corrupt", false)
 	var label := "Продолжить путешествие" if state.get("saved", false) else "Начать путешествие"
-	%Start.text = "Все миры" if corrupt else label
+	%Start.text = "Все миры" if corrupt else ("Продолжить «%s»" % seed_text if state.get("saved", false) else label)
+	if state.get("saved", false):
+		var when := _local_time_text(int(state.saved_at))
+		var today := Time.get_datetime_string_from_system().get_slice("T", 0)
+		var saved_label := "сегодня" if when.begins_with(today) else when.get_slice(" ", 0)
+		%MenuStatus.text = "Открыто мест: %d · Сохранено %s" % [state.get("visited", 0), saved_label]
+	else:
+		%MenuStatus.text = str(state.get("summary", "Выберите или создайте мир")).replace("\n", " · ")
+	%OpenShop.text = "Экипировка  ·  %d" % _shop_progress.balance if _shop_progress.load_error == OK else "Экипировка"
 	if seed_text.is_empty():
 		%Start.text = "Создать мир"
 	%PlaySelected.text = label
@@ -1205,7 +1230,7 @@ func _update_selection() -> void:
 	var tex: Texture2D = _previews.get(seed_text)
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
-	%PreviewHint.text = "Карта мира появится после первого запуска"
+	%PreviewHint.text = "Карта мира появится после загрузки мира"
 	%ChoiceName.text = "Мир не выбран" if seed_text.is_empty() else "«%s»" % seed_text
 	%WorldStatus.text = state.get("summary", "")
 	var star: Button = %Star
@@ -1257,6 +1282,10 @@ func _on_star(seed_text: String, source_button: Control = null) -> void:
 
 
 func _show_favorites_full_notice() -> void:
+	if _is_screen("menu"):
+		%MenuStatus.text = "Избранное заполнено (%d)" % GameSettings.FAVORITES_MAX
+		get_tree().create_timer(2.0).timeout.connect(func() -> void:
+			if is_inside_tree() and _is_screen("menu"): _update_selection())
 	var notice := get_node_or_null("%FavoritesNotice") as Label
 	if notice == null:
 		return
@@ -1419,6 +1448,34 @@ func _restore_author_worlds() -> void:
 
 func _fit_menu() -> void:
 	var vs := get_viewport().get_visible_rect().size
+	var showcase: Control = %Carousel
+	var panel: Control = %Menu.get_node("Panel")
+	var lab: Control = %TrailLab
+	# Вся колонка помещается между равными верхним и нижним отступами.
+	var column_width := maxf(388.0, panel.get_combined_minimum_size().x)
+	var panel_height := panel.get_combined_minimum_size().y
+	var card_height := 260.0
+	var total_height := card_height + 12.0 + panel_height + 12.0 + 44.0
+	var column_scale := minf(1.0, minf(maxf(0.3, (vs.y - 56.0) / total_height), maxf(0.3, (vs.x - 96.0) / column_width)))
+	showcase.visible = true
+	showcase.scale = Vector2.ONE * column_scale
+	showcase.offset_left = 48.0
+	showcase.offset_top = 28.0
+	showcase.offset_right = 48.0 + column_width
+	showcase.offset_bottom = 28.0 + card_height
+	panel.scale = showcase.scale
+	panel.offset_left = 48.0
+	panel.offset_top = vs.y - 28.0 - (44.0 + 12.0 + panel_height) * column_scale
+	panel.offset_right = 48.0 + column_width
+	panel.offset_bottom = panel.offset_top + panel_height
+	lab.scale = showcase.scale
+	lab.offset_top = -28.0 - 44.0 * column_scale
+	lab.offset_bottom = lab.offset_top + 44.0
+	var loading_panel: Control = %Loading.get_node("Panel")
+	loading_panel.scale = showcase.scale
+	loading_panel.offset_left = showcase.offset_left
+	loading_panel.offset_top = showcase.offset_top
+	loading_panel.offset_right = showcase.offset_right
 	var worlds: Control = %AllWorlds.get_node("Panel")
 	worlds.custom_minimum_size = Vector2(clampf(vs.x * 0.75, 920.0, 1220.0), clampf(vs.y * 0.80, 550.0, 700.0))
 	if _backdrop != null:
@@ -1496,7 +1553,10 @@ func _on_start() -> void:
 		_on_create_world()
 		return
 	if _selected_seed.is_empty():
-		_open_new_world()
+		if %Carousel.visible:
+			(%Carousel as Carousel).focus_quick_seed()
+		else:
+			_open_new_world()
 		return
 	_launch_seed(_selected_seed)
 
@@ -1553,6 +1613,7 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 		if result.backup:
 			_message("Резервная копия", "Основное сохранение повреждено. Загружается предыдущая исправная копия.")
 	_finish_session("switch_world", save_began_us, save_ended_us)
+	(%Carousel as Carousel).cancel_preview()
 	busy = true
 	_progress_target = 0.0
 	bar.value = 0.0
@@ -1566,7 +1627,8 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	hud.visible = false
 	_set_progress(0.0, "Подготовка", true)
 	cancel_load_button.disabled = false
-	%LoadPreview.texture = _preview_tex(seed_text)
+	var selected_map: Texture2D = (%Carousel as Carousel).selected_texture() if _is_screen("menu") and seed_text == _selected_seed else null
+	%LoadPreview.texture = selected_map if selected_map != null else _preview_tex(seed_text)
 	%LoadPreview.visible = %LoadPreview.texture != null
 	%LoadPlaceholder.visible = not %LoadPreview.visible
 	%LoadPlaceholder.text = seed_text

@@ -26,6 +26,7 @@ const SOUNDS := {
 
 var suppress_focus_sound := false
 var last_sound: StringName = &""
+var last_pitch := 1.0
 var play_counts := {}
 
 var _players: Array[AudioStreamPlayer] = []
@@ -55,6 +56,7 @@ func play(kind: StringName, pitch := 1.0) -> void:
 			return
 		_last_hover_ms = now
 	last_sound = kind
+	last_pitch = pitch
 	play_counts[kind] = int(play_counts.get(kind, 0)) + 1
 	if DisplayServer.get_name() == "headless" or AudioServer.get_driver_name() == "Dummy":
 		return
@@ -150,8 +152,8 @@ static func pulse_confirm(button: Control) -> void:
 	var tween := button.create_tween()
 	button.set_meta(&"_pulse_tween", tween)
 	tween.set_parallel(true)
-	tween.tween_property(button, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tween.tween_property(button, "self_modulate", Color.WHITE, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "scale", Vector2.ONE, 0.13).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.tween_property(button, "self_modulate", Color.WHITE, 0.13).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tween.set_parallel(false)
 	tween.tween_callback(func() -> void:
 		if is_instance_valid(button):

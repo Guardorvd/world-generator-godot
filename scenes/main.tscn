@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource type="Script" uid="uid://bpvp0imp4gmsq" path="res://scripts/ui/main.gd" id="1_main"]
 [ext_resource type="Theme" path="res://resources/ui_theme.tres" id="2_theme"]
@@ -15,6 +15,7 @@
 [ext_resource type="Texture2D" path="res://resources/menu/poster.jpg" id="12_poster"]
 [ext_resource type="Script" path="res://scripts/ui/world_carousel.gd" id="13_carousel"]
 [ext_resource type="Texture2D" path="res://resources/icons/journal.svg" id="14_journal"]
+[ext_resource type="Script" path="res://scripts/ui/menu_map_pattern.gd" id="15_map_pattern"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -252,44 +253,186 @@ mouse_filter = 2
 
 [node name="Panel" type="VBoxContainer" parent="UI/Root/Menu"]
 layout_mode = 1
-anchor_top = 1.0
-anchor_bottom = 1.0
 offset_left = 48.0
-offset_top = -48.0
-offset_right = 488.0
-offset_bottom = -48.0
-grow_vertical = 0
+offset_top = 300.0
+offset_right = 436.0
+offset_bottom = 634.0
 mouse_filter = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 8
 
-[node name="Heading" type="Label" parent="UI/Root/Menu/Panel"]
+[node name="Header" type="HBoxContainer" parent="UI/Root/Menu/Panel"]
+layout_mode = 2
+alignment = 0
+
+[node name="Heading" type="Label" parent="UI/Root/Menu/Panel/Header"]
+layout_mode = 2
 theme_type_variation = &"MenuHeading"
 text = "Генератор миров"
 
-[node name="Carousel" type="VBoxContainer" parent="UI/Root/Menu/Panel"]
+[node name="Version" type="Label" parent="UI/Root/Menu/Panel/Header"]
 unique_name_in_owner = true
-theme_override_constants/separation = 9
+layout_mode = 2
+size_flags_vertical = 8
+theme_type_variation = &"MenuFootnote"
+text = "15.0"
+
+[node name="Start" type="Button" parent="UI/Root/Menu/Panel"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 56)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_font_sizes/font_size = 18
+text = "Начать путешествие"
+clip_text = true
+icon = ExtResource("6_play")
+
+[node name="MenuStatus" type="Label" parent="UI/Root/Menu/Panel"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"MenuFootnote"
+text_overrun_behavior = 3
+
+[node name="Actions" type="VBoxContainer" parent="UI/Root/Menu/Panel"]
+custom_minimum_size = Vector2(320, 0)
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="OpenWorlds" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 44)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "Миры и создание"
+alignment = 0
+
+[node name="OpenShop" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 44)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "Экипировка"
+alignment = 0
+
+[node name="MenuSettings" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 44)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "Настройки"
+alignment = 0
+
+[node name="MenuExit" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 44)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "Выход"
+alignment = 0
+
+[node name="TrailLab" type="Button" parent="UI/Root/Menu"]
+unique_name_in_owner = true
+layout_mode = 1
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 48.0
+offset_top = -72.0
+offset_right = 250.0
+offset_bottom = -28.0
+grow_vertical = 0
+theme_type_variation = &"MenuLink"
+theme_override_font_sizes/font_size = 13
+text = "Лаборатория трасс"
+alignment = 0
+
+[node name="Carousel" type="PanelContainer" parent="UI/Root/Menu"]
+unique_name_in_owner = true
+layout_mode = 1
+offset_left = 48.0
+offset_top = 28.0
+offset_right = 436.0
+offset_bottom = 288.0
+clip_contents = true
+theme_type_variation = &"WorldCard"
 script = ExtResource("13_carousel")
 
-[node name="Card" type="PanelContainer" parent="UI/Root/Menu/Panel/Carousel"]
-theme_type_variation = &"WorldCard"
+[node name="Card" type="Control" parent="UI/Root/Menu/Carousel"]
+layout_mode = 2
+clip_contents = true
+
+[node name="Slide" type="VBoxContainer" parent="UI/Root/Menu/Carousel/Card"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 8
+
+[node name="Header" type="HBoxContainer" parent="UI/Root/Menu/Carousel/Card/Slide"]
+layout_mode = 2
+theme_override_constants/separation = 3
+
+[node name="WorldName" type="Label" parent="UI/Root/Menu/Carousel/Card/Slide/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"WorldName"
+theme_override_font_sizes/font_size = 18
+text_overrun_behavior = 3
+
+[node name="Favorite" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Header"]
+custom_minimum_size = Vector2(36, 36)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+expand_icon = true
+
+[node name="Previous" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Header"]
+custom_minimum_size = Vector2(32, 36)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "‹"
+tooltip_text = "Предыдущий мир"
+
+[node name="Count" type="Label" parent="UI/Root/Menu/Carousel/Card/Slide/Header"]
+layout_mode = 2
+vertical_alignment = 1
+text = "0 / 0"
+
+[node name="Next" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Header"]
+custom_minimum_size = Vector2(32, 36)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "›"
+tooltip_text = "Следующий мир"
+
+[node name="Frame" type="Control" parent="UI/Root/Menu/Carousel/Card/Slide"]
+custom_minimum_size = Vector2(0, 190)
+layout_mode = 2
 mouse_filter = 2
 
-[node name="CardContent" type="VBoxContainer" parent="UI/Root/Menu/Panel/Carousel/Card"]
-theme_override_constants/separation = 9
+[node name="Pattern" type="Control" parent="UI/Root/Menu/Carousel/Card/Slide/Frame"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 mouse_filter = 2
+script = ExtResource("15_map_pattern")
 
-[node name="Artwork" type="AspectRatioContainer" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent"]
-custom_minimum_size = Vector2(0, 232.875)
-ratio = 1.7777778
+[node name="Artwork" type="AspectRatioContainer" parent="UI/Root/Menu/Carousel/Card/Slide/Frame"]
+layout_mode = 1
+offset_right = 190.0
+offset_bottom = 190.0
+ratio = 1.0
 stretch_mode = 2
 mouse_filter = 0
+focus_mode = 2
 
-[node name="Art" type="Control" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent/Artwork"]
+[node name="Art" type="Control" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Artwork"]
 clip_contents = true
 mouse_filter = 2
 
-[node name="Map" type="TextureRect" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent/Artwork/Art"]
+[node name="Map" type="TextureRect" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Artwork/Art"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -297,110 +440,154 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 expand_mode = 1
-stretch_mode = 6
+stretch_mode = 5
 mouse_filter = 2
 
-[node name="Placeholder" type="Label" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent/Artwork/Art"]
+[node name="OldMap" type="TextureRect" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Artwork/Art"]
+visible = false
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_type_variation = &"WorldPlaceholder"
-horizontal_alignment = 1
-vertical_alignment = 1
-text_overrun_behavior = 3
+expand_mode = 1
+stretch_mode = 5
 mouse_filter = 2
 
-[node name="WorldName" type="Label" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent"]
+[node name="PreviewNote" type="Label" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Artwork/Art"]
+visible = false
+layout_mode = 1
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -28.0
+theme_type_variation = &"WorldPlaceholder"
+theme_override_font_sizes/font_size = 12
+text = "Предпросмотр · без дорог"
+horizontal_alignment = 1
+vertical_alignment = 1
+mouse_filter = 2
+
+[node name="Modes" type="Control" parent="UI/Root/Menu/Carousel/Card/Slide/Frame"]
+layout_mode = 1
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 202.0
+mouse_filter = 2
+
+[node name="Caption" type="Label" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes"]
+layout_mode = 1
+anchor_right = 1.0
+offset_bottom = 22.0
+theme_type_variation = &"MenuFootnote"
+theme_override_font_sizes/font_size = 11
+text = "ВИД КАРТЫ"
+mouse_filter = 2
+
+[node name="Track" type="Panel" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 24.0
+mouse_filter = 2
+
+[node name="Indicator" type="Panel" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes"]
+mouse_filter = 2
+
+[node name="Buttons" type="VBoxContainer" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = 24.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 2
+
+[node name="Relief" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes/Buttons"]
 custom_minimum_size = Vector2(0, 32)
-theme_type_variation = &"WorldName"
-text_overrun_behavior = 3
-
-[node name="Summary" type="Label" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent"]
-custom_minimum_size = Vector2(0, 44)
-theme_type_variation = &"SubtitleLabel"
-autowrap_mode = 3
-
-[node name="Strip" type="HBoxContainer" parent="UI/Root/Menu/Panel/Carousel"]
-theme_override_constants/separation = 5
-
-[node name="Previous" type="Button" parent="UI/Root/Menu/Panel/Carousel/Strip"]
-custom_minimum_size = Vector2(44, 44)
-theme_type_variation = &"MenuLink"
-text = "‹"
-tooltip_text = "Предыдущий мир"
-
-[node name="Cards" type="HBoxContainer" parent="UI/Root/Menu/Panel/Carousel/Strip"]
+layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 4
+size_flags_vertical = 3
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "Рельеф"
+
+[node name="Atlas" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes/Buttons"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "Атлас"
+
+[node name="Heights" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Modes/Buttons"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "Высоты"
+
+[node name="Placeholder" type="VBoxContainer" parent="UI/Root/Menu/Carousel/Card/Slide/Frame"]
+mouse_filter = 1
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = 5.0
+offset_right = -20.0
+offset_bottom = -5.0
+grow_horizontal = 2
+grow_vertical = 2
 alignment = 1
-
-[node name="Next" type="Button" parent="UI/Root/Menu/Panel/Carousel/Strip"]
-custom_minimum_size = Vector2(44, 44)
-theme_type_variation = &"MenuLink"
-text = "›"
-tooltip_text = "Следующий мир"
-
-[node name="Start" type="Button" parent="UI/Root/Menu/Panel"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 56)
-theme_type_variation = &"PrimaryButton"
-theme_override_font_sizes/font_size = 20
-text = "Начать путешествие"
-icon = ExtResource("6_play")
-
-[node name="Actions" type="HBoxContainer" parent="UI/Root/Menu/Panel"]
 theme_override_constants/separation = 4
 
-[node name="OpenNew" type="Button" parent="UI/Root/Menu/Panel/Actions"]
-unique_name_in_owner = true
-size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 44)
-theme_type_variation = &"MenuLink"
-text = "Новый мир"
+[node name="Icon" type="TextureRect" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Placeholder"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+texture = ExtResource("14_journal")
+expand_mode = 1
+stretch_mode = 5
+mouse_filter = 2
 
-[node name="OpenWorlds" type="Button" parent="UI/Root/Menu/Panel/Actions"]
-unique_name_in_owner = true
-size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 44)
-theme_type_variation = &"MenuLink"
-text = "Все миры"
+[node name="Hint" type="Label" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Placeholder"]
+layout_mode = 2
+theme_type_variation = &"WorldPlaceholder"
+theme_override_font_sizes/font_size = 13
+text = "Карта появится после загрузки мира"
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+mouse_filter = 2
 
-[node name="OpenShop" type="Button" parent="UI/Root/Menu/Panel/Actions"]
-unique_name_in_owner = true
+[node name="QuickSeed" type="LineEdit" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Placeholder"]
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+placeholder_text = "Зерно (случайное)"
+max_length = 32
+
+[node name="CreateFirst" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Placeholder"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_font_sizes/font_size = 15
+text = "Создать первый мир"
+
+[node name="BuildPreview" type="Button" parent="UI/Root/Menu/Carousel/Card/Slide/Frame/Placeholder"]
+custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
 theme_type_variation = &"MenuLink"
-text = "Магазин"
-
-[node name="MenuSettings" type="Button" parent="UI/Root/Menu/Panel/Actions"]
-unique_name_in_owner = true
-size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 44)
-theme_type_variation = &"MenuLink"
-text = "Настройки"
-
-[node name="MenuExit" type="Button" parent="UI/Root/Menu/Panel/Actions"]
-unique_name_in_owner = true
-size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 44)
-theme_type_variation = &"MenuLink"
-text = "Выход"
-
-[node name="Build" type="HBoxContainer" parent="UI/Root/Menu/Panel"]
-theme_override_constants/separation = 14
-
-[node name="Version" type="Label" parent="UI/Root/Menu/Panel/Build"]
-unique_name_in_owner = true
-theme_type_variation = &"MenuFootnote"
-text = "15.0"
-
-[node name="TrailLab" type="Button" parent="UI/Root/Menu/Panel/Build"]
-unique_name_in_owner = true
-theme_type_variation = &"MenuLink"
-theme_override_font_sizes/font_size = 13
-text = "Лаборатория трасс"
+theme_override_font_sizes/font_size = 12
+text = "Построить предпросмотр"
 
 [node name="Dimmer" type="ColorRect" parent="UI/Root"]
 unique_name_in_owner = true
@@ -435,7 +622,7 @@ theme_override_constants/separation = 14
 
 [node name="Title" type="Label" parent="UI/Root/AllWorlds/Panel/Box"]
 theme_type_variation = &"TitleLabel"
-text = "Все миры"
+text = "Миры и создание"
 
 [node name="Columns" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box"]
 layout_mode = 2
@@ -451,6 +638,13 @@ size_flags_stretch_ratio = 1.2
 layout_mode = 2
 theme_type_variation = &"SectionLabel"
 text = "Ваши миры"
+
+[node name="OpenNew" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "+ Создать мир"
 
 [node name="SeedTabs" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 layout_mode = 2
@@ -749,13 +943,9 @@ grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="UI/Root/Loading"]
 layout_mode = 1
-anchor_top = 1.0
-anchor_bottom = 1.0
 offset_left = 48.0
-offset_top = -48.0
-offset_right = 488.0
-offset_bottom = -48.0
-grow_vertical = 0
+offset_top = 28.0
+offset_right = 436.0
 theme_type_variation = &"WorldCard"
 
 [node name="Box" type="VBoxContainer" parent="UI/Root/Loading/Panel"]
@@ -770,14 +960,14 @@ text = "Создание мира…"
 text_overrun_behavior = 3
 
 [node name="Artwork" type="AspectRatioContainer" parent="UI/Root/Loading/Panel/Box"]
-custom_minimum_size = Vector2(0, 232.875)
-ratio = 1.7777778
+custom_minimum_size = Vector2(0, 190)
+ratio = 1.0
 stretch_mode = 2
 
 [node name="LoadPreview" type="TextureRect" parent="UI/Root/Loading/Panel/Box/Artwork"]
 unique_name_in_owner = true
 expand_mode = 1
-stretch_mode = 6
+stretch_mode = 5
 
 [node name="LoadPlaceholder" type="Label" parent="UI/Root/Loading/Panel/Box/Artwork"]
 unique_name_in_owner = true
@@ -1625,9 +1815,9 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/CreateWorld" to="." method="_on_create_world"]
 [connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/NewBack" to="." method="_return_to_menu_screen"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Start" to="." method="_on_start"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Actions/OpenNew" to="." method="_open_new_world"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/OpenNew" to="." method="_open_new_world"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Actions/OpenWorlds" to="." method="_open_all_worlds"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Actions/MenuSettings" to="." method="_open_settings"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Actions/MenuExit" to="." method="_exit_game"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Build/TrailLab" to="." method="_open_trail_lab"]
+[connection signal="pressed" from="UI/Root/Menu/TrailLab" to="." method="_open_trail_lab"]
 [connection signal="pressed" from="UI/Root/Loading/Panel/Box/CancelLoad" to="." method="_on_cancel_load_pressed"]
