@@ -150,6 +150,16 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 	_overlay_regions(ledger, Rect2i(x0, y0, cw, ch), out)
 	if not climate_inputs:
 		out.rock = preload("res://scripts/world/mountain_surface.gd").field(out.elev, out.slope, out.moist)
+		# Используем полный ореол рельефа, в том числе для дальнего полога по краям куска.
+		var biomes: PackedByteArray = out.biome
+		var position := PackedFloat32Array()
+		position.resize(n)
+		for j in ch:
+			for i in cw:
+				var o := j * cw + i
+				if biomes[o] == Biomes.GRASS:
+					position[o] = StageVegetation.meadow_position(hn, (j + PAD) * pw + i + PAD, pw)
+		out.meadow_position = position
 	return out
 
 

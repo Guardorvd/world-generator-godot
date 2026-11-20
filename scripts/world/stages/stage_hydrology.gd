@@ -11,14 +11,15 @@ const LAKE_MAX := 320
 const LAKE_DEPTH := 0.004
 const COAST_REACH := 32
 ## Региональный характер местности (14.11.2026, GEO 18, docs/MACRO_GEOGRAPHY.md). Осадки здесь — основа
-## влажности почвы, поэтому через них без новых систем и без правки C# меняются биомы (StageClimate),
+## влажности почвы, поэтому через них меняются биомы (StageClimate),
 ## густота и состав леса (StageVegetation) и открытость породы (MountainSurface). Два плавных слагаемых
 ## только из данных самой клетки (одинаково в плане и в OuterLand):
 ##   REGION_* — медленная волна того же шума влажности: сухие и влажные края размером в несколько км;
 ##              REGION_AMP — выраженность, REGION_SCALE — размер (больше — крупнее и реже);
 ##   RELIEF_* — положение в рельефе (position_field): дно долин и ложбин влажнее, гребни и вершины холмов
 ##              суше — относительно окрестности радиусом POSITION_R, а не по абсолютной высоте (долина на 40 м
-##              влажная, гребень у моря сухой). POSITION_SCALE — перепад (в единицах h), дающий полную поправку.
+##              влажная, гребень у моря сухой). POSITION_SCALE — перепад (в единицах h), дающий полную поправку;
+##              в сухих краях даже более неглубокие долины и невысокие гребни меняют осадки.
 ## Выше REGION_KEEP (≈ 85–110 м) поправка гаснет: горы, их биомы и скальные склоны как были. Ноль — прежние осадки.
 const REGION_SCALE := 640.0
 const REGION_OX := 57.3
@@ -44,9 +45,10 @@ static func rainfall(noise_value: float, distance_to_ocean: float, region: float
 	var base := 0.66 + 0.48 * noise_value + 0.08 * coast
 	var rain := base
 	if e > 0.0 and regional:
-		var valley := smoothstep(0.0, POSITION_SCALE, -position)
-		var ridge := smoothstep(0.0, POSITION_SCALE, position)
-		rain += (REGION_AMP * region + RELIEF_WET * valley - RELIEF_DRY * ridge) * (1.0 - smoothstep(REGION_KEEP.x, REGION_KEEP.y, e))
+		var regional_rain := REGION_AMP * region
+		var scale := POSITION_SCALE * lerpf(0.65, 1.0, smoothstep(0.43, 0.60, base + regional_rain))
+		var local := smoothstep(0.0, scale, absf(position)) * (RELIEF_WET if position < 0.0 else -RELIEF_DRY)
+		rain += (regional_rain + local) * (1.0 - smoothstep(REGION_KEEP.x, REGION_KEEP.y, e))
 		# Сушь мягко упирается в DRY_FLOOR: сухие края — лесостепь и луга, а не голая степь (её цвет — почти песок)
 		var floor_rain := minf(base, DRY_FLOOR)
 		if rain < floor_rain:

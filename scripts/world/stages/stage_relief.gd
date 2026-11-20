@@ -182,7 +182,7 @@ static func _start_raws(w: WorldData, finalists: Array, fast: Object) -> Array:
 			raw.resize(G * G)
 			for p in G * G:
 				raw[p] = raw_at(own.warpX, own.warpY, own.cont, own.mask, own.ridge, own.hill, grid[2 * p], grid[2 * p + 1],
-					finalists[f][2], finalists[f][3], w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
+					finalists[f][2], finalists[f][3], w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread, false)
 			part.append(raw)
 		return part, 1):
 		out.append_array(done)
@@ -268,7 +268,7 @@ static func _pick_start_legacy(w: WorldData) -> void:
 			for si in 16:
 				var x := (si + 0.5) * START_SIDE / 16.0
 				var y := (sj + 0.5) * START_SIDE / 16.0
-				if raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, floorf(x), floorf(y), mx, my, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread) >= SEA_RAW:
+				if raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, floorf(x), floorf(y), mx, my, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread, false) >= SEA_RAW:
 					land += 1
 		var frac := land / 256.0
 		if frac > best:
@@ -333,7 +333,7 @@ static func _micro_rows(noise: Simplex, base: PackedFloat32Array, x0: int, y0: i
 	return out
 
 
-## Рябь остаётся слабой в поймах и ложбинах, а на склонах её сила меняется пятнами.
+## Рябь остаётся слабой в поймах и ложбинах, а на открытой низкой суше меняется пятнами.
 ## Соседи читаются из основы до ряби. Численная копия — FastGrid.ReliefMicro.
 static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simplex, x: float, y: float) -> float:
 	var h := base[k]
@@ -356,6 +356,9 @@ static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simp
 			var shoulder := smoothstep(0.25, 1.5, -hollow)
 			var terrain := 0.06 + 0.94 * maxf(flank, shoulder) * (1.0 - 0.9 * shelter)
 			var patch := noise.noise(x / 90.0 + 83.7, y / 90.0 - 41.3)
+			# На части пологих низин проявляется слабая рябь; защищённое дно и выраженные склоны получают меньше прибавки.
+			if patch > 0.16 and lowland > 0.0:
+				terrain += 0.10 * smoothstep(0.16, 0.48, patch) * lowland * (1.0 - shelter) * (1.0 - terrain)
 			var varied := terrain * (0.35 + 0.65 * smoothstep(-0.55, 0.15, patch))
 			strength = lerpf(1.0, varied, weight)
 	return maxf(1e-4, h + noise.fbm(x / 9.0, y / 9.0, 2) * 0.006 * minf(1.0, h * 40.0) * strength)
@@ -410,9 +413,10 @@ static func _base_rows(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Pack
 	return out
 
 
-## Макрорельеф в клетке (x, y); (mx, my) — сдвиг шума материков. Копия — FastGrid.ReliefField
+## Макрорельеф в клетке (x, y); (mx, my) — сдвиг шума материков. Оценка окна использует прежнюю форму равнин.
+## Копия — FastGrid.BaseAt.
 static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simplex, ridge: Simplex, hill: Simplex,
-		x: float, y: float, mx: float, my: float, mountain_scale: float = 1.0, mountain_bias: float = 0.3, mountain_height: float = 1.0, foothill_spread: float = 0.0) -> float:
+		x: float, y: float, mx: float, my: float, mountain_scale: float = 1.0, mountain_bias: float = 0.3, mountain_height: float = 1.0, foothill_spread: float = 0.0, shape_plains: bool = true) -> float:
 	var wx := warp_x.fbm(x / 240.0, y / 240.0, 3) * 25.0
 	var wy := warp_y.fbm(x / 240.0 + 13.1, y / 240.0 - 7.7, 3) * 25.0
 	var X := x + wx
@@ -499,6 +503,15 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 		var support := smoothstep(0.12, 0.55, relief)
 		h -= maxf(0.0, h - SEA_RAW) * 0.60 * core * inland * (1.0 - support)
 		h += relief * mask * MOUNTAIN_AMP * mountain_height
+	# На спокойной суше замещаем короткую волну блока calm увалами масштаба 360 м.
+	# Вес считаем по итоговой высоте после долин и горного подъёма: от уреза воды до высоких плато.
+	var above_sea := h - SEA_RAW
+	if shape_plains and calm > 0.0 and core < 0.35 and above_sea > 0.035 and above_sea < 0.30:
+		var plain := calm * (1.0 - smoothstep(0.1, 0.35, core))
+		var lowland := smoothstep(0.035, 0.11, above_sea) * (1.0 - smoothstep(0.18, 0.30, above_sea))
+		var rolling := hill.noise(X / 90.0 - 24.7, Y / 90.0 + 53.1)
+		var fold := 0.055 * rolling - 0.025 * hills * shore_fade - 0.010 * valley
+		h += fold * plain * lowland
 	return h
 
 

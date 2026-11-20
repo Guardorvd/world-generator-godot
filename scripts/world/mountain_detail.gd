@@ -11,7 +11,8 @@ extends RefCounted
 ## Полоса соседей для уклона, в клетках
 const DETAIL_PAD := 2
 ## Высоты над морем, м: начало широких форм, начало горных рёбер и конец перехода.
-const DETAIL_LOW := 9.0
+const DETAIL_LOW := 5.0
+const DETAIL_LOW_FULL := 28.0
 const DETAIL_MOUNTAIN := 30.0
 const DETAIL_TRANSITION := 42.0
 const DETAIL_HIGH := 60.0
@@ -54,14 +55,17 @@ static func apply(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: i
 	if elev < DETAIL_TRANSITION:
 		mountain = smoothstep(DETAIL_MOUNTAIN, DETAIL_TRANSITION, elev)
 		var shore := smoothstep(0.015, 0.08, v - sea_raw)
-		lift += 0.28 * smoothstep(DETAIL_LOW, DETAIL_MOUNTAIN, elev) * (1.0 - mountain) * shore
+		lift += 0.42 * smoothstep(DETAIL_LOW, DETAIL_LOW_FULL, elev) * (1.0 - mountain) * shore
 	var per_raw := 1.25 * r4 / (top_raw - sea_raw) * height_scale
 	# Уклон основы (Собель на ±2 клетки), м на м
 	var b := 2 * bw
 	var gx := ((base[k + 2 - b] + 2.0 * base[k + 2] + base[k + 2 + b]) - (base[k - 2 - b] + 2.0 * base[k - 2] + base[k - 2 + b])) * per_raw / (16.0 * tile)
 	var gy := ((base[k - 2 + b] + 2.0 * base[k + b] + base[k + 2 + b]) - (base[k - 2 - b] + 2.0 * base[k - b] + base[k + 2 - b])) * per_raw / (16.0 * tile)
 	var g2 := gx * gx + gy * gy
-	if g2 < 0.0016:
+	# Широкие формы проявляются от 2,5 % на низких холмах; к горным склонам возвращается прежний диапазон.
+	var lowland := 1.0 - mountain
+	var gentle_start := 0.04 - 0.015 * lowland
+	if g2 <= gentle_start * gentle_start:
 		return v
 	var s := sqrt(g2)
 	if s >= DETAIL_LIMIT:
@@ -77,7 +81,8 @@ static func apply(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: i
 	t = clampf((hill.noise(x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0, 0.0, 1.0)
 	var vary := t * t * (3.0 - 2.0 * t)
 	# Пологие склоны — слабые волны; крутые — глубже, но самые крутые ослаблены
-	t = clampf((s - 0.04) / (0.12 - 0.04), 0.0, 1.0)
+	var gentle_end := 0.12 - 0.03 * lowland
+	t = clampf((s - gentle_start) / (gentle_end - gentle_start), 0.0, 1.0)
 	var gentle := t * t * (3.0 - 2.0 * t)
 	# Направление падения: веса четырёх осей (0°, 90°, 45°, 135°) по cos 2θ и sin 2θ, их сумма 1
 	var c2 := (gx * gx - gy * gy) / g2

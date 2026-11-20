@@ -11,6 +11,11 @@ const MAX_CONVEXITY_FACTOR := 1.0 + CONVEXITY_GAIN
 const OUTCROP_CHANCE := 0.12
 const HILL_OUTCROP_CHANCE := 0.065
 const HILL_OUTCROP_SLOPE := 0.28
+const LOW_HILL_CHANCE := 0.052
+const LOW_HILL_MIN := 0.018 # около 5 м над морем
+const LOW_HILL_MAX := 0.085
+const LOW_HILL_SLOPE := 0.16
+const LOW_HILL_REACH := 4 # клеток: выпуклость бровки на 16 м
 ## Conservative projected upper-block footprint, in clear_path's boulder-scale units.
 const OUTCROP_CLEAR := 2.2 # includes the projected upper blocks on a tilted instance
 const FIELD_HALO := 15 # соседний источник массива, его полный круг просвета и выборки посадки
@@ -77,13 +82,16 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			# 15.0: dist_path — просвет (м) до кромки полотна с запасом пути (StageVegetation.path_clearance)
 			var dp: float = paths[i] if not paths.is_empty() else 100.0
 			if dp < 0.0: continue
-			var outcrop_site := dp > 10.0 and dw[i] >= 1.5 and (sl > HILL_OUTCROP_SLOPE or (bi == Biomes.ROCK and sl > 0.12))
+			var outcrop_clear := dp > 10.0 and dw[i] >= 1.5
+			var e := elev[i]
+			var low_hill := outcrop_clear and has_moist and sl > LOW_HILL_SLOPE and e > LOW_HILL_MIN and e < LOW_HILL_MAX \
+				and (bi == Biomes.GRASS or bi == Biomes.STEPPE or bi == Biomes.SAVANNA) and moist[i] < 0.52
+			var outcrop_site := outcrop_clear and (low_hill or sl > HILL_OUTCROP_SLOPE or (bi == Biomes.ROCK and sl > 0.12))
 			# Грубый порог валунов до выборки месторождения.
 			var hc := WGRandom.hash_cell(seed_num, x, y, 37)
 			var roll := float(hc) / 4294967296.0
 			var boulder_candidate := sl <= 0.85 and roll < MAX_CHANCE
 			if not boulder_candidate and not outcrop_site: continue
-			var e := elev[i]
 			var mountain := smoothstep(0.12, 0.36, e)
 			var exposed := float(rock[i]) / 255.0
 			var gx := float(x) / PATCH_CELLS
@@ -105,15 +113,25 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 					var shoulder_chance := HILL_OUTCROP_CHANCE * hill * dry * smoothstep(0.15, 0.9, convex) \
 						* smoothstep(HILL_OUTCROP_SLOPE, 0.62, sl) * smoothstep(0.55, 0.84, deposit)
 					oc = maxf(oc, shoulder_chance)
-				var ho := WGRandom.hash_cell(seed_num, x, y, 38) if oc > 0.0 else 0
-				if oc > 0.0 and float(ho) / 4294967296.0 < oc:
+				# Пологие бровки читаются в окне шире коротких перегибов обычного выхода.
+				var low_chance := 0.0
+				if low_hill and deposit > 0.62:
+					var convex := local_convexity(elev, i, stride, LOW_HILL_REACH)
+					var height := smoothstep(LOW_HILL_MIN, 0.036, e) * (1.0 - smoothstep(0.065, LOW_HILL_MAX, e))
+					var dry := 1.0 - smoothstep(0.37, 0.52, moist[i])
+					low_chance = LOW_HILL_CHANCE * height * dry * smoothstep(0.20, 1.0, convex) \
+						* smoothstep(LOW_HILL_SLOPE, 0.36, sl) * smoothstep(0.62, 0.86, deposit)
+				var chance_outcrop := maxf(oc, low_chance)
+				var ho := WGRandom.hash_cell(seed_num, x, y, 38) if chance_outcrop > 0.0 else 0
+				var outcrop_roll := float(ho) / 4294967296.0
+				if outcrop_roll < chance_outcrop:
 					# В теле массива ни выходов, ни валунов.
 					if has_bodies and RockMassif.covers(bodies, x + 0.5, y + 0.5, 0.0): continue
 					rng.reset(ho ^ 0x0c7c0e5)
 					var ocx := x + 0.3 + rng.next_float() * 0.4
 					var ocy := y + 0.3 + rng.next_float() * 0.4
 					var r := rng.next_float()
-					var os := 0.85 + r * r * 0.95 + steep * 0.25
+					var os := 0.60 + r * r * 0.50 if outcrop_roll >= oc else 0.85 + r * r * 0.95 + steep * 0.25
 					var otint := RockModels.OUTCROP_V + int(clampf(deposit * 3.0, 0.0, 2.0))
 					var reach := os * OUTCROP_CLEAR
 					if (outcrop_path.is_empty() or clear_path(outcrop_path, ox, oy, stride, ocx, ocy, reach)) \
@@ -219,15 +237,14 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				store.add(px, py, Biomes.T_ROCK, tint, fragment)
 
 
-## Высота над средним соседей в метрах на радиусе 8 м. Положительная — выпуклое плечо.
+## Высота над средним соседей в метрах (радиус по умолчанию — 8 м). Положительная — выпуклое плечо.
 ## Весь план или его полоса соседей доступны в полях. На внешнем краю поля форма нейтральна.
-static func local_convexity(elev: PackedFloat32Array, i: int, stride: int) -> float:
-	const R := 2
+static func local_convexity(elev: PackedFloat32Array, i: int, stride: int, radius := 2) -> float:
 	var x := i % stride
-	var d := R * stride
-	if x < R or x + R >= stride or i < d or i + d >= elev.size():
+	var d := radius * stride
+	if x < radius or x + radius >= stride or i < d or i + d >= elev.size():
 		return 0.0
-	return (elev[i] - (elev[i - R] + elev[i + R] + elev[i - d] + elev[i + d]) * 0.25) * GameConfig.HS
+	return (elev[i] - (elev[i - radius] + elev[i + radius] + elev[i - d] + elev[i + d]) * 0.25) * GameConfig.HS
 
 
 ## Радиус камня масштаба scale на земле, м: столько просвета ему нужно у кромки пути

@@ -485,9 +485,16 @@ static func _cover(w: WorldData, f: Dictionary, i: int, x: float, y: float, bias
 	var wood := n.fbm(x / StageVegetation.WOOD_SCALE + StageVegetation.WOOD_OX, y / StageVegetation.WOOD_SCALE + StageVegetation.WOOD_OY, StageVegetation.WOOD_OCT)
 	var fine := n.fbm(x / 36.0, y / 36.0, 3)
 	var c := wood * 1.15 + bias + fine * 0.4
-	var amount := smoothstep(-0.3, 0.12, c) if bi != Biomes.GRASS else smoothstep(0.2, 0.55, c) * smoothstep(0.3, 0.42, f.moist[i])
+	var altitude := 1.0 - smoothstep(0.35, 0.72, f.elev[i])
+	if bi == Biomes.GRASS:
+		var stand := n.fbm(x / StageVegetation.STAND_SCALE + StageVegetation.STAND_OX,
+			y / StageVegetation.STAND_SCALE + StageVegetation.STAND_OY, 2)
+		var positions: Variant = f.get("meadow_position")
+		var position: float = positions[i] if positions != null else 0.0
+		return StageVegetation.meadow_cover(c, stand, f.moist[i], position) * altitude
+	var amount := smoothstep(-0.3, 0.12, c)
 	var glade := n.fbm(x / StageVegetation.GLADE_SCALE + StageVegetation.GLADE_OX, y / StageVegetation.GLADE_SCALE + StageVegetation.GLADE_OY, 2)
-	return amount * (1.0 - smoothstep(0.3, 0.45, glade) * 0.92) * (1.0 - smoothstep(0.35, 0.72, f.elev[i]))
+	return amount * (1.0 - smoothstep(0.3, 0.45, glade) * 0.92) * altitude
 
 static func cover_field(w: WorldData, key: Vector2i, f: Dictionary) -> PackedFloat32Array:
 	var values := PackedFloat32Array()

@@ -13,9 +13,10 @@ var failures := 0
 
 class CountingNoise extends Simplex:
 	var calls := 0
+	var value := 0.2
 	func noise(_x: float, _y: float) -> float:
 		calls += 1
-		return 0.2
+		return value
 
 
 func _initialize() -> void:
@@ -46,12 +47,18 @@ func profile(height: float, grade: float, convexity: float = 0.0) -> PackedFloat
 
 func contracts() -> void:
 	var ridge := CountingNoise.new(); var hill := CountingNoise.new()
-	for spec: Array in [[8.0,0.35],[20.0,0.03],[100.0,0.0],[100.0,0.9]]:
+	for spec: Array in [[4.5,0.35],[20.0,0.02],[100.0,0.03],[100.0,0.0],[100.0,0.9]]:
 		var b := profile(spec[0],spec[1])
 		ridge.calls=0; hill.calls=0
 		var v := Detail.apply(ridge,hill,b,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS,GameConfig.TILE)
 		check(v==b[12],"no detail on low, flat or steep ground "+str(spec))
 		check(ridge.calls==0 and hill.calls==0,"no noise calls for inactive layer "+str(spec))
+	var gentle := profile(20.0, 0.055)
+	var near_shore := profile(7.0, 0.055)
+	var gentle_shift := detail_shift(ridge, hill, gentle)
+	var shore_shift := detail_shift(ridge, hill, near_shore)
+	check(gentle_shift > 0.005 and gentle_shift < 0.25, "low gentle slopes gain a shallow fold")
+	check(shore_shift > 0.0 and shore_shift < gentle_shift * 0.1, "low folds fade near the shore")
 	var low := profile(24.0, 0.5)
 	ridge.calls = 0
 	hill.calls = 0
@@ -94,6 +101,12 @@ func contracts() -> void:
 	var flank_ripple := absf(StageRelief.add_micro(flank, center, width, hill, 20.0, 50.0) - flank[center])
 	check(flat_ripple > 0.0 and is_equal_approx(hollow_ripple, flat_ripple) and flat_ripple < minf(flank_ripple, shoulder_ripple) * 0.1,
 		"flat and hollow ripple below 10% of slope and shoulder ripple")
+	hill.value = 0.5
+	var constant_carrier := hill.value * 0.006
+	var open_strength := absf(StageRelief.add_micro(flat, center, width, hill, 20.0, 50.0) - flat[center]) / constant_carrier
+	var hollow_strength := absf(StageRelief.add_micro(hollow, center, width, hill, 20.0, 50.0) - hollow[center]) / constant_carrier
+	check(open_strength > 0.12 and open_strength < 0.16 and is_equal_approx(hollow_strength, 0.06),
+		"strong ripple patches remain shallow and leave sheltered hollows smooth")
 	var micro_noise := Simplex.new(WGRandom.new(271))
 	var calm := INF
 	var lively := 0.0
@@ -114,6 +127,11 @@ func contracts() -> void:
 		var p: Dictionary=proposals[k]
 		independent = independent and p.x>=24 and p.x<104 and p.y>=24 and p.y<72 and p.depth>=0.006 and p.depth<0.016
 	check(independent,"lake proposals are independent of rejection and request order")
+
+
+func detail_shift(ridge: Simplex, hill: Simplex, base: PackedFloat32Array) -> float:
+	var shaped := Detail.apply(ridge, hill, base, 5, 12, 313.0, -127.0, StageRelief.SEA_RAW, StageRelief.TOP_RAW, GameConfig.HS, GameConfig.TILE)
+	return absf(StageRelief.normalize(shaped) - StageRelief.normalize(base[12])) * GameConfig.HS
 
 
 static func world(seed_text: String) -> WorldData:

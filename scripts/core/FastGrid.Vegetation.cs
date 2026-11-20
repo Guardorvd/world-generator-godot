@@ -25,6 +25,8 @@ public partial class FastGrid
 	private const int PatchCells = 8;
 	private const double MaxChance = 0.48, ConvexityGain = 0.45, MaxConvexityFactor = 1.0 + ConvexityGain,
 		OutcropChance = 0.12, HillOutcropChance = 0.065, HillOutcropSlope = 0.28, OutcropClear = 2.2;
+	private const double LowHillChance = 0.052, LowHillMin = 0.018, LowHillMax = 0.085, LowHillSlope = 0.16;
+	private const int LowHillReach = 4;
 	private static readonly int[] TalusReach = { 2, 4, 6 };
 	private const int OutcropV = 3, MassifV = 6; // RockModels.OUTCROP_V, MASSIF_V
 	private const int MassifStride = 10;          // RockMassif.STRIDE
@@ -274,6 +276,17 @@ public partial class FastGrid
 		return t * t * (3.0 - 2.0 * t);
 	}
 
+	private const int VegMeadowReach = 12;
+	private const double VegMeadowBackground = 0.20;
+
+	private static double VegMeadowCover(double cover, double standNoise, double moist, double position)
+	{
+		double shelter = VegClamp(-position / 3.5, -1.0, 1.0);
+		double grove = VegSs(0.04, 0.48, standNoise + 0.23 * shelter);
+		double edge = VegSs(0.2, 0.55, cover + 0.08 * shelter);
+		return VegSs(0.29, 0.44, moist) * (0.57 * grove + edge * (0.09 + 0.34 * grove));
+	}
+
 	private static double VegLerp(double a, double b, double t) => a + (b - a) * t;
 	private static double VegClamp(double v, double lo, double hi) => v < lo ? lo : (v > hi ? hi : v);
 	private static double VegMax(double a, double b) => a > b ? a : b;
@@ -351,15 +364,14 @@ public partial class FastGrid
 	}
 
 	/// <summary>RockScatter.local_convexity</summary>
-	private static double VegConvexity(VegInput f, int i)
+	private static double VegConvexity(VegInput f, int i, int radius = 2)
 	{
-		const int R = 2;
 		int stride = f.W;
 		var elev = f.Elev;
 		int x = i % stride;
-		int d = R * stride;
-		if (x < R || x + R >= stride || i < d || i + d >= elev.Length) return 0.0;
-		return (elev[i] - ((double)elev[i - R] + elev[i + R] + elev[i - d] + elev[i + d]) * 0.25) * f.Hs;
+		int d = radius * stride;
+		if (x < radius || x + radius >= stride || i < d || i + d >= elev.Length) return 0.0;
+		return (elev[i] - ((double)elev[i - radius] + elev[i + radius] + elev[i - d] + elev[i + d]) * 0.25) * f.Hs;
 	}
 
 	private static bool VegDryOpen(int bi) => bi == BDesert || bi == BSavanna || bi == BSteppe || bi == BTundra || bi == BGrass;
@@ -518,12 +530,12 @@ public partial class FastGrid
 					dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t));
 					if (bi == BGrass)
 					{
-						double spread = VegSs(0.2, 0.55, cover) * VegSs(0.3, 0.42, moistI);
-						if (spread > 0.0)
-						{
-							interior = spread;
-							dens = VegMax(dens, VegSpread * spread);
-						}
+						double sv = f.Stand[i];
+						int reach = Math.Min(VegMeadowReach, Math.Min(Math.Min(x, W - 1 - x), Math.Min(y, f.H - 1 - y)));
+						double position = VegConvexity(f, i, reach);
+						interior = VegMeadowCover(cover, sv, moistI, position);
+						dens = VegMax(dens * VegMeadowBackground, VegSpread * interior);
+						stand = VegSs(-0.4, 0.4, sv);
 					}
 					if (dw < VegShore && VegDryOpen(bi) && f.Temp[i] > 0.24)
 						dens += 0.22 * (1.0 - dw / VegShore);
@@ -566,8 +578,6 @@ public partial class FastGrid
 						double py = y + 0.15 + rng.Next() * 0.8;
 						if (communityMoist < 0.0)
 						{
-							if (bi == BGrass)
-								stand = VegSs(-0.4, 0.4, f.Stand[i]);
 							double dryShoulder = VegClamp(VegConvexity(f, i) / 0.9, -1.0, 1.0);
 							communityMoist = VegClamp(moistI + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dryShoulder, 0.0, 1.0);
 						}
@@ -673,12 +683,15 @@ public partial class FastGrid
 				if (dw[i] < 0.65) continue;
 				double dp = paths[i];
 				if (dp < 0.0) continue;
-				bool outcropSite = dp > 10.0 && dw[i] >= 1.5 && (sl > HillOutcropSlope || (bi == BRock && sl > 0.12));
+				bool outcropClear = dp > 10.0 && dw[i] >= 1.5;
+				double e = elev[i];
+				bool lowHill = outcropClear && sl > LowHillSlope && e > LowHillMin && e < LowHillMax
+					&& (bi == BGrass || bi == BSteppe || bi == BSavanna) && f.Moist[i] < 0.52;
+				bool outcropSite = outcropClear && (lowHill || sl > HillOutcropSlope || (bi == BRock && sl > 0.12));
 				long hc = VegHashCell(seed, x, y, 37);
 				double roll = hc / 4294967296.0;
 				bool boulderCandidate = sl <= 0.85 && roll < MaxChance;
 				if (!boulderCandidate && !outcropSite) continue;
-				double e = elev[i];
 				double mountain = ReliefSmooth(0.12, 0.36, e);
 				double exposed = rock[i] / 255.0;
 				double gx = (double)x / PatchCells;
@@ -703,15 +716,26 @@ public partial class FastGrid
 							* ReliefSmooth(HillOutcropSlope, 0.62, sl) * ReliefSmooth(0.55, 0.84, deposit);
 						oc = VegMax(oc, shoulderChance);
 					}
-					long ho = oc > 0.0 ? VegHashCell(seed, x, y, 38) : 0;
-					if (oc > 0.0 && ho / 4294967296.0 < oc)
+					double lowChance = 0.0;
+					if (lowHill && deposit > 0.62)
+					{
+						double convex = VegConvexity(f, i, LowHillReach);
+						double height = ReliefSmooth(LowHillMin, 0.036, e) * (1.0 - ReliefSmooth(0.065, LowHillMax, e));
+						double dry = 1.0 - ReliefSmooth(0.37, 0.52, f.Moist[i]);
+						lowChance = LowHillChance * height * dry * ReliefSmooth(0.20, 1.0, convex)
+							* ReliefSmooth(LowHillSlope, 0.36, sl) * ReliefSmooth(0.62, 0.86, deposit);
+					}
+					double chanceOutcrop = VegMax(oc, lowChance);
+					long ho = chanceOutcrop > 0.0 ? VegHashCell(seed, x, y, 38) : 0;
+					double outcropRoll = ho / 4294967296.0;
+					if (outcropRoll < chanceOutcrop)
 					{
 						if (hasBodies && VegCovers(f.Cores, coreFrom, coreTo, x + 0.5, y + 0.5, 0.0)) continue;
 						rng.Reset(ho ^ 0x0c7c0e5);
 						double ocx = x + 0.3 + rng.Next() * 0.4;
 						double ocy = y + 0.3 + rng.Next() * 0.4;
 						double r = rng.Next();
-						double os = 0.85 + r * r * 0.95 + steep * 0.25;
+						double os = outcropRoll >= oc ? 0.60 + r * r * 0.50 : 0.85 + r * r * 0.95 + steep * 0.25;
 						int otint = OutcropV + (int)VegClamp(deposit * 3.0, 0.0, 2.0);
 						double reach = os * OutcropClear;
 						if (VegClearPath(f, f.PathMask, ocx, ocy, reach) && VegClearPath(f, f.Village, ocx, ocy, reach)

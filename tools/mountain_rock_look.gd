@@ -98,7 +98,8 @@ func low_hill_rules(old_scatter: Script) -> void:
 	heights.resize(N * N)
 	for y in N:
 		for x in N:
-			heights[y * N + x] = 18.0 + 9.0 * cos(x * 0.33) * cos(y * 0.15)
+			var hills := cos(x * 0.33) * cos(y * 0.15)
+			heights[y * N + x] = lerpf(8.5 + 4.8 * hills, 18.0 + 9.0 * hills, smoothstep(64.0, 94.0, y))
 	var f := fields(heights)
 	for y in N:
 		for x in N:
@@ -113,6 +114,7 @@ func low_hill_rules(old_scatter: Script) -> void:
 	var prior_count := 0
 	var count := 0
 	var supported := 0
+	var supported_low := 0
 	var valid := true
 	var h := Heightfield.new()
 	var w := world_of(after, f)
@@ -125,13 +127,21 @@ func low_hill_rules(old_scatter: Script) -> void:
 		var x: float = after.x[o]
 		var y: float = after.y[o]
 		var i := floori(y) * N + floori(x)
-		valid = valid and f.moist[i] < 0.62 and f.slope[i] > 0.28 and RockScatter.local_convexity(f.elev, i, N) > 0.15
+		var previous_hill: bool = f.elev[i] > 0.035 and f.slope[i] > RockScatter.HILL_OUTCROP_SLOPE \
+			and f.moist[i] < 0.62 and RockScatter.local_convexity(f.elev, i, N) > 0.15
+		var low_hill: bool = f.elev[i] > RockScatter.LOW_HILL_MIN and f.elev[i] < RockScatter.LOW_HILL_MAX \
+			and f.slope[i] > RockScatter.LOW_HILL_SLOPE and f.moist[i] < 0.52 \
+			and RockScatter.local_convexity(f.elev, i, N, RockScatter.LOW_HILL_REACH) > 0.20
+		valid = valid and (previous_hill or low_hill) and f.dist_path[i] > 10.0
 		for mask: PackedByteArray in [f.path, f.village, f.river]:
 			valid = valid and RockScatter.clear_path(mask, 0, 0, N, x, y, after.s[o] * RockScatter.OUTCROP_CLEAR)
-		supported += int(RockModels.seat(h, x * GameConfig.TILE, y * GameConfig.TILE, after.s[o] * 1.2, after.v[o]).x != INF)
+		var seated := RockModels.seat(h, x * GameConfig.TILE, y * GameConfig.TILE, after.s[o] * 1.2, after.v[o]).x != INF
+		supported += int(seated)
+		supported_low += int(seated and low_hill and not previous_hill)
 	check(prior_count == 0 and count > 0 and count < N * N / 100 and supported > 0,
 		"rare supported low-hill outcrops: %d -> %d (%d seated)" % [prior_count, count, supported])
 	check(valid, "low hill outcrops require dry convex slopes and keep clear of paths, houses and rivers")
+	check(supported_low > 0, "small outcrops sit on shoulders outside the previous height or grade envelope: %d" % supported_low)
 
 
 func nature_relief_rules() -> void:

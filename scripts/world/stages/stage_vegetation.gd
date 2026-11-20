@@ -24,6 +24,8 @@ const WOOD_OCT := 4
 const WOOD_OX := -133.0
 const WOOD_OY := 271.0
 const SPREAD := 0.55     # насколько густо массив заходит из леса на соседние луга
+const MEADOW_REACH := 12 # клеток (48 м) до соседей для оценки ложбины или плеча
+const MEADOW_BACKGROUND := 0.20 # отдельные деревья между рощами
 # 9.2: строение массива. Древостой (около 220 м): густые и редкие участки, хвойные или лиственные пятна.
 # Поляны (около 80 м): открытые места в глубине леса с мягкой опушкой.
 const STAND_SCALE := 56.0
@@ -386,7 +388,8 @@ static func world_cover(seed_num: int) -> float:
 ## (y - oy) * stride + (x - ox). Числа rng у каждой клетки свои: WGRandom.hash_cell(seed, x, y, LAYER), а
 ## отступы между объектами проверяются только внутри чанка, поэтому чанк не зависит ни от соседей, ни от
 ## порядка, в котором считаются чанки. f: biome, forest, stony, elev, slope, dw, temp, moist и необязательные
-## river, dist_path, village (стартовая область), light, age_n, wood, stand, glade (без них они считаются по w).
+## river, dist_path, village (стартовая область), light, age_n, wood, stand, glade (без них они считаются по w),
+## meadow_position (за краем плана есть поле с полной полосой соседей).
 ## Просеки и лесные дороги вписываются через dist_path — просвет (м) до кромки полотна (15.0, path_clearance): ствол
 ## ставится, если просвета хватает его радиусу; у дороги запас шире, у тропы лес подходит к самой кромке.
 ## w — стартовая область (тропы и дома) или null за её краем.
@@ -410,6 +413,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var stand_f: PackedFloat64Array = f.get("stand", PackedFloat64Array())
 	var glade_f: PackedFloat64Array = f.get("glade", PackedFloat64Array())
 	var has_stand := not stand_f.is_empty()
+	var meadow_f: PackedFloat32Array = f.get("meadow_position", PackedFloat32Array())
 	var cover_bias := world_cover(seed_num)
 	var has_river := not river.is_empty()
 	var has_path := not dist_path.is_empty()
@@ -472,12 +476,13 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			else:
 				var t := clampf((fv - 0.1) / (0.5 - 0.1), 0.0, 1.0)
 				dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t)) # рощи в открытой местности
-				# там, где лесистость высокая, массив продолжается и на влажных лугах
+				# На лугах плотность сосредоточена в рощах и перелесках, фон между ними редкий.
 				if bi == Biomes.GRASS:
-					var spread := _ss(0.2, 0.55, cover) * _ss(0.3, 0.42, moist[i])
-					if spread > 0.0:
-						interior = spread
-						dens = maxf(dens, SPREAD * spread)
+					var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
+					var position := meadow_position(elev, i, stride) if meadow_f.is_empty() else meadow_f[i]
+					interior = meadow_cover(cover, sv, moist[i], position)
+					dens = maxf(dens * MEADOW_BACKGROUND, SPREAD * interior)
+					stand = _ss(-0.4, 0.4, sv)
 				# у воды в сухих и открытых краях — прибрежные рощи и оазисы
 				if dw < SHORE and _dry_open(bi) and temp[i] > 0.24:
 					dens += 0.22 * (1.0 - dw / SHORE)
@@ -525,10 +530,6 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
 					if community_moist < 0.0:
-						if bi == Biomes.GRASS:
-							# Рощи на лугах продолжают поле древостоя соседнего леса.
-							var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
-							stand = _ss(-0.4, 0.4, sv)
 						var dry_shoulder := clampf(RockScatter.local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
 						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
 					var r_kind := rng.next_float()
@@ -601,6 +602,27 @@ static func _ss(a: float, b: float, x: float) -> float:
 	return t * t * (3.0 - 2.0 * t)
 
 
+## Высота над окружением в метрах: отрицательная в ложбине, положительная на гребне.
+## У границы плана сужаем симметричную выборку, чтобы уклон сам по себе не считался выпуклостью.
+static func meadow_position(heights: PackedFloat32Array, i: int, stride: int) -> float:
+	var x := i % stride
+	var y := i / stride
+	var r := mini(MEADOW_REACH, mini(mini(x, stride - 1 - x), mini(y, heights.size() / stride - 1 - y)))
+	var d := r * stride
+	var around := (maxf(0.0, heights[i - r]) + maxf(0.0, heights[i + r])
+		+ maxf(0.0, heights[i - d]) + maxf(0.0, heights[i + d])) * 0.25
+	return (maxf(0.0, heights[i]) - around) * GameConfig.HS
+
+
+## Влажные пятна образуют рощи. Ложбины смещают их границы, а выпуклые гребни разрежают.
+## Копия — FastGrid.VegMeadowCover.
+static func meadow_cover(cover: float, stand_noise: float, moist: float, position: float) -> float:
+	var shelter := clampf(-position / 3.5, -1.0, 1.0)
+	var grove := _ss(0.04, 0.48, stand_noise + 0.23 * shelter)
+	var edge := _ss(0.2, 0.55, cover + 0.08 * shelter)
+	return _ss(0.29, 0.44, moist) * (0.57 * grove + edge * (0.09 + 0.34 * grove))
+
+
 ## 0 — молодой участок, 1 — старый лес. 8.2: тот же шум задаёт подлесок и характер леса.
 static func age_at(w: WorldData, x: float, y: float) -> float:
 	if not w.noise.has("forest"):
@@ -625,9 +647,12 @@ static func cover_at(w: WorldData, x: int, y: int) -> Vector2:
 		var gv: float = w.noise.forest.fbm(x / GLADE_SCALE + GLADE_OX, y / GLADE_SCALE + GLADE_OY, 2)
 		var glade := _ss(0.3, 0.45, gv) * interior
 		return Vector2(clampf(interior * (1.0 - 0.92 * glade) * minf(1.0, dens * 1.2), 0.0, 1.0), glade)
-	# открытая местность: рощи пятнами и массив, заходящий на влажные луга
+	# Открытая местность: отдельные деревья и рощи влажных лугов.
 	var grove := _ss(0.1, 0.5, fv) * 0.35
-	if bi == Biomes.GRASS: grove = maxf(grove, SPREAD * _ss(0.2, 0.55, cover) * _ss(0.3, 0.42, w.moist[i]))
+	if bi == Biomes.GRASS:
+		var sv: float = w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
+		var position := meadow_position(w.elev, i, w.W)
+		grove = maxf(grove * MEADOW_BACKGROUND, SPREAD * meadow_cover(cover, sv, w.moist[i], position))
 	return Vector2(clampf(grove, 0.0, 0.6), 0.0)
 
 

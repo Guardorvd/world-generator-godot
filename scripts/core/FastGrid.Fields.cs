@@ -135,10 +135,11 @@ public partial class FastGrid
 				double e = heights[i];
 				if (regional && e > 0.0 && e < keep.Y)
 				{
-					double region = Fbm(moistPerm, x / regionScale + regionOx, ry, 2);
-					double valley = ReliefSmooth(0.0, positionScale, -rain[i]);
-					double ridge = ReliefSmooth(0.0, positionScale, rain[i]);
-					value += (regionAmp * region + reliefWet * valley - reliefDry * ridge) * (1.0 - ReliefSmooth(keep.X, keep.Y, e));
+					double regionalRain = regionAmp * Fbm(moistPerm, x / regionScale + regionOx, ry, 2);
+					double scale = positionScale * (0.65 + (1.0 - 0.65) * ReliefSmooth(0.43, 0.60, baseline + regionalRain));
+					double position = rain[i];
+					double local = ReliefSmooth(0.0, scale, Math.Abs(position)) * (position < 0.0 ? reliefWet : -reliefDry);
+					value += (regionalRain + local) * (1.0 - ReliefSmooth(keep.X, keep.Y, e));
 					double floor = Math.Min(baseline, dryFloor);
 					if (value < floor)
 						value = floor + (value - floor) * 0.3;

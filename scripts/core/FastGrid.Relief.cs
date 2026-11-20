@@ -71,7 +71,8 @@ public partial class FastGrid
 
 	/// <summary>Копия mountain_detail.gd; единицы мира передаются из GameConfig.</summary>
 	private const int DetailPad = 2;
-	private const double DetailLow = 9.0;
+	private const double DetailLow = 5.0;
+	private const double DetailLowFull = 28.0;
 	private const double DetailMountain = 30.0;
 	private const double DetailTransition = 42.0;
 	private const double DetailHigh = 60.0;
@@ -119,6 +120,8 @@ public partial class FastGrid
 							double shoulder = ReliefSmooth(0.25, 1.5, -hollow);
 							double terrain = 0.06 + 0.94 * Math.Max(flank, shoulder) * (1.0 - 0.9 * shelter);
 							double patch = Noise(noise, x / 90.0 + 83.7, y / 90.0 - 41.3);
+							if (patch > 0.16 && lowland > 0.0)
+								terrain += 0.10 * ReliefSmooth(0.16, 0.48, patch) * lowland * (1.0 - shelter) * (1.0 - terrain);
 							double varied = terrain * (0.35 + 0.65 * ReliefSmooth(-0.55, 0.15, patch));
 							strength = 1.0 + (varied - 1.0) * weight;
 						}
@@ -150,14 +153,16 @@ public partial class FastGrid
 		{
 			mountain = ReliefSmooth(DetailMountain, DetailTransition, elev);
 			double shore = ReliefSmooth(0.015, 0.08, v - SeaRaw);
-			lift += 0.28 * ReliefSmooth(DetailLow, DetailMountain, elev) * (1.0 - mountain) * shore;
+			lift += 0.42 * ReliefSmooth(DetailLow, DetailLowFull, elev) * (1.0 - mountain) * shore;
 		}
 		double perRaw = 1.25 * r4 / (TopRaw - SeaRaw) * heightScale;
 		int r = 2 * bw;
 		double gx = (((double)b[k + 2 - r] + 2.0 * b[k + 2] + b[k + 2 + r]) - ((double)b[k - 2 - r] + 2.0 * b[k - 2] + b[k - 2 + r])) * perRaw / (16.0 * tile);
 		double gy = (((double)b[k - 2 + r] + 2.0 * b[k + r] + b[k + 2 + r]) - ((double)b[k - 2 - r] + 2.0 * b[k - r] + b[k + 2 - r])) * perRaw / (16.0 * tile);
 		double g2 = gx * gx + gy * gy;
-		if (g2 < 0.0016)
+		double lowland = 1.0 - mountain;
+		double gentleStart = 0.04 - 0.015 * lowland;
+		if (g2 <= gentleStart * gentleStart)
 			return v;
 		double s = Math.Sqrt(g2);
 		if (s >= DetailLimit)
@@ -167,7 +172,8 @@ public partial class FastGrid
 		double crest = 1.0 - 0.65 * t * t * (3.0 - 2.0 * t);
 		t = Clamp01((Noise(hill, x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0);
 		double vary = t * t * (3.0 - 2.0 * t);
-		t = Clamp01((s - 0.04) / (0.12 - 0.04));
+		double gentleEnd = 0.12 - 0.03 * lowland;
+		t = Clamp01((s - gentleStart) / (gentleEnd - gentleStart));
 		double gentle = t * t * (3.0 - 2.0 * t);
 		double c2 = (gx * gx - gy * gy) / g2;
 		double s2 = 2.0 * gx * gy / g2;
@@ -240,7 +246,7 @@ public partial class FastGrid
 		void Row(int j)
 		{
 			for (int i = 0; i < W; i++)
-				outH[j * W + i] = (float)BaseAt(warpX, warpY, cont, mask, ridge, hill, x0 + i, y0 + j, mx, my, mountainScale, mountainBias, mountainHeight, foothillSpread, footScale, wide);
+				outH[j * W + i] = (float)BaseAt(warpX, warpY, cont, mask, ridge, hill, x0 + i, y0 + j, mx, my, mountainScale, mountainBias, mountainHeight, foothillSpread, footScale, wide, true);
 		}
 		RunRows(H, parallel, Row);
 		return outH;
@@ -248,7 +254,7 @@ public partial class FastGrid
 
 	/// <summary>
 	/// Сырой макрорельеф в точках (px[k], py[k]) со своим сдвигом шума материков (mx[k], my[k]), в double,
-	/// как StageRelief.raw_at: оценка кандидатов стартовой области (StageRelief._start_raws).
+	/// как StageRelief.raw_at без новых увалов: оценка кандидатов стартовой области (StageRelief._start_raws).
 	/// </summary>
 	public double[] ReliefRawPoints(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double[] mx, double[] my, double[] px, double[] py, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread)
 	{
@@ -257,7 +263,7 @@ public partial class FastGrid
 		double footScale = 100.0 * Math.Max(mountainScale, mountainHeight / HeightPerWidth);
 		double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
 		System.Threading.Tasks.Parallel.For(0, n, k =>
-			raw[k] = BaseAt(warpX, warpY, cont, mask, ridge, hill, px[k], py[k], mx[k], my[k], mountainScale, mountainBias, mountainHeight, foothillSpread, footScale, wide));
+			raw[k] = BaseAt(warpX, warpY, cont, mask, ridge, hill, px[k], py[k], mx[k], my[k], mountainScale, mountainBias, mountainHeight, foothillSpread, footScale, wide, false));
 		return raw;
 	}
 
@@ -271,7 +277,7 @@ public partial class FastGrid
 	}
 
 	/// <summary>Макрорельеф одной клетки (копия StageRelief.raw_at); footScale и wide — параметры мира, см. BaseField.</summary>
-	private static double BaseAt(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double x, double y, double mx, double my, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, double footScale, double wide)
+	private static double BaseAt(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double x, double y, double mx, double my, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, double footScale, double wide, bool shapePlains)
 	{
 		double wx = Fbm(warpX, x / 240.0, y / 240.0, 3) * 25.0;
 		double wy = Fbm(warpY, x / 240.0 + 13.1, y / 240.0 - 7.7, 3) * 25.0;
@@ -337,6 +343,15 @@ public partial class FastGrid
 			double support = ReliefSmooth(0.12, 0.55, relief);
 			h -= Math.Max(0.0, h - SeaRaw) * 0.60 * core * inland * (1.0 - support);
 			h += relief * m * MountainAmp * mountainHeight;
+		}
+		double aboveSea = h - SeaRaw;
+		if (shapePlains && calm > 0.0 && core < 0.35 && aboveSea > 0.035 && aboveSea < 0.30)
+		{
+			double plain = calm * (1.0 - ReliefSmooth(0.1, 0.35, core));
+			double lowland = ReliefSmooth(0.035, 0.11, aboveSea) * (1.0 - ReliefSmooth(0.18, 0.30, aboveSea));
+			double rolling = Noise(hill, X / 90.0 - 24.7, Y / 90.0 + 53.1);
+			double fold = 0.055 * rolling - 0.025 * hills * shoreFade - 0.010 * valley;
+			h += fold * plain * lowland;
 		}
 		return h;
 	}
