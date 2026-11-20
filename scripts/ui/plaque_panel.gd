@@ -3,6 +3,7 @@ extends PanelContainer
 ## Открывается у таблички (E «Прочитать»), закрывается E, Esc или кнопкой. Оформление — HudStyle.
 
 signal closed
+signal photo_requested # 20.11: «Сфотографировать» — закрыть табличку и сразу достать фотоаппарат
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
@@ -17,6 +18,7 @@ const FORM_NAMES := [
 
 var _box: VBoxContainer
 var _close: Button
+var can_photo := false # 20.11: в подвале есть «Сфотографировать» (табличка ещё не в альбоме)
 
 
 func _ready() -> void:
@@ -34,7 +36,8 @@ func _ready() -> void:
 
 
 ## title — название обелиска, text — описание, hint — подпись под текстом,
-## meta — необязательные сведения: {form, in_album, series: Vector2i, key_hint}
+## meta — необязательные сведения: {form, in_album, series: Vector2i, key_hint, photo_key}; photo_key — подпись клавиши
+## фотоаппарата: если табличка ещё не в альбоме, в подвале есть кнопка «Сфотографировать»
 func open(title: String, text: String, hint := "", meta := {}) -> void:
 	var was_open := visible
 	clear()
@@ -81,6 +84,12 @@ func open(title: String, text: String, hint := "", meta := {}) -> void:
 	_box.add_child(body_card)
 	_label(text, 17, HudStyle.CREAM, WIDTH - 76.0, body_card)
 
+	can_photo = not in_album and meta.has("photo_key")
+	# с кнопкой «Сфотографировать» подвал тесен: подпись встаёт отдельной строкой над кнопками
+	if can_photo and hint != "":
+		var above := _label(hint, 13, HudStyle.MINT, WIDTH - 44.0)
+		above.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint = ""
 	var footer := HBoxContainer.new()
 	footer.add_theme_constant_override("separation", 10)
 	_box.add_child(footer)
@@ -97,6 +106,14 @@ func open(title: String, text: String, hint := "", meta := {}) -> void:
 	var key_hint := str(meta.get("key_hint", "E / Esc"))
 	if not key_hint.is_empty():
 		footer.add_child(HudStyle.chip(key_hint))
+	if can_photo:
+		var shoot := Button.new()
+		shoot.text = "Сфотографировать · %s" % str(meta.photo_key)
+		shoot.icon = UiIcons.QUESTS.photo
+		shoot.tooltip_text = str(meta.photo_key)
+		shoot.custom_minimum_size = Vector2(0, 44)
+		shoot.pressed.connect(func() -> void: photo_requested.emit())
+		footer.add_child(shoot)
 	_close = Button.new()
 	_close.text = "Закрыть"
 	_close.custom_minimum_size = Vector2(140, 44)

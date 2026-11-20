@@ -22,6 +22,8 @@ const TILE := GameConfig.TILE
 ## Рельеф, готовый сразу при старте и переносе (м). Дальше в тумане части догружаются по одной за кадр:
 ## на 900 м туман уже скрывает больше 80 % цвета, а за секунды загрузки игрок проходит считанные метры.
 const NEAR := PlanTerrain.RADIUS / 2.0
+const CARGO_BOTTOM_OUT := 1.8 # 20.11: м/с, пробой сильнее этого бьёт хрупкий груз (обычный пробой — нет)
+const CARGO_LANDING := 8.5     # 20.11: м/с, посадка жёстче этого бьёт хрупкий груз
 const LAND_BURST := 6.0 # 20.11: м/с, посадка жёстче этого выбивает грунт из-под колёс (тот же порог, что у тряски)
 const REACH := 3.5     # предметы дальше этого от глаз игрока (м) не выбираются взглядом
 const OpeningRoute = preload("res://scripts/game/opening_route.gd")
@@ -46,6 +48,7 @@ var place_names: PlaceNames
 var photo: PhotoCamera
 var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
 var shop_progress: ShopProgress
+var _board_remount := false # 20.11: к доске подъехали на велосипеде — после доски седок садится обратно
 var _gear_changed := false # 20.11: в дневнике надели другой комплект — при возвращении в мир велосипед коротко «проявляется»
 var _bag: Node3D         # сумка доставки у доски, пока её не взяли
 var _bag_label: Label3D  # подпись над ней
@@ -1312,6 +1315,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.is_action_pressed("pause") or event.is_action_pressed("back") or event.is_action_pressed("interact"):
 			close_plaque()
 			get_viewport().set_input_as_handled()
+		elif hud.plaque_panel.can_photo and (event.is_action_pressed("photo")
+				or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT)):
+			_photo_from_plaque()
+			get_viewport().set_input_as_handled()
 		return
 	if _settlement_open():
 		if event.is_action_pressed("pause") or event.is_action_pressed("interact") or event.is_action_pressed("back"):
@@ -1935,9 +1942,7 @@ func _shake_on_landing(impact: float, soft: float) -> void:
 func _crash() -> void:
 	bike_controller.begin_crash(bike_view, bike, crash, heights)
 	# 12.3: хрупкий груз бьётся при падении
-	var broken := quests.crashed() if quests != null else ""
-	if not broken.is_empty():
-		hud.toast_now("Груз разбит\n" + broken, &"warning")
+	_hit_cargo(Quests.CARGO_CRASH_LOSS)
 	# 20.11: падение звучит своим ударом с шорохом скольжения (прежде — стук приземления), из-под седока
 	# летит грунт, обзор коротко вздрагивает шире. Остановки времени (hit-stop) нет: она сбила бы физику и стриминг.
 	audio.crash(maxf(bike.land_impact, 8.0))
@@ -2118,6 +2123,7 @@ func _open_settlement(village: Variant = {}) -> void:
 			hud.toast("Остановитесь у костра, чтобы прочитать указатель", &"warning")
 			return
 		toggle_bike()
+		_board_remount = not bike.riding
 	services.controls.release_motion()
 	services.controls.read_bike_body(bike, false)
 	player.vx = 0.0
@@ -2163,6 +2169,17 @@ func _quest_reward_note(ids: Array) -> String:
 	elif shop_progress.first_purchase_unlocked(points):
 		note += "\nХватает на первую расцветку. Откройте «Магазин» в дневнике."
 	return note
+
+## 20.11: удар по хрупкому грузу: звон стекла, значок груза в трекере вздрагивает; разбит — задание к доске
+func _hit_cargo(loss: int) -> void:
+	if quests == null:
+		return
+	var hit := quests.damage_cargo(loss)
+	if hit.is_empty():
+		return
+	hud.interaction_audio.play(&"glass_clink", 0.92 if hit.broken else 1.0)
+	hud.pulse_cargo()
+	hud.toast_now(("Груз разбит\n" if hit.broken else "") + str(hit.text), &"warning")
 
 ## 20.11: награда магазина за исследование (страницы альбома, первый обзор, ремонт по пути) — заметка к тосту или пусто
 func _explore_reward(ids: Array) -> String:
@@ -2368,9 +2385,21 @@ func _close_settlement(capture := true) -> void:
 		return
 	hud._close_travel()
 	hud.settlement_panel.clear()
+	_remount_after_board()
 	if capture and not paused and not show_map:
 		capture_mouse()
 
+
+## 20.11: к доске подъехали на велосипеде — после закрытия снова в седле, если велосипед рядом. Не садимся, если у доски
+## ждёт сумка взятого задания (её надевают пешком) или игрок переместился с доски
+func _remount_after_board() -> void:
+	if not _board_remount:
+		return
+	_board_remount = false
+	var bag_waiting := _bag != null and _bag.visible and _bag_pickup == null
+	if bike.riding or bag_waiting or travel_active() or bike.distance_to(player) > GameConfig.BIKE_MOUNT or not bike.can_mount(player):
+		return
+	toggle_bike()
 
 ## Табличка обелиска: E у неё — текст (ObeliskLore) в окне, игра идёт, управление заперто; E, Esc или «Закрыть» — закрыть
 func _plaque_open() -> bool:
@@ -2394,10 +2423,19 @@ func _read_plaque(item: Dictionary) -> void:
 		in_album = hud.explore.album.has("plaque:" + item.id),
 		series = quests.series_progress() if quests != null else Vector2i.ZERO,
 		key_hint = "%s / Esc" % ikey if not ikey.is_empty() else "E / Esc",
+		photo_key = services.controls.label(&"photo") if services.controls.joypad else "ПКМ",
 	}
 	if not hud.plaque_panel.closed.is_connected(close_plaque):
 		hud.plaque_panel.closed.connect(close_plaque)
+		hud.plaque_panel.photo_requested.connect(_photo_from_plaque)
 	hud.plaque_panel.open(lore.title, lore.text, series, meta)
+	hud.interaction_audio.play(&"panel_open") # 20.11: тихий шорох открытой таблички
+
+
+## 20.11: из окна таблички сразу к видоискателю: табличка закрывается, фотоаппарат у глаз (игрок пешком у таблички)
+func _photo_from_plaque() -> void:
+	close_plaque()
+	toggle_photo()
 
 
 func close_plaque(capture := true) -> void:
@@ -2568,6 +2606,15 @@ func _bike_impacts() -> void:
 		audio.wheel_knock(knock, wheel.x >= wheel.y)
 		weak = maxf(weak, (0.25 + hit * 0.35) if wheel.x >= wheel.y else 0.1)
 		strong = maxf(strong, (0.2 + hit * 0.4) if wheel.y > wheel.x else 0.1)
+	# 20.11: хрупкий груз теряет целостность от сильного пробоя и очень жёсткой посадки (падение — в _crash)
+	if not bike.crashed:
+		var loss := 0.0
+		if bike.bottom_out > CARGO_BOTTOM_OUT:
+			loss = lerpf(15.0, 25.0, clampf((bike.bottom_out - CARGO_BOTTOM_OUT) / 1.2, 0.0, 1.0))
+		if land > CARGO_LANDING:
+			loss = maxf(loss, lerpf(15.0, 25.0, clampf((land - CARGO_LANDING) / 4.0, 0.0, 1.0)))
+		if loss > 0.0:
+			_hit_cargo(roundi(loss))
 	if bike.bottom_out > 0.0:
 		audio.bottom_out(bike.bottom_out)
 		# 14.1: пробой вилки — удар рамы: камера проседает и вздрагивает, геймпад отдаёт тяжёлым мотором

@@ -279,10 +279,6 @@ func riding_preview() -> void:
 	title.position = Vector2(24, 20)
 	title.add_theme_font_size_override("font_size", 24)
 	root.add_child(title)
-	var indicator := preload("res://scripts/ui/brake_indicator.gd").new()
-	indicator.position = Vector2(100, 638)
-	indicator.size = Vector2(280, 58)
-	root.add_child(indicator)
 	var capture_enabled := "--ride-capture" in OS.get_cmdline_user_args()
 	for mode in ["pedal", "climb", "coast", "brake", "rough", "jump"]:
 		title.text = "BIKE / " + mode.to_upper()
@@ -300,7 +296,6 @@ func riding_preview() -> void:
 		var landed := false
 		var fork_scale: Vector3 = bike._fork_lowers[0].get_node("Slider").scale
 		for i in 180:
-			indicator.update_state(state, true)
 			var throttle := 1.0 if mode in ["pedal", "climb"] else (-1.0 if mode == "brake" and i < 60 else 0.0)
 			state.step(player, throttle, 0.0, false, mode == "jump" and i == 15, DT, test_world, test_ground)
 			landed = landed or state.land_impact > 0.0
@@ -326,7 +321,6 @@ func riding_preview() -> void:
 	if capture_enabled:
 		write_motion_avi("res://tools/control/runs/bike_motion.avi", 1280, 360, 15)
 	bike.free()
-	indicator.free()
 
 func capture_pair(camera: Camera3D, mode: String, frame: int, snapshot: bool) -> void:
 	var images: Array[Image] = []

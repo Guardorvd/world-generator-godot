@@ -21,6 +21,7 @@ const SOUNDS := {
 	&"discovery_chime": {path = "res://resources/sounds/discovery_chime.wav", db = -19.0},
 	&"quest_complete": {path = "res://resources/sounds/quest_complete.wav", db = -16.0},
 	&"lamp_switch": {path = "res://resources/sounds/lamp_switch.wav", db = -17.0},
+	&"glass_clink": {path = "res://resources/sounds/glass_clink.wav", db = -15.0},
 }
 
 var suppress_focus_sound := false

@@ -364,6 +364,7 @@ def main():
     write_wav("lamp_switch", lamp_switch(hit_rng))
     write_wav("discovery_chime", discovery_chime(hit_rng))
     write_wav("quest_complete", quest_complete(hit_rng))
+    write_wav("glass_clink", glass_clink(random.Random(2012)))  # 20.11: хрупкий груз звякнул
     write_wav("pump_suspension", pump_suspension(random.Random(2027)))
 
 
@@ -534,6 +535,19 @@ def quest_complete(_rng):
         mix(out, ring(1.5 - k * 0.15, f, 600 - k * 60, 8.0, PLUCK), int(RATE * 0.12 * k), 0.5)
     mix(out, ring(1.4, 196.0, 700, 20.0, ((1.0, 1.0), (2.0, 0.1))), 0, 0.25)
     return fade(out, 2, 350)
+
+
+
+def glass_clink(rng):
+    """Хрупкий груз в сумке: два-три тонких звяка стекла о стекло, глухо, через ткань"""
+    n = int(RATE * 0.45)
+    out = [0.0] * n
+    at = 0
+    for k, (f, g) in enumerate(((2650.0, 0.8), (3180.0, 0.55), (2420.0, 0.35))):
+        mix(out, ring(0.3, f, 70 - k * 12, 0.4, ((1.0, 0.7), (2.76, 0.25), (5.4, 0.08))), at, g)
+        mix(out, bandpass(burst(8, 2.0, rng, 0.2), f * 1.4, 3.0), at, g * 0.4)
+        at += int(RATE * rng.uniform(0.045, 0.085))
+    return fade(lowpass(out, 5200.0), 0.5, 80)
 
 
 if __name__ == "__main__":

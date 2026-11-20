@@ -111,6 +111,7 @@ const FAR_CELLS := 500.0       # клеток (2 км): дальше места 
 const PLAQUE_REACH_M := 4.5   # м: табличку обелиска снимают не дальше этого (PhotoCamera.plaque_near); 18.11.2026
 const SHOT_REACH_M := 150.0 # м: снимок для задания — не дальше этого от места (до 18.11.2026 — 400 м: с ×4 снимали с соседнего холма)
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
+const CARGO_CRASH_LOSS := 55  # 20.11: падение отнимает у хрупкого груза столько процентов (два падения — разбит)
 const FRAGILE_CHANCE := 0.35   # доля досок, где вместо доставки — хрупкий груз
 ## 18.11.2026: задания ведут в разные стороны и постепенно дальше. travel = {explored: клетки EXPLORED_CELL м, где проходил
 ## трек (MapJournal.explored_cells), from: точка трека в 300 м до доски — откуда игрок приехал (MapJournal.came_from)}.
@@ -164,6 +165,7 @@ const PHOTO_TEXTS := [
 ]
 var active := QuestData.new()       # {id, kind, giver — id поселения, title, text, steps: [{do, place}], step}
 var cargo := false     # сумка за спиной
+var cargo_hp := 100    # 20.11: целостность хрупкого груза, %: жёсткие удары отнимают часть, падение — больше; 0 — разбит
 var done := 0          # выполнено заданий
 var last := ""         # название последнего выполненного
 var by_giver := {}     # id поселения -> выполнено его заданий
@@ -504,15 +506,27 @@ func abandon() -> void:
 	changed.emit()
 
 
-## Седок упал с велосипеда. Хрупкий груз разбит: задание возвращается к шагу «взять у доски».
-## Возвращает сообщение или пусто
+## Седок упал с велосипеда. С 20.11 хрупкий груз теряет CARGO_CRASH_LOSS целостности (damage_cargo); разбит —
+## задание возвращается к шагу «взять у доски». Возвращает сообщение о разбитом грузе или пусто
 func crashed() -> String:
-	if active.kind != "fragile" or not cargo:
-		return ""
+	var hit := damage_cargo(CARGO_CRASH_LOSS)
+	return str(hit.text) if hit.get("broken", false) else ""
+
+
+## 20.11: удар по хрупкому грузу (loss — сколько процентов целостности он отнимает). Пусто — груза нет или он не хрупкий;
+## иначе {hp, broken, text}: при 0 % груз разбит и задание возвращается к доске, как прежде при падении
+func damage_cargo(loss: int) -> Dictionary:
+	if active.kind != "fragile" or not cargo or loss <= 0:
+		return {}
+	cargo_hp = maxi(0, cargo_hp - loss)
+	if cargo_hp > 0:
+		changed.emit()
+		return {hp = cargo_hp, broken = false, text = "Груз звякнул: цел на %d %%" % cargo_hp}
 	cargo = false
+	cargo_hp = 100
 	active.step = 0
 	changed.emit()
-	return "Груз разбился. Новый — у доски поселения «%s»" % active.steps[0].place.name
+	return {hp = 0, broken = true, text = "Груз разбился. Новый — у доски поселения «%s»" % active.steps[0].place.name}
 
 
 ## Текущий шаг активного задания или пусто
@@ -641,6 +655,7 @@ func pick_up() -> String:
 	if step().get("do") != "pickup":
 		return ""
 	cargo = true
+	cargo_hp = 100
 	return _advance()
 
 
@@ -712,7 +727,7 @@ func _advance() -> String:
 
 ## Только адреса мест: src и данные мира берутся из текущего мира.
 func save_state() -> Dictionary:
-	return {active = _addresses(active), cargo = cargo, done = done, last = last,
+	return {active = _addresses(active), cargo = cargo, cargo_hp = cargo_hp, done = done, last = last,
 		by_giver = by_giver.duplicate(), known = known.duplicate(), completed = _done.duplicate(),
 		series = _addresses(series), series_done = series_done, beacons = installed_beacons.duplicate(),
 		painted = painted_objects.duplicate(), thanks = thanks.duplicate(true)}
@@ -834,6 +849,8 @@ func restore_state(d: Dictionary, places: Dictionary, plan := Rect2i(), world: W
 					return false
 	active = q
 	cargo = d.cargo and not q.is_empty()
+	var hp: Variant = d.get("cargo_hp", 100) # 20.11: в прежних сохранениях целостности нет — груз цел
+	cargo_hp = clampi(int(hp), 1, 100) if (hp is int or hp is float) else 100
 	done = d.done
 	last = d.last
 	by_giver = d.by_giver.duplicate()

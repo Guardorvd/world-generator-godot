@@ -969,7 +969,7 @@ func update_tracker() -> void:
 		if quests.cargo:
 			# 19.11.2026: хрупкий груз — предупреждение (видно и в лёгком виде), обычная сумка — пометка
 			var fragile: bool = q.kind == "fragile"
-			note = "Хрупкий груз · не падайте" if fragile else "сумка за спиной"
+			note = ("Хрупкий груз · цел на %d %%" % quests.cargo_hp) if fragile else "сумка за спиной"
 			_tracker_note_icon.texture = UiIcons.ALERT if fragile else UiIcons.BAG
 			_tracker_note_icon.modulate = HudStyle.AMBER if fragile else HudStyle.MUTED
 			_tracker_note.add_theme_color_override("font_color", HudStyle.AMBER if fragile else HudStyle.MUTED)
@@ -1463,11 +1463,31 @@ func _fit_toast() -> void:
 		toast_panel.size = fit
 
 
+static func _summary_toggle_learned() -> bool:
+	var settings: GameSettings = GameContext.scope.settings
+	return settings == null or settings.hud_toggle_learned
+
+
+static func _learn_summary_toggle() -> void:
+	if _summary_toggle_learned():
+		return
+	GameContext.scope.settings.hud_toggle_learned = true
+	GameContext.scope.settings.save_settings()
+
+
+## 20.11: хрупкий груз пострадал — значок груза в трекере вздрагивает и вспыхивает (видно и в лёгком виде)
+func pulse_cargo() -> void:
+	if _tracker_note_icon != null and _tracker_note_icon.is_visible_in_tree():
+		UiAudio.shake(_tracker_note_icon, 4.0)
+		HudStyle.pulse(_tracker_note_icon, HudStyle.RED)
+
+
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"show_hud") and _summary_allowed():
 		view_mode = {View.LIGHT: View.FULL, View.FULL: View.HIDDEN, View.HIDDEN: View.LIGHT}[view_mode]
 		_revealed = view_mode == View.FULL
 		_summary_hint_left = SUMMARY_HINT_TIME
+		_learn_summary_toggle()
 
 
 func _process(delta: float) -> void:
@@ -1476,7 +1496,9 @@ func _process(delta: float) -> void:
 	_tick_ride_peek(delta)
 	_show_ride()
 	if _summary_allowed() and view_mode != View.HIDDEN:
-		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
+		# 20.11: пока игрок ни разу не нажал переключатель сводки, подсказка о нём не гаснет (GameSettings.hud_toggle_learned)
+		if _summary_toggle_learned():
+			_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
 	if journal_panel.visible:
 		_sync_map_hint()
 	# 19.11.2026: сводка раскладывается только когда что-то сдвинулось (проявление, вид, экраны поверх игры);
