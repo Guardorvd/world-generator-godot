@@ -42,10 +42,14 @@ func run() -> void:
 	Input.flush_buffered_events()
 	controls.read_bike_body(b)
 	var quiet := true
+	var passive := 0.0
 	for i in 30:
 		b.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
-		quiet = quiet and b.pump_accel == 0.0 and b.pump_load == 0.0 and b._pump_reach == 0.0 and b._pump_absorb_v == 0.0 and b.pump_active == 0.0
-	check(quiet, "отпущенная ЛКМ: нет сил и поглощения")
+		quiet = quiet and b.pump_accel == 0.0 and b.pump_load == 0.0 and b.pump_active == 0.0 and b.pump_body == 0.0
+		quiet = quiet and b._pump_absorb_v <= BikeRide.PUMP_ABSORB_V * BikeRide.PUMP_PASSIVE + 0.0001
+		passive = maxf(passive, b._pump_absorb_v)
+	# 20.11: без пампа седок только гасит гребень ногами (PUMP_PASSIVE), сил пампа нет
+	check(quiet, "отпущенная ЛКМ: нет сил пампа, поглощение не больше пассивного (%.2f м/с)" % passive)
 	Input.action_press("bike_pump")
 	controls.read_bike_body(b, false)
 	check(not b.pump_pressed, "панель блокирует памп")

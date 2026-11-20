@@ -18,6 +18,7 @@ class Ground extends Friendly.TestGround:
 var world := Friendly.TestWorld.new()
 var ground := Ground.new(world)
 var failures := 0
+var held := true # 20.11: false — памп не зажат (пассивное поглощение гребня)
 var checks := 0
 
 func _initialize() -> void:
@@ -36,7 +37,7 @@ func bike(enabled := true, pace := 8.0, contact := true) -> BikeRide:
 	b.y = ground.surface_at(0.0, 0.0, -INF)
 	b.mount(PlayerState.new())
 	b.speed = pace
-	b.pump_pressed = true # сценарии механики при удержании ЛКМ
+	b.pump_pressed = held # сценарии механики при удержании ЛКМ
 	return b
 
 func ride(profile: Callable, enabled := true, pace := 8.0, seconds := 4.0, hz := 60, contact := true, action := "") -> Dictionary:
@@ -87,8 +88,11 @@ func run() -> void:
 	for wave_profile: Array in [[waves, "6 м × 0,5 м"], [func(s: float) -> float: return 0.25 * (1.0 - cos(s * TAU / 5.2)), "5,2 м × 0,5 м"]]:
 		var line := PackedStringArray()
 		for pace: float in [8.0, 10.0, 12.0, 14.0, 16.0]:
-			line.append("%d м/с %.2f/%.2f" % [pace, ride(wave_profile[0], true, pace, 3.0).air, ride(wave_profile[0], false, pace, 3.0).air])
-		print("AIR %s, с в воздухе за 3 с (автопамп/без): %s" % [wave_profile[1], " · ".join(line)])
+			held = false
+			var passive: float = ride(wave_profile[0], true, pace, 3.0).air
+			held = true
+			line.append("%d м/с %.2f/%.2f/%.2f" % [pace, ride(wave_profile[0], true, pace, 3.0).air, passive, ride(wave_profile[0], false, pace, 3.0).air])
+		print("AIR %s, с в воздухе за 3 с (памп зажат/не зажат/выключен): %s" % [wave_profile[1], " · ".join(line)])
 	var high := ride(waves, true, 16.0, 2.0)
 	check(high.accel < 0.00001, "на большой скорости автопамп не добавляет тягу")
 	var tiny := ride(func(s: float) -> float: return 0.003 * sin(s * 5.0))
@@ -100,6 +104,10 @@ func run() -> void:
 		var on := ride(profile)
 		var off := ride(profile, false)
 		check(absf(on.air - off.air) < 0.08 and absf(on.height - off.height) < 0.1, "трамплин, край и ступень сохраняют штатный отрыв/столкновение")
+		held = false
+		var calm := ride(profile)
+		held = true
+		check(absf(calm.air - off.air) < 0.08 and absf(calm.height - off.height) < 0.1, "без зажатого пампа трамплин, край и ступень — штатный отрыв")
 	# 30.10: ручной Q→E на волне при опущенном переднем — памп, а не прыжок; ручной прыжок проверяется на ровном
 	for action: String in ["manual", "space"]:
 		var on := ride(flat if action == "manual" else waves, true, 8.0, 2.0, 60, true, action)

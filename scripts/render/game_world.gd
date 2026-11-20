@@ -1353,7 +1353,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("interact"):
 		interact()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
-		if event.pressed:
+		# 20.11: на велосипеде ПКМ — памп (действие bike_pump), фотоаппарат там всё равно недоступен
+		if event.pressed and not bike.riding:
 			toggle_photo()
 	elif event is InputEventMouseButton and photo.active and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
 		if event.pressed:

@@ -208,6 +208,9 @@ const PUMP_BODY_ACCEL := 2.5  # м/с²: предел разгона и торм
 const PUMP_KINK := 0.55      # 1/м: резче этого излом профиля — ступень или кромка, а не волна
 const PUMP_HOLD := 0.3       # с: столько велосипед считается «на волне» после последнего заметного изгиба профиля
 const PUMP_WAVE_PRESS := 0.06 # уклон волны: от подъёма до гребня (выше −половины этого) Q на волне — поглощение
+## 20.11: без зажатого пампа седок всё равно гасит гребень ногами — эта доля поглощения (ход PUMP_REACH и PUMP_ABSORB_V).
+## Только поглощение: разгона на обратном склоне, прижима и движения тела нет, «на волне» (pump_active) не включается.
+const PUMP_PASSIVE := 0.65
 const START_PACE := 3.0       # м/с: до этой скорости тяга педалей не ограничена запасом заднего колеса (помощь старта)
 ## Усилие седока на педалях — общее состояние тяги и позы: набирается плавно (около 95 % за 0,5 с),
 ## без мёртвой задержки, и спадает при отпускании без длинной скрытой тяги.
@@ -224,7 +227,7 @@ const CLIMB_ASSIST := 0.45
 ## 15.0: рывок (Shift, Stamina.surge): добавка тяги в полную силу прилива, м/с²; гаснет у поднятой крейсерской
 const SURGE_PUSH := 2.5
 
-var pump_pressed := false  # удержание ЛКМ; без него нет сил или поглощения пампа
+var pump_pressed := false  # удержание ЛКМ; без него нет сил пампа, поглощение гребня — только PUMP_PASSIVE
 var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
 var effort := 0.0           # усилие седока на педалях 0..1: от него тяга и поза (BikeView)
 var effort_ramp := true     # false — прежняя мгновенная тяга, для сравнительных прогонов
@@ -687,10 +690,13 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 	pump_active = held * exp(-dt / PUMP_HOLD)
 	pump_body = 0.0
 	_pump_wait = maxf(0.0, _pump_wait - dt)
-	if not pump_pressed or not pump_enabled:
+	if not pump_enabled:
 		pump_active = 0.0
 		pump_motion = lerpf(pump_motion, 0.0, Util.damp(12.0, dt))
 		return
+	var manual := pump_pressed
+	if not manual:
+		pump_active = 0.0
 	# 30.10: ручная работа телом больше не выключает памп — она и есть памп (ниже). Автоматика уступает ей место
 	# плавно; целиком памп снимают только прыжок, тормоз, занос и отрыв.
 	var blocked := hop or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_used or throttle < -0.05 or brake_pressure > 0.1 or absf(slip) > 0.12
@@ -723,6 +729,13 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 				# Ступень/стена/гэп и очень крутой кикер остаются штатными препятствиями и вылетами.
 				if absf(grade) > 0.65 or (i > 0 and absf(grade - previous) > PUMP_KINK * span): clear = false
 				previous = grade
+		if clear and not manual:
+			# 20.11: пассивный седок — тот же гребень (кривизна и спуск за ним, как ниже), только поглощение ногами
+			var crest := smoothstep(0.01, 0.07, absf((levels[1] + levels[3]) * 0.5 - levels[2])) * smoothstep(2.0, 5.0, speed)
+			crest *= smoothstep(0.03, 0.12, maxf(levels[2], levels[3]) - levels[4])
+			_pump_reach = PUMP_REACH * PUMP_PASSIVE * crest
+			_pump_absorb_v = PUMP_ABSORB_V * PUMP_PASSIVE * crest
+			clear = false
 		if clear:
 			var local_grade := (levels[3] - levels[1]) / (2.0 * span)
 			var long_grade := (levels[4] - levels[0]) / (4.0 * span)
