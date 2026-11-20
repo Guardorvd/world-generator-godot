@@ -2,6 +2,9 @@ extends PanelContainer
 ## Полевой планшет. Карта и путь делят один вид атласа, альбом открывает уже сохранённые снимки.
 
 signal closed
+signal goal_requested(place: Dictionary)
+signal cover_requested(key: String, path: String)
+signal controls_created(root: Node)
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
@@ -13,14 +16,27 @@ const INK := Color("#101e1c")
 const SURFACE := Color("#1a2c29")
 const LINE := Color("#455e55")
 const ACCENT := Color("#d2bd88")
+const THUMB_CACHE_LIMIT := 384
+const LARGE_CACHE_LIMIT := 4
+const CARDS_PER_FRAME := 2
 const Atlas := preload("res://scripts/ui/world_map_view.gd")
 enum Tab { MAP, PATH, ALBUM, SHOP }
 var active_tab := Tab.MAP
 var map_view: Atlas
 var data_provider := Callable()
 var quest_provider := Callable()
+var goal_provider := Callable()
 var _data := {}
 var _load_photos := {}
+var _photo_waiters := {}
+var _photo_thread: Thread
+var _photo_job := ""
+var _photo_generation := 0
+var _photo_job_generation := 0
+var _card_jobs: Array = []
+var _personal_grid: GridContainer
+var _focus_card_index := -1
+var _cards_loading: Label
 var _map_page: VBoxContainer
 var _map_row: BoxContainer
 var _dock: PanelContainer
@@ -28,14 +44,20 @@ var _details: BoxContainer
 var _dock_divider: HSeparator
 var _place_title: Label
 var _place_detail: Label
+var _place_goal: Button
+var _place_photo: Button
+var _inspected_place := {}
 var _checklist: VBoxContainer
 var _shown_quest := {}
 var _map_hint: Label
+var _track_layer: Button
+var _photo_layer: Button
 var _tab_map: Button
 var _seed: Label
 var _rides: Array = []            # заезды открытой вкладки (Hud._ride_rows)
 var _ride_buttons: Array[Button] = []
 var _ride_info: VBoxContainer
+var _selected_ride := 0
 const SHORT_GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночь", "Обелиски"]
 
 var _box: VBoxContainer
@@ -44,6 +66,9 @@ var _album_page: VBoxContainer
 var _album_scroll: ScrollContainer
 var _album_content: VBoxContainer
 var _album_filter := -1
+var _album_personal := false
+var _personal_visible := 24
+var _album_modes: Array[Button] = []
 var _album_data := {}
 var _tab_path: Button
 var _tab_album: Button
@@ -106,8 +131,12 @@ func clear() -> void:
 	_album_scroll = null
 	_album_content = null
 	_album_filter = -1
+	_album_personal = false
+	_personal_visible = 24
+	_album_modes.clear()
 	_album_data = {}
 	_data = {}
+	_inspected_place = {}
 	for child: Node in _path_page.get_children():
 		_path_page.remove_child(child)
 		child.queue_free()
@@ -115,14 +144,27 @@ func clear() -> void:
 	_rides = []
 	_ride_buttons.clear()
 	_ride_info = null
+	_selected_ride = 0
 	map_view.show_ride([], Rect2())
 	_lightbox_return_focus = null
 	_cache.clear()
 	_large_cache.clear()
 	_load_photos.clear()
+	_photo_waiters.clear()
+	_card_jobs.clear()
+	_personal_grid = null
+	_focus_card_index = -1
+	_cards_loading = null
+	_photo_generation += 1
 	map_view.set_photo_pins(false, {})
 	_fill_checklist({})
-	set_process(false)
+	set_process(_photo_thread != null)
+
+
+func _exit_tree() -> void:
+	if _photo_thread != null:
+		_photo_thread.wait_to_finish()
+		_photo_thread = null
 
 
 ## Закрыть лайтбокс, если он открыт. Возвращает true, если лайтбокс был закрыт
@@ -169,7 +211,7 @@ func cycle_tab(direction: int) -> void:
 
 func set_shortcuts(map_key: String, path_key: String, hint: String) -> void:
 	_tab_map.text = "Карта" if map_key.is_empty() else "Карта [%s]" % map_key
-	_tab_path.text = "Заезды" if path_key.is_empty() else "Заезды [%s]" % path_key
+	_tab_path.text = "Поездки" if path_key.is_empty() else "Поездки [%s]" % path_key
 	_map_hint.text = hint
 
 
@@ -204,8 +246,11 @@ func _build_header() -> void:
 	_box.add_child(tabs)
 	var group := ButtonGroup.new()
 	_tab_map = _tab("Карта", group, tabs, Tab.MAP)
-	_tab_path = _tab("Заезды", group, tabs, Tab.PATH)
+	_tab_path = _tab("Поездки", group, tabs, Tab.PATH)
 	_tab_album = _tab("Альбом", group, tabs, Tab.ALBUM)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.add_child(spacer)
 	_tab_shop = _tab("Магазин", group, tabs, Tab.SHOP)
 	_tab_shop.hide()
 
@@ -275,6 +320,18 @@ func _build_map() -> void:
 	_place_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_place_detail = _label("", 14, inspector, MUTED)
 	_place_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_place_goal = Button.new()
+	_place_goal.custom_minimum_size.y = 40
+	_place_goal.pressed.connect(func() -> void:
+		if not _inspected_place.is_empty():
+			map_view.selected_place = _inspected_place
+			goal_requested.emit(_inspected_place))
+	inspector.add_child(_place_goal)
+	_place_photo = Button.new()
+	_place_photo.text = "Открыть снимок"
+	_place_photo.custom_minimum_size.y = 40
+	_place_photo.pressed.connect(_open_place_photo)
+	inspector.add_child(_place_photo)
 	_dock_divider = HSeparator.new()
 	_details.add_child(_dock_divider)
 	var objective := VBoxContainer.new()
@@ -295,13 +352,26 @@ func _build_map() -> void:
 	_map_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_map_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_map_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_track_layer = Button.new()
+	_track_layer.text = "Путь"
+	_track_layer.tooltip_text = "Показать пройденный путь"
+	_track_layer.toggle_mode = true
+	_track_layer.button_pressed = true
+	_track_layer.toggled.connect(func(on: bool) -> void: map_view.set_travel_track(on))
+	footer.add_child(_track_layer)
+	_photo_layer = Button.new()
+	_photo_layer.text = "Снимки"
+	_photo_layer.tooltip_text = "Показать снимки на карте"
+	_photo_layer.toggle_mode = true
+	_photo_layer.button_pressed = true
+	_photo_layer.toggled.connect(func(on: bool) -> void: map_view.set_photo_pins(on, _cache))
+	footer.add_child(_photo_layer)
 	var center := Button.new()
 	center.text = "К себе"
 	center.icon = UiIcons.map_icon("goal")
 	center.custom_minimum_size.y = 40
 	center.pressed.connect(func() -> void:
-		map_view.center_on_player()
-		center.release_focus())
+		map_view.center_on_player())
 	footer.add_child(center)
 
 
@@ -325,6 +395,12 @@ func _select(tab: Tab) -> void:
 	if tab == Tab.SHOP and shop_panel.visible:
 		return
 	close_lightbox()
+	var focus := get_viewport().gui_get_focus_owner()
+	var move_focus := focus != null and (
+		(_album_page.is_ancestor_of(focus) and tab != Tab.ALBUM)
+		or (_path_page.is_ancestor_of(focus) and tab != Tab.PATH)
+		or (_details.is_ancestor_of(focus) and tab != Tab.MAP)
+		or (shop_panel.is_ancestor_of(focus) and tab != Tab.SHOP))
 	active_tab = tab
 	_tab_map.set_pressed_no_signal(tab == Tab.MAP)
 	_tab_path.set_pressed_no_signal(tab == Tab.PATH)
@@ -340,24 +416,31 @@ func _select(tab: Tab) -> void:
 		_data = data_provider.call()
 	if tab == Tab.PATH and _path_page.get_child_count() == 0:
 		_fill_path(_data)
+	elif tab == Tab.PATH and not _rides.is_empty():
+		var ride: Dictionary = _rides[_selected_ride]
+		map_view.show_ride(ride.legs, ride.bounds, false)
 	if tab == Tab.ALBUM and _album_scroll == null:
 		_fill_album(_data)
-	map_view.set_photo_pins(tab == Tab.PATH, _cache)
+	if tab == Tab.ALBUM and not _card_jobs.is_empty():
+		set_process(true)
+	map_view.set_photo_pins(_photo_layer.button_pressed, _cache)
 	if tab != Tab.PATH:
 		map_view.show_ride([], Rect2())
-	_load_photos.clear()
-	set_process(false)
 	if tab == Tab.SHOP:
 		shop_panel.open()
 	refresh_inspector(map_view.hover)
 	refresh_quest()
+	if move_focus:
+		var tab_button: Button = [_tab_map, _tab_path, _tab_album, _tab_shop][tab]
+		tab_button.grab_focus()
 
 
 func refresh_inspector(place: Dictionary) -> void:
 	if not _map_page.is_visible_in_tree():
 		return
 	if place.is_empty():
-		place = map_view.selected_place
+		place = _inspected_place if not _inspected_place.is_empty() else map_view.selected_place
+	_inspected_place = place
 	var title := str(place.get("name", ""))
 	var detail := "Наведитесь на метку или выберите её." if place.is_empty() else ""
 	if not place.is_empty():
@@ -381,6 +464,31 @@ func refresh_inspector(place: Dictionary) -> void:
 	_place_title.text = title
 	_place_title.visible = not title.is_empty()
 	_place_detail.text = detail
+	_place_goal.visible = not place.is_empty()
+	var goal: Dictionary = goal_provider.call() if goal_provider.is_valid() else {}
+	_place_goal.text = "Снять цель" if not place.is_empty() and place.get("key") == goal.get("key") else "Сделать целью"
+	_place_photo.visible = not str(place.get("map_photo", "")).is_empty()
+
+
+## Обновить карточку после изменения набора известных мест.
+func refresh_inspected_place() -> void:
+	var id := str(_inspected_place.get("key", ""))
+	_inspected_place = {}
+	for place: Dictionary in map_view.places:
+		if str(place.get("key", "")) == id:
+			_inspected_place = place
+			break
+	refresh_inspector(map_view.hover)
+
+
+func _open_place_photo() -> void:
+	if _inspected_place.is_empty():
+		return
+	var page := {key = "place:" + str(_inspected_place.get("key", "")), group = 1,
+		title = str(_inspected_place.get("name", "Место")), place_name = str(_inspected_place.get("name", "")),
+		shot = {path = str(_inspected_place.get("map_photo", "")), place = str(_inspected_place.get("key", "")), date = ""}}
+	var pages: Array[Dictionary] = [page]
+	_open_lightbox(page, pages, _place_photo)
 
 
 func refresh_quest() -> void:
@@ -413,12 +521,20 @@ func _fill_checklist(data: Dictionary) -> void:
 func _fill_path(data: Dictionary) -> void:
 	_rides = data.get("rides", [])
 	_ride_buttons.clear()
-	_label("ИСТОРИЯ МАРШРУТОВ", 12, _path_page, ACCENT)
-	_label("Ваши заезды", 22, _path_page, HudStyle.CREAM)
-	_label("Выберите заезд, чтобы увидеть его на карте", 13, _path_page, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_label("ИСТОРИЯ ПУТЕШЕСТВИЙ", 12, _path_page, ACCENT)
+	_label("Ваши поездки", 22, _path_page, HudStyle.CREAM)
+	_label("Одна запись — время от входа в мир до выхода. Хранятся последние 40 поездок.", 13, _path_page, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _rides.is_empty():
 		_label("Заездов пока нет", 14, _path_page, MUTED)
 	var group := ButtonGroup.new()
+	var ride_scroll := ScrollContainer.new()
+	ride_scroll.custom_minimum_size.y = 150
+	ride_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	ride_scroll.follow_focus = true
+	_path_page.add_child(ride_scroll)
+	var ride_list := VBoxContainer.new()
+	ride_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ride_scroll.add_child(ride_list)
 	for i in _rides.size():
 		var ride: Dictionary = _rides[i]
 		var button := Button.new()
@@ -435,7 +551,7 @@ func _fill_path(data: Dictionary) -> void:
 		button.add_theme_stylebox_override("hover_pressed", HudStyle.panel(Color("#4b6350"), ACCENT, 0, Vector2(12, 8), false))
 		button.tooltip_text = "Показать заезд на карте"
 		button.pressed.connect(_select_ride.bind(i))
-		_path_page.add_child(button)
+		ride_list.add_child(button)
 		_ride_buttons.append(button)
 	_ride_info = VBoxContainer.new()
 	_ride_info.add_theme_constant_override("separation", 4)
@@ -461,19 +577,21 @@ func _fill_path(data: Dictionary) -> void:
 	if not _rides.is_empty():
 		_ride_buttons[0].set_pressed_no_signal(true)
 		_select_ride.call_deferred(0) # карта уже разложена: вид подгоняется под трек заезда
+	controls_created.emit(_path_page)
 
 
 ## Выбранный заезд: трек на карте, вид на него, счётчики и места
-func _select_ride(index: int) -> void:
-	if index >= _rides.size() or _ride_info == null or active_tab != Tab.PATH:
+func _select_ride(index: int, frame := true) -> void:
+	if index < 0 or index >= _rides.size() or _ride_info == null or active_tab != Tab.PATH:
 		return
+	_selected_ride = index
 	var ride: Dictionary = _rides[index]
 	for i in _ride_buttons.size():
 		_ride_buttons[i].set_pressed_no_signal(i == index)
 	for child: Node in _ride_info.get_children():
 		_ride_info.remove_child(child)
 		child.queue_free()
-	_label("ВЫБРАННЫЙ ЗАЕЗД", 12, _ride_info, ACCENT)
+	_label("ВЫБРАННАЯ ПОЕЗДКА", 12, _ride_info, ACCENT)
 	_label(ride.title + (" · идёт сейчас" if ride.current else ""), 17, _ride_info, HudStyle.CREAM)
 	var metrics := GridContainer.new()
 	metrics.columns = 2
@@ -485,12 +603,44 @@ func _select_ride(index: int) -> void:
 	_metric(metrics, "В ПУТИ", _duration(ride.time))
 	_metric(metrics, "ВЫСШАЯ ТОЧКА", "%d м" % roundi(ride.alt))
 	_label("Снимков · %d   Заданий · %d" % [ride.photos, ride.quests], 14, _ride_info, MUTED)
-	var places: Array = ride.places
-	var where := "Места: " + ", ".join(PackedStringArray(places)) if not places.is_empty() else "Места: —"
-	_label(where, 13, _ride_info, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var locations: Array = ride.get("locations", [])
+	if locations.is_empty():
+		_label("Посещённых мест нет или данные недоступны", 13, _ride_info, MUTED)
+	else:
+		_label("ПОСЕЩЁННЫЕ МЕСТА", 11, _ride_info, MUTED)
+		for location: Dictionary in locations:
+			var place_button := Button.new()
+			place_button.text = str(location.name) + "  ↗"
+			place_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			place_button.pressed.connect(_show_place_on_map.bind(str(location.id)))
+			_ride_info.add_child(place_button)
+	var linked := 0
+	for photo: Dictionary in _data.get("personal_photos", []):
+		if float(photo.get("ride_start", 0.0)) > 0.0 and float(photo.get("ride_start", 0.0)) == float(ride.get("start", 0.0)):
+			linked += 1
+	if linked > 0:
+		var photos_button := Button.new()
+		photos_button.text = "Снимки поездки · %d" % linked
+		photos_button.pressed.connect(_show_ride_photos.bind(float(ride.start), photos_button))
+		_ride_info.add_child(photos_button)
 	if ride.legs.is_empty():
-		_label("Трека нет: стояли на месте", 13, _ride_info, MUTED)
-	map_view.show_ride(ride.legs, ride.bounds)
+		_label("Трек этой поездки недоступен", 13, _ride_info, MUTED)
+	map_view.show_ride(ride.legs, ride.bounds, frame)
+	controls_created.emit(_ride_info)
+
+
+func _show_place_on_map(id: String) -> void:
+	_select(Tab.MAP)
+	map_view.focus_place(id)
+
+
+func _show_ride_photos(start: float, return_to: Control) -> void:
+	var pages: Array[Dictionary] = []
+	for photo: Dictionary in _data.get("personal_photos", []):
+		if start > 0.0 and float(photo.get("ride_start", 0.0)) == start:
+			pages.append(_personal_page(photo))
+	if not pages.is_empty():
+		_open_lightbox(pages[0], pages, return_to)
 
 
 func _metric(parent: GridContainer, caption: String, value: String) -> void:
@@ -508,18 +658,111 @@ static func _duration(seconds: float) -> String:
 
 
 func _queue_photo(path: String) -> void:
-	_load_photos[path] = true
+	_queue_image(path, false)
+
+
+## Decode and resize off the render thread. Only ImageTexture creation touches the UI thread.
+static func _decode_photo(path: String, width: int) -> Image:
+	if not FileAccess.file_exists(path):
+		return null
+	var image := Image.load_from_file(path)
+	if image == null or image.is_empty():
+		return null
+	if image.get_width() > width:
+		image.resize(width, maxi(1, roundi(float(width) * image.get_height() / image.get_width())), Image.INTERPOLATE_BILINEAR)
+	return image
+
+
+func _queue_image(path: String, large: bool) -> void:
+	if path.is_empty():
+		return
+	var cache: Dictionary = _large_cache if large else _cache
+	if cache.has(path):
+		return
+	var key := ("L:" if large else "S:") + path
+	if key != _photo_job or _photo_job_generation != _photo_generation:
+		_load_photos[key] = true
 	set_process(true)
 
 
+func _request_image(path: String, large: bool, view: TextureRect, status: Label) -> void:
+	var cache: Dictionary = _large_cache if large else _cache
+	if cache.has(path):
+		view.texture = cache[path]
+		status.visible = view.texture == null
+		status.text = "Файл снимка недоступен"
+		return
+	var key := ("L:" if large else "S:") + path
+	if path.is_empty():
+		status.text = "Файл снимка недоступен"
+		return
+	if not _photo_waiters.has(key):
+		_photo_waiters[key] = []
+	_photo_waiters[key].append([weakref(view), weakref(status)])
+	_queue_image(path, large)
+
+
 func _process(_dt: float) -> void:
-	if not _load_photos.is_empty():
-		var path: String = _load_photos.keys()[0]
-		_load_photos.erase(path)
-		_thumbnail(path)
-		map_view.refresh_overlay()
-	if _load_photos.is_empty():
+	var card_count := mini(CARDS_PER_FRAME, _card_jobs.size()) if active_tab == Tab.ALBUM and is_visible_in_tree() else 0
+	for i in card_count:
+		var job: Array = _card_jobs.pop_front()
+		var grid := (job[0] as WeakRef).get_ref() as GridContainer
+		if not is_instance_valid(grid) or grid.is_queued_for_deletion():
+			continue
+		var opened: Array[Dictionary] = job[2]
+		var card := _card(job[1], opened)
+		grid.add_child(card)
+		controls_created.emit(card)
+		if grid == _personal_grid and grid.get_child_count() - 1 == _focus_card_index:
+			if card is Button:
+				card.grab_focus()
+			_focus_card_index = -1
+	if _card_jobs.is_empty() and is_instance_valid(_cards_loading):
+		_cards_loading.hide()
+	if _photo_thread != null and not _photo_thread.is_alive():
+		var image: Image = _photo_thread.wait_to_finish()
+		_photo_thread = null
+		var key := _photo_job
+		_photo_job = ""
+		if _photo_job_generation == _photo_generation:
+			_complete_photo(key, image)
+	if _photo_thread == null and not _load_photos.is_empty():
+		_photo_job = _load_photos.keys()[0]
+		for pending: String in _load_photos:
+			if pending.begins_with("L:"):
+				_photo_job = pending
+				break
+		_load_photos.erase(_photo_job)
+		_photo_job_generation = _photo_generation
+		_photo_thread = Thread.new()
+		var width := 800 if _photo_job.begins_with("L:") else 256
+		if _photo_thread.start(_decode_photo.bind(_photo_job.substr(2), width)) != OK:
+			_photo_thread = null
+			_complete_photo(_photo_job, null)
+			_photo_job = ""
+	if _photo_thread == null and _load_photos.is_empty() and (_card_jobs.is_empty() or active_tab != Tab.ALBUM or not is_visible_in_tree()):
 		set_process(false)
+
+
+func _complete_photo(key: String, image: Image) -> void:
+	var path := key.substr(2)
+	var large := key.begins_with("L:")
+	var cache: Dictionary = _large_cache if large else _cache
+	var limit := LARGE_CACHE_LIMIT if large else THUMB_CACHE_LIMIT
+	var texture: ImageTexture = ImageTexture.create_from_image(image) if image != null else null
+	if cache.size() >= limit and not cache.has(path):
+		cache.erase(cache.keys()[0])
+	cache[path] = texture
+	for waiter: Array in _photo_waiters.get(key, []):
+		var view := (waiter[0] as WeakRef).get_ref() as TextureRect
+		var status := (waiter[1] as WeakRef).get_ref() as Label
+		if is_instance_valid(view) and is_instance_valid(status):
+			view.texture = texture
+			status.visible = texture == null
+			status.text = "Файл снимка недоступен"
+	_photo_waiters.erase(key)
+	if not large:
+		map_view.refresh_overlay()
 
 
 func _fill_album(data: Dictionary) -> void:
@@ -527,7 +770,30 @@ func _fill_album(data: Dictionary) -> void:
 	var pages: Array = data.get("pages", [])
 	var groups: Array = data.get("groups", [])
 	var nav_bar := HFlowContainer.new()
+	var modes := HBoxContainer.new()
+	modes.add_theme_constant_override("separation", 8)
+	_album_page.add_child(modes)
+	var mode_group := ButtonGroup.new()
+	for mode in [false, true]:
+		var button := Button.new()
+		button.text = "Мои снимки" if mode else "Коллекция"
+		button.toggle_mode = true
+		button.button_group = mode_group
+		button.button_pressed = mode == _album_personal
+		button.custom_minimum_size.y = 40
+		button.pressed.connect(func() -> void:
+			_album_personal = mode
+			for i in _album_modes.size():
+				_album_modes[i].set_pressed_no_signal(i == (1 if mode else 0))
+			_personal_visible = 24
+			nav_bar.visible = not mode
+			_rebuild_album_grid()
+			if _album_scroll != null:
+				_album_scroll.scroll_vertical = 0)
+		modes.add_child(button)
+		_album_modes.append(button)
 	nav_bar.add_theme_constant_override("separation", 8)
+	nav_bar.visible = not _album_personal
 	_album_page.add_child(nav_bar)
 
 	var total_all := pages.size()
@@ -556,6 +822,7 @@ func _fill_album(data: Dictionary) -> void:
 	_album_scroll.add_child(_album_content)
 	_album_scroll.resized.connect(_resize_album_grid)
 	_rebuild_album_grid()
+	controls_created.emit(_album_page)
 
 
 func _pill(text: String, group_index: int, group: ButtonGroup, parent: Container) -> Button:
@@ -581,9 +848,41 @@ func _pill(text: String, group_index: int, group: ButtonGroup, parent: Container
 func _rebuild_album_grid() -> void:
 	if _album_content == null:
 		return
+	_card_jobs.clear()
+	_personal_grid = null
+	_focus_card_index = -1
 	for child: Node in _album_content.get_children():
 		_album_content.remove_child(child)
 		child.queue_free()
+	_cards_loading = _label("Подготавливаем страницы…", 13, _album_content, MUTED)
+	if _album_personal:
+		var personal_pages: Array[Dictionary] = []
+		var personal: Array = _album_data.get("personal_photos", [])
+		for i in range(personal.size() - 1, -1, -1):
+			personal_pages.append(_personal_page(personal[i]))
+		_label("МОИ СНИМКИ  /  %d" % personal_pages.size(), 20, _album_content, HudStyle.CREAM)
+		_label("В дневнике хранятся последние 256 снимков.", 13, _album_content, MUTED)
+		if personal_pages.is_empty():
+			_label("Здесь появятся новые фотографии. Снимки из прежних сохранений остаются в коллекции.", 14, _album_content, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		else:
+			var personal_grid := GridContainer.new()
+			_personal_grid = personal_grid
+			personal_grid.columns = _album_columns()
+			personal_grid.add_theme_constant_override("h_separation", 12)
+			personal_grid.add_theme_constant_override("v_separation", 12)
+			_album_content.add_child(personal_grid)
+			for i in mini(_personal_visible, personal_pages.size()):
+				_card_jobs.append([weakref(personal_grid), personal_pages[i], personal_pages])
+			if personal_pages.size() > _personal_visible:
+				var more := Button.new()
+				more.text = "Показать ещё снимки"
+				more.pressed.connect(_show_more_photos)
+				_album_content.add_child(more)
+		_cards_loading.visible = not _card_jobs.is_empty()
+		if not _card_jobs.is_empty():
+			set_process(true)
+		controls_created.emit(_album_content)
+		return
 	var pages: Array = _album_data.get("pages", [])
 	var groups: Array = _album_data.get("groups", [])
 	var opened_all: Array[Dictionary] = []
@@ -608,7 +907,25 @@ func _rebuild_album_grid() -> void:
 		grid.add_theme_constant_override("v_separation", 12)
 		_album_content.add_child(grid)
 		for page: Dictionary in mine:
-			grid.add_child(_card(page, opened_all))
+			_card_jobs.append([weakref(grid), page, opened_all])
+	_cards_loading.visible = not _card_jobs.is_empty()
+	if not _card_jobs.is_empty():
+		set_process(true)
+	controls_created.emit(_album_content)
+
+
+func _show_more_photos() -> void:
+	var previous := _personal_visible
+	_personal_visible += 24
+	_rebuild_album_grid()
+	_focus_card_index = previous
+
+
+func _personal_page(photo: Dictionary) -> Dictionary:
+	var name := str(photo.get("place_name", ""))
+	return {key = "photo:" + str(photo.get("path", "")), group = 1,
+		title = name if not name.is_empty() else "Снимок путешествия", hint = "",
+		place_name = name, shot = photo, photo_keys = photo.get("keys", [])}
 
 
 func _album_columns() -> int:
@@ -659,8 +976,7 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 	frame.custom_minimum_size = THUMB
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(frame)
-	var texture := _thumbnail(page.shot.get("path", "")) if done else null
-	if texture != null:
+	if done:
 		var clip := Panel.new()
 		clip.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		clip.clip_children = CanvasItem.CLIP_CHILDREN_AND_DRAW
@@ -670,12 +986,17 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		clip.add_theme_stylebox_override("panel", clip_style)
 		frame.add_child(clip)
 		var view := TextureRect.new()
-		view.texture = texture
 		view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 		view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		clip.add_child(view)
+		var loading := _label("Загрузка снимка…", 12, clip, MUTED)
+		loading.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		loading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		loading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		loading.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_request_image(str(page.shot.get("path", "")), false, view, loading)
 		var date_text := str(page.shot.get("date", "")).left(10)
 		if not date_text.is_empty():
 			var dbadge := PanelContainer.new()
@@ -741,6 +1062,9 @@ func _card(page: Dictionary, opened_all: Array[Dictionary]) -> Control:
 		if page.get("text", "") != "":
 			sub_text = str(page.text)
 			sub_color = MUTED
+		elif str(page.key).begins_with("photo:"):
+			sub_text = "Снимок из поездки" if float(page.shot.get("ride_start", 0.0)) > 0.0 else "Личный снимок"
+			sub_color = HudStyle.MINT
 		elif str(page.get("place_name", "")) != "":
 			sub_text = str(page.place_name)
 			sub_color = HudStyle.MINT
@@ -825,26 +1149,25 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 
 	var lore_text := str(page.get("text", ""))
 	var image_width := minf(560.0 if not lore_text.is_empty() else 720.0, modal_width - 40.0)
-	var image_height := minf(image_width * 0.5625, maxf(100.0, size.y - (330.0 if not lore_text.is_empty() else 250.0)))
+	var allowance := 330.0 if not lore_text.is_empty() else 250.0
+	if not page.get("photo_keys", []).is_empty():
+		allowance += 56.0
+	var image_height := minf(image_width * 0.5625, maxf(100.0, size.y - allowance))
 	var img_size := Vector2(image_width, image_height)
-	var large_tex := _large_photo(str(page.shot.get("path", "")))
-	if large_tex != null:
-		var view := TextureRect.new()
-		view.texture = large_tex
-		view.custom_minimum_size = img_size
-		view.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		vbox.add_child(view)
-	else:
-		var missing := PanelContainer.new()
-		missing.custom_minimum_size = img_size
-		missing.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		missing.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS.lerp(HudStyle.AMBER, 0.14), HudStyle.BORDER, 8, Vector2(16, 16), false))
-		var mlbl := _label("Файл снимка был удалён с диска", 16, missing, HudStyle.AMBER)
-		mlbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		mlbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		vbox.add_child(missing)
+	var picture := Control.new()
+	picture.custom_minimum_size = img_size
+	picture.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vbox.add_child(picture)
+	var view := TextureRect.new()
+	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	picture.add_child(view)
+	var loading := _label("Загрузка снимка…", 16, picture, MUTED)
+	loading.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	loading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_request_image(str(page.shot.get("path", "")), true, view, loading)
 
 	var meta_row := HBoxContainer.new()
 	meta_row.add_theme_constant_override("separation", 12)
@@ -858,6 +1181,45 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 		meta_parts.append("Снято: %s" % date_full)
 	var meta_lbl := _label(" · ".join(meta_parts), 13, meta_row, HudStyle.MINT)
 	meta_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var place_id := str(page.shot.get("place", ""))
+	var show_place_button: Button
+	if not place_id.is_empty() and map_view.places.any(func(p: Dictionary) -> bool: return str(p.get("key", "")) == place_id):
+		var show_place := Button.new()
+		show_place_button = show_place
+		show_place.text = "На карте"
+		show_place.pressed.connect(func() -> void:
+			close_lightbox()
+			_show_place_on_map(place_id))
+		meta_row.add_child(show_place)
+	var photo_keys: Array = page.get("photo_keys", [])
+	var choices: Array[Dictionary] = []
+	var choice_control: OptionButton
+	var cover_button: Button
+	for collection_page: Dictionary in _data.get("pages", []):
+		if collection_page.key in photo_keys and not collection_page.shot.is_empty():
+			choices.append(collection_page)
+	if not choices.is_empty():
+		var cover_row := HBoxContainer.new()
+		vbox.add_child(cover_row)
+		var choice := OptionButton.new()
+		choice_control = choice
+		choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		for item: Dictionary in choices:
+			choice.add_item(str(item.title))
+		cover_row.add_child(choice)
+		var cover := Button.new()
+		cover_button = cover
+		cover.text = "Выбрать для коллекции"
+		cover.pressed.connect(func() -> void:
+			cover_requested.emit(str(choices[choice.selected].key), str(page.shot.path))
+			if data_provider.is_valid():
+				_data = data_provider.call()
+				_album_data = _data
+			close_lightbox()
+			_rebuild_album_grid()
+			if _album_modes.size() > 1 and _album_modes[1].is_visible_in_tree():
+				_album_modes[1].grab_focus())
+		cover_row.add_child(cover)
 
 	if not lore_text.is_empty():
 		var lore_box := PanelContainer.new()
@@ -898,6 +1260,21 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 	next_btn.focus_neighbor_top = close_btn.get_path()
 	prev_btn.focus_neighbor_right = next_btn.get_path()
 	next_btn.focus_neighbor_left = prev_btn.get_path()
+	var middle: Array[Control] = []
+	if show_place_button != null:
+		middle.append(show_place_button)
+	if choice_control != null:
+		middle.append(choice_control)
+	if cover_button != null:
+		middle.append(cover_button)
+	if not middle.is_empty():
+		close_btn.focus_neighbor_bottom = middle[0].get_path()
+		for i in middle.size():
+			middle[i].focus_neighbor_top = close_btn.get_path() if i == 0 else middle[i - 1].get_path()
+			middle[i].focus_neighbor_bottom = prev_btn.get_path() if i == middle.size() - 1 else middle[i + 1].get_path()
+		prev_btn.focus_neighbor_top = middle[-1].get_path()
+		next_btn.focus_neighbor_top = middle[-1].get_path()
+	controls_created.emit(modal)
 	if flip and DisplayServer.get_name() != "headless":
 		# листание: новая карточка мягко проявляется на месте прежней
 		modal.modulate.a = 0.35
@@ -906,37 +1283,3 @@ func _open_lightbox(page: Dictionary, opened_all: Array[Dictionary], return_to: 
 		"prev": prev_btn.grab_focus()
 		"next": next_btn.grab_focus()
 		_: close_btn.grab_focus()
-
-
-## Снимок целиком в игровом размере тяжёл: в карточке — уменьшенная копия, одна на путь
-func _thumbnail(path: String) -> Texture2D:
-	if path.is_empty():
-		return null
-	if _cache.has(path):
-		return _cache[path]
-	var texture: ImageTexture = null
-	if FileAccess.file_exists(path):
-		var image := Image.load_from_file(path)
-		if image != null and not image.is_empty():
-			var width := 320
-			image.resize(width, maxi(1, roundi(float(width) * image.get_height() / image.get_width())), Image.INTERPOLATE_BILINEAR)
-			texture = ImageTexture.create_from_image(image)
-	_cache[path] = texture
-	return texture
-
-
-func _large_photo(path: String) -> Texture2D:
-	if path.is_empty():
-		return null
-	if _large_cache.has(path):
-		return _large_cache[path]
-	var texture: ImageTexture = null
-	if FileAccess.file_exists(path):
-		var image := Image.load_from_file(path)
-		if image != null and not image.is_empty():
-			if image.get_width() > 800:
-				var w := 800
-				image.resize(w, maxi(1, roundi(float(w) * image.get_height() / image.get_width())), Image.INTERPOLATE_BILINEAR)
-			texture = ImageTexture.create_from_image(image)
-	_large_cache[path] = texture
-	return texture

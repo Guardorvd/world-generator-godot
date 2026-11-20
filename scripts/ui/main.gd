@@ -240,7 +240,8 @@ func _ready() -> void:
 		_play_ui(&"volume_tick"))
 	_shop.sound_requested.connect(_play_ui)
 	hud.journal_panel.shop_panel.sound_requested.connect(_play_ui)
-	for subtree: Node in [%Menu, %AllWorlds, %NewWorld, %Loading, %Pause, %Settings, _shop, hud.journal_panel.shop_panel]:
+	hud.journal_panel.controls_created.connect(_ui_audio.bind_tree)
+	for subtree: Node in [%Menu, %AllWorlds, %NewWorld, %Loading, %Pause, %Settings, _shop, hud.journal_panel]:
 		_ui_audio.bind_tree(subtree)
 	get_viewport().size_changed.connect(_fit_menu)
 	if _progress_enabled and DisplayServer.get_name() != "headless" and "--static-menu" not in OS.get_cmdline_user_args():

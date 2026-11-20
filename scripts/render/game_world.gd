@@ -2395,7 +2395,7 @@ func _album_photo(shot: Dictionary) -> void:
 	# 18.11.2026: место засчитывается только вблизи (Exploration.ALBUM_REACH), приближение не помогает
 	var far := not place.is_empty() and float(shot.get("dist", 0.0)) > Exploration.album_reach(place.kind)
 	var keys := Exploration.classify({} if far else place, int(info.biome) if not info.is_empty() else -1, sky, str(shot.get("plaque", "")))
-	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true))
+	var titles := hud.explore.add_photo(shot, keys, Time.get_datetime_string_from_system(false, true), hud.ride_log.session_start())
 	var photographed: String = shot.get("plaque", "")
 	if photographed.is_empty() and not far:
 		photographed = place.get("id", "")

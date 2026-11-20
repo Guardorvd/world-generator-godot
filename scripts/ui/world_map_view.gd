@@ -44,6 +44,7 @@ var tablet := false
 enum Status { VISITED = 1, REVEALED = 2, PHOTO = 4, QUEST = 8 }
 var selected_place := {}
 var _show_photos := false
+var show_travel_track := true
 var _photo_cache := {}
 var journal: Journal
 var ride_legs: Array = []    # 20.11.2026: трек выбранного заезда (вкладка «Заезды»): он ярче, остальной путь бледнее
@@ -258,6 +259,12 @@ func set_photo_pins(on: bool, cache: Dictionary) -> void:
 	_show_photos = on
 	_photo_cache = cache
 	refresh_overlay()
+
+
+func set_travel_track(on: bool) -> void:
+	show_travel_track = on
+	if _track != null:
+		_track.queue_redraw()
 
 
 func set_player(at: Vector2, yaw: float) -> void:
@@ -572,6 +579,19 @@ func center_on_player() -> void:
 	refresh_overlay()
 
 
+## Открыть уже известное место из дневника, не назначая его целью.
+func focus_place(id: String) -> bool:
+	for place: Dictionary in places:
+		if str(place.get("key", "")) == id:
+			selected_place = place
+			_center = place_at(place).clamp(_bounds.position, _bounds.end)
+			_update_base()
+			refresh_overlay()
+			hover_changed.emit(place)
+			return true
+	return false
+
+
 func _zoom_at(at: Vector2, factor: float) -> void:
 	var anchor := screen_to_world(at)
 	var next_scale := clampf(_scale * factor, _min_scale, MAX_SCALE)
@@ -754,11 +774,12 @@ func _draw_track() -> void:
 	if _data == null or journal == null:
 		return
 	var faded := not ride_legs.is_empty()
-	for leg: Dictionary in journal.legs:
-		if _track_window.intersects(leg.bounds.grow(1.0)):
-			_draw_leg(leg.points, faded)
-	if journal.current.size() > 1 and _track_window.intersects(journal.current_bounds.grow(1.0)):
-		_draw_leg(journal.current, faded)
+	if show_travel_track:
+		for leg: Dictionary in journal.legs:
+			if _track_window.intersects(leg.bounds.grow(1.0)):
+				_draw_leg(leg.points, faded)
+		if journal.current.size() > 1 and _track_window.intersects(journal.current_bounds.grow(1.0)):
+			_draw_leg(journal.current, faded)
 	for points: PackedVector2Array in ride_legs:
 		_track.draw_polyline(points, Color("#fffaff"), 7.0 / _stroke_scale, true)
 		_track.draw_polyline(points, RIDE_INK, 4.2 / _stroke_scale, true)
@@ -773,12 +794,12 @@ func _draw_leg(points: PackedVector2Array, faded := false) -> void:
 
 
 ## 20.11.2026: показать заезд — его трек ярко, вид на всю его рамку (пустой список — обычный путь целиком)
-func show_ride(legs: Array, frame: Rect2) -> void:
+func show_ride(legs: Array, frame: Rect2, fit_view := true) -> void:
 	ride_legs = legs
 	_ride_frame = frame if not legs.is_empty() else Rect2()
 	if _track != null:
 		_track.queue_redraw()
-	if not legs.is_empty():
+	if not legs.is_empty() and fit_view:
 		_frame_ride()
 
 
@@ -933,8 +954,10 @@ func _draw_key(color: Color, font: Font) -> void:
 	# На низкой карте легенда перекрывает ориентиры и центр управления.
 	if size.y < 320.0:
 		return
-	var rows := [["Мой трек", "track"], ["Дорога", Paint.PAPER_STROKES[2]], ["Тропа", Paint.PAPER_STROKES[1]],
+	var rows := [["Дорога", Paint.PAPER_STROKES[2]], ["Тропа", Paint.PAPER_STROKES[1]],
 		["Велотрасса", Paint.PAPER_STROKES[3]], ["Игрок", "player"], ["Цель", "goal"]]
+	if show_travel_track:
+		rows.push_front(["Мой трек", "track"])
 	if not ride_legs.is_empty():
 		rows.insert(1, ["Заезд", "ride"])
 	if bike.is_finite():

@@ -144,6 +144,10 @@ func _album() -> void:
 	var first := e.add_photo({path = "user://a.jpg", place = ""}, PackedStringArray(["peak", "biome:8"]), "2026-11-18 10:00:00")
 	var second := e.add_photo({path = "user://b.jpg", place = ""}, PackedStringArray(["peak", "lake"]), "2026-11-18 11:00:00")
 	check(first.size() == 2 and second.size() == 1 and e.album.peak.path == "user://a.jpg" and e.photos == 2, "страница хранит первый снимок")
+	check(e.personal_photos.size() == 2 and e.choose_album_photo("peak", "user://b.jpg") and e.album.peak.path == "user://b.jpg",
+		"личные снимки сохраняются и подходящий кадр становится обложкой")
+	check(not e.choose_album_photo("biome:8", "user://b.jpg") and e.album["biome:8"].path == "user://a.jpg",
+		"неподходящий кадр не заменяет обложку")
 	var pages := Exploration.pages()
 	var keys_seen := {}
 	for page: Dictionary in pages:
@@ -162,7 +166,10 @@ func _save() -> void:
 	check(Exploration.valid_save(state), "состояние проходит проверку")
 	var copy := Exploration.new()
 	copy.restore(state)
-	check(copy.revealed == e.revealed and copy.scanned == e.scanned and copy.album == e.album and copy.play_s == e.play_s and copy.photos == 1, "сохранение и загрузка без потерь")
+	check(copy.revealed == e.revealed and copy.scanned == e.scanned and copy.album == e.album and copy.play_s == e.play_s and copy.photos == 1 and copy.personal_photos == e.personal_photos, "сохранение и загрузка без потерь")
+	var legacy := state.duplicate(true)
+	legacy.erase("personal_photos")
+	check(Exploration.valid_save(legacy), "сохранение без личной галереи остаётся совместимым")
 	check(Exploration.valid_save(var_to_bytes_and_back(state)), "и через байты сохранения")
 	var bad := state.duplicate(true)
 	bad.time = -1.0
@@ -170,6 +177,9 @@ func _save() -> void:
 	bad = state.duplicate(true)
 	bad.album["x"] = {path = 1, date = "", place = ""}
 	check(not Exploration.valid_save(bad), "битая страница отвергается")
+	bad = state.duplicate(true)
+	bad.personal_photos[0]["keys"] = [1]
+	check(not Exploration.valid_save(bad), "битые категории личного снимка отвергаются")
 	check(not Exploration.valid_save({}) and not Exploration.valid_save("x"), "пустое и чужое отвергаются")
 
 

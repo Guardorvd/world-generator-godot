@@ -15,6 +15,10 @@ var alt := 0.0                       # высшая точка заезда, м
 var _start := {}                     # счётчики на начало заезда
 
 
+func session_start() -> float:
+	return float(_start.get("at", 0.0))
+
+
 ## Начать заезд (после восстановления сохранения или в новой игре)
 func begin(journal, explore: Exploration, quests_done: int) -> void:
 	places = {}

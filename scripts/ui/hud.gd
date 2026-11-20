@@ -190,6 +190,11 @@ func _ready() -> void:
 	journal_panel = Tablet.new()
 	journal_panel.data_provider = journey_data
 	journal_panel.quest_provider = _tablet_quest
+	journal_panel.goal_provider = func() -> Dictionary: return goal
+	journal_panel.goal_requested.connect(_select_map_goal)
+	journal_panel.cover_requested.connect(func(key: String, path: String) -> void:
+		if explore.choose_album_photo(key, path):
+			_tablet_places_dirty = true)
 	add_child(journal_panel)
 	big_map = journal_panel.map_view
 	big_map.journal = map_journal
@@ -628,7 +633,7 @@ func _sync_tablet_map() -> void:
 		pin.map_status = status
 		known.append(pin)
 	big_map.set_places(known)
-	journal_panel.refresh_inspector(big_map.hover)
+	journal_panel.refresh_inspected_place()
 	journal_panel.refresh_quest()
 	_sync_map_goal()
 
@@ -682,6 +687,7 @@ func set_goal(place: Dictionary) -> void:
 		compass.queue_redraw()
 		_sync_minimap_destinations()
 		_sync_map_goal()
+		journal_panel.refresh_inspector(big_map.selected_place)
 
 
 static func marker_goal(at: Vector2) -> Dictionary:
@@ -792,11 +798,17 @@ func journey_data() -> Dictionary:
 	var world_size := Vector2(world.W, world.H) * TILE if world != null else Vector2.ZERO
 	var track := {legs = map_journal.legs, current = map_journal.current, player = Vector2(px, pz),
 		yaw = yaw, world_size = world_size}
+	var personal: Array = []
+	for photo: Dictionary in explore.personal_photos:
+		var item := photo.duplicate(true)
+		var p := world.place(str(item.place)) if world != null and not str(item.place).is_empty() else {}
+		item.place_name = str(p.get("name", ""))
+		personal.append(item)
 	return {seed = world.seed_text if world != null else "", close_hint = close_hint,
 		foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt,
 		photos = explore.photos, quests = quests.done if quests != null else 0, places = rows,
 		pages = pages, groups = Exploration.GROUPS, active_quest = active_quest,
-		series = series, thanks = thanks, helped = helped, track = track, rides = _ride_rows()}
+		series = series, thanks = thanks, helped = helped, track = track, rides = _ride_rows(), personal_photos = personal}
 
 
 ## 20.11.2026: заезды для вкладки дневника, новые первыми: подписи, счётчики, названия мест и трек
@@ -806,16 +818,19 @@ func _ride_rows() -> Array:
 		if not entry.get("current", false) and not RideLog.meaningful(entry):
 			continue
 		var names: Array[String] = []
+		var locations: Array[Dictionary] = []
 		for id: String in entry.places:
 			var place := world.place(id) if world != null else {}
 			if not place.is_empty():
 				names.append(str(place.get("name", "")))
+				locations.append({id = id, name = str(place.get("name", ""))})
 		var distance: float = entry.bike + entry.foot
 		out.append({current = entry.get("current", false),
 			title = ("Сейчас" if entry.get("current", false) else RideLog.date_text(entry.start)),
 			summary = "%s · %s" % [Util.distance_text(distance), RideLog.duration_text(entry.time)],
 			bike = entry.bike, foot = entry.foot, time = entry.time, alt = entry.alt, photos = entry.photos,
-			quests = entry.quests, places = names, legs = entry.legs, bounds = RideLog.bounds(entry)})
+			quests = entry.quests, places = names, locations = locations, legs = entry.legs, bounds = RideLog.bounds(entry),
+			start = entry.start, end = entry.end})
 	return out
 
 

@@ -18,6 +18,7 @@ const EVENT_MIN := 0.3        # сила явления (DayCycle.events), с к
 const UP_MIN := 0.12          # взгляд камеры выше горизонта не меньше чем на столько (y единичного вектора)
 const MAX_ALBUM := 128
 const MAX_PLACE_PHOTOS := 256
+const MAX_PERSONAL_PHOTOS := 256
 ## 18.11.2026: место в рамке закрывает страницу альбома, только если снято вблизи — м от камеры до края места
 ## (PhotoCamera shot.dist). Приближение фотоаппарата расстояние не меняет: с соседнего холма через ×4 не засчитывается
 const ALBUM_REACH := {settlement = 150.0, site = 60.0, peak = 300.0, lake = 150.0}
@@ -32,6 +33,7 @@ var max_alt := 0.0   # высшая точка, м (как высота в св�
 var photos := 0
 var album := {}      # ключ страницы -> {path, date, place}
 var place_photos := {} # id места -> последний сохранённый снимок вблизи
+var personal_photos: Array[Dictionary] = [] # недавние снимки, старые первыми
 
 
 ## Название вида места с большой буквы («Дозорная вышка»)
@@ -133,8 +135,17 @@ static func album_reach(kind: String) -> float:
 
 
 ## Записать снимок: страницы без снимка получают его (path, date). Возвращает названия вновь заполненных страниц.
-func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> PackedStringArray:
+func add_photo(shot: Dictionary, keys: PackedStringArray, date: String, ride_start := 0.0) -> PackedStringArray:
 	photos += 1
+	var path := str(shot.get("path", ""))
+	if not path.is_empty():
+		var photo_place := str(shot.get("place", ""))
+		if photo_place.is_empty():
+			photo_place = str(shot.get("plaque", ""))
+		personal_photos.append({path = path, date = date, place = photo_place,
+			keys = Array(keys), time = Time.get_unix_time_from_system(), ride_start = ride_start})
+		if personal_photos.size() > MAX_PERSONAL_PHOTOS:
+			personal_photos.pop_front()
 	var titles := PackedStringArray()
 	for key: String in keys:
 		if album.has(key) or album.size() >= MAX_ALBUM:
@@ -142,6 +153,17 @@ func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> Packe
 		album[key] = {path = str(shot.get("path", "")), date = date, place = str(shot.get("place", ""))}
 		titles.append(str(shot.get("name", "Табличка")) if key.begins_with("plaque:") else page_title(key))
 	return titles
+
+
+## Выбранный игроком снимок должен действительно подходить открытой странице.
+func choose_album_photo(key: String, path: String) -> bool:
+	if not album.has(key):
+		return false
+	for photo: Dictionary in personal_photos:
+		if photo.path == path and key in photo["keys"]:
+			album[key] = {path = photo.path, date = photo.date, place = photo.place}
+			return true
+	return false
 
 
 func record_place_photo(id: String, path: String) -> void:
@@ -154,7 +176,8 @@ func record_place_photo(id: String, path: String) -> void:
 
 func save_state() -> Dictionary:
 	return {revealed = revealed.duplicate(), scanned = scanned.duplicate(), time = play_s,
-		alt = max_alt, photos = photos, album = album.duplicate(true), place_photos = place_photos.duplicate()}
+		alt = max_alt, photos = photos, album = album.duplicate(true), place_photos = place_photos.duplicate(),
+		personal_photos = personal_photos.duplicate(true)}
 
 
 func restore(state: Dictionary) -> void:
@@ -165,6 +188,9 @@ func restore(state: Dictionary) -> void:
 	photos = int(state.get("photos", 0))
 	album = state.get("album", {}).duplicate(true)
 	place_photos = state.get("place_photos", {}).duplicate()
+	personal_photos.clear()
+	for photo: Dictionary in state.get("personal_photos", []):
+		personal_photos.append(photo.duplicate(true))
 
 
 static func valid_save(state: Variant) -> bool:
@@ -198,4 +224,21 @@ static func valid_save(state: Variant) -> bool:
 	for key: Variant in location_photos:
 		if not key is String or not location_photos[key] is String:
 			return false
+	var personal: Variant = state.get("personal_photos", [])
+	if not personal is Array or personal.size() > MAX_PERSONAL_PHOTOS:
+		return false
+	for photo: Variant in personal:
+		if not photo is Dictionary:
+			return false
+		for field: String in ["path", "date", "place"]:
+			if not photo.get(field) is String:
+				return false
+		if not photo.get("keys") is Array or not (photo.get("time") is float or photo.get("time") is int) or not is_finite(float(photo.time)):
+			return false
+		var ride_start: Variant = photo.get("ride_start", 0.0)
+		if not (ride_start is float or ride_start is int) or not is_finite(float(ride_start)):
+			return false
+		for key: Variant in photo["keys"]:
+			if not key is String:
+				return false
 	return true

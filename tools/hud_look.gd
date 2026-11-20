@@ -33,6 +33,94 @@ func _shot(name: String) -> void:
 	root.get_texture().get_image().save_png(out.path_join(name + ".png"))
 
 
+func _await_image(path: String, large := false) -> bool:
+	var deadline := Time.get_ticks_msec() + 8000
+	while Time.get_ticks_msec() < deadline:
+		var cache: Dictionary = hud.journal_panel._large_cache if large else hud.journal_panel._cache
+		if cache.has(path):
+			return cache[path] != null
+		await process_frame
+	return false
+
+
+func _await_cards() -> void:
+	var deadline := Time.get_ticks_msec() + 8000
+	while not hud.journal_panel._card_jobs.is_empty() and Time.get_ticks_msec() < deadline:
+		await process_frame
+
+
+## Большой альбом: замер синхронного построения и ожидание фоновой загрузки 24 разных файлов.
+func _journal_photo_stress(source: String) -> void:
+	var panel := hud.journal_panel
+	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+	var records: Array = []
+	var paths: Array[String] = []
+	for i in 24:
+		var path := out.path_join("journal_stress_%02d.jpg" % i)
+		if DirAccess.copy_absolute(source, path) != OK:
+			_check(false, "подготовка снимков для нагрузки")
+			return
+		paths.append(path)
+	for i in 256:
+		records.append({path = paths[i % paths.size()], date = "2026-11-20", place = "", keys = [], time = 0.0, ride_start = 0.0})
+	panel._album_data.personal_photos = records
+	panel._album_personal = true
+	panel._personal_visible = 24
+	var begin := Time.get_ticks_usec()
+	panel._rebuild_album_grid()
+	var build_us := Time.get_ticks_usec() - begin
+	var pending_cards := panel._card_jobs.size()
+	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	await process_frame
+	await process_frame
+	_check(panel._card_jobs.size() == pending_cards, "скрытый альбом не создаёт карточки")
+	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+	var max_frame_us := 0
+	var deadline := Time.get_ticks_msec() + 12000
+	while Time.get_ticks_msec() < deadline:
+		var done := 0
+		for path: String in paths:
+			if panel._cache.has(path):
+				done += 1
+		if done == paths.size():
+			break
+		var frame := Time.get_ticks_usec()
+		await process_frame
+		max_frame_us = maxi(max_frame_us, Time.get_ticks_usec() - frame)
+	var loaded := 0
+	for path: String in paths:
+		if panel._cache.get(path) != null:
+			loaded += 1
+	print("Журнал: 256 записей, подготовка очереди 24 карточек %.2f мс, загружено %d/24, макс. интервал кадра %.2f мс" % [build_us / 1000.0, loaded, max_frame_us / 1000.0])
+	_check(loaded == 24 and panel._cache.size() <= panel.THUMB_CACHE_LIMIT, "большой альбом загружает миниатюры и ограничивает кэш")
+	panel._show_more_photos()
+	await _await_cards()
+	_check(panel._personal_visible == 48 and root.gui_get_focus_owner() != null,
+		"дополнительные снимки сохраняют доступный фокус")
+	var missing := out.path_join("journal_missing_photo.jpg")
+	var missing_view := TextureRect.new()
+	var missing_status := Label.new()
+	panel.add_child(missing_view)
+	panel.add_child(missing_status)
+	panel._request_image(missing, false, missing_view, missing_status)
+	var missing_deadline := Time.get_ticks_msec() + 8000
+	while not panel._cache.has(missing) and Time.get_ticks_msec() < missing_deadline:
+		await process_frame
+	_check(panel._cache.has(missing) and panel._cache[missing] == null and missing_status.visible and missing_status.text.contains("недоступен"),
+		"отсутствующий файл получает понятное состояние")
+	missing_view.queue_free()
+	missing_status.queue_free()
+	for path: String in paths:
+		DirAccess.remove_absolute(path)
+	panel._cache.erase(source)
+	panel._queue_photo(source)
+	await process_frame
+	panel.clear()
+	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+	await _await_cards()
+	_check(await _await_image(source), "закрытие и повторное открытие не теряют фоновую загрузку")
+
+
 ## Снег под ярким небом — худший фон для белого текста
 func _build() -> void:
 	var env := WorldEnvironment.new()
@@ -235,7 +323,7 @@ func _journal_checks() -> void:
 	var image := Image.create(640, 360, false, Image.FORMAT_RGB8)
 	image.fill(Color(0.35, 0.55, 0.75))
 	image.fill_rect(Rect2i(0, 210, 640, 150), Color(0.3, 0.5, 0.25))
-	var shot_path := OS.get_user_data_dir().path_join("hud_look_shot.jpg")
+	var shot_path := out.path_join("hud_look_shot.jpg")
 	image.save_jpg(shot_path, 0.9)
 	hud.map_journal.foot = 4200.0
 	hud.map_journal.bike = 31800.0
@@ -264,6 +352,9 @@ func _journal_checks() -> void:
 	hud.ride_log.entries.append({start = 1795600000.0, end = 1795603600.0, time = 2400.0, bike = 6400.0, foot = 350.0, alt = 412.0,
 		photos = 2, quests = 1, places = [id], legs = [past]})
 	hud.ride_log.begin(hud.map_journal, hud.explore, 0)
+	var second_path := out.path_join("hud_look_shot_second.jpg")
+	image.save_jpg(second_path, 0.9)
+	hud.explore.add_photo({path = second_path, place = id}, keys, "2026-11-20 12:00:00", hud.ride_log.session_start())
 	for i in 60:
 		hud.map_journal.record(Vector2(520 + i * 4.0, 640 - i * 3.0), 0.3, true)
 	hud.show_tablet(Hud.Tablet.Tab.PATH)
@@ -272,6 +363,13 @@ func _journal_checks() -> void:
 	var rides: Array = hud.journal_panel._rides
 	_check(rides.size() == 2 and rides[0].current and hud.journal_panel._ride_buttons.size() == 2 and not hud.big_map.ride_legs.is_empty(),
 		"заезды: текущий первым, его трек выделен на карте")
+	var ride_photo_buttons := hud.journal_panel._ride_info.find_children("*", "Button", true, false).filter(func(node: Node) -> bool:
+		return (node as Button).text.begins_with("Снимки поездки"))
+	_check(ride_photo_buttons.size() == 1, "снимок привязан к текущей поездке")
+	if not ride_photo_buttons.is_empty():
+		(ride_photo_buttons[0] as Button).pressed.emit()
+		_check(hud.journal_panel._lightbox != null, "снимки поездки открываются")
+		hud.journal_panel.close_lightbox()
 	hud.journal_panel._ride_buttons[1].emit_signal("pressed")
 	await process_frame
 	_check(hud.big_map.ride_legs.size() == 1 and hud.big_map.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed, "клик по прошлому заезду выбирает его и показывает трек")
@@ -286,22 +384,49 @@ func _journal_checks() -> void:
 	await _shot("hud_journal_path")
 	await process_frame
 	var atlas := hud.big_map
+	var thumbnail_loaded := await _await_image(shot_path)
 	_check(atlas.places.size() > 0 and int(atlas.places[0].map_status) & Hud.Atlas.Status.PHOTO != 0
-		and hud.journal_panel._cache.has(shot_path), "место со снимком получает статус и миниатюру")
+		and thumbnail_loaded, "место со снимком получает статус и миниатюру")
 	var center := atlas._center
 	var zoom := atlas._scale
 	hud.show_tablet(Hud.Tablet.Tab.MAP)
 	hud.show_tablet(Hud.Tablet.Tab.PATH)
 	_check(hud.big_map == atlas and atlas._center == center and atlas._scale == zoom, "Карта и Путь сохраняют один вид")
+	_check(atlas.ride_legs.size() == 1 and atlas.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed,
+		"выбранная поездка и её маршрут сохраняются при возврате")
+	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	if not atlas.places.is_empty():
+		var pin: Dictionary = atlas.places[0]
+		hud.journal_panel.refresh_inspector(pin)
+		hud.journal_panel.refresh_inspector({}) # указатель ушёл с карты к кнопкам
+		_check(hud.journal_panel._inspected_place.get("key") == pin.key and hud.journal_panel._place_goal.visible,
+			"карточка сохраняет место при переходе к её действиям")
+		await _shot("journal_place")
+		hud.journal_panel._place_goal.pressed.emit()
+		_check(hud.goal.get("key") == pin.key and hud.journal_panel._place_goal.text == "Снять цель", "кнопка назначает цель")
+		hud.journal_panel._place_goal.pressed.emit()
+		_check(hud.goal.is_empty(), "повторное действие снимает цель")
+	hud.journal_panel._track_layer.button_pressed = false
+	_check(not atlas.show_travel_track, "слой пройденного пути отключается")
+	hud.journal_panel._track_layer.button_pressed = true
+	hud.journal_panel._photo_layer.button_pressed = false
+	_check(not atlas._show_photos, "слой снимков отключается")
+	hud.journal_panel._photo_layer.button_pressed = true
 	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
-	var filters := hud.journal_panel._album_page.get_child(0).get_children()
+	await _await_cards()
+	var filters := hud.journal_panel._album_page.get_child(1).get_children()
 	_check(hud.journal_panel._album_page.visible and filters.any(func(node: Node) -> bool:
 		return node is Button and node.text.begins_with("Ночь")), "вкладка «Альбом»: группы страниц")
 	await _shot("hud_journal_album")
 	var card_buttons: Array[Node] = hud.journal_panel._album_content.find_children("*", "Button", true, false)
 	_check(card_buttons.size() >= 2, "открытые страницы альбома интерактивны")
 	if not card_buttons.is_empty():
+		(card_buttons[0] as Button).grab_focus()
+		hud.show_tablet(Hud.Tablet.Tab.MAP)
+		_check(hud.journal_panel._tab_map.has_focus(), "переключение вкладок переносит фокус с закрытой карточки")
+		hud.show_tablet(Hud.Tablet.Tab.ALBUM)
 		(card_buttons[0] as Button).pressed.emit()
+		_check(await _await_image(shot_path, true), "полный снимок загружается в фоне")
 		await process_frame
 		_check(hud.journal_panel._lightbox != null and hud.journal_panel._lightbox.visible, "клик по карточке открывает лайтбокс")
 		_check(root.get_visible_rect().encloses(hud.journal_panel._lightbox.get_global_rect()), "лайтбокс помещается в 1280×720")
@@ -315,6 +440,45 @@ func _journal_checks() -> void:
 				_check(hud.journal_panel._lightbox == shade and shade.get_child_count() == 1, "листание лайтбокса не пересоздаёт окно")
 				break
 		_check(hud.journal_panel.close_lightbox() and hud.journal_panel._lightbox == null, "лайтбокс закрывается")
+	var modes := hud.journal_panel._album_page.get_child(0).get_children()
+	(modes[1] as Button).set_pressed_no_signal(true)
+	(modes[1] as Button).pressed.emit()
+	await _await_cards()
+	_check(await _await_image(second_path), "миниатюра личного снимка загружается в фоне")
+	_check(hud.journal_panel._album_personal and hud.journal_panel._album_content.find_children("*", "Button", true, false).size() > 0,
+		"личная галерея показывает сделанный снимок")
+	await _shot("journal_personal")
+	var personal_cards := hud.journal_panel._album_content.find_children("*", "Button", true, false)
+	if not personal_cards.is_empty():
+		(personal_cards[0] as Button).pressed.emit()
+		_check(await _await_image(second_path, true), "личный снимок загружается в фоне")
+		await process_frame
+		await _shot("journal_personal_photo")
+		var controls := hud.journal_panel._lightbox.find_children("*", "Button", true, false)
+		var on_map := controls.filter(func(node: Node) -> bool: return (node as Button).text == "На карте")
+		var set_cover := controls.filter(func(node: Node) -> bool: return (node as Button).text == "Выбрать для коллекции")
+		_check(on_map.size() == 1 and set_cover.size() == 1, "личный снимок связан с картой и коллекцией")
+		if not set_cover.is_empty():
+			(set_cover[0] as Button).pressed.emit()
+			_check(hud.explore.album[keys[0]].path == second_path and hud.journal_panel._lightbox == null,
+				"выбор обложки обновляет сохранённую коллекцию")
+			await _await_cards()
+			var refreshed_cards := hud.journal_panel._album_content.find_children("*", "Button", true, false)
+			if not refreshed_cards.is_empty():
+				(refreshed_cards[0] as Button).pressed.emit()
+				var map_buttons := hud.journal_panel._lightbox.find_children("*", "Button", true, false).filter(func(node: Node) -> bool:
+					return (node as Button).text == "На карте")
+				if not map_buttons.is_empty():
+					(map_buttons[0] as Button).pressed.emit()
+					_check(hud.journal_panel.active_tab == Hud.Tablet.Tab.MAP and atlas.selected_place.get("key") == id and hud.goal.is_empty(),
+						"переход из снимка выбирает место без назначения цели")
+					hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+		else:
+			hud.journal_panel.close_lightbox()
+	(modes[0] as Button).set_pressed_no_signal(true)
+	(modes[0] as Button).pressed.emit()
+	await _await_cards()
+	_check((modes[0] as Button).has_meta(&"_ui_audio_bound"), "динамические кнопки журнала подключены к звукам интерфейса")
 	# 19.11.2026: Tab под «Путешествием» не переключает вид сводки вслепую
 	var mode_before: int = hud.view_mode
 	await _tap_hud()
@@ -328,6 +492,7 @@ func _journal_checks() -> void:
 	_check(hud.journal_panel._map_row.vertical and root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()),
 		"на узком экране док переезжает под карту")
 	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
+	await _await_cards()
 	await _shot("hud_album_narrow")
 	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()) and hud.journal_panel._album_columns() < 5,
 		"сетка альбома сужается вместе с планшетом")
@@ -341,6 +506,7 @@ func _journal_checks() -> void:
 	root.content_scale_size = old_scale
 	root.size = old_size
 	await process_frame
+	await _journal_photo_stress(shot_path)
 	# сообщения: пролежавшее под окном дольше TOAST_STALE некритичное сгорает, задание остаётся
 	hud._toast_queue.clear()
 	hud._toast_kinds.clear()
