@@ -26,6 +26,7 @@ const CARGO_BOTTOM_OUT := 1.8 # 20.11: м/с, пробой сильнее это
 const CARGO_LANDING := 8.5     # 20.11: м/с, посадка жёстче этого бьёт хрупкий груз
 const LAND_BURST := 6.0 # 20.11: м/с, посадка жёстче этого выбивает грунт из-под колёс (тот же порог, что у тряски)
 const REACH := 3.5     # предметы дальше этого от глаз игрока (м) не выбираются взглядом
+const TABLET_MODES := ["map", "map_path", "map_album", "map_shop"] # режим записи сессии по вкладке планшета (JournalPanel.Tab)
 const OpeningRoute = preload("res://scripts/game/opening_route.gd")
 const OPENING_PASS := 1.6
 const OPENING_FOLLOW := 3.0
@@ -42,6 +43,8 @@ const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BikePlacement = preload("res://scripts/render/bike_placement.gd")
 const HudStyle := preload("res://scripts/ui/hud_style.gd")
 const BoardDisplay = preload("res://scripts/render/board_display.gd")
+const AdaptiveResolution = preload("res://scripts/render/adaptive_resolution.gd")
+const DisplayConfig = preload("res://scripts/game/display_config.gd")
 var board_display: BoardDisplay  # щит ближней доски с картой и заданиями
 var bike_placement: BikePlacement
 var place_names: PlaceNames
@@ -140,8 +143,10 @@ var _pump_feedback_latched := false
 var paused := false
 var show_map := false
 var _hints_key := []  # от чего зависели последние подсказки (_update_hints)
-var _map_disabled_3d := false
+var _map_covers_world := false
 var _map_stream_origin := Vector2.INF
+var _adaptive := AdaptiveResolution.new()
+var _adaptive_budget_ms := 0.0 # 0 — адаптивное разрешение недоступно (Compatibility, без окна, инструменты)
 var info_timer := 0.0
 const DISCOVERY_TICKS := 6   # такты физики между проверками открытий мест (10 раз в секунду)
 var _discovery_tick := 0
@@ -203,6 +208,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	if services.resource_profile != null:
 		_resource_before = services.resource_profile.stamp()
 		if DisplayServer.get_name() != "headless": RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+	_start_adaptive_resolution()
 	if loaded.service_scope == null: loaded.service_scope = services
 	if loaded.chunk_source == null: loaded.prepare_streaming()
 	if not loaded.error.is_empty(): return
@@ -608,6 +614,9 @@ func _photo_capturing(on: bool) -> void:
 
 func _exit_tree() -> void:
 	_resume_map_rendering()
+	if _adaptive.reset() or DisplayConfig.adaptive_scale != 1.0:
+		DisplayConfig.adaptive_scale = 1.0
+		DisplayConfig.apply_quality(get_tree().root, services.settings.display_state()) # меню — в полном разрешении
 	if day != null:
 		RenderingServer.global_shader_parameter_set("vegetation_night", 0.0)
 		VisualStyle.release() # окружение мира закрыто; глобальные параметры стиля нейтральны для других сцен
@@ -1040,17 +1049,44 @@ func close_tablet(capture := true) -> void:
 		sync_mouse_mode()
 
 
+## Планшет непрозрачен и закрывает весь экран: на это время не обновляются вид велосипеда, подписи, частицы,
+## свет и туман, а подгрузка ждёт, пока игрок не отъедет на RECHECK. Сам 3D-кадр продолжает рисоваться, как на паузе.
+## 20.11.2026: прежде здесь выключалось 3D (disable_3d) — за 2 с простоя видеокарта сбрасывала частоты, и после
+## закрытия карты 2–6 кадров шли по 50–130 мс GPU (запись сессий: 9 из 9 закрытий после ≥1,9 с карты, 0 из 4 до 1,3 с).
 func _suspend_map_rendering() -> void:
-	if not get_viewport().disable_3d:
-		get_viewport().disable_3d = true
-		_map_disabled_3d = true
+	if not _map_covers_world:
+		_map_covers_world = true
 		_map_stream_origin = Vector2(player.x, player.z)
 
 
 func _resume_map_rendering() -> void:
-	if _map_disabled_3d:
-		get_viewport().disable_3d = false
-		_map_disabled_3d = false
+	_map_covers_world = false
+
+
+## Адаптивное разрешение (AdaptiveResolution) — только в настоящей игре с окном и Forward+/Mobile: в Compatibility
+## нет FSR и замера GPU, а инструменты (--script, у главного цикла свой скрипт) меряют при неизменном разрешении.
+func _start_adaptive_resolution() -> void:
+	_adaptive_budget_ms = 0.0
+	if DisplayServer.get_name() == "headless" or RenderingServer.get_current_rendering_method() == "gl_compatibility":
+		return
+	if Engine.get_main_loop().get_script() != null:
+		return
+	_adaptive_budget_ms = AdaptiveResolution.budget_ms(DisplayServer.screen_get_refresh_rate())
+	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+
+
+func _tick_adaptive_resolution(delta: float) -> void:
+	var settings := services.settings
+	var changed: bool
+	if settings.adaptive_resolution and is_equal_approx(settings.render_scale, 1.0):
+		# запись сессии на выходе выключает замер вьюпорта — тогда время 0, и ступень просто держится
+		changed = _adaptive.update(RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid()),
+			delta, _adaptive_budget_ms)
+	else:
+		changed = _adaptive.reset()
+	if changed:
+		DisplayConfig.adaptive_scale = _adaptive.scale()
+		DisplayConfig.apply_quality(get_tree().root, settings.display_state())
 
 
 func travel_active() -> bool:
@@ -1421,7 +1457,7 @@ func _tick_mark(part: String, t0: int) -> int:
 func performance_mode() -> String:
 	if travel_active(): return "travel"
 	if paused: return "pause"
-	if show_map: return "map"
+	if show_map: return TABLET_MODES[hud.journal_panel.active_tab] # 20.11: вкладка планшета — свой режим записи сессии
 	if _journal_open(): return "journal"
 	if _plaque_open(): return "plaque"
 	if _settlement_open(): return "settlement"
@@ -1443,6 +1479,7 @@ func performance_settings() -> Dictionary:
 	settings.resolution = [resolution.x, resolution.y]
 	settings.window_px = [window_size.x, window_size.y]
 	settings.max_fps = Engine.max_fps
+	settings.adaptive_scale = DisplayConfig.adaptive_scale # 20.11: ступень адаптивного разрешения — событие «graphics» при смене
 	return settings
 
 
@@ -1479,7 +1516,7 @@ func performance_context() -> Dictionary:
 		settlement = nearest.get("name", ""), settlement_id = nearest.get("id", ""),
 		settlement_m = nearest.get("distance_m"), settlement_zone = nearest.get("zone", "far"),
 		movement = "riding" if bike.riding else "walking", bike_speed_m_s = bike.speed if bike.riding else 0.0,
-		world_rendering = not _map_disabled_3d,
+		world_covered = _map_covers_world,
 	}
 
 
@@ -1744,9 +1781,11 @@ func _process(delta: float) -> void:
 		_tick_paused_preview(delta)
 		_tick_mark("frame_paused_preview", t0)
 		return
+	if _adaptive_budget_ms > 0.0:
+		_tick_adaptive_resolution(delta)
 	if _live_veg_dirty:
 		_tick_live_vegetation()
-	if board_display != null and not _map_disabled_3d:
+	if board_display != null and not _map_covers_world:
 		board_display.tick(Vector3(player.x, player.feet + GameConfig.EYE, player.z))
 	t0 = _tick_mark("frame_setup", t0)
 	tick_us.frames = tick_us.get("frames", 0) + 1
@@ -1763,7 +1802,7 @@ func _process(delta: float) -> void:
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := 1.0 if _placing_bike() or _settlement_open() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
-	if not _map_disabled_3d:
+	if not _map_covers_world:
 		if crash.active():
 			crash.draw()
 		else:
@@ -1788,9 +1827,9 @@ func _process(delta: float) -> void:
 			# 19.11.2026: в сообщения — только отказ («Проход к цели не найден»); «Расчёт маршрута…» не мелькает
 			if _navigation_status != "" and _navigation_status != NavigationLine.SEARCHING: hud.toast_now(_navigation_status)
 	t0 = _tick_mark("frame_route_ui", t0)
-	if place_names != null and not _map_disabled_3d:
+	if place_names != null and not _map_covers_world:
 		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)
-	if _bag != null and _bag.visible and _bag_pickup == null and not _map_disabled_3d:
+	if _bag != null and _bag.visible and _bag_pickup == null and not _map_covers_world:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
 		_bag_label.visible = summary and camera.global_position.distance_to(_bag.position) < 60.0
@@ -1809,16 +1848,16 @@ func _process(delta: float) -> void:
 	_apply_render_clock(alpha)
 	t0 = _tick_mark("frame_day", t0)
 
-	if ambient != null and not _map_disabled_3d:
+	if ambient != null and not _map_covers_world:
 		ambient.update(delta, camera.global_position, day.sunlight)
 	t0 = _tick_mark("frame_ambient", t0)
 	var decor_deadline := -1
 	# While the atlas covers the world, defer visual uploads around the same spot.
 	# Resume normal streaming if the rider coasts far enough to need new collision data.
-	if not _map_disabled_3d or Vector2(pos.x, pos.z).distance_squared_to(_map_stream_origin) >= PlanTerrain.RECHECK * PlanTerrain.RECHECK:
+	if not _map_covers_world or Vector2(pos.x, pos.z).distance_squared_to(_map_stream_origin) >= PlanTerrain.RECHECK * PlanTerrain.RECHECK:
 		decor_deadline = stream_coordinator.update(pos)
 	t0 = _tick_mark("frame_stream", t0)
-	if not _map_disabled_3d:
+	if not _map_covers_world:
 		local_mist.update(camera.global_position, delta)
 		if _ocean != null:
 			_ocean.position = Vector3(pos.x, 0.0, pos.z)

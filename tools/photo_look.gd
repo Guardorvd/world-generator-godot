@@ -154,7 +154,7 @@ func _plaque_checks() -> void:
 	_check(photo.plaque_view.get("state") == "ok" and photo.plaque_view.corners.size() == 4, "вблизи и лицом — «табличка в кадре», зона засчитывается")
 	await _shot("plaque_ok")
 	photo.shoot()
-	for i in 4:
+	while photo.saving() or photo._capturing: # файл пишется в фоне
 		await process_frame
 		photo.update(camera, DT)
 	_check(photo.shots.size() > 0 and photo.shots[-1].plaque == "site:7:7", "снимок в зелёной зоне запомнил табличку")
@@ -185,7 +185,7 @@ func _plaque_checks() -> void:
 	_hold(0.2)
 	await create_timer(0.6).timeout # затвор после прошлого снимка
 	photo.shoot()
-	for i in 4:
+	while photo.saving() or photo._capturing: # файл пишется в фоне
 		await process_frame
 		photo.update(camera, DT)
 	_check(photo.shots.size() == 1 and photo.shots[-1].plaque == "", "снимок издалека табличку не засчитывает")
@@ -246,7 +246,7 @@ func _run() -> void:
 	_look(places.peak)
 	_hold(0.5)
 	photo.shoot()
-	for i in 4:
+	while photo.saving() or photo._capturing: # файл пишется в фоне
 		await process_frame
 		photo.update(camera, DT)
 	var ok := photo.shots.size() == 1 and FileAccess.file_exists(photo.shots[0].path)

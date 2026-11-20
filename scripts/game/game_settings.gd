@@ -117,6 +117,7 @@ var trail_clutter := DEFAULT_TRAIL_CLUTTER  # препятствия на тро
 var fullscreen := DEFAULT_FULLSCREEN
 var resolution := DisplayConfig.BASE
 var render_scale := 1.0
+var adaptive_resolution := false # 20.11.2026: «Авто» в разрешении 3D — при нагрузке до 80 % (AdaptiveResolution); по умолчанию выключено: при 1080p даёт лишь −0,8…1,9 мс, а FSR подчёркивает дизеринг крон
 var msaa := 2 # прежнее MSAA 4x
 var vsync := true
 var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
@@ -172,6 +173,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	if DisplayConfig.valid_resolution(saved_resolution):
 		resolution = saved_resolution
 	render_scale = _number(cfg, "display", "render_scale", render_scale, 0.5, 1.0)
+	adaptive_resolution = _flag(cfg, "display", "adaptive_resolution", adaptive_resolution)
 	msaa = roundi(_number(cfg, "display", "msaa", msaa, 0, 2))
 	vsync = _flag(cfg, "display", "vsync", vsync)
 	shadows = _flag(cfg, "view", "shadows", shadows)
@@ -274,6 +276,7 @@ func reset_defaults() -> void:
 	fullscreen = DEFAULT_FULLSCREEN
 	resolution = DisplayConfig.BASE
 	render_scale = 1.0
+	adaptive_resolution = false
 	msaa = 2
 	vsync = true
 	shadows = DEFAULT_SHADOWS
@@ -307,6 +310,7 @@ func save_settings() -> Error:
 	cfg.set_value("view", "fullscreen", fullscreen)
 	cfg.set_value("display", "resolution", resolution)
 	cfg.set_value("display", "render_scale", render_scale)
+	cfg.set_value("display", "adaptive_resolution", adaptive_resolution)
 	cfg.set_value("display", "msaa", msaa)
 	cfg.set_value("display", "vsync", vsync)
 	cfg.set_value("view", "shadows", shadows)
@@ -349,7 +353,7 @@ func apply_window() -> void:
 
 
 func display_state() -> Dictionary:
-	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
+	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale, adaptive_resolution = adaptive_resolution,
 		msaa = msaa, vsync = vsync, shadows = shadows, tree_garlands = tree_garlands, draw = draw, flora = flora, lighting = lighting,
 		fog_quality = fog_quality, cloud_quality = cloud_quality, particles = particles, carpet_density = carpet_density, carpet_range = carpet_range,
 		mid_grass = mid_grass, road_quality = road_quality, road_range = road_range,
@@ -360,6 +364,7 @@ func set_display_state(state: Dictionary) -> void:
 	fullscreen = state.fullscreen
 	resolution = state.resolution
 	render_scale = state.render_scale
+	adaptive_resolution = bool(state.get("adaptive_resolution", adaptive_resolution))
 	msaa = state.msaa
 	vsync = state.vsync
 	shadows = state.shadows

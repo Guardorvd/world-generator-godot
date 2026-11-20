@@ -22,6 +22,7 @@ const MAX_AIM := 0.2      # и не больше этой (близкое пос
 const KEEP := 1.4         # выбранное место держится, пока угол меньше пятна в столько раз: без мигания на краю
 const PREVIEW := 2.6      # с: сколько висит карточка снимка
 const SHUTTER_COOLDOWN := 0.35
+const THUMB_WIDTH := 240  # px: ширина карточки снимка
 const FOLDER := "user://photos"
 const AMBER := Color(1.0, 0.78, 0.30)
 const GREEN := Color(0.66, 0.92, 0.58)
@@ -61,6 +62,8 @@ var _busy := false
 var _cooldown := 0.0
 var _capturing := false
 var _pending_place := {}
+var _save_task := -1                 # фоновая запись снимка (WorkerThreadPool) или -1
+var _save_job := {}                  # её данные: пишет задача, читает _finish_save после ожидания
 var _thumb: ImageTexture
 var _thumb_text := ""
 var _preview := 0.0
@@ -115,13 +118,21 @@ func exit() -> void:
 
 
 func _process(dt: float) -> void:
+	if _save_task != -1 and WorkerThreadPool.is_task_completed(_save_task):
+		_finish_save()
 	if _cooldown > 0.0:
 		_cooldown = maxf(0.0, _cooldown - dt)
-		if _cooldown == 0.0:
-			_busy = false
+	# затвор свободен, когда прошла перезарядка и прежний снимок записан
+	if _busy and _cooldown == 0.0 and _save_task == -1 and not _capturing:
+		_busy = false
 
 
 func _exit_tree() -> void:
+	# файл дописывается и при выходе из игры; карточка и photo_taken уже не нужны
+	if _save_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_save_task)
+		_save_task = -1
+		_save_job = {}
 	active = false
 	_cooldown = 0.0
 	_busy = false
@@ -350,21 +361,46 @@ func _capture_frame() -> void:
 		return
 	_flash = 0.85
 	_click.play()
-	var path := _save(image)
-	var thumb := image.duplicate() as Image
-	thumb.resize(240, maxi(1, roundi(240.0 * image.get_height() / image.get_width())), Image.INTERPOLATE_BILINEAR)
-	_thumb = ImageTexture.create_from_image(thumb)
-	_preview = PREVIEW
-	# dist — от камеры до края места (м): задание засчитывает снимок только вблизи
+	# dist — от камеры до края места (м): задание засчитывает снимок только вблизи. Считается в кадре снимка,
+	# а не после записи файла: к тому времени камера уже сдвинулась.
 	var camera := get_viewport().get_camera_3d()
 	var dist: float = maxf(0.0, camera.global_position.distance_to(place.pos) - place.radius) if not place.is_empty() and camera != null else 0.0
+	# 20.11.2026: сжатие JPG, запись и уменьшенная копия — в фоне (в главном потоке кадр стоял 85–92 мс, запись сессий).
+	# Снимок попадает в shots и photo_taken, когда файл записан (через 2–4 кадра), — альбом не видит ещё не записанный файл.
+	_save_job = {image = image, path = _photo_path(), ok = false, thumb = null, place = place, plaque = plaque, dist = dist}
+	_save_task = WorkerThreadPool.add_task(_encode.bind(_save_job), false, "Снимок")
+
+
+## Прочитанный кадр в файл и уменьшенная копия для карточки. Фоновая задача: трогает только свой job.
+static func _encode(job: Dictionary) -> void:
+	var image: Image = job.image
+	job.image = null
+	image.convert(Image.FORMAT_RGB8)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(FOLDER))
+	job.ok = image.save_jpg(job.path, 0.92) == OK
+	# копия больше не нужна — уменьшается сам кадр, без копии полного размера
+	image.resize(THUMB_WIDTH, maxi(1, roundi(float(THUMB_WIDTH) * image.get_height() / image.get_width())), Image.INTERPOLATE_BILINEAR)
+	job.thumb = image
+
+
+## Файл записан: карточка снимка, shots и photo_taken.
+func _finish_save() -> void:
+	WorkerThreadPool.wait_for_task_completion(_save_task)
+	_save_task = -1
+	var job := _save_job
+	_save_job = {}
+	var place: Dictionary = job.place
+	var plaque: String = job.plaque
+	var path: String = job.path if job.ok else ""
+	_thumb = ImageTexture.create_from_image(job.thumb)
+	_preview = PREVIEW
 	_thumb_text = "Снимок сохранён" + ("" if place.is_empty() else " · «%s»" % place.name)
 	if not place.is_empty() and place.id == wanted:
-		_thumb_text = ("Снимок для задания · «%s»" if dist <= wanted_reach else "Далеко для задания · «%s»") % place.name
+		_thumb_text = ("Снимок для задания · «%s»" if job.dist <= wanted_reach else "Далеко для задания · «%s»") % place.name
 	if path.is_empty():
 		_thumb_text = "Не удалось сохранить снимок"
 	# снимок для задания засчитывается и без файла: на диске могло не хватить места
-	var shot := {path = path, place = place.get("id", ""), name = EntityCodec.value(place, "name", ""), dist = dist, plaque = plaque}
+	var shot := {path = path, place = place.get("id", ""), name = EntityCodec.value(place, "name", ""), dist = job.dist, plaque = plaque}
 	if plaque != "" and path != "":
 		for p: Dictionary in plaques:
 			if p.id == plaque:
@@ -374,18 +410,20 @@ func _capture_frame() -> void:
 	photo_taken.emit(shot)
 
 
+## Снимок ещё записывается в фоне
+func saving() -> bool:
+	return _save_task != -1
+
+
 func _capture_image() -> Image:
 	var texture := get_viewport().get_texture()
 	return texture.get_image() if texture != null else null
 
 
-## Файл снимка в FOLDER; пусто, если не записался
-static func _save(image: Image) -> String:
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(FOLDER))
+## Имя файла снимка в FOLDER (уникально до миллисекунды)
+static func _photo_path() -> String:
 	var stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_")
-	var path := FOLDER.path_join("photo_%s_%03d.jpg" % [stamp, Time.get_ticks_msec() % 1000])
-	image.convert(Image.FORMAT_RGB8)
-	return path if image.save_jpg(path, 0.92) == OK else ""
+	return FOLDER.path_join("photo_%s_%03d.jpg" % [stamp, Time.get_ticks_msec() % 1000])
 
 
 func _draw_view(c: Control) -> void:

@@ -7,6 +7,7 @@ extends RefCounted
 const Config := preload("res://scripts/game/display_config.gd")
 const CONFIRM_SECONDS := 15
 const SCALES := [0.5, 0.67, 0.75, 1.0]
+const AUTO_SCALE := 4 # 20.11.2026: пункт «Авто» после SCALES — 100 %, при нагрузке до 80 % (AdaptiveResolution)
 var tabs: TabContainer
 var mode: OptionButton
 var resolution: OptionButton
@@ -65,6 +66,8 @@ func setup(host: Node) -> void:
 	mid_grass = host.get_node("%MidGrassOption")
 	road_quality = host.get_node("%RoadQualityOption")
 	road_range = host.get_node("%RoadRangeOption")
+	if scale.item_count == AUTO_SCALE:
+		scale.add_item("Авто — 100 %, при нагрузке до 80 %")
 	if road_quality.item_count == 0:
 		for level: Dictionary in GameSettings.ROAD_QUALITY:
 			road_quality.add_item(level.title.capitalize())
@@ -153,7 +156,7 @@ func sync() -> void:
 	for i in SCALES.size():
 		if absf(SCALES[i] - state.render_scale) < absf(SCALES[nearest] - state.render_scale):
 			nearest = i
-	scale.select(nearest)
+	scale.select(AUTO_SCALE if state.get("adaptive_resolution", false) and is_equal_approx(state.render_scale, 1.0) else nearest)
 	aa.select(state.msaa)
 	vsync.set_pressed_no_signal(state.vsync)
 	shadows.set_pressed_no_signal(state.shadows)
@@ -198,7 +201,7 @@ func stage_mode(state: Dictionary) -> void:
 
 func selected_state() -> Dictionary:
 	return {fullscreen = mode.selected == 1, resolution = _sizes[resolution.selected],
-		render_scale = SCALES[scale.selected], msaa = aa.selected, vsync = vsync.button_pressed,
+		render_scale = SCALES[mini(scale.selected, SCALES.size() - 1)], adaptive_resolution = scale.selected == AUTO_SCALE, msaa = aa.selected, vsync = vsync.button_pressed,
 		shadows = shadows.button_pressed, tree_garlands = tree_garlands.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
 		fog_quality = fog_quality.selected, cloud_quality = cloud_quality.selected, particles = particles.selected,
 		carpet_density = carpet_density.selected, carpet_range = carpet_range.selected, mid_grass = mid_grass.selected,
@@ -217,7 +220,7 @@ func _update_apply() -> void:
 func apply_graphics(category: StringName = &"graphics") -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "mid_grass", "road_quality", "road_range"]:
+	for key: String in ["render_scale", "adaptive_resolution", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "mid_grass", "road_quality", "road_range"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

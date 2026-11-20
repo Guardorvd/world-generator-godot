@@ -157,8 +157,9 @@ var _trash: Array[Node] = [] # скрытые узлы, удаляются по 
 var _tree_pool: Array[MultiMeshInstance3D] = []
 var frame_budget: RefCounted
 var node_stats := {created = 0, reused = 0, pooled = 0}
-var phase_stats := {names = ["cleanup", "tree_poll", "details", "tree_queue", "detail_schedule", "tree_upload"],
-	last_us = [0, 0, 0, 0, 0, 0], max_us = [0, 0, 0, 0, 0, 0]}
+# 20.11.2026: «carpet» — GroundCarpet.update отдельно; прежде он входил в tree_poll (пик 76 мс в записи сессии не делился)
+var phase_stats := {names = ["cleanup", "tree_poll", "details", "tree_queue", "detail_schedule", "tree_upload", "carpet"],
+	last_us = [0, 0, 0, 0, 0, 0, 0], max_us = [0, 0, 0, 0, 0, 0, 0]}
 
 func _record_phase(index: int, began: int) -> int:
 	var now := Time.get_ticks_usec()
@@ -708,6 +709,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			frame_budget.deadline_usec if frame_budget != null else 0, stream.clock)
 		if allow_upload and may_work:
 			_carpet_uploaded_last = carpet_uploaded
+	phase_started = _record_phase(6, phase_started)
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
 		WorkerThreadPool.wait_for_task_completion(_tree_task)
 		_tree_task = -1

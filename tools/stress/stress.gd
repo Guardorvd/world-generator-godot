@@ -16,6 +16,8 @@ extends SceneTree
 ##   --save-base — записать этот прогон как базу (base.json); без ключа прогон сравнивается с base.json, если она есть;
 ##   --compare <база.json> <новый.json> — только сравнить два отчёта (окно не нужно, ничего не меряется).
 ##   --travel-from-map — начать перенос с открытым атласом и проверить его закрытие при прибытии.
+##   --fullscreen — весь экран вместо окна 1280×720; --settings <файл> — настройки игрока (копия, файл не меняется).
+##   20.11: world.off_res_90/res_80 — шаги адаптивного разрешения, world.res_switch — цена смены разрешения.
 ## 20.11.2026: world.board — сборка щита доски у камеры (с отбором заданий), OFFERS_MS —
 ##   цена отбора заданий по частям; world.play_map — карта (M) открывается и закрывается в игре без паузы.
 ## Итог: stress.json (все числа), stress.md (выводы и таблицы), строка STRESS_RESULT в консоли. Код 1 — прогон не завершён.
@@ -97,8 +99,7 @@ func _run(groups: Array) -> void:
 		FileAccess.open(out.path_join(".gdignore"), FileAccess.WRITE)
 	only = Dev.arg("only", "").split(",", false)
 	# одинаковые условия: окно 1280×720, без вертикальной синхронизации и ограничения кадров
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	DisplayServer.window_set_size(Dev.WINDOW_SIZE)
+	_set_window()
 	_unlock_frames()
 	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	var git := []
@@ -744,14 +745,23 @@ func _group_world() -> void:
 	var seed_text := Dev.arg("world", "Север-1234")
 	var size := WorldGenerator.START_SIZE
 	var settings := GameContext.scope.settings
-	# настройки — по умолчанию и в своём файле: профиль игрока не читается и не пишется
+	# настройки — по умолчанию и в своём файле: профиль игрока не читается и не пишется.
+	# --settings <файл>: настройки игрока (копируются рядом с отчётом, сам файл не меняется)
 	settings.settings_path = out.path_join("settings.cfg")
+	var player_settings := Dev.arg("settings", "")
+	if player_settings != "":
+		var copy := out.path_join("settings_player.cfg")
+		if DirAccess.copy_absolute(ProjectSettings.globalize_path(player_settings), copy) == OK:
+			settings.settings_path = copy
+			settings.load_settings()
+		else:
+			report.failed.append("настройки %s не прочитаны" % player_settings)
 	preload("res://scripts/game/opening_route.gd").fixed_seed = 1
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 	main.startup_render_frames = main.LOAD_WARMUP_FRAMES
 	await _frames(3)
-	DisplayServer.window_set_size(Dev.WINDOW_SIZE)
+	_set_window()
 	_unlock_frames()
 	# свой кэш мира: первый раз мир генерируется (или берётся готовый из папок DONORS), дальше грузится из кэша
 	var cache := GameContext.scope.cache
@@ -881,6 +891,9 @@ func _group_world() -> void:
 				_under_shadow_far.bind(game.vegetation, VegetationLayer.UNDERSTORY_SHADOW_FAR)],
 			["msaa2", "MSAA 4x (2x вместо него)", func() -> void: root.msaa_3d = Viewport.MSAA_2X, func() -> void: root.msaa_3d = msaa],
 			["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
+			# 20.11: шаги адаптивного разрешения (FSR 1) — сколько GPU снимает 90 % и 80 % стороны кадра
+			["res_90", "разрешение 3D 90 % с FSR", _render_scale.bind(0.9), _render_scale.bind(1.0)],
+			["res_80", "разрешение 3D 80 % с FSR", _render_scale.bind(0.8), _render_scale.bind(1.0)],
 			["vegetation", "ближняя растительность", _show.bind([game.vegetation], false), _show.bind([game.vegetation], true)],
 			# 19.11: ковёр травы (GroundCarpet) отдельно от остальной ближней растительности — его доля в треугольниках
 			["carpet", "ковёр травы", _show_carpet.bind(game.vegetation, false), _show_carpet.bind(game.vegetation, true)],
@@ -893,7 +906,22 @@ func _group_world() -> void:
 			["flora_low", "качество растительности выше низкого", func() -> void: _veg_level(game.vegetation, -1, 0), func() -> void: _veg_level(game.vegetation, -1, settings.flora)],
 			["all_low", "все настройки выше минимума", low, high],
 		], step, game.vegetation)
+		# 20.11: цена самой смены разрешения (пересоздание буферов кадра) — смена 100 % ↔ 90 % раз в 0,5 с
+		if _wanted("world.res_switch"):
+			var switch := func(t: float, dt: float) -> void:
+				step.call(t, dt)
+				var reduced := int(t / 0.5) % 2 == 1
+				if reduced != (root.scaling_3d_scale < 1.0):
+					_render_scale(0.9 if reduced else 1.0)
+			await _case("world.res_switch", "Мир: тот же вид, разрешение 3D 100 % ↔ 90 % раз в 0,5 с", MOVE, switch)
+			_render_scale(1.0)
+			await _settle(game.vegetation, step)
 		if "--shots" in args:
+			for scale: float in [0.9, 0.8]:
+				_render_scale(scale)
+				await _settle(game.vegetation, step)
+				await _shot("forest_res_%d" % roundi(scale * 100.0), relight)
+			_render_scale(1.0)
 			_under_shadow_far(game.vegetation, 0.0)
 			await _settle(game.vegetation, step)
 			await _shot("forest_under_shadow_all", relight)
@@ -1274,6 +1302,21 @@ func _look(_t: float, dt: float, v: Dictionary) -> void:
 		game._ocean.position = Vector3(v.pos.x, 0.0, v.pos.z)
 	if _night_lights:
 		game.update_lights(v.pos, v.pos, clock, dt, decor_deadline) # 15.1: на паузе не было ни костров, ни окон, ни гирлянд
+
+
+## Доля разрешения 3D: ниже 100 % — с повышением резкости FSR 1, как у адаптивного разрешения игры
+func _render_scale(scale: float) -> void:
+	root.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR if scale < 1.0 else Viewport.SCALING_3D_MODE_BILINEAR
+	root.scaling_3d_scale = scale
+
+
+## Окно замера: 1280×720 или (--fullscreen) весь экран — как у игрока в полноэкранном режиме
+func _set_window() -> void:
+	if "--fullscreen" in args:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	else:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		DisplayServer.window_set_size(Dev.WINDOW_SIZE)
 
 
 func _ride(t: float, dt: float, speed: float) -> void:

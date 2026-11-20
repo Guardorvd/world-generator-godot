@@ -4,6 +4,7 @@ const DIRECTORY := "user://session_performance"
 static var dir := DIRECTORY
 const WINDOW_US := 1_000_000
 const TOP_FRAMES := 20
+const UNMARKED_MIN_MS := 2.0 # неразмеченная работа _process меньше этого в доказательства долгого кадра не идёт
 const FrameStatistics := preload("res://scripts/core/frame_statistics.gd")
 const Report := preload("res://scripts/game/session_performance_report.gd")
 const CacheFile := preload("res://scripts/core/cache_file.gd")
@@ -197,6 +198,7 @@ func _measure(game: Node) -> void:
 	_monitor("draw_calls", int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)) if _graphical else null)
 	_monitor("primitives", int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)) if _graphical else null)
 	_monitor("physics_ms", Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0)
+	_monitor("process_ms", Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0)
 	_monitor("video_mb", Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0 if _graphical else null)
 	_monitor("static_mb", Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0)
 	_monitor("nodes", Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
@@ -249,6 +251,15 @@ func _frame_details(game: Node, began_us: int, ms: float, limit: float, hitch: b
 			vegetation_ms[vegetation.names[i]] = vegetation.last_us[i] / 1000.0
 		_add_largest(evidence, stream_ms, "stream/")
 		_add_largest(evidence, vegetation_ms, "vegetation/")
+	# 20.11: _process всех узлов за кадр минус размеченные части кадра GameWorld (frame_*) — работа интерфейса,
+	# main и прочих узлов, которую замеры не называют (так прятались ~50 мс у открытия мест)
+	var marked_ms := 0.0
+	for part: String in tick_ms:
+		if part.begins_with("frame_"):
+			marked_ms += tick_ms[part]
+	var unmarked_ms: float = _render.process_ms - marked_ms
+	if unmarked_ms >= UNMARKED_MIN_MS:
+		evidence.append({part = "process_unmarked", ms = unmarked_ms})
 	if _render.gpu_ms != null and _render.gpu_ms >= 1.0:
 		evidence.append({part = "gpu", ms = _render.gpu_ms})
 	if _render.render_cpu_ms != null and _render.render_cpu_ms >= 1.0:

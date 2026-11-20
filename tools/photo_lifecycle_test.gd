@@ -46,8 +46,12 @@ func run() -> void:
 	photo.enter()
 	photo.shoot()
 	RenderingServer.frame_post_draw.emit()
-	check(photo.reads == 1 and photo.shots.size() == 1 and photo._busy and photo._cooldown > 0,
-		"снимок сохраняется, перезарядка начинается без корутины")
+	check(photo.reads == 1 and photo.shots.is_empty() and photo.saving() and photo._busy,
+		"кадр прочитан, файл пишется в фоне — снимок появится после записи")
+	while photo.saving():
+		await process_frame
+	check(photo.shots.size() == 1 and FileAccess.file_exists(photo.shots[0].path) and photo._busy and photo._cooldown > 0,
+		"снимок записан в фоне, перезарядка начинается без корутины")
 	photo.shoot()
 	check(photo.reads == 1 and not RenderingServer.frame_post_draw.is_connected(photo._capture_frame)
 		and photo.feedback.play_counts.get(&"error_deny", 0) == 1,

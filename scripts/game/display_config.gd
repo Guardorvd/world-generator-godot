@@ -52,10 +52,15 @@ static func apply(window: Window, state: Dictionary) -> void:
 		window.position = usable.position + (usable.size - window.size) / 2
 	apply_quality(window, state)
 
+## 20.11.2026: ступень адаптивного разрешения (AdaptiveResolution) поверх выбранной игроком доли; ставит GameWorld
+static var adaptive_scale := 1.0
+
 static func apply_quality(window: Window, state: Dictionary) -> void:
-	if window.scaling_3d_mode != Viewport.SCALING_3D_MODE_BILINEAR:
-		window.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
-	var factor := render_factor(state, window.size)
+	# снижение адаптивным разрешением — с повышением резкости FSR 1; выбранная игроком доля — как прежде, без него
+	var upscale := Viewport.SCALING_3D_MODE_FSR if adaptive_scale < 1.0 else Viewport.SCALING_3D_MODE_BILINEAR
+	if window.scaling_3d_mode != upscale:
+		window.scaling_3d_mode = upscale
+	var factor := clampf(render_factor(state, window.size) * adaptive_scale, 0.1, 1.0)
 	if not is_equal_approx(window.scaling_3d_scale, factor):
 		window.scaling_3d_scale = factor
 	if window.msaa_3d != state.msaa:

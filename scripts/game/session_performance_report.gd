@@ -3,7 +3,7 @@ extends RefCounted
 
 const LABELS := {
 	"gameplay": "Игра", "opening": "Вступление", "pause": "Пауза", "settings": "Настройки",
-	"map": "Карта", "journal": "Журнал", "plaque": "Табличка", "settlement": "Доска поселения",
+	"map": "Карта", "map_path": "Планшет · Поездки", "map_album": "Планшет · Альбом", "map_shop": "Планшет · Магазин", "journal": "Журнал", "plaque": "Табличка", "settlement": "Доска поселения",
 	"photo": "Фоторежим", "travel": "Быстрое перемещение", "background": "Свёрнутое окно",
 	"walking": "Пешком", "riding": "На велосипеде",
 	"dawn": "Рассвет", "day": "День", "dusk": "Закат", "night": "Ночь",
@@ -16,12 +16,14 @@ const WORK_LABELS := {
 	"frame_stream": "Подгрузка мира", "frame_travel_apply": "Подгрузка при перемещении",
 	"stream/vegetation": "Подгрузка растительности", "stream/terrain": "Подгрузка рельефа",
 	"stream/water": "Подгрузка воды", "stream/outer": "Дальний рельеф", "stream/regions": "Подгрузка областей",
-	"vegetation/tree_upload": "Передача мешей деревьев", "frame_day": "Небо и смена света",
+	"vegetation/tree_upload": "Передача мешей деревьев", "vegetation/carpet": "Ковёр травы",
+	"vegetation/tree_poll": "Приём готовых деревьев", "frame_day": "Небо и смена света",
 	"frame_ambient": "Частицы окружения", "frame_lights_mist": "Местный свет и туман",
 	"frame_route": "Навигация", "frame_paused_preview": "Обновление графики на паузе",
 	"world_save_auto": "Сохранение мира", "world_save_manual": "Ручное сохранение", "autosave_snapshot": "Подготовка автосохранения",
 	"gpu": "GPU", "render_cpu": "CPU отрисовки", "chunk_upload": "Передача чанков",
 	"pipeline_compilation": "Компиляции конвейеров", "dotnet_gc": "Пауза GC .NET",
+	"process_unmarked": "Неразмеченная работа _process",
 }
 
 
