@@ -202,6 +202,8 @@ func open_tab(tab: Tab, seed_text: String) -> void:
 	if not visible:
 		_seed.text = seed_text
 		show()
+		if _tab_shop.visible:
+			shop_panel.prefetch_portraits() # 20.11: портреты витрины — в фоне, пока игрок смотрит карту
 	_select(tab)
 
 

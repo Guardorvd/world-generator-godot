@@ -97,6 +97,8 @@ var _ride_peek_left := 0.0
 var _ride_peek := 0.0
 var _summary_hint_left := SUMMARY_HINT_TIME
 var _summary_hint: Label
+var _toggle_learned := -1 # 20.11: -1 — ещё не читали GameSettings.hud_toggle_learned, 0/1 — кэш
+var _cargo_pulse: Tween   # 20.11: вспышка значка хрупкого груза
 var _summary_switch: PanelContainer
 var _reticle_on_target := false
 var _reticle_open := 0.0
@@ -1463,23 +1465,33 @@ func _fit_toast() -> void:
 		toast_panel.size = fit
 
 
-static func _summary_toggle_learned() -> bool:
-	var settings: GameSettings = GameContext.scope.settings
-	return settings == null or settings.hud_toggle_learned
+## Освоен ли переключатель сводки: читается из настроек один раз, дальше — кэш (проверка идёт каждый кадр)
+func _summary_toggle_learned() -> bool:
+	if _toggle_learned < 0:
+		var settings: GameSettings = GameContext.scope.settings
+		_toggle_learned = 1 if settings == null or settings.hud_toggle_learned else 0
+	return _toggle_learned == 1
 
 
-static func _learn_summary_toggle() -> void:
+func _learn_summary_toggle() -> void:
 	if _summary_toggle_learned():
 		return
+	_toggle_learned = 1
 	GameContext.scope.settings.hud_toggle_learned = true
 	GameContext.scope.settings.save_settings()
 
 
 ## 20.11: хрупкий груз пострадал — значок груза в трекере вздрагивает и вспыхивает (видно и в лёгком виде)
 func pulse_cargo() -> void:
-	if _tracker_note_icon != null and _tracker_note_icon.is_visible_in_tree():
-		UiAudio.shake(_tracker_note_icon, 4.0)
-		HudStyle.pulse(_tracker_note_icon, HudStyle.RED)
+	if _tracker_note_icon == null or not _tracker_note_icon.is_visible_in_tree():
+		return
+	UiAudio.shake(_tracker_note_icon, 4.0)
+	if _cargo_pulse != null and _cargo_pulse.is_valid():
+		_cargo_pulse.kill()
+	# self_modulate, а не modulate: янтарный цвет значка хрупкого груза задаёт трекер и после вспышки он остаётся
+	_tracker_note_icon.self_modulate = HudStyle.RED.lerp(Color.WHITE, 0.2) * 1.4
+	_cargo_pulse = create_tween()
+	_cargo_pulse.tween_property(_tracker_note_icon, "self_modulate", Color.WHITE, 0.45).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 
 func _input(event: InputEvent) -> void:

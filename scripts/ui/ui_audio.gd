@@ -35,6 +35,10 @@ var _last_hover_ms := -1000
 
 
 func _ready() -> void:
+	# 20.11: все звуки — сразу при создании (это загрузка экрана или меню): первый звон груза, тумблер фары или
+	# отклик открытия в игре не читают файл с диска посреди кадра. Файлы короткие, повторная загрузка — из кэша.
+	for kind: StringName in SOUNDS:
+		_stream_for(SOUNDS[kind].path)
 	for i in POOL_SIZE:
 		var player := AudioStreamPlayer.new()
 		player.bus = &"Master"

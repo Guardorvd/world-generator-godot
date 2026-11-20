@@ -878,6 +878,7 @@ func _personal_map() -> void:
 	trail.restore(state)
 	_check(trail.current.is_empty() and trail.read.size() == 3 and trail.distance > 350.0, "трек и открытия восстанавливаются при загрузке")
 	hud.visited[_place("Каменка").key] = true
+	hud.sync_map_places() # как в игре после открытия места: список карты пересобирается только по сигналу
 	hud.set_map_visible(true)
 	# посещённые и прочитанные на доске + место взятого задания (вышка «Сторожевая»): оно видно на карте сквозь туман ориентиров
 	_check(hud.big_map.places.size() == 5 and hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Сторожевая") and not hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Седая"),

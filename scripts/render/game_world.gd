@@ -2178,6 +2178,8 @@ func _hit_cargo(loss: int) -> void:
 	if hit.is_empty():
 		return
 	hud.interaction_audio.play(&"glass_clink", 0.92 if hit.broken else 1.0)
+	if not hit.broken:
+		hud.update_tracker() # шаг тот же — только процент в трекере; разбитый груз обновляет задание через Quests.changed
 	hud.pulse_cargo()
 	hud.toast_now(("Груз разбит\n" if hit.broken else "") + str(hit.text), &"warning")
 

@@ -520,7 +520,7 @@ func damage_cargo(loss: int) -> Dictionary:
 		return {}
 	cargo_hp = maxi(0, cargo_hp - loss)
 	if cargo_hp > 0:
-		changed.emit()
+		# шаг задания не меняется: changed не шлём — он пересобирает цель, маршрут и слои мира (рывок на кочке)
 		return {hp = cargo_hp, broken = false, text = "Груз звякнул: цел на %d %%" % cargo_hp}
 	cargo = false
 	cargo_hp = 100

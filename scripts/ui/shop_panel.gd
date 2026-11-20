@@ -384,6 +384,30 @@ func set_profile(profile: Progress) -> void:
 		_refresh()
 
 
+## 20.11: портреты витрины (по два на расцветку, 14 файлов) читаются в фоне заранее — дневник зовёт это при открытии;
+## первое открытие вкладки «Магазин» их только забирает, а не грузит с диска разом. Пока дневник не открывали —
+## портреты не занимают память
+func prefetch_portraits() -> void:
+	if not _previews.is_empty():
+		return
+	for id: String in Progress.PRICES:
+		for path: String in _portrait_paths(id):
+			if ResourceLoader.exists(path) and not ResourceLoader.has_cached(path) \
+					and ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+				ResourceLoader.load_threaded_request(path)
+
+
+static func _portrait_paths(id: String) -> PackedStringArray:
+	return [PREVIEW_DIR + id + "_side.png", PREVIEW_DIR + id + "_angle.png", PREVIEW_DIR + id + ".jpg"]
+
+
+## Текстура витрины: из фоновой загрузки, если она была, иначе обычной; нет файла — пусто
+static func _texture(path: String) -> Texture2D:
+	if ResourceLoader.load_threaded_get_status(path) != ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		return ResourceLoader.load_threaded_get(path) as Texture2D
+	return load(path) as Texture2D if ResourceLoader.exists(path) else null
+
+
 func open() -> void:
 	_purchase_id = ""
 	_compare_mode = false
@@ -393,10 +417,11 @@ func open() -> void:
 		reward_result = _profile.retry_rewards()
 	if _previews.is_empty():
 		for id: String in _rows:
-			# 20.11: у расцветок второго ряда только портреты, без отдельной картинки
-			var preview := load(PREVIEW_DIR + id + ".jpg") as Texture2D if ResourceLoader.exists(PREVIEW_DIR + id + ".jpg") else null
+			# 20.11: у расцветок второго ряда только портреты, без отдельной картинки; всё — из фоновой загрузки
+			var paths := _portrait_paths(id)
+			var preview := _texture(paths[2])
 			_previews[id] = preview
-			_portraits[id] = [load(PREVIEW_DIR + id + "_side.png"), load(PREVIEW_DIR + id + "_angle.png")]
+			_portraits[id] = [_texture(paths[0]), _texture(paths[1])]
 			_card_images[id].texture = _portrait_crop(_portraits[id][0] if _portraits[id][0] != null else preview)
 	_refresh()
 	if reward_result < 0 and _profile.load_error == OK:
