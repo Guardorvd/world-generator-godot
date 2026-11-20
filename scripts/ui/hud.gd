@@ -22,6 +22,9 @@ const Journal = preload("res://scripts/game/map_journal.gd")
 const MINI := LocalMap.DIAMETER
 const SUMMARY_FADE := 0.24
 const SUMMARY_HINT_TIME := 5.0
+const RIDE_PEEK_HOLD := 2.5
+const RIDE_PEEK_IN := 0.22
+const RIDE_PEEK_OUT := 0.65
 const LEFT_MARGIN := 18.0  # левая колонка: отступ от края и зазор между карточками (с 19.11.2026)
 const LEFT_GAP := 10.0
 const LEFT_WIDTH := 282.0  # 19.11.2026: ширина левой колонки постоянна (как у сведений о месте), от соседей не зависит
@@ -86,6 +89,9 @@ var _revealed := false      # view_mode == FULL
 var _light := 1.0           # 0..1: проявление лёгкого вида
 var _summary_blocked := false
 var _summary_progress := 0.0
+var _ride_activity := false
+var _ride_peek_left := 0.0
+var _ride_peek := 0.0
 var _summary_hint_left := SUMMARY_HINT_TIME
 var _summary_hint: Label
 var _summary_switch: PanelContainer
@@ -353,6 +359,9 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	view_mode = View.LIGHT
 	_revealed = false
 	_summary_progress = 0.0
+	_ride_activity = false
+	_ride_peek_left = 0.0
+	_ride_peek = 0.0
 	_light = 1.0
 	_summary_hint_left = SUMMARY_HINT_TIME
 	_apply_reveal()
@@ -1127,11 +1136,36 @@ func _gauges_allowed() -> bool:
 	return not _photo_mode and not _overlay_open() and not _summary_blocked
 
 
-## Прибор виден со сводкой; без неё — только когда срочно (силы на исходе, тормоз на грани)
+## Активное управление удерживает прибор, после отпускания отсчитывается задержка.
+func set_ride_activity(active: bool) -> void:
+	_ride_activity = active
+
+
+func _tick_ride_peek(delta: float) -> void:
+	if view_mode != View.LIGHT or not _summary_allowed():
+		_ride_activity = false
+		_ride_peek_left = 0.0
+		_ride_peek = 0.0
+		return
+	if _ride_activity:
+		_ride_peek_left = RIDE_PEEK_HOLD
+	else:
+		var held_for := minf(_ride_peek_left, delta)
+		_ride_peek_left = maxf(0.0, _ride_peek_left - delta)
+		if _ride_peek_left <= 0.0:
+			# Затухание начинается только после истечения задержки, даже при длинном кадре.
+			_ride_peek = move_toward(_ride_peek, 0.0, (delta - held_for) / RIDE_PEEK_OUT)
+			return
+	var target := 1.0 if _ride_peek_left > 0.0 else 0.0
+	_ride_peek = move_toward(_ride_peek, target, delta / (RIDE_PEEK_IN if target > _ride_peek else RIDE_PEEK_OUT))
+
+
+## Срочные предупреждения и полная сводка имеют приоритет над временным показом.
 func _show_ride() -> void:
 	var urgent := _ride.stamina_urgent() or _ride.brake_urgent()
-	_ride.visible = _gauges_allowed() and (_summary_progress > 0.0 or urgent)
-	_ride.modulate.a = 1.0 if urgent else smoothstep(0.0, 1.0, _summary_progress)
+	var alpha := maxf(smoothstep(0.0, 1.0, _summary_progress), smoothstep(0.0, 1.0, _ride_peek))
+	_ride.visible = _gauges_allowed() and (alpha > 0.0 or urgent)
+	_ride.modulate.a = 1.0 if urgent else alpha
 
 
 func _fill_chips(row: Container, items: Array, style: StyleBoxFlat) -> void:
@@ -1344,6 +1378,8 @@ func _input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	_summary_progress = move_toward(_summary_progress, 1.0 if _revealed else 0.0, delta / SUMMARY_FADE)
 	_light = move_toward(_light, 1.0 if view_mode == View.LIGHT else 0.0, delta / SUMMARY_FADE)
+	_tick_ride_peek(delta)
+	_show_ride()
 	if _summary_allowed() and view_mode != View.HIDDEN:
 		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
 	if journal_panel.visible:

@@ -1464,6 +1464,9 @@ func _physics_process(dt: float) -> void:
 		fw = 0.0
 		st = 0.0
 		jump = false
+	if hud != null:
+		hud.set_ride_activity(bike.riding and not crash.active() and not _opening and not map_lock
+			and time >= _rescue_input_until and (fw < -0.01 or Input.is_action_pressed("run")))
 	_moving = false
 	var crashed := false
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
