@@ -446,8 +446,9 @@ func _line_port() -> void:
 	_smooth_check()
 
 
-## Фаза 3.2: сглаживание не ухудшает линию: концы побитно, число точек то же, отрезков с нарушением (RoadLine.segment_ok
-## с пределом вида × поблажка) и окон профиля (profile_ok) не больше, чем до; хоть какие-то точки сдвинуты.
+## Фаза 3.4: сглаживание по прорежённой линии не ухудшает линию (уклон/крен/профиль, концы побитно, плотность станций
+## как у V1), выпрямляет лесенку 4–8 м, сглаживает разворот без зубца, не делает угол на хорде 4 м острее, не двигает
+## концы, подходы к сооружениям и смены ширины.
 func _smooth_check() -> void:
 	var w := _world("river")
 	var surface := _surface(w)
@@ -456,9 +457,11 @@ func _smooth_check() -> void:
 	axis.resize(w.N)
 	var widths: Dictionary = RoadTuning.current().section.widths
 	var worse := 0
+	var angle_worse := 0
 	var moved := 0
 	var lines := 0
 	var ends_ok := true
+	var density_ok := true
 	for e: Array in [[8 * S + 8, 70 * S + 30], [30 * S + 10, 85 * S + 60], [60 * S + 30, 20 * S + 90], [90 * S + 8, 10 * S + 70], [12 * S + 50, 88 * S + 50]]:
 		for kind: String in ["trail", "mountain"]:
 			var grade: float = StageTrails.MOUNTAIN_GRADE if kind == "mountain" else StageTrails.TRAIL_GRADE
@@ -471,15 +474,222 @@ func _smooth_check() -> void:
 			V2.smooth_lines = true
 			var smooth := V2.line(w, pts.duplicate(true), axis, surface, kind)
 			lines += 1
-			ends_ok = ends_ok and plain.size() == smooth.size() and plain[0].x == smooth[0].x and plain[0].y == smooth[0].y 				and plain[-1].x == smooth[-1].x and plain[-1].y == smooth[-1].y
+			ends_ok = ends_ok and plain[0].x == smooth[0].x and plain[0].y == smooth[0].y \
+				and plain[-1].x == smooth[-1].x and plain[-1].y == smooth[-1].y
+			density_ok = density_ok and smooth.size() >= int(plain.size() * 0.5) and smooth.size() <= int(plain.size() * 1.8) + 2
 			var relax: float = RoadTuning.current().routing.line_relax[kind]
 			if _bad(surface, plain, grade, relax) < _bad(surface, smooth, grade, relax): worse += 1
-			for k in mini(plain.size(), smooth.size()):
-				if plain[k].x != smooth[k].x or plain[k].y != smooth[k].y:
-					moved += 1
-					break
-	check(lines >= 4 and ends_ok and worse == 0 and moved > 0,
-		"сглаживание: линий %d, сдвинуто %d, ухудшений %d, концы и число точек те же: %s" % [lines, moved, worse, ends_ok])
+			var sp := _chord_stats(plain)
+			var ss := _chord_stats(smooth)
+			if ss.dense_max_ang > sp.dense_max_ang + 0.5:
+				angle_worse += 1
+				print("  угол острее на %s %s: %.1f° -> %.1f°" % [str(e), kind, sp.dense_max_ang, ss.dense_max_ang])
+			var line_moved := smooth.size() != plain.size()
+			if not line_moved:
+				for k in plain.size():
+					if plain[k].x != smooth[k].x or plain[k].y != smooth[k].y:
+						line_moved = true
+						break
+			if line_moved: moved += 1
+	check(lines >= 4 and ends_ok and density_ok and worse == 0 and moved > 0,
+		"сглаживание: линий %d, сдвинуто %d, ухудшений %d, плотность в норме %s, концы побитно %s" % [lines, moved, worse, density_ok, ends_ok])
+
+	# Случай 1: лесенка 4–8 м выпрямляется (плоский участок)
+	var fw := _world("none")
+	var fs := _surface(fw)
+	var faxis := PackedByteArray()
+	faxis.resize(fw.N)
+	var stair4: Array = []
+	for k in 10:
+		stair4.append({x = 10.5 + k, y = 20.5 + k, w = widths.trail})
+		stair4.append({x = 11.5 + k, y = 20.5 + k, w = widths.trail})
+	stair4.append({x = 20.5, y = 30.5, w = widths.trail})
+	var stair8: Array = [{x = 9.0, y = 20.5, w = widths.trail}]
+	for k in 7:
+		stair8.append({x = 10.5 + 2 * k, y = 20.5 + 2 * k, w = widths.trail})
+		stair8.append({x = 12.5 + 2 * k, y = 20.5 + 2 * k, w = widths.trail})
+	stair8.append({x = 24.5, y = 34.5, w = widths.trail})
+	StageTrails.routing_overrides.straighten = {road = 0.0, trail = 0.0, mountain = 0.0}
+	V2.smooth_lines = false
+	var p4 := V2.line(fw, stair4.duplicate(true), faxis, fs, "trail")
+	var p8 := V2.line(fw, stair8.duplicate(true), faxis, fs, "trail")
+	V2.smooth_lines = true
+	var s4 := V2.line(fw, stair4.duplicate(true), faxis, fs, "trail")
+	var s8 := V2.line(fw, stair8.duplicate(true), faxis, fs, "trail")
+	StageTrails.routing_overrides.erase("straighten")
+	var st_p4 := _chord_stats(p4)
+	var st_s4 := _chord_stats(s4)
+	var st_p8 := _chord_stats(p8)
+	var st_s8 := _chord_stats(s8)
+	check(st_p4.kinks > 0 and st_s4.kinks == 0 and st_s4.corners <= st_p4.corners \
+		and st_p8.dense_max_ang > 35.0 and st_s8.kinks == 0 and st_s8.corners <= st_p8.corners \
+		and st_s4.dense_max_ang < st_p4.dense_max_ang * 0.65 and st_s8.dense_max_ang < st_p8.dense_max_ang * 0.65 \
+		and st_s4.dense_max_ang < 35.0 and st_s8.dense_max_ang < 35.0,
+		"лесенка 4–8 м выпрямляется: 4м kinks %d→%d corners %d→%d max %.1f°→%.1f°, 8м kinks %d→%d corners %d→%d max %.1f°→%.1f°" % [
+			st_p4.kinks, st_s4.kinks, st_p4.corners, st_s4.corners, st_p4.dense_max_ang, st_s4.dense_max_ang,
+			st_p8.kinks, st_s8.kinks, st_p8.corners, st_s8.corners, st_p8.dense_max_ang, st_s8.dense_max_ang])
+
+	# Случай 2: разворот > 105° без зубца (нет роста hairpins и острых зубцов)
+	var upts: Array = []
+	for q: Vector2 in [Vector2(14.5, 18.5), Vector2(16.5, 18.5), Vector2(18.5, 18.5), Vector2(20.5, 18.5), Vector2(22.5, 18.5),
+			Vector2(23.3, 19.3), Vector2(22.7, 20.1), Vector2(21.0, 20.7), Vector2(18.5, 21.3), Vector2(16.0, 21.7), Vector2(14.5, 22.0)]:
+		upts.append({x = q.x, y = q.y, w = widths.trail})
+	StageTrails.routing_overrides.straighten = {road = 0.0, trail = 0.0, mountain = 0.0}
+	V2.smooth_lines = false
+	var pu := V2.line(fw, upts.duplicate(true), faxis, fs, "trail")
+	V2.smooth_lines = true
+	var su := V2.line(fw, upts.duplicate(true), faxis, fs, "trail")
+	StageTrails.routing_overrides.erase("straighten")
+	var st_pu := _chord_stats(pu)
+	var st_su := _chord_stats(su)
+	check(st_su.hairpins <= st_pu.hairpins and st_su.kinks <= st_pu.kinks and st_su.corners <= st_pu.corners \
+		and st_su.dense_max_ang <= st_pu.dense_max_ang + 0.5,
+		"разворот без зубца: hairpins %d→%d, kinks %d→%d, corners %d→%d, max %.1f°→%.1f°" % [
+			st_pu.hairpins, st_su.hairpins, st_pu.kinks, st_su.kinks, st_pu.corners, st_su.corners, st_pu.dense_max_ang, st_su.dense_max_ang])
+
+	# Случай 3: угол на хорде 4 м нигде не стал острее
+	if st_s4.dense_max_ang > st_p4.dense_max_ang + 0.5 or st_s8.dense_max_ang > st_p8.dense_max_ang + 0.5 or st_su.dense_max_ang > st_pu.dense_max_ang + 0.5:
+		angle_worse += 1
+	check(angle_worse == 0, "угол на хорде 4 м не острее (ухудшений %d)" % angle_worse)
+
+	# Случай 4: концы, подходы к сооружениям (on_axis ± 2 кл) и смена ширины не сдвинуты
+	var rw := _world("river")
+	var rs := _surface(rw)
+	var raxis := PackedByteArray()
+	raxis.resize(rw.N)
+	raxis[50 * S + 44] = 1
+	raxis[50 * S + 45] = 1
+	var bpts: Array = []
+	for q: Vector2 in [Vector2(33.5, 45.5), Vector2(35.5, 45.5), Vector2(36.5, 47.5), Vector2(38.5, 47.5), Vector2(40.5, 49.5),
+			Vector2(42.5, 50.5), Vector2(43.5, 50.5), Vector2(44.5, 50.5), Vector2(45.5, 50.5), Vector2(46.5, 50.5),
+			Vector2(47.5, 50.5), Vector2(49.5, 51.5), Vector2(51.5, 51.5), Vector2(52.5, 53.5), Vector2(54.5, 53.5), Vector2(56.5, 55.5)]:
+		bpts.append({x = q.x, y = q.y, w = widths.trail})
+	bpts[13].w = widths.trail * 0.8
+	bpts[14].w = widths.trail * 0.8
+	bpts[15].w = widths.trail * 0.8
+	StageTrails.routing_overrides.straighten = {road = 0.0, trail = 0.0, mountain = 0.0}
+	V2.smooth_lines = false
+	var pb := V2.line(rw, bpts.duplicate(true), raxis, rs, "trail")
+	V2.smooth_lines = true
+	var sb := V2.line(rw, bpts.duplicate(true), raxis, rs, "trail")
+	StageTrails.routing_overrides.erase("straighten")
+	var pinned_ok: bool = pb[0].x == sb[0].x and pb[0].y == sb[0].y and pb[-1].x == sb[-1].x and pb[-1].y == sb[-1].y
+	for p: Dictionary in [bpts[6], bpts[7], bpts[8], bpts[9], bpts[10], bpts[12], bpts[13]]:
+		var found := false
+		for q: Dictionary in sb:
+			if absf(p.x - q.x) < 1e-6 and absf(p.y - q.y) < 1e-6:
+				found = true
+				break
+		if not found: pinned_ok = false
+	var free_moved := false
+	for p: Dictionary in [bpts[2], bpts[3]]:
+		var exact := false
+		for q: Dictionary in sb:
+			if absf(p.x - q.x) < 1e-4 and absf(p.y - q.y) < 1e-4: exact = true
+		if not exact: free_moved = true
+	check(pinned_ok and free_moved, "концы, подходы к сооружениям и смена ширины не сдвинуты (закреплены %s, свободные сдвинуты %s)" % [pinned_ok, free_moved])
+
+	# Случай 5: бугристый склон с relax = 1.4 — сглаживание двигает вершины, не откатывает линию и не ухудшает _bad / corners
+	var bw := _world("none")
+	for i in bw.N:
+		var bx := i % S
+		var by := i / S
+		if bx >= 16 and bx <= 56:
+			bw.h[i] += 0.0046 * float(bx - 16) + 0.0022 * sin(float(bx) * 1.35) * cos(float(by) * 1.15)
+	var bs := _surface(bw)
+	var baxis := PackedByteArray()
+	baxis.resize(bw.N)
+	var spts: Array = []
+	for k in 13:
+		spts.append({x = 18.5 + 2.0 * k, y = 42.5 + (0.0 if k % 2 == 0 else 1.5), w = widths.trail})
+	StageTrails.routing_overrides.line_relax = {road = 1.4, trail = 1.4, mountain = 1.4}
+	V2.smooth_lines = false
+	var pbump := V2.line(bw, spts.duplicate(true), baxis, bs, "trail")
+	V2.smooth_lines = true
+	var sbump := V2.line(bw, spts.duplicate(true), baxis, bs, "trail")
+	StageTrails.routing_overrides.erase("line_relax")
+	var bump_moved := sbump.size() != pbump.size()
+	if not bump_moved:
+		for k in pbump.size():
+			if absf(pbump[k].x - sbump[k].x) > 1e-4 or absf(pbump[k].y - sbump[k].y) > 1e-4:
+				bump_moved = true
+				break
+	var st_pb := _chord_stats(pbump)
+	var st_sb := _chord_stats(sbump)
+	check(bump_moved and _bad(bs, sbump, StageTrails.TRAIL_GRADE, 1.4) <= _bad(bs, pbump, StageTrails.TRAIL_GRADE, 1.4) \
+		and st_sb.corners <= st_pb.corners,
+		"бугристый склон (relax=1.4): сдвинуто %s, bad %d→%d, corners %d→%d" % [
+			bump_moved, _bad(bs, pbump, StageTrails.TRAIL_GRADE, 1.4), _bad(bs, sbump, StageTrails.TRAIL_GRADE, 1.4), st_pb.corners, st_sb.corners])
+
+
+func _chord_stats(line: Array) -> Dictionary:
+	var stations: Array[Vector2] = []
+	var carry := 0.0
+	for j in range(1, line.size()):
+		var a := Vector2(line[j - 1].x, line[j - 1].y)
+		var b := Vector2(line[j].x, line[j].y)
+		var seg := a.distance_to(b)
+		var s := carry
+		while s < seg:
+			stations.append(a.lerp(b, s / seg))
+			s += 1.0
+		carry = s - seg
+	stations.append(Vector2(line[-1].x, line[-1].y))
+	var e0 := Vector2(line[0].x, line[0].y)
+	var e1 := Vector2(line[-1].x, line[-1].y)
+	var near_end := func(p: Vector2) -> bool: return p.distance_squared_to(e0) <= 4.0 or p.distance_squared_to(e1) <= 4.0
+	var kinks := 0
+	for n in range(1, stations.size() - 1):
+		if near_end.call(stations[n]): continue
+		var d0 := stations[n] - stations[n - 1]
+		var d1 := stations[n + 1] - stations[n]
+		if d0.length() > 0.01 and d1.length() > 0.01 and absf(rad_to_deg(d0.angle_to(d1))) > 35.0:
+			kinks += 1
+	var corners := 0
+	var last_c := Vector2(INF, INF)
+	for j in range(1, line.size() - 1):
+		var a := Vector2(line[j - 1].x, line[j - 1].y)
+		var b := Vector2(line[j].x, line[j].y)
+		var c := Vector2(line[j + 1].x, line[j + 1].y)
+		if a.distance_to(b) < 0.3 or b.distance_to(c) < 0.3: continue
+		if absf(rad_to_deg((b - a).angle_to(c - b))) <= 20.0: continue
+		if b.distance_to(last_c) < 1.0 or near_end.call(b): continue
+		last_c = b
+		corners += 1
+	var hairpins := 0
+	var hskip := 0
+	for n in range(2, stations.size() - 2):
+		if near_end.call(stations[n]): continue
+		var u0 := stations[n] - stations[n - 2]
+		var u1 := stations[n + 2] - stations[n]
+		if u0.length() > 0.01 and u1.length() > 0.01 and absf(rad_to_deg(u0.angle_to(u1))) > 110.0 and n >= hskip:
+			hairpins += 1
+			hskip = n + 4
+	# Плотное измерение угла на хордах 4 м (каждые 0,25 кл)
+	var cum := PackedFloat64Array([0.0])
+	for j in range(1, line.size()):
+		cum.append(cum[-1] + Vector2(line[j - 1].x, line[j - 1].y).distance_to(Vector2(line[j].x, line[j].y)))
+	var total := cum[-1]
+	var sample_at := func(dist: float) -> Vector2:
+		var lo := 0
+		var hi := cum.size() - 2
+		while lo < hi:
+			var mid := (lo + hi + 1) / 2
+			if cum[mid] <= dist: lo = mid
+			else: hi = mid - 1
+		var seg := cum[lo + 1] - cum[lo]
+		var t := clampf((dist - cum[lo]) / seg, 0.0, 1.0) if seg > 1e-9 else 0.0
+		return Vector2(line[lo].x, line[lo].y).lerp(Vector2(line[lo + 1].x, line[lo + 1].y), t)
+	var dense_max := 0.0
+	var s := 1.0
+	while s <= total - 1.0:
+		var a: Vector2 = sample_at.call(s - 1.0)
+		var p: Vector2 = sample_at.call(s)
+		var b: Vector2 = sample_at.call(s + 1.0)
+		if (p - a).length() > 0.01 and (b - p).length() > 0.01:
+			dense_max = maxf(dense_max, absf(rad_to_deg((p - a).angle_to(b - p))))
+		s += 0.25
+	return {kinks = kinks, corners = corners, hairpins = hairpins, dense_max_ang = dense_max}
 
 
 func _bad(surface: Heightfield, line: Array, grade: float, relax: float) -> int:

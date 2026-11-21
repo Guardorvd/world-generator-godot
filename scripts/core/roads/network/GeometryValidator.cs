@@ -84,21 +84,63 @@ public sealed class GeometryValidator
 		return true;
 	}
 
-	/// <summary>Наименьший радиус поворота по тройкам точек (отрезки не короче 0,3 клетки), м.</summary>
+	/// <summary>Наименьший радиус поворота по хордам не короче 4 м (при короткой ломаной — по тройкам точек ≥ 0,3 кл), м.</summary>
 	public double MinRadius(double[] pts)
 	{
 		double best = double.PositiveInfinity, T = _tile;
 		int n = pts.Length / 2;
+		if (n < 3) return best;
+		double minChord = 4.0 / T;
+		double totalLen = 0.0;
+		for (int k = 1; k < n; k++)
+			totalLen += RoadGraph.Hypot(pts[2 * k] - pts[2 * k - 2], pts[2 * k + 1] - pts[2 * k - 1]);
+		if (totalLen < 2.0 * minChord)
+		{
+			for (int k = 1; k + 1 < n; k++)
+			{
+				double ax = pts[2 * k - 2], ay = pts[2 * k - 1], bx = pts[2 * k], by = pts[2 * k + 1], cx = pts[2 * k + 2], cy = pts[2 * k + 3];
+				double a = RoadGraph.Hypot(bx - ax, by - ay), b = RoadGraph.Hypot(cx - bx, cy - by), c = RoadGraph.Hypot(cx - ax, cy - ay);
+				if (a < 0.3 || b < 0.3) continue;
+				double cross = Math.Abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+				if (cross < 1e-9) continue;
+				best = Math.Min(best, a * b * c / (2.0 * cross) * T);
+			}
+			return best;
+		}
 		for (int k = 1; k + 1 < n; k++)
 		{
-			double ax = pts[2 * k - 2], ay = pts[2 * k - 1], bx = pts[2 * k], by = pts[2 * k + 1], cx = pts[2 * k + 2], cy = pts[2 * k + 3];
+			if (!WalkArc(pts, n, k, -1, minChord, out double ax, out double ay)) continue;
+			if (!WalkArc(pts, n, k, 1, minChord, out double cx, out double cy)) continue;
+			double bx = pts[2 * k], by = pts[2 * k + 1];
 			double a = RoadGraph.Hypot(bx - ax, by - ay), b = RoadGraph.Hypot(cx - bx, cy - by), c = RoadGraph.Hypot(cx - ax, cy - ay);
-			if (a < 0.3 || b < 0.3) continue;
+			if (a < 1e-6 || b < 1e-6) continue;
 			double cross = Math.Abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
 			if (cross < 1e-9) continue;
 			best = Math.Min(best, a * b * c / (2.0 * cross) * T);
 		}
 		return best;
+	}
+
+	private static bool WalkArc(double[] pts, int n, int start, int dir, double targetLen, out double ox, out double oy)
+	{
+		double rem = targetLen;
+		int cur = start;
+		while (true)
+		{
+			int next = cur + dir;
+			if (next < 0 || next >= n) { ox = oy = 0.0; return false; }
+			double sx = pts[2 * next] - pts[2 * cur], sy = pts[2 * next + 1] - pts[2 * cur + 1];
+			double seg = RoadGraph.Hypot(sx, sy);
+			if (seg >= rem - 1e-9)
+			{
+				double t = seg > 1e-12 ? Math.Min(1.0, rem / seg) : 0.0;
+				ox = pts[2 * cur] + sx * t;
+				oy = pts[2 * cur + 1] + sy * t;
+				return true;
+			}
+			rem -= seg;
+			cur = next;
+		}
 	}
 
 	/// <summary>Полная проверка ломаной pts (клетки) полосы width (клетки): отрезки с пределом maxGrade × relax и креном,

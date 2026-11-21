@@ -87,13 +87,17 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var overlap_plain := 0.0
 	var spots: Array = [] # [point, "overlap" | "parallel"]
 	var pairs := {} # "r:other:вид" -> м
-	var kinks := {road = 0, trail = 0, mountain = 0}
+	var kinks := {road = 0, trail = 0, mountain = 0, trail_smoothed = 0, trail_skeleton = 0}
 	var kink_spots: Array = []
-	var corners := {road = 0, trail = 0, mountain = 0}
+	var corners := {road = 0, trail = 0, mountain = 0, trail_smoothed = 0, trail_skeleton = 0}
 	var corner_spots: Array = []
-	var hairpins := {road = 0, trail = 0, mountain = 0}
+	var hairpins := {road = 0, trail = 0, mountain = 0, trail_smoothed = 0, trail_skeleton = 0}
 	var sharp := {road = 0, trail = 0, mountain = 0}
 	var hairpin_spots: Array = []
+	var non_skeleton := {}
+	for note: Array in w.generation_profile.get("second_ways", []):
+		for k: int in note[1]:
+			non_skeleton[k] = true
 	var grade_acc := {} # вид -> [длина, длина круче STEEP, сумма уклон×длина, наибольший]
 	var grade_at := {} # вид -> [путь, x, y, рядом с концом пути (16 м)] — где наибольший уклон
 	var crossings := {} # пара -> [точки]
@@ -103,6 +107,9 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var samples := 0
 	for r: int in routes:
 		var t: Dictionary = w.trails[r]
+		var trail_sub := ""
+		if t.kind == "trail":
+			trail_sub = "trail_smoothed" if (non_skeleton.has(r) or t.has("ride")) else "trail_skeleton"
 		var pts: Array = t.pts
 		# равномерная выборка
 		var stations: Array[Vector2] = []
@@ -143,6 +150,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 			if b.distance_to(last_corner) < 1.0 or _near_end(ends, b, 2.0) or _near_structure(structures, b, 3.0): continue
 			last_corner = b
 			corners[t.kind] = int(corners.get(t.kind, 0)) + 1
+			if not trail_sub.is_empty(): corners[trail_sub] += 1
 			if t.kind != "mountain": corner_spots.append(b)
 		var hairpin_skip := 0
 		var sharp_skip := 0
@@ -158,6 +166,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 				var d1 := stations[n + 1] - stations[n]
 				if d0.length() > 0.01 and d1.length() > 0.01 and absf(rad_to_deg(d0.angle_to(d1))) > KINK:
 					kinks[t.kind] = int(kinks.get(t.kind, 0)) + 1
+					if not trail_sub.is_empty(): kinks[trail_sub] += 1
 					if t.kind != "mountain": kink_spots.append(p)
 			# развороты: хорды по 8 м до и после точки
 			if n >= 2 and n + 2 < stations.size() and not _near_end(ends, p, 2.0) and not _near_structure(structures, p, 3.0):
@@ -167,6 +176,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 					var turn := absf(rad_to_deg(u0.angle_to(u1)))
 					if turn > HAIRPIN and n >= hairpin_skip:
 						hairpins[t.kind] = int(hairpins.get(t.kind, 0)) + 1
+						if not trail_sub.is_empty(): hairpins[trail_sub] += 1
 						hairpin_skip = n + 4
 						if t.kind != "mountain": hairpin_spots.append(p)
 					elif turn > SHARP and turn <= HAIRPIN and n >= sharp_skip:
