@@ -33,6 +33,11 @@ const KINDS := ["road", "trail", "mountain"]
 @export_group("Линия по видам пути")
 ## Локальная перестройка крутого подъёма в V2.
 @export var switchbacks_enabled := false
+## Опорный шаг, минимальный радиус и максимальное смещение оси V2, в метрах.
+@export var broad_spacing_m := {road = 80.0, trail = 50.0, mountain = 40.0}
+@export var broad_radius_m := {road = 60.0, trail = 30.0, mountain = 15.0}
+@export var broad_offset_m := {road = 15.0, trail = 10.0, mountain = 6.0}
+@export var broad_straight_m := 0.35
 ## Допуск срезания лесенки сетки в клетках.
 @export var straighten: Dictionary
 ## Множитель допуска на локальный бугор при пробе хорды или дуги.

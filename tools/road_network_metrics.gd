@@ -332,6 +332,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		sections = routes.size(), excluded = excluded, character_by_kind = Samples.measure(w, routes, surface, forest),
 		decisions = {width = w.generation_profile.get("road_width_decisions"),
 			line_grade_fallbacks = w.generation_profile.get("road_line_grade_fallbacks"),
+			broad_curves = w.generation_profile.get("road_broad_curves", {}),
 			switchbacks = w.generation_profile.get("road_switchbacks", {}),
 			ride_rejections = w.generation_profile.get("rides", {}).get("rejected")},
 		length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),

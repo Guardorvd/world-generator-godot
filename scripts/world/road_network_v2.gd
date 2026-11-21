@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 5
+const VERSION := 6
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
@@ -49,7 +49,9 @@ static func cache_suffix(enabled: bool) -> String:
 	values.switchbacks_enabled = routing.switchbacks_enabled
 	var keys := values.keys()
 	keys.sort()
-	var digest := RoadTuning._digest_values(keys.map(func(key: String) -> Array: return [key, values[key]]))
+	var digest := RoadTuning._digest_values([keys.map(func(key: String) -> Array: return [key, values[key]]),
+		RoadTuning.Routing.KINDS.map(func(kind: String) -> Array: return [routing.broad_spacing_m[kind], routing.broad_radius_m[kind],
+			routing.broad_offset_m[kind]]), routing.broad_straight_m])
 	return "|net=v2.%d.%s" % [VERSION, digest]
 
 
@@ -508,6 +510,10 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	if smooth_lines:
+		data.broad_spacing_m = float(routing.broad_spacing_m[kind])
+		data.broad_radius_m = float(routing.broad_radius_m[kind])
+		data.broad_offset_m = float(routing.broad_offset_m[kind])
+		data.broad_straight_m = routing.broad_straight_m
 		_add_near_axes(w, pts, data)
 	for end in 2:
 		var join: Dictionary = joins.get(end, {})
@@ -523,6 +529,12 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		var smooth: Dictionary = block.get_or_add("smooth", {lines = 0, moved = 0, rejected = 0, hairpins = 0, hairpins_moved = 0})
 		smooth.lines += 1
 		for key: String in ["moved", "rejected", "hairpins", "hairpins_moved"]: smooth[key] += int(out.smooth[key])
+	if not (out.broad as Dictionary).is_empty():
+		var profile: Dictionary = w.generation_profile.get_or_add("road_broad_curves", {})
+		var stats: Dictionary = profile.get_or_add(kind, {accepted = 0, refused = {}})
+		stats.accepted += out.broad.accepted
+		for reason: String in out.broad.refused:
+			stats.refused[reason] = int(stats.refused.get(reason, 0)) + int(out.broad.refused[reason])
 	if out.fallback:
 		StageTrails.RoadLine.fallbacks += 1
 		var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
@@ -543,7 +555,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 	for p: Dictionary in pts:
 		width = maxf(width, p.w)
 	# Запас на сглаживание оси хозяина и новой линии, плюс диагональ клетки.
-	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + 3.0)
+	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0 + float(data.get("broad_offset_m", 0.0))) / GameConfig.TILE + 3.0)
 	var hosts := {}
 	for p: Dictionary in pts:
 		var px := floori(p.x)

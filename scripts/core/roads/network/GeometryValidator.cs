@@ -75,6 +75,17 @@ public sealed class GeometryValidator
 
 	internal double Ground(double x, double y) => _water.GroundAt(x * _tile, y * _tile);
 
+	internal bool NearAxis(LineBuilder.P p, double distance) =>
+		_axes != null && _axes.Clearance(p.X, p.Y, distance, null) < distance;
+
+	internal string SegmentRefusal(LineBuilder.P a, LineBuilder.P b, double grade, double cross)
+	{
+		double width = Math.Max(a.W, b.W);
+		if (Segment(a.X, a.Y, b.X, b.Y, width, grade, cross)) return null;
+		if (!Segment(a.X, a.Y, b.X, b.Y, width, 1e6, 1e6)) return "water";
+		return !Segment(a.X, a.Y, b.X, b.Y, width, grade, 1e6) ? "grade" : "crossfall";
+	}
+
 	internal double TerrainGrade(double x, double y) => RoadGraph.Hypot(
 		Ground(x + 1, y) - Ground(x - 1, y), Ground(x, y + 1) - Ground(x, y - 1)) / (2 * _tile);
 

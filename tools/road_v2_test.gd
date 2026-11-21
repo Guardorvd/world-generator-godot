@@ -36,9 +36,125 @@ func _initialize() -> void:
 	_character_on_flat()
 	_short_ride_turnback()
 	_switchback_climbs()
+	_broad_curves()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
+
+
+func _broad_curves() -> void:
+	var w := _world("none")
+	w.h.fill(0.15)
+	w.filled.fill(0.15)
+	var routing := RoadTuning.current().routing
+	var x := PackedFloat64Array()
+	var y := PackedFloat64Array()
+	var widths := PackedFloat64Array()
+	for i in range(8, 89):
+		x.append(i + 0.5)
+		y.append(35.5 + 0.32 * minf(i - 8, 88 - i))
+		widths.append(RoadTuning.current().section.widths.road)
+	var data := {x = x, y = y, w = widths, axis = PackedByteArray(), W = S, H = S, kind = "road", smooth = "",
+		relax = 0.0, tolerance = 0.0, road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE,
+		mountain_grade = StageTrails.MOUNTAIN_GRADE, bench_cross = StageTrails.BENCH_CROSS,
+		speed = StageTrails.RoadLine.TURN_SPEED.road, accel = StageTrails.RoadLine.TURN_ACCEL.road,
+		profile_base = StageTrails.RoadLine.PROFILE_BASE, broad_spacing_m = routing.broad_spacing_m.road,
+		broad_radius_m = routing.broad_radius_m.road, broad_offset_m = routing.broad_offset_m.road,
+		broad_straight_m = routing.broad_straight_m, smooth_line = true}
+	var core: Object = Grid.native_grid()
+	var plane := Heightfield.new(w, false)
+	var flat: Dictionary = core.BuildRoadLine(data, plane.fast_water())
+	var plain_data := data.duplicate()
+	plain_data.erase("broad_spacing_m")
+	var plain: Dictionary = core.BuildRoadLine(plain_data, plane.fast_water())
+	var curves := 0
+	var tight := 0
+	for i in range(2, flat.x.size() - 2):
+		var a := Vector2(flat.x[i - 2], flat.y[i - 2])
+		var b := Vector2(flat.x[i], flat.y[i])
+		var c := Vector2(flat.x[i + 2], flat.y[i + 2])
+		var twice_area := absf((b - a).cross(c - a))
+		if twice_area < 1e-5: continue
+		var radius := 2.0 * a.distance_to(b) * b.distance_to(c) * c.distance_to(a) / twice_area
+		if radius >= 60.0 and radius <= 200.0: curves += 1
+		if radius < 59.0: tight += 1
+	check(curves >= 8 and tight == 0 and flat.broad.accepted >= 2 and flat.x[0] == x[0] and flat.y[-1] == y[-1],
+		"крупная форма: равнинная ломаная, %d станций радиусом 60–200 м, тесных %d, %s" % [curves, tight, flat.broad])
+
+	# Найти плечо поворота, где кривая ближе к углу клетки, чем исходная ось.
+	var lake := _world("none")
+	lake.h.fill(0.15)
+	lake.filled.fill(0.15)
+	var chosen := Vector2i.ZERO
+	var best := -INF
+	for col in range(33, 65):
+		for row in range(41, 51):
+			var centre := Vector2(col + 0.5, row + 0.5)
+			# LakeLevel распространяет воду на четыре квадрата вокруг центра клетки.
+			var original_gap := _broad_square_gap(plain, centre)
+			var curve_gap := _broad_square_gap(flat, centre)
+			var margin := minf(original_gap - 1.03, 1.0 - curve_gap)
+			if margin > best:
+				best = margin
+				chosen = Vector2i(col, row)
+	var lake_cell := chosen.y * S + chosen.x
+	lake.lake[lake_cell] = 1
+	lake.filled[lake_cell] += 0.025
+	var wet := Heightfield.new(lake, false)
+	var waterside: Dictionary = core.BuildRoadLine(data, wet.fast_water())
+	var dry := true
+	for i in waterside.x.size(): dry = dry and wet.depth_at(waterside.x[i] * 4.0, waterside.y[i] * 4.0) <= 0.3
+	check(dry and waterside.broad.refused.has("water"), "крупная форма: озеро в %s отклоняет участок, ось сухая %s" % [chosen, waterside.broad])
+
+	var need := (widths[0] * 4.0 + 2.0 * RoadRefinement.REACH + 2.0) / 4.0
+	var other := Vector2.ZERO
+	best = -INF
+	for col in range(132, 260, 2):
+		for row in range(156, 222, 2):
+			var at := Vector2(col, row) * 0.25
+			var margin := minf(_broad_gap(plain, at) - need - 0.15, need - _broad_gap(flat, at))
+			if margin > best:
+				best = margin
+				other = at
+	var beside := data.merged({near_axis_start = PackedInt32Array([0, 2]), near_axis_x = PackedFloat64Array([other.x - 0.1, other.x + 0.1]),
+		near_axis_y = PackedFloat64Array([other.y, other.y]), reach = RoadRefinement.REACH})
+	var foreign: Dictionary = core.BuildRoadLine(beside, plane.fast_water())
+	var gap := INF
+	for i in foreign.x.size(): gap = minf(gap, Grid.segment_dist(foreign.x[i], foreign.y[i], other.x - 0.1, other.y, other.x + 0.1, other.y) * 4.0)
+	check(foreign.broad.refused.has("clearance") and gap >= need * 4.0 - 0.05,
+		"крупная форма: чужая ось, зазор %.2f м, %s" % [gap, foreign.broad])
+
+	for i in w.N:
+		w.h[i] += 0.20 * (i % S) / StageTrails.HEIGHT_SCALE
+		w.filled[i] = w.h[i]
+	var slope := Heightfield.new(w, false)
+	var uphill: Dictionary = core.BuildRoadLine(data, slope.fast_water())
+	var max_grade := 0.0
+	for i in range(1, uphill.x.size()):
+		var a := Vector2(uphill.x[i - 1], uphill.y[i - 1]) * 4.0
+		var b := Vector2(uphill.x[i], uphill.y[i]) * 4.0
+		if a.distance_to(b) > 0.001:
+			max_grade = maxf(max_grade, absf(slope.ground_at(b.x, b.y) - slope.ground_at(a.x, a.y)) / a.distance_to(b))
+	check(uphill.broad.accepted > 0 and max_grade <= 0.201, "крупная форма: склон 20 %% (уклон %.2f %%)" % [100 * max_grade])
+
+
+func _broad_gap(line: Dictionary, at: Vector2) -> float:
+	var gap := INF
+	for i in range(1, line.x.size()):
+		gap = minf(gap, Grid.segment_dist(at.x, at.y, line.x[i - 1], line.y[i - 1], line.x[i], line.y[i]))
+	return gap
+
+
+func _broad_square_gap(line: Dictionary, at: Vector2) -> float:
+	var gap := INF
+	for i in range(1, line.x.size()):
+		if absf(line.x[i] - at.x) > 3.0: continue
+		var a := Vector2(line.x[i - 1], line.y[i - 1]) - at
+		var b := Vector2(line.x[i], line.y[i]) - at
+		for j in 17:
+			var q := a.lerp(b, j / 16.0)
+			gap = minf(gap, maxf(absf(q.x), absf(q.y)))
+	return gap
 
 
 ## Синтетический мир: water — "none" | "lake" | "river" (полоса x = 44..45 поперёк карты)

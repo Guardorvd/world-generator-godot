@@ -316,7 +316,10 @@ public partial class FastGrid
 				input["mountain_grade"].AsDouble(), input["bench_cross"].AsDouble(), input["speed"].AsDouble(), input["accel"].AsDouble());
 			// фаза 4: сглаживание линий всех видов (road, trail, mountain и связей остова)
 			var smoothStats = new Godot.Collections.Dictionary();
-			if (input.ContainsKey("smooth_line") && input["smooth_line"].AsBool())
+			var broadStats = new Godot.Collections.Dictionary();
+			bool smooth = input.ContainsKey("smooth_line") && input["smooth_line"].AsBool();
+			bool broad = input.ContainsKey("broad_spacing_m");
+			if (smooth || broad)
 			{
 				builder.Biharmonic = input.ContainsKey("biharmonic") && input["biharmonic"].AsBool();
 				RoadGraph axes = null;
@@ -328,17 +331,30 @@ public partial class FastGrid
 				}
 				var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), axes,
 					input.ContainsKey("reach") ? input["reach"].AsDouble() : 0.0);
-				line = builder.Smooth(line, validator);
-				smoothStats["moved"] = builder.SmoothMoved;
-				smoothStats["rejected"] = builder.SmoothRejected;
-				smoothStats["hairpins"] = builder.Hairpins;
-				smoothStats["hairpins_moved"] = builder.HairpinsMoved;
+				if (broad)
+				{
+					line = builder.ShapeBroadCurve(line, pts, validator, input["broad_spacing_m"].AsDouble(), input["broad_radius_m"].AsDouble(),
+						input["broad_offset_m"].AsDouble(), input["broad_straight_m"].AsDouble(), out var pass);
+					var refused = new Godot.Collections.Dictionary();
+					foreach (var (reason, count) in pass.Refused) refused[reason] = count;
+					broadStats["accepted"] = pass.Accepted;
+					broadStats["refused"] = refused;
+				}
+				if (smooth)
+				{
+					line = builder.Smooth(line, validator);
+					smoothStats["moved"] = builder.SmoothMoved;
+					smoothStats["rejected"] = builder.SmoothRejected;
+					smoothStats["hairpins"] = builder.Hairpins;
+					smoothStats["hairpins_moved"] = builder.HairpinsMoved;
+				}
 			}
 			var ox = new double[line.Count];
 			var oy = new double[line.Count];
 			var ow = new double[line.Count];
 			for (int k = 0; k < line.Count; k++) { ox[k] = line[k].X; oy[k] = line[k].Y; ow[k] = line[k].W; }
-			return new Godot.Collections.Dictionary { ["x"] = ox, ["y"] = oy, ["w"] = ow, ["fallback"] = builder.Fallback, ["smooth"] = smoothStats };
+			return new Godot.Collections.Dictionary { ["x"] = ox, ["y"] = oy, ["w"] = ow, ["fallback"] = builder.Fallback,
+				["smooth"] = smoothStats, ["broad"] = broadStats };
 		}
 		catch (Exception e)
 		{
