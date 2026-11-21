@@ -984,6 +984,33 @@ public sealed class NetworkPlanner
 		return "";
 	}
 
+	// ---------------------------------------------------------------- примыкания природных маршрутов (шаг 4)
+
+	/// <summary>Правила узлов 3.4 для готовых путей (природные маршруты RideRoutes): для каждого пути из paths —
+	/// причина отказа по готовой сети (пусто — годится) и клетки его точек примыкания. Расстояние между точками
+	/// примыкания разных маршрутов проверяет RoadNetworkV2.ride_nodes_spaced тем же NodeSep.</summary>
+	public Godot.Collections.Dictionary CheckNodes()
+	{
+		long total = NetStats.Now();
+		Prepare(false, false);
+		var verdicts = new Godot.Collections.Array();
+		var nodes = new Godot.Collections.Array();
+		foreach (var v in _in["paths"].AsGodotArray())
+		{
+			var p = v.AsInt32Array();
+			var att = AttachmentsAt(p);
+			var cells = new int[att.Count];
+			for (int k = 0; k < att.Count; k++) cells[k] = att[k].Cell;
+			string why = NodeRules(att, null, p);
+			verdicts.Add(why.Length > 0 ? why + LastNode : "");
+			nodes.Add(cells);
+			Stats.Count(why.Length > 0 ? "rides_rejected" : "rides_ok");
+			if (why.Length > 0) Stats.Reject("ride_" + why);
+		}
+		Stats.Time("total", total);
+		return new Godot.Collections.Dictionary { ["verdicts"] = verdicts, ["nodes"] = nodes, ["network_v2"] = Stats.ToDictionary() };
+	}
+
 	// ---------------------------------------------------------------- выход
 
 	private Godot.Collections.Dictionary Result(Godot.Collections.Array paths, Godot.Collections.Array what, Godot.Collections.Array pairs)

@@ -267,3 +267,33 @@ static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 		else:
 			StageTrails._note_way(w, what, StageTrails._add_trail(w, cells, "trail", road_cost, on_axis, surface))
 	_profile(w, "mountain" if mountain else "spurs", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
+
+
+## Шаг 4 (21.11): точки примыкания природных маршрутов по тем же правилам узлов (NodeSep, MaxDegree, ExitR).
+## Для каждого кандидата RideRoutes: c.v2_reject — причина по готовой сети (пусто — годится), c.v2_nodes — клетки точек
+## примыкания. Только при StageTrails.network_v2.
+static func ride_nodes(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray, candidates: Array) -> void:
+	var started := Time.get_ticks_usec()
+	var known := _unsafe_cache if _unsafe_cache.size() == w.N and _unsafe_axis == on_axis else unsafe_mask(w, surface, on_axis)
+	var data := input(w, finder, surface, on_axis, known)
+	data.mode = "nodes"
+	data.session = _session
+	var paths: Array = []
+	for c: Dictionary in candidates: paths.append(c.path)
+	data.paths = paths
+	var out := call_core(finder, surface, data)
+	if out.is_empty(): return
+	for k in candidates.size():
+		candidates[k].v2_reject = String(out.verdicts[k])
+		candidates[k].v2_nodes = PackedInt32Array(out.nodes[k])
+	_profile(w, "rides", out, 0.0, (Time.get_ticks_usec() - started) / 1000.0, {})
+
+
+## Точки примыкания маршрута nodes не ближе NODE_SEP к точкам уже принятых маршрутов (совпадающие — общий узел).
+static func ride_nodes_spaced(w: WorldData, nodes: PackedInt32Array, chosen: Array) -> bool:
+	for other: PackedInt32Array in chosen:
+		for a: int in nodes:
+			for b: int in other:
+				var d := Vector2(a % w.W - b % w.W, a / w.W - b / w.W).length()
+				if d > 1.5 and d < NODE_SEP: return false
+	return true

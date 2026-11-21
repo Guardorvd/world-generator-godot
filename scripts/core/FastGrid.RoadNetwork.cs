@@ -193,6 +193,7 @@ public partial class FastGrid
 			{
 				"loops" => planner.PlanLoops(),
 				"spurs" => planner.PlanSpurs(),
+				"nodes" => planner.CheckNodes(),
 				"probe" => NetworkProbe.Run(snapshot, planner, input),
 				_ => throw new ArgumentException("V2: неизвестный режим «" + mode + "»"),
 			};

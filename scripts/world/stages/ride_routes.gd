@@ -177,6 +177,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	forks.refresh(on_axis)
 	for c: Dictionary in candidates:
 		c.fork_rank = float(c.score) - 0.60 * forks.ride_pressure(c.path)
+	# Сеть V2 (шаг 4, 21.11): точки примыкания маршрутов — по правилам узлов сети V2 (RoadNetworkV2.ride_nodes)
+	if StageTrails.network_v2:
+		StageTrails.RoadNetworkV2.ride_nodes(w, finder, surface, on_axis, candidates)
 	var chosen := _select(w, candidates, stats, forks)
 	var publish_us := Time.get_ticks_usec()
 	var number := 0
@@ -561,6 +564,7 @@ static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: R
 	var used := {}
 	var per_top := {}
 	var limit := maxi(1, roundi(MAX_RIDES * w.scale))
+	var v2_chosen: Array = [] # точки примыкания принятых маршрутов (только сеть V2)
 	# Prefer space between the chosen junctions both within each style and when
 	# filling the remaining slots. Revisit the original candidates in each fallback.
 	for pass_n in 4:
@@ -573,6 +577,12 @@ static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: R
 			if pass_n < 2 and styles.has(c.style): continue
 			var path: PackedInt32Array = c.path
 			if forks != null and pass_n % 2 == 0 and forks.crowds_chosen(path): continue
+			if c.has("v2_reject"):
+				var why: String = c.v2_reject
+				if why.is_empty() and not StageTrails.RoadNetworkV2.ride_nodes_spaced(w, c.v2_nodes, v2_chosen): why = "node_pair_rides"
+				if not why.is_empty():
+					if pass_n == 3: stats.rejected["узлы V2: " + why.get_slice(" ", 0)] = int(stats.rejected.get("узлы V2: " + why.get_slice(" ", 0), 0)) + 1
+					continue
 			var same := 0
 			for i: int in path:
 				if near[i] != 0: same += 1
@@ -580,6 +590,7 @@ static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: R
 				if pass_n == 3: stats.rejected["похож на принятый"] = int(stats.rejected.get("похож на принятый", 0)) + 1
 				continue
 			chosen.append(c)
+			if c.has("v2_nodes"): v2_chosen.append(c.v2_nodes)
 			used[n] = true
 			styles[c.style] = true
 			per_top[c.top.i] = int(per_top.get(c.top.i, 0)) + 1
