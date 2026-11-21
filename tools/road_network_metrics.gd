@@ -226,16 +226,23 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		if w.path_mask[i] >= 2 and dist[i] > 1.5: orphan += 1
 		if not base_cost.is_empty() and base_cost[i] != INF and w.cost[i] < base_cost[i] * 0.5 and dist[i] > 1.5: ghost += 1
 	var junctions := 0
+	var junction_points: Array[Vector2] = []
 	for r: int in routes:
 		var pts: Array = w.trails[r].pts
 		for p: Dictionary in [pts[0], pts[-1]]:
 			var at := Vector2(p.x, p.y)
+			var hit := false
 			for by in range(floori((at.y - 1.0) / BIN), floori((at.y + 1.0) / BIN) + 1):
 				for bx in range(floori((at.x - 1.0) / BIN), floori((at.x + 1.0) / BIN) + 1):
 					for o: Array in bins.get(Vector2i(bx, by), []):
 						if o[0] != r and Grid.segment_dist(at.x, at.y, o[1].x, o[1].y, o[2].x, o[2].y) < 0.05:
 							junctions += 1
+							hit = true
 							break
+			if hit: junction_points.append(at)
+	var crowded := _crowded_nodes(w, junction_points, structures)
+	var shore := _shore_m(w, routes, structures)
+	var wiggle := _wiggle(w, routes)
 	var lengths := {}
 	for kind: String in length_by_kind: lengths[kind] = roundi(length_by_kind[kind])
 	var grade := {}
@@ -270,7 +277,148 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
 		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
-		spots = spots, kink_spots = kink_spots, double_spots = double_spots, pairs = _top(pairs, 8)}
+		crowded_nodes = crowded.pairs, nodes = crowded.nodes, shore_m = shore, wiggle = wiggle,
+		second_ways = _second_way_counts(w), rides = _ride_counts(w),
+		spots = spots, kink_spots = kink_spots, double_spots = double_spots, crowded_spots = crowded.spots, pairs = _top(pairs, 8)}
+
+
+## 21.11.2026, план V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md, фаза 0; определения плана 19.11, шаг 0.2).
+## crowded_nodes — пары узлов сети ближе CROWD_R (40 м). Узел — конец участка на оси другого участка (junction_ends),
+## точки ближе NODE_SAME (0,6 клетки) — один узел. Узлы у поселений (ближе EXIT_NODE клеток к центру) и у
+## сооружений (ближе 3 клеток к оси моста или туннеля) не считаются: там узлы нужны.
+const CROWD_R := 10.0     # 40 м
+const NODE_SAME := 0.6
+const EXIT_NODE := 35.0   # = StageTrails.EXIT_R
+const SHORE_R := 3.0      # 12 м до моря или озера
+const SHORE_RUN := 15     # станций (60 м) подряд — путь вдоль берега
+const WIGGLE_WIN := 25    # станций (100 м)
+const WIGGLE_STEP := 5
+const WIGGLE_RATIO := 1.05
+
+
+static func _crowded_nodes(w: WorldData, points: Array[Vector2], structures: Array) -> Dictionary:
+	var nodes: Array[Vector2] = []
+	for p: Vector2 in points:
+		var same := false
+		for q: Vector2 in nodes:
+			if q.distance_to(p) < NODE_SAME:
+				same = true
+				break
+		if not same: nodes.append(p)
+	var kept: Array[Vector2] = []
+	for p: Vector2 in nodes:
+		var settled := false
+		for s: SettlementData in w.settlements:
+			if Vector2(s.i % w.W + 0.5, s.i / w.W + 0.5).distance_to(p) < EXIT_NODE:
+				settled = true
+				break
+		if not settled and not _near_structure(structures, p, 3.0): kept.append(p)
+	var pairs := 0
+	var spots: Array = []
+	for a in kept.size():
+		for b in range(a + 1, kept.size()):
+			if kept[a].distance_to(kept[b]) <= CROWD_R:
+				pairs += 1
+				spots.append((kept[a] + kept[b]) * 0.5)
+	return {pairs = pairs, nodes = kept.size(), spots = spots}
+
+
+## shore_m — длина путей, где станции через 1 клетку ближе SHORE_R к морю или озеру подряд не меньше SHORE_RUN
+## (60 м): путь вдоль берега, а не подход к воде. Станции на мостах и у них (3 клетки) прерывают счёт. По видам
+## пути и отдельно по ответвлениям shore (generation_profile.second_ways).
+static func _shore_m(w: WorldData, routes: Array, structures: Array) -> Dictionary:
+	var water := PackedByteArray()
+	water.resize(w.N)
+	for i in w.N:
+		if w.ocean[i] != 0 or w.lake[i] != 0: water[i] = 1
+	var dist := Grid.distance_field(w.W, w.H, water)
+	var spur := {}
+	for note: Array in w.generation_profile.get("second_ways", []):
+		if note[0] == "shore":
+			for k: int in note[1]: spur[k] = true
+	var out := {road = 0.0, trail = 0.0, mountain = 0.0, shore_spurs = 0.0}
+	for r: int in routes:
+		var t: Dictionary = w.trails[r]
+		var run := 0
+		var total := 0
+		for p: Vector2 in _stations(t.pts):
+			var i := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
+			if dist[i] <= SHORE_R and not _near_structure(structures, p, 3.0):
+				run += 1
+			else:
+				if run >= SHORE_RUN: total += run
+				run = 0
+		if run >= SHORE_RUN: total += run
+		var m := total * SAMPLE * GameConfig.TILE
+		out[t.kind] = float(out.get(t.kind, 0.0)) + m
+		if spur.has(r): out.shore_spurs += m
+	for key: String in out: out[key] = roundi(out[key])
+	return out
+
+
+## wiggle — окна по 100 м (25 станций, шаг 5): длина / хорда; доля окон с отношением ≥ 1,05 и медиана суммы
+## поворотов хорд по 4 м на 100 м, градусов. По видам пути.
+static func _wiggle(w: WorldData, routes: Array) -> Dictionary:
+	var acc := {}
+	for r: int in routes:
+		var t: Dictionary = w.trails[r]
+		var st := _stations(t.pts)
+		if st.size() <= WIGGLE_WIN: continue
+		var a: Dictionary = acc.get_or_add(String(t.kind), {windows = 0, wavy = 0, turns = []})
+		for s in range(0, st.size() - WIGGLE_WIN, WIGGLE_STEP):
+			var length := 0.0
+			var turn := 0.0
+			for k in range(s + 1, s + WIGGLE_WIN + 1):
+				length += st[k].distance_to(st[k - 1])
+			for k in range(s + 4, s + WIGGLE_WIN + 1, 4):
+				if k + 4 > s + WIGGLE_WIN: break
+				var d0 := st[k] - st[k - 4]
+				var d1 := st[k + 4] - st[k]
+				if d0.length() > 0.01 and d1.length() > 0.01: turn += absf(rad_to_deg(d0.angle_to(d1)))
+			var chord := st[s + WIGGLE_WIN].distance_to(st[s])
+			a.windows += 1
+			if length >= chord * WIGGLE_RATIO: a.wavy += 1
+			a.turns.append(turn * 100.0 / (WIGGLE_WIN * SAMPLE * GameConfig.TILE))
+	var out := {}
+	for kind: String in acc:
+		var a: Dictionary = acc[kind]
+		a.turns.sort()
+		out[kind] = {windows = a.windows, wavy_share = snappedf(float(a.wavy) / maxi(1, a.windows), 0.001),
+			turn_per_100m = snappedf(a.turns[a.turns.size() / 2], 0.1)}
+	return out
+
+
+static func _stations(pts: Array) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var carry := 0.0
+	for j in range(1, pts.size()):
+		var a := Vector2(pts[j - 1].x, pts[j - 1].y)
+		var b := Vector2(pts[j].x, pts[j].y)
+		var seg := a.distance_to(b)
+		var s := carry
+		while s < seg:
+			out.append(a.lerp(b, s / seg))
+			s += SAMPLE
+		carry = s - seg
+	if not pts.is_empty(): out.append(Vector2(pts[-1].x, pts[-1].y))
+	return out
+
+
+## Вторые пути по видам (generation_profile.second_ways): записей w.trails
+static func _second_way_counts(w: WorldData) -> Dictionary:
+	var out := {shortcut = 0, alternative = 0, shore = 0, view = 0, bridge_gap = 0}
+	for note: Array in w.generation_profile.get("second_ways", []):
+		out[note[0]] = int(out.get(note[0], 0)) + (note[1] as Array).size()
+	var mountain := 0
+	for t: Dictionary in w.trails:
+		if t.kind == "mountain" and not t.has("ride"): mountain += 1
+	out.mountain = mountain
+	return out
+
+
+static func _ride_counts(w: WorldData) -> Dictionary:
+	var stats: Dictionary = w.generation_profile.get("rides", {})
+	return {accepted = stats.get("accepted", 0), climbs = stats.get("climbs", 0), styles = stats.get("styles", {})}
 
 
 static func _requested() -> Dictionary:
@@ -393,7 +541,7 @@ static func _near_structure(structures: Array, p: Vector2, r: float) -> bool:
 ## Картинка полотна: дороги белые, тропы светло-серые, горные коричневые;
 ## красные точки — совпадающие оси, жёлтые — параллельные полотна, малиновые — углы (corners, с 15.11; раньше изломы
 ## kinks), голубые — двойные пересечения,
-## зелёные — развороты > 110° на 16 м.
+## зелёные — развороты > 110° на 16 м, оранжевые квадраты — тесные пары узлов (crowded_nodes, с 21.11).
 static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 	var S := 2
 	var img := Image.create(w.W * S, w.H * S, false, Image.FORMAT_RGB8)
@@ -421,6 +569,7 @@ static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 	for p: Vector2 in m.get("corner_spots", m.kink_spots): _dot(img, p * S, Color(1, 0.2, 0.9), 1)
 	for p: Vector2 in m.get("hairpin_spots", []): _dot(img, p * S, Color(0.1, 1.0, 0.3), 2)
 	for p: Vector2 in m.double_spots: _dot(img, p * S, Color(0.2, 0.9, 1), 2)
+	for p: Vector2 in m.get("crowded_spots", []): _dot(img, p * S, Color(1.0, 0.5, 0.0), 3)
 	DirAccess.make_dir_recursive_absolute(file.get_base_dir())
 	img.save_png(file)
 
@@ -436,7 +585,7 @@ static func summary(m: Dictionary) -> Dictionary:
 	for key: String in ["seed", "grid_cells", "requested", "route_usage", "decisions"]:
 		metadata[key] = out[key]
 		out.erase(key)
-	for key: String in ["spots", "kink_spots", "double_spots", "hairpin_spots", "corner_spots"]:
+	for key: String in ["spots", "kink_spots", "double_spots", "hairpin_spots", "corner_spots", "crowded_spots"]:
 		out.erase(key)
 	metadata.physical = out
 	return metadata

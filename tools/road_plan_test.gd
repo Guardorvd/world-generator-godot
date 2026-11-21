@@ -8,18 +8,22 @@ extends SceneTree
 ## --save пишет отпечаток (было), --compare сверяет с ним (стало): тот же мир — рефакторинг, разный — изменение маршрутов.
 ## --metrics-json <файл> сохраняет сравнимый отчёт о готовой сети; --metrics также пишет картинку.
 ## --forks — где отходят необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты): у поселения или на перегоне.
+## --v2 — дорожная сеть V2 (StageTrails.network_v2, docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md); --nav — навигация игры
+## (RoadNavigation на готовой поверхности) между каждой парой поселений: сколько пар, неполных маршрутов и рёбер
+## с разрывом высоты > 0,5 м.
 ## Первый запуск на этом ПК ~1,5 мин (география), следующие ~1 мин.
 
 const SelfTest := preload("res://tools/selftest.gd")
 const Metrics := preload("res://tools/road_network_metrics.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const Navigation := preload("res://scripts/game/road_navigation.gd")
 const SIZE := 512
 const DIR := "user://road_plan_test"
 const KEYS := ["stage_ms", "main_roads_ms", "secondary_roads_ms", "mountain_trails_ms", "settlement_attempts",
 	"settlement_rejected", "road_failures", "expanded", "prefetch_expanded", "budget_stops", "no_path", "skipped",
 	"reach_calls", "reach_rejects", "reach_visited", "checkpoints", "checkpoint_mb", "restores", "road_windows", "no_bridge_cells", "cost_ms", "route_heightfield_ms", "finder_setup_ms",
 	"animal_trails_ms", "corridor_road_ms", "corridor_trail_ms", "corridor_mountain_ms", "layout_ms", "native_ms", "call_ms", "calls",
-	"parts_ms"]
+	"parts_ms", "network_v2"]
 
 
 func _initialize() -> void:
@@ -73,6 +77,9 @@ func _initialize() -> void:
 	if not line_arg.is_empty():
 		StageTrails.routing_overrides.line_relax = {road = float(line_arg.get_slice(",", 0)), trail = float(line_arg.get_slice(",", 1)), mountain = float(line_arg.get_slice(",", 2))}
 		print("линия: срезаемый бугор ", StageTrails.routing_overrides.line_relax)
+	if "--v2" in args:
+		StageTrails.network_v2 = true
+		print("дорожная сеть V2")
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true
@@ -208,6 +215,9 @@ func _initialize() -> void:
 	if "--landmarks" in args:
 		if "--landmarks-old" in args: _landmarks(w, final, true)
 		_landmarks(w, final, false)
+	# --nav: маршруты навигации игры между поселениями на готовой поверхности
+	if "--nav" in args:
+		fails += _nav(w, final)
 	# --forks: где необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты) отходят от сети
 	if "--forks" in args:
 		_forks(w)
@@ -375,6 +385,36 @@ func _forks(w: WorldData) -> void:
 		close, spacing[spacing.size() / 2] if not spacing.is_empty() else 0.0])
 
 
+## 21.11.2026 (план V2, фаза 0): навигация игры (RoadNavigation.build на готовой поверхности final, как в игре)
+## между каждой парой поселений одной связной группы. Печать: пар, неполных (complete == false), рёбер графа,
+## отброшенных из-за разрыва высоты > 0,5 м. Неполный маршрут — отказ стенда.
+func _nav(w: WorldData, final: Heightfield) -> int:
+	var started := Time.get_ticks_msec()
+	var nav := Navigation.new()
+	nav.build(w, final)
+	var graph: Dictionary = Navigation.Topology.compile(w, func() -> bool: return false)
+	var gaps := 0
+	var seen := {}
+	for edge: Dictionary in graph.get("edges", []):
+		var key := Vector2i(mini(edge.from, edge.to), maxi(edge.from, edge.to))
+		if seen.has(key) or not nav.points.has(edge.from) or not nav.points.has(edge.to): continue
+		seen[key] = true
+		if not nav._edges.has(key): gaps += 1
+	var pairs := 0
+	var broken: Array = []
+	var st := w.settlements
+	for a in st.size():
+		for b in range(a + 1, st.size()):
+			pairs += 1
+			var from := Vector2(st[a].i % w.W + 0.5, st[a].i / w.W + 0.5) * GameConfig.TILE
+			var to := Vector2(st[b].i % w.W + 0.5, st[b].i / w.W + 0.5) * GameConfig.TILE
+			nav.route_to(from, to)
+			if not nav.complete: broken.append("%d-%d" % [a, b])
+	print("NAV пар %d, неполных %d %s, рёбер с разрывом > 0,5 м %d из %d (%d мс)" % [pairs, broken.size(),
+		str(broken.slice(0, 12)), gaps, seen.size(), Time.get_ticks_msec() - started])
+	return broken.size()
+
+
 ## Ориентиры вдоль дорог: число по видам, на км дорог, туров на гребне (выше обоих концов участка на 8 м).
 ## old — прежний SettlementsBuilder._add_road_landmarks из копии .godot/landmarks_old/settlements_builder_old.gd
 ## (git show <коммит>:scripts/render/settlements_builder.gd без строки class_name) через счётчик вместо MeshBatch.
@@ -405,7 +445,7 @@ func _landmarks(w: WorldData, final: Heightfield, old: bool) -> void:
 
 class LandmarkCounter extends MeshBatch:
 	var marks: Array = []
-	func add_detail(mesh: Mesh, xform: Transform3D, _color: Color, _mat: Material) -> void:
+	func add_detail(mesh: Mesh, xform: Transform3D, _color: Color, _mat: Material, _landmark := false) -> void:
 		marks.append([mesh, xform])
 
 

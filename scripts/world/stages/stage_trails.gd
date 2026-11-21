@@ -62,6 +62,10 @@ const CROSS_GAP := 8.0      # 10.4: вода ближе стольких кле�
 const Section := preload("res://scripts/world/road_section.gd")
 ## Стенды могут на время запуска заменить таблицы turn_costs, bend_costs, straighten и line_relax.
 static var routing_overrides := {}
+## 21.11.2026: дорожная сеть V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md) — петли и ответвления после остова V1.
+## Выключено по умолчанию; при включении меняется ключ слоя places (RoadNetworkV2.cache_suffix).
+static var network_v2 := false
+const RoadNetworkV2 := preload("res://scripts/world/road_network_v2.gd")
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
 ## В пределах своего класса крутизна дополнительно оплачивается штрафом climb.
