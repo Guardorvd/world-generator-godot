@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 7
+const VERSION := 8
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
@@ -51,7 +51,7 @@ static func cache_suffix(enabled: bool) -> String:
 	keys.sort()
 	var digest := RoadTuning._digest_values([keys.map(func(key: String) -> Array: return [key, values[key]]),
 		RoadTuning.Routing.KINDS.map(func(kind: String) -> Array: return [routing.broad_spacing_m[kind], routing.broad_radius_m[kind],
-			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled])
+			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled, routing.ride_search_reserve])
 	return "|net=v2.%d.%s" % [VERSION, digest]
 
 
@@ -281,8 +281,9 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 		var cells: PackedInt32Array = out.paths[k]
 		var pair: Array = out.pairs[k]
 		StageTrails._note_way(w, out.what[k], _publish(w, out, cells, "trail", road_cost, state.on_axis, surface))
-		paths.append([pair[0], pair[1], cells, false, Grid.hypot(w.settlements[pair[0]].x - w.settlements[pair[1]].x,
-			w.settlements[pair[0]].y - w.settlements[pair[1]].y)])
+		if not pair.is_empty():
+			paths.append([pair[0], pair[1], cells, false, Grid.hypot(w.settlements[pair[0]].x - w.settlements[pair[1]].x,
+				w.settlements[pair[0]].y - w.settlements[pair[1]].y)])
 	_profile(w, "loops", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
 
 

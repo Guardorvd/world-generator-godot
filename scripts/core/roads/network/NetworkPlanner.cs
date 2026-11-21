@@ -596,7 +596,19 @@ public sealed class NetworkPlanner
 			string why = TryLoop(a, b, dNet, dGeo, out int[] path);
 			Stats.Log.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "петля {0}-{1}: D_net {2:F0}, D_geo {3:F0}, путь {4:F0} кл — {5}",
 				a, b, dNet, dGeo, path.Length > 0 ? SmoothLength(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") || why.Contains("parallel") ? LastNode : "") : "принята"));
-			if (why.Length > 0) { Stats.Reject(why, path.Length > 0 ? _t.Length(path) * _p.Tile : null); continue; }
+			if (why.Length > 0)
+			{
+				Stats.Reject(why, path.Length > 0 ? _t.Length(path) * _p.Tile : null);
+				if (why is not ("loop_exit_loop" or "loop_node_exit" or "loop_node_exit_same" or "loop_node_crowded")) continue;
+				int[] connector = InlandConnector(path);
+				if (connector.Length == 0) continue;
+				Accept(connector);
+				outPaths.Add(connector);
+				outWhat.Add("connector");
+				outPairs.Add(new Godot.Collections.Array());
+				Stats.Count("reused_loop_connectors");
+				continue;
+			}
 			Accept(path);
 			outPaths.Add(path);
 			outWhat.Add(SmoothLength(path) < dNet ? "shortcut" : "alternative");
@@ -605,6 +617,29 @@ public sealed class NetworkPlanner
 		}
 		Stats.Time("total", total);
 		return Result(outPaths, outWhat, outPairs);
+	}
+
+	/// <summary>Reuse the dry interior of a rejected loop only when both ends already meet the network.</summary>
+	private int[] InlandConnector(int[] path)
+	{
+		int[] best = Array.Empty<int>();
+		double longest = SpurMinLength;
+		for (int start = 0; start + 2 < path.Length; start++)
+		{
+			if (_t.Owner[path[start]] < 0 || _t.Owner[path[start + 1]] >= 0) continue;
+			int end = start + 2;
+			while (end < path.Length && _t.Owner[path[end]] < 0) end++;
+			if (end == path.Length) break;
+			var part = path[start..(end + 1)];
+			start = end - 1;
+			double length = _t.Length(part);
+			if (length <= longest || _t.Dist(part[0], part[^1]) < SpurMinLength || !Validator.Ford(part) || FollowsShore(part)) continue;
+			if (!AddsNetwork(part) || Graph.DoubleCross(Polyline(part, 0, part.Length - 1), 20.0)) continue;
+			if (NodeRules(AttachmentsAt(part), null, part).Length > 0) continue;
+			best = part;
+			longest = length;
+		}
+		return best;
 	}
 
 	private double NetDistance(int a, int b)

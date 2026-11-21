@@ -39,6 +39,8 @@ const KINDS := ["road", "trail", "mountain"]
 @export var broad_radius_m := {road = 60.0, trail = 30.0, mountain = 15.0}
 @export var broad_offset_m := {road = 15.0, trail = 10.0, mountain = 6.0}
 @export var broad_straight_m := 0.35
+## Дополнительные поиски V2, чтобы проверить запасные финиши после основных.
+@export var ride_search_reserve := 0.40
 ## Допуск срезания лесенки сетки в клетках.
 @export var straighten: Dictionary
 ## Множитель допуска на локальный бугор при пробе хорды или дуги.

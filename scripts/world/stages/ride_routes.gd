@@ -126,6 +126,8 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	stats.virtual_tops = virtual.map(func(v: Dictionary) -> Array: return [v.x, v.y, roundi(v.rise)])
 	var pairs := _pairs(w, anchors, virtual, stats)
 	var budget := roundi(SEARCHES * w.scale)
+	if StageTrails.network_v2:
+		budget += roundi(budget * RoadTuning.current().routing.ride_search_reserve)
 	var candidates: Array = []
 	var cost_version := finder.next_cost_version()
 	var wood_version := finder.next_cost_version()
@@ -381,6 +383,7 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 	stats.tops = tops.size()
 	tops.append_array(virtual)
 	var pairs: Array = []
+	var reserve: Array = []
 	for s: Dictionary in tops:
 		var ends: Array = []
 		for t: Dictionary in anchors:
@@ -404,10 +407,32 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 			# Вершина горной тропы — готовый подъём к спуску: небольшой приоритет
 			pairs.append([s, t, e[1] * (1.25 if s.mountain else 1.0)])
 			if taken.size() >= ENDS_PER_TOP: break
+		if StageTrails.network_v2:
+			_add_reserve_ends(s, ends, taken, reserve)
 	_traverse_pairs(w, anchors, pairs)
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
+	reserve.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
+	pairs.append_array(reserve)
+	if StageTrails.network_v2: stats.density.reserve_pairs = reserve.size()
 	stats.pairs = pairs.size()
 	return pairs
+
+
+static func _add_reserve_ends(start: Dictionary, ends: Array, chosen: Array, reserve: Array) -> void:
+	var used := {}
+	for primary: Array in chosen: used[primary[0].i] = true
+	for primary: Array in chosen:
+		var target: Dictionary = primary[0]
+		var direction := Vector2(target.x - start.x, target.y - start.y).normalized()
+		for entry: Array in ends:
+			var alternate: Dictionary = entry[0]
+			if used.has(alternate.i): continue
+			if Grid.hypot(alternate.x - target.x, alternate.y - target.y) < StageTrails.RoadNetworkV2.RIDE_NODE_SEP: continue
+			var offset := Vector2(alternate.x - start.x, alternate.y - start.y)
+			if offset.dot(direction) / entry[2] < END_ANGLE: continue
+			used[alternate.i] = true
+			reserve.append([start, alternate, entry[1] * (1.25 if start.mountain else 1.0)])
+			break
 
 
 ## Пары траверса (четвёртый элемент — вершина): начало — опорная точка горной тропы, вершина w.peaks в TRAVERSE_R выше
