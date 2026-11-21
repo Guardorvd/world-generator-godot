@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_refresh()
 	_repeat()
 	_line_port()
+	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
 
@@ -754,6 +755,18 @@ func _line_world(bumpy: bool) -> Array:
 				for k in gd.size():
 					worst = maxf(worst, maxf(absf(gd[k].x - cs[k].x), maxf(absf(gd[k].y - cs[k].y), absf(gd[k].w - cs[k].w))))
 	return [cases, mismatch, worst, fallbacks]
+
+
+func _flag_check() -> void:
+	var tuning := RoadTuning.current()
+	var def_flag := StageTrails.network_v2
+	var s_off: String = WorldCache._road_layer_suffixes(tuning, false).places
+	StageTrails.network_v2 = true
+	var s_on: String = WorldCache._road_layer_suffixes(tuning, false).places
+	StageTrails.network_v2 = def_flag
+	var expected := V2.cache_suffix(true)
+	check(not def_flag and s_off != s_on and s_on.contains(expected),
+		"флаг --roads-v2: по умолчанию выключен (%s), с флагом меняет ключ кэша (%s -> %s)" % [def_flag, s_off, s_on])
 
 
 class V2Flags:
