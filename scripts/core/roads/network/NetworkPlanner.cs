@@ -474,6 +474,9 @@ public sealed class NetworkPlanner
 		foreach (var (from, to) in pieces)
 		{
 			var pts = Polyline(p, from, to);
+			// примыкание ближе JoinSame к развилке — в саму развилку (общий узел), как при публикации (StageTrails._join_point)
+			SnapToJunction(pts, 0);
+			SnapToJunction(pts, pts.Length / 2 - 1);
 			int a = Graph.Attach(pts[0], pts[1], 1.5);
 			int b = Graph.Attach(pts[^2], pts[^1], 1.5);
 			if (b < 0)
@@ -499,6 +502,25 @@ public sealed class NetworkPlanner
 		Stats.Time("accept", t0);
 		// окно — весь путь: у его клеток сменилась цена «протоптанности»; источники Near — новые клетки сети
 		RefreshLocal(fresh, junctions, p);
+	}
+
+	/// <summary>Близость к развилке, с которой примыкание идёт в саму развилку (клетки): как правило узлов (≤ 1,5).</summary>
+	public const double JoinSame = 1.5;
+
+	/// <summary>Точка k ломаной pts ближе JoinSame к развилке графа — заменяется точкой развилки.</summary>
+	private void SnapToJunction(double[] pts, int k)
+	{
+		double x = pts[2 * k], y = pts[2 * k + 1], bd = JoinSame;
+		int best = -1;
+		for (int n = 0; n < Graph.NX.Count; n++)
+		{
+			if (!Graph.Junction(n)) continue;
+			double d = RoadGraph.Hypot(Graph.NX[n] - x, Graph.NY[n] - y);
+			if (d <= bd) { bd = d; best = n; }
+		}
+		if (best < 0) return;
+		pts[2 * k] = Graph.NX[best];
+		pts[2 * k + 1] = Graph.NY[best];
 	}
 
 	/// <summary>Для стенда: принять путь и вернуть (Near, NodeDist) после локального обновления.</summary>
@@ -956,7 +978,10 @@ public sealed class NetworkPlanner
 				for (int k = 0; k < count; k++) if (Fields.ShoreDist[path[k]] <= _p.ShoreBand) wet++;
 				if (count > 0 && (double)wet / count > _p.ShoreShare) return what + "_along_shore";
 			}
-			string node = SpurNodeRules(AttachmentsAt(path), source, exitFree);
+			var touches = AttachmentsAt(path);
+			// тупиковое ответвление к берегу или смотровой: одна точка примыкания — точка съезда
+			if (kind != 2 && (touches.Count != 1 || touches[0].Cell != source)) return what + "_spur_touch";
+			string node = SpurNodeRules(touches, source, exitFree);
 			if (node.Length > 0) return what + "_" + node;
 			return "";
 		}
@@ -1019,6 +1044,10 @@ public sealed class NetworkPlanner
 		Stats.Count("window_retries", Router.Retries);
 		var outPaths = new Godot.Collections.Array();
 		foreach (var p in paths) outPaths.Add(p);
-		return new Godot.Collections.Dictionary { ["paths"] = outPaths, ["what"] = what, ["pairs"] = pairs, ["network_v2"] = Stats.ToDictionary() };
+		var junctions = new List<double>();
+		for (int n = 0; n < Graph.NX.Count; n++)
+			if (Graph.Junction(n)) { junctions.Add(Graph.NX[n]); junctions.Add(Graph.NY[n]); }
+		return new Godot.Collections.Dictionary { ["paths"] = outPaths, ["what"] = what, ["pairs"] = pairs, ["junctions"] = junctions.ToArray(),
+			["network_v2"] = Stats.ToDictionary() };
 	}
 }

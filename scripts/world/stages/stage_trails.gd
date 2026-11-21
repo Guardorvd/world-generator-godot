@@ -545,6 +545,10 @@ static func _join_point(w: WorldData, owner: PackedInt32Array, cell: int, anchor
 	if hosts.is_empty():
 		return {}
 	var c := Vector2(cx + 0.5, cy + 0.5)
+	# Сеть V2 (21.11, шаг 5): примыкание ближе 1,5 клетки к развилке — в саму развилку, общий узел
+	if not v2_junctions.is_empty():
+		var shared := _v2_junction(w, c, hosts)
+		if not shared.is_empty(): return shared
 	var best := {}
 	var best_d := JOIN_R if anchored or owner[cell] >= 0 else 1.0
 	for host: int in hosts:
@@ -554,6 +558,31 @@ static func _join_point(w: WorldData, owner: PackedInt32Array, cell: int, anchor
 		if d <= best_d:
 			best_d = d
 			best = {host = host, point = q, tangent = tangent[0]}
+	return best
+
+
+## Развилки сети для публикации путей V2 (RoadNetworkV2 заполняет на время публикации): ячейка (Vector2i) → точки
+## концов участков, лежащих на оси другого участка. Пусто — правило V1 без изменений.
+static var v2_junctions := {}
+
+
+## Развилка ближе RoadNetworkV2.JOIN_SAME к центру клетки c на оси одного из hosts: {host, point, tangent} или пусто.
+static func _v2_junction(w: WorldData, c: Vector2, hosts: Dictionary) -> Dictionary:
+	var best := {}
+	var best_d: float = RoadNetworkV2.JOIN_SAME
+	var keys := hosts.keys()
+	keys.sort()
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			for q: Vector2 in v2_junctions.get(Vector2i(floori(c.x) + dx, floori(c.y) + dy), []):
+				var d := c.distance_to(q)
+				if d > best_d: continue
+				for host: int in keys:
+					var tangent: Array[Vector2] = [Vector2.ZERO]
+					if _nearest_on(w.trails[host].pts, q, 2.0, tangent).distance_to(q) < 0.05:
+						best_d = d
+						best = {host = host, point = q, tangent = tangent[0]}
+						break
 	return best
 
 

@@ -31,7 +31,8 @@ const SHORE_SHARE := 0.25   # береговое ответвление: дол�
 const EXIT_ANGLE := 45.0    # петля: новый выезд своего поселения отличается от прежних выездов не меньше (градусы)
 const EXIT_CHORD := 10.0    # клеток: хорда направления выезда (8–12)
 const SPUR_NET_FLOOR := 2.0 # ответвление: клетка сети в окне не дешевле этого до множителя EXIT_MUL (как пол 2,0 в ride_routes.gd)
-const MOUNTAIN_REACH := 1.5 # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
+const MOUNTAIN_REACH := 1.5
+const JOIN_SAME := 1.5      # примыкание ближе этого (клеток) к развилке — в саму развилку (общий узел) # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
 
 
 ## Подмена чисел V2 на время запуска стенда (road_plan_test -- --v2-param ключ=значение,…); в кэш игры не попадает.
@@ -166,7 +167,7 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 	for k in out.paths.size():
 		var cells: PackedInt32Array = out.paths[k]
 		var pair: Array = out.pairs[k]
-		StageTrails._note_way(w, out.what[k], StageTrails._add_trail(w, cells, "trail", road_cost, state.on_axis, surface))
+		StageTrails._note_way(w, out.what[k], _publish(w, out, cells, "trail", road_cost, state.on_axis, surface))
 		paths.append([pair[0], pair[1], cells, false, Grid.hypot(w.settlements[pair[0]].x - w.settlements[pair[1]].x,
 			w.settlements[pair[0]].y - w.settlements[pair[1]].y)])
 	_profile(w, "loops", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
@@ -263,9 +264,9 @@ static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 		var cells: PackedInt32Array = out.paths[k]
 		var what: String = out.what[k]
 		if what == "mountain":
-			StageTrails._note_way(w, what, StageTrails._add_trail(w, cells, "mountain", PackedFloat32Array(), on_axis, surface))
+			StageTrails._note_way(w, what, _publish(w, out, cells, "mountain", PackedFloat32Array(), on_axis, surface))
 		else:
-			StageTrails._note_way(w, what, StageTrails._add_trail(w, cells, "trail", road_cost, on_axis, surface))
+			StageTrails._note_way(w, what, _publish(w, out, cells, "trail", road_cost, on_axis, surface))
 	_profile(w, "mountain" if mountain else "spurs", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
 
 
@@ -297,3 +298,26 @@ static func ride_nodes_spaced(w: WorldData, nodes: PackedInt32Array, chosen: Arr
 				var d := Vector2(a % w.W - b % w.W, a / w.W - b / w.W).length()
 				if d > 1.5 and d < NODE_SEP: return false
 	return true
+
+
+## Развилки сети для StageTrails._join_point на время публикации путей V2: развилки графа ядра (концы участков на оси
+## другого участка, точки примыкания принятых путей), по ячейкам. Точка, не лежащая на оси хозяина, при публикации не
+## используется (StageTrails._v2_junction).
+static func junctions(out: Dictionary) -> Dictionary:
+	var result := {}
+	var flat: PackedFloat64Array = out.get("junctions", PackedFloat64Array())
+	for k in range(0, flat.size() - 1, 2):
+		var p := Vector2(flat[k], flat[k + 1])
+		var list: Array = result.get_or_add(Vector2i(floori(p.x), floori(p.y)), [])
+		list.append(p)
+	return result
+
+
+## Публикация пути V2 общим конвейером с общими узлами у развилок (StageTrails.v2_junctions на время вызова).
+static func _publish(w: WorldData, out: Dictionary, cells: PackedInt32Array, kind: String, road_cost: PackedFloat32Array,
+		on_axis: PackedByteArray, surface: Heightfield) -> Array:
+	if not out.has("_junction_cells"): out._junction_cells = junctions(out)
+	StageTrails.v2_junctions = out._junction_cells
+	var added := StageTrails._add_trail(w, cells, kind, road_cost, on_axis, surface)
+	StageTrails.v2_junctions = {}
+	return added

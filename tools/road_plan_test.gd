@@ -466,8 +466,14 @@ func _nav(w: WorldData, final: Heightfield) -> int:
 			var kind := "?"
 			for k in w.trails.size():
 				if String(w.trails[k].get("road_id", "")) == String(edge.section): kind = "%d %s%s" % [k, w.trails[k].kind, " ride" if w.trails[k].has("ride") else ""]
-			if gaps <= 5: print("  разрыв: (%.1f,%.1f)→(%.1f,%.1f) кл, уровни %.2f / %.2f м, по ребру %.2f м, участок %s" % [pa.x / GameConfig.TILE,
-				pa.y / GameConfig.TILE, pb.x / GameConfig.TILE, pb.y / GameConfig.TILE, nav.levels[edge.from], nav.levels[edge.to], end, kind])
+			# сухой овраг метровой сетки (road_gaps.gd) поперёк тропы — намеренная ступень с объездом
+			var gully := false
+			if final.road_refinement != null:
+				for g: Dictionary in final.road_refinement.gaps:
+					if (g.area as Rect2).grow(2.0).has_point(pa): gully = true
+			if gaps <= 5: print("  разрыв: (%.1f,%.1f)→(%.1f,%.1f) кл, уровни %.2f / %.2f м, по ребру %.2f м, участок %s%s" % [pa.x / GameConfig.TILE,
+				pa.y / GameConfig.TILE, pb.x / GameConfig.TILE, pb.y / GameConfig.TILE, nav.levels[edge.from], nav.levels[edge.to], end, kind,
+				", в сухом овраге (road_gaps)" if gully else ""])
 	var pairs := 0
 	var broken: Array = []
 	var st := w.settlements

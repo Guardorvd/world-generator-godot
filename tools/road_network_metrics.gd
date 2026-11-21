@@ -54,6 +54,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	# индекс отрезков и концов
 	var bins := {}
 	var ends := {}
+	var ends_plain := {} # концы участков без природных маршрутов: parallel_without_rides_m от них не зависит
 	var length_by_kind := {}
 	for r: int in routes:
 		var pts: Array = w.trails[r].pts
@@ -74,6 +75,9 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 			var key := Vector2i(floori(p.x / BIN), floori(p.y / BIN))
 			if not ends.has(key): ends[key] = []
 			ends[key].append(Vector2(p.x, p.y))
+			if not w.trails[r].has("ride"):
+				if not ends_plain.has(key): ends_plain[key] = []
+				ends_plain[key].append(Vector2(p.x, p.y))
 	var structures: Array = []
 	for s: EntityRecord in w.bridges + w.tunnels:
 		structures.append([Vector2(s.a % w.W + 0.5, s.a / w.W + 0.5), Vector2(s.b % w.W + 0.5, s.b / w.W + 0.5)])
@@ -188,6 +192,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 							acc[3] = gr
 							grade_at[t.kind] = [r, snappedf(mid.x, 0.1), snappedf(mid.y, 0.1), _near_end(ends, mid, 4.0)]
 			var near_node := _near_end(ends, p, NODE_R)
+			var near_plain := _near_end(ends_plain, p, NODE_R)
 			var best := {}
 			for by in range(floori((p.y - NEAR_MAX) / BIN), floori((p.y + NEAR_MAX) / BIN) + 1):
 				for bx in range(floori((p.x - NEAR_MAX) / BIN), floori((p.x + NEAR_MAX) / BIN) + 1):
@@ -206,9 +211,10 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 					if not t.has("ride") and not w.trails[other].has("ride"): overlap_plain += SAMPLE * GameConfig.TILE * 0.5
 					_tally(pairs, r, other, "overlap", SAMPLE * GameConfig.TILE * 0.5)
 					if spots.size() < 400 and n % 6 == 0: spots.append([p, "overlap"])
-				elif d >= NEAR_MIN and not near_node:
+				elif d >= NEAR_MIN and not near_plain and not t.has("ride") and not w.trails[other].has("ride"):
+					parallel_plain += SAMPLE * GameConfig.TILE * 0.5
+				if d >= NEAR_MIN and not near_node:
 					parallel += SAMPLE * GameConfig.TILE * 0.5
-					if not t.has("ride") and not w.trails[other].has("ride"): parallel_plain += SAMPLE * GameConfig.TILE * 0.5
 					_tally(pairs, r, other, "parallel", SAMPLE * GameConfig.TILE * 0.5)
 					if spots.size() < 400 and n % 6 == 0: spots.append([p, "parallel"])
 	var double_cross := 0
