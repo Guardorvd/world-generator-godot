@@ -1,0 +1,664 @@
+using System;
+using System.Collections.Generic;
+using Godot;
+
+namespace Roads.Network;
+
+/// <summary>Планировщик V2 (план V2, 3.4–3.6): петли по t-спаннеру и ответвления (берег, смотровые, вершины) поверх
+/// опубликованной сети V1. Каждое принятое ребро сразу становится частью своей копии сети (Owner, Mask, граф, цена),
+/// следующие кандидаты видят его. Публикует GDScript (StageTrails._add_trail) в порядке принятия.
+/// Правила V1, перенесённые сюда портом (с источником): _parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core,
+/// _new_ground; сверка с GDScript — стенд road_v2_test.</summary>
+public sealed class NetworkPlanner
+{
+	private readonly TerrainSnapshot _t;
+	private readonly Params _p;
+	private readonly Godot.Collections.Dictionary _in;
+	public readonly NetStats Stats = new();
+	public readonly GeomorphologyFields Fields;
+	public readonly GeometryValidator Validator;
+	public readonly CorridorRouter Router;
+	public RoadGraph Graph;
+	public CoarseGraph Coarse;
+	public float[] Base = Array.Empty<float>();     // цена V2 с правилами узлов (дороже у узлов и поселений)
+	private float[] _scratch = Array.Empty<float>();
+	public float[] Near = Array.Empty<float>();     // клеток до сети (StageTrails._net_near)
+	public float[] NodeDist = Array.Empty<float>(); // клеток до узла сети (развилки, не поселения)
+	public float[] SettleDist = Array.Empty<float>();
+	private readonly int[] _settle;
+	private readonly byte[] _remote;
+	private int _virtual;
+
+	public NetworkPlanner(TerrainSnapshot t, Godot.Collections.Dictionary input)
+	{
+		_t = t;
+		_p = t.P;
+		_in = input;
+		Fields = new GeomorphologyFields(t);
+		Validator = new GeometryValidator(t);
+		Router = new CorridorRouter(t);
+		_settle = input.ContainsKey("settle") ? input["settle"].AsInt32Array() : Array.Empty<int>();
+		_remote = input.ContainsKey("remote") ? input["remote"].AsByteArray() : new byte[_settle.Length];
+		if (_remote.Length != _settle.Length) throw new ArgumentException("V2: remote не по числу поселений");
+		foreach (int s in _settle) if ((uint)s >= (uint)t.N) throw new ArgumentException("V2: клетка поселения вне карты");
+		_virtual = t.Sections;
+	}
+
+	// ---------------------------------------------------------------- подготовка
+
+	public void Prepare(bool ridge, bool coarse)
+	{
+		Fields.Build(ridge, Stats);
+		long t0 = NetStats.Now();
+		Graph = new RoadGraph(_p.NodeSame);
+		var settlePts = new double[_settle.Length * 2];
+		for (int k = 0; k < _settle.Length; k++) { settlePts[2 * k] = _t.X(_settle[k]); settlePts[2 * k + 1] = _t.Y(_settle[k]); }
+		Graph.Build(_in["sec_x"].AsFloat64Array(), _in["sec_y"].AsFloat64Array(), _in["sec_start"].AsInt32Array(), settlePts);
+		var src = new byte[_t.N];
+		foreach (int s in _settle) src[s] = 1;
+		SettleDist = _t.Router.DistanceField(_t.W, _t.H, src);
+		Refresh();
+		Stats.Time("graph", t0);
+		if (coarse)
+		{
+			t0 = NetStats.Now();
+			Coarse = new CoarseGraph(_t, Base, _p.TrailGrade);
+			Stats.Count("coarse_components", Coarse.Comps);
+			Stats.Time("coarse", t0);
+		}
+	}
+
+	/// <summary>Поля расстояний до сети и узлов и цена с правилами узлов — после каждого принятого ребра.</summary>
+	private void Refresh()
+	{
+		long t0 = NetStats.Now();
+		int N = _t.N, W = _t.W, H = _t.H;
+		var net = new byte[N];
+		for (int i = 0; i < N; i++) net[i] = (byte)(_t.Owner[i] >= 0 ? 1 : 0);
+		Near = _t.Router.DistanceField(W, H, net);
+		var nodes = new byte[N];
+		for (int n = 0; n < Graph.NX.Count; n++)
+			if (Graph.Junction(n))
+			{
+				int x = Math.Clamp((int)Math.Floor(Graph.NX[n]), 0, W - 1), y = Math.Clamp((int)Math.Floor(Graph.NY[n]), 0, H - 1);
+				nodes[y * W + x] = 1;
+			}
+		NodeDist = _t.Router.DistanceField(W, H, nodes);
+		if (Base.Length != N) { Base = new float[N]; _scratch = new float[N]; }
+		var raw = Fields.Raw;
+		for (int i = 0; i < N; i++)
+		{
+			float c = raw[i];
+			// Новая земля вплотную к сети у узла или поселения дороже: съезд там нарушил бы правила узлов (3.4)
+			if (_t.Owner[i] < 0 && float.IsFinite(c) && Near[i] <= 2.0f && (NodeDist[i] < _p.NodeSep || SettleDist[i] < _p.ExitR))
+				c = (float)(c * _p.ExitMul);
+			Base[i] = c;
+		}
+		Array.Copy(Base, _scratch, N);
+		Stats.Time("refresh", t0);
+	}
+
+	// ---------------------------------------------------------------- порты правил V1 (StageTrails)
+
+	/// <summary>Порт StageTrails._parallel_stats: (доля, самый длинный подряд участок) новых клеток пути ближе NEAR_NET
+	/// к сети на той же высоте (LEVEL_GAP).</summary>
+	public (double Share, int Longest) ParallelStats(int[] p)
+	{
+		int fresh = 0, side = 0, run = 0, longest = 0, W = _t.W, H = _t.H;
+		int r = (int)Math.Ceiling(_p.NearNet);
+		double scale = _p.HeightScale * _p.Tile;
+		for (int k = _p.NodeCells; k < p.Length - _p.NodeCells; k++)
+		{
+			int i = p[k];
+			if (_t.Owner[i] >= 0) { run = 0; continue; }
+			fresh++;
+			double level = double.PositiveInfinity;
+			if (Near[i] <= _p.NearNet)
+			{
+				int x = i % W, y = i / W;
+				double reach = Near[i] + 0.75;
+				for (int dy = -r; dy <= r; dy++)
+					for (int dx = -r; dx <= r; dx++)
+					{
+						int nx = x + dx, ny = y + dy;
+						if (nx < 0 || ny < 0 || nx >= W || ny >= H || dx * dx + dy * dy > reach * reach) continue;
+						int j = ny * W + nx;
+						if (_t.Owner[j] >= 0) level = Math.Min(level, Math.Abs((double)_t.Hw[j] - _t.Hw[i]) * scale);
+					}
+			}
+			if (level < _p.LevelGap) { side++; run++; longest = Math.Max(longest, run); }
+			else run = 0;
+		}
+		return (fresh > 0 ? (double)side / fresh : 0.0, longest);
+	}
+
+	/// <summary>Порт StageTrails._rejoins: путь дважды касается одного участка ближе REJOIN_GAP клеток.</summary>
+	public bool Rejoins(int[] p)
+	{
+		int n = p.Length, first = 0, last = n - 1;
+		while (first < n && _t.Owner[p[first]] >= 0) first++;
+		while (last >= 0 && _t.Owner[p[last]] >= 0) last--;
+		var seen = new Dictionary<int, int>();
+		int previous = -1;
+		for (int k = first; k <= last; k++)
+		{
+			int o = _t.Owner[p[k]];
+			if (o >= 0 && o != previous && seen.TryGetValue(o, out int at) && k - at < _p.RejoinGap) return true;
+			if (o != previous && previous >= 0) seen[previous] = k;
+			previous = o;
+		}
+		return false;
+	}
+
+	/// <summary>Порт StageTrails._adds_network.</summary>
+	public bool AddsNetwork(int[] p)
+	{
+		var (share, longest) = ParallelStats(p);
+		return share <= _p.ParallelShare && longest <= _p.ParallelRun && !Rejoins(p);
+	}
+
+	/// <summary>Порт StageTrails._exit_loop (по Mask = path_mask ≥ 2).</summary>
+	public bool ExitLoop(int[] p, bool reverse)
+	{
+		int n = p.Length;
+		if (n < 2) return false;
+		int o = reverse ? p[n - 1] : p[0];
+		int ox = o % _t.W, oy = o / _t.W, fresh = 0, touch = 0;
+		bool left = false;
+		for (int k = 0; k < n; k++)
+		{
+			int c = reverse ? p[n - 1 - k] : p[k];
+			int dx = c % _t.W - ox, dy = c / _t.W - oy;
+			if (dx * dx + dy * dy > _p.ExitR * _p.ExitR) break;
+			if (_t.Mask[c] >= 2)
+			{
+				fresh = 0;
+				if (left && ++touch > _p.CrossRun) return true;
+			}
+			else
+			{
+				touch = 0;
+				if (++fresh > _p.JitterRun) left = true;
+			}
+		}
+		return false;
+	}
+
+	/// <summary>Порт StageTrails._beyond_exits.</summary>
+	public int[] BeyondExits(int[] p)
+	{
+		int n = p.Length;
+		if (n < 2) return p;
+		double ax = p[0] % _t.W, ay = p[0] / _t.W, bx = p[n - 1] % _t.W, by = p[n - 1] / _t.W;
+		int first = 0, last = n - 1;
+		while (first < n - 1 && RoadGraph.Hypot(p[first] % _t.W - ax, p[first] / _t.W - ay) <= _p.ExitR) first++;
+		while (last > first && RoadGraph.Hypot(p[last] % _t.W - bx, p[last] / _t.W - by) <= _p.ExitR) last--;
+		return p[first..(last + 1)];
+	}
+
+	/// <summary>Порт StageTrails._core.</summary>
+	public int[] Core(int[] p)
+	{
+		int first = 0, last = p.Length - 1;
+		while (first < last && _t.Mask[p[first]] >= 2) first++;
+		while (last > first && _t.Mask[p[last]] >= 2) last--;
+		return p[first..(last + 1)];
+	}
+
+	/// <summary>Порт StageTrails._new_ground.</summary>
+	public bool NewGround(int[] p)
+	{
+		int fresh = 0;
+		foreach (int i in p) if (_t.Mask[i] < 2) fresh++;
+		return fresh > p.Length * 0.5;
+	}
+
+	// ---------------------------------------------------------------- узлы
+
+	/// <summary>Точки примыкания пути к сети: клетка сети у каждого перехода сеть ↔ новая земля. Короткое касание сети
+	/// (не длиннее CROSS_RUN) между новыми кусками — один узел-пересечение.</summary>
+	public List<(int Cell, bool Crossing)> Attachments(int[] p)
+	{
+		var outl = new List<(int, bool)>();
+		int n = p.Length, k = 0;
+		while (k < n)
+		{
+			if (_t.Owner[p[k]] < 0) { k++; continue; }
+			int s = k;
+			while (k < n && _t.Owner[p[k]] >= 0) k++;
+			int e = k - 1; // сеть p[s..e]
+			bool before = s > 0, after = k < n;
+			if (before && after && e - s + 1 <= _p.CrossRun) outl.Add((p[(s + e) / 2], true));
+			else
+			{
+				if (before) outl.Add((p[s], false));
+				if (after) outl.Add((p[e], false));
+			}
+		}
+		return outl;
+	}
+
+	private int NearestJunction(int cell)
+	{
+		double x = _t.X(cell), y = _t.Y(cell), bd = double.PositiveInfinity;
+		int best = -1;
+		for (int n = 0; n < Graph.NX.Count; n++)
+		{
+			if (!Graph.Junction(n)) continue;
+			double d = RoadGraph.Hypot(Graph.NX[n] - x, Graph.NY[n] - y);
+			if (d < bd) { bd = d; best = n; }
+		}
+		return best;
+	}
+
+	/// <summary>Правила узлов 3.4 для точки примыкания; пустая строка — годится, иначе причина отказа.</summary>
+	public string NodeRule(int cell, bool crossing)
+	{
+		if (SettleDist[cell] < _p.ExitR) return "node_exit";
+		if (_t.OnAxis[cell] != 0) return "node_structure";
+		double d = NodeDist[cell];
+		if (d < _p.NodeSep)
+		{
+			if (d > 1.5) return "node_crowded";
+			int j = NearestJunction(cell);
+			if (j >= 0 && Graph.Degree(j) + (crossing ? 2 : 1) > _p.MaxDegree) return "node_degree";
+		}
+		return "";
+	}
+
+	public string NodeRules(List<(int Cell, bool Crossing)> nodes)
+	{
+		foreach (var (c, x) in nodes)
+		{
+			string why = NodeRule(c, x);
+			if (why.Length > 0) return why;
+		}
+		for (int a = 0; a < nodes.Count; a++)
+			for (int b = a + 1; b < nodes.Count; b++)
+			{
+				double d = _t.Dist(nodes[a].Cell, nodes[b].Cell);
+				if (d > 1.5 && d < _p.NodeSep) return "node_pair";
+			}
+		return "";
+	}
+
+	// ---------------------------------------------------------------- принятие ребра
+
+	private double[] Polyline(int[] cells, int from, int to)
+	{
+		var pts = new double[(to - from + 1) * 2];
+		for (int k = from; k <= to; k++) { pts[2 * (k - from)] = _t.X(cells[k]); pts[2 * (k - from) + 1] = _t.Y(cells[k]); }
+		return pts;
+	}
+
+	private void Accept(int[] p)
+	{
+		long t0 = NetStats.Now();
+		int sec = _virtual++;
+		// Куски новой земли с клетками сети по краям — новые рёбра графа
+		int n = p.Length, k = 0;
+		var pieces = new List<(int From, int To)>();
+		while (k < n)
+		{
+			if (_t.Owner[p[k]] >= 0) { k++; continue; }
+			int s = k;
+			while (k < n && _t.Owner[p[k]] < 0) k++;
+			pieces.Add((Math.Max(0, s - 1), Math.Min(n - 1, k)));
+		}
+		foreach (var (from, to) in pieces)
+		{
+			var pts = Polyline(p, from, to);
+			int a = Graph.Attach(pts[0], pts[1], 1.5);
+			int b = Graph.Attach(pts[^2], pts[^1], 1.5);
+			if (b < 0)
+			{
+				// тупик (вершина, берег, смотровая): свой узел
+				Graph.NX.Add(pts[^2]); Graph.NY.Add(pts[^1]); Graph.NSettle.Add(false); Graph.NEdges.Add(new List<int>());
+				b = Graph.NX.Count - 1;
+			}
+			Graph.AddPath(a, b, pts, sec);
+		}
+		// Своя копия сети: клетки, маска и «протоптанность» (StageTrails._trodden: max(0,3; цена × human_reuse))
+		foreach (int c in p)
+		{
+			if (_t.Owner[c] < 0) _t.Owner[c] = sec;
+			if (_t.Mask[c] < 2) _t.Mask[c] = 2;
+			var raw = Fields.Raw;
+			if (float.IsFinite(raw[c])) raw[c] = (float)Math.Max(0.3, Math.Min(raw[c], _t.Cost[c]) * _p.HumanReuse);
+		}
+		Stats.Time("accept", t0);
+		Refresh();
+	}
+
+	// ---------------------------------------------------------------- петли
+
+	public Godot.Collections.Dictionary PlanLoops()
+	{
+		long total = NetStats.Now();
+		Prepare(false, true);
+		var pairs = _in.ContainsKey("pairs") ? _in["pairs"].AsInt32Array() : Array.Empty<int>();
+		int N = _settle.Length;
+		int limit = (int)Math.Ceiling(_p.LoopShare * N);
+		Stats.Count("loop_limit", limit);
+		var geo = new Dictionary<int, double[]>();
+		double[] Geo(int s)
+		{
+			if (!geo.TryGetValue(s, out var d)) geo[s] = d = Coarse.Dijkstra(Coarse.CompNear(_settle[s])).Dist;
+			return d;
+		}
+		var candidates = new List<(double Ratio, int A, int B, double DGeo)>();
+		long t0 = NetStats.Now();
+		for (int k = 0; k + 1 < pairs.Length; k += 2)
+		{
+			int a = pairs[k], b = pairs[k + 1];
+			if ((uint)a >= N || (uint)b >= N) throw new ArgumentException("V2: пара вне списка поселений");
+			Stats.Count("loop_pairs");
+			if (_remote[a] != 0 || _remote[b] != 0) { Stats.Reject("loop_remote"); continue; }
+			int cb = Coarse.CompNear(_settle[b]);
+			double dGeo = cb >= 0 ? Geo(a)[cb] : double.PositiveInfinity;
+			double dNet = NetDistance(a, b);
+			if (!double.IsFinite(dGeo)) { Stats.Reject("loop_no_geo"); continue; }
+			if (!double.IsFinite(dNet)) { Stats.Reject("loop_no_net"); continue; }
+			double ratio = dNet / Math.Max(dGeo, 1.0);
+			if (ratio <= _p.LoopRatio) { Stats.Reject("loop_ratio_ok"); continue; }
+			candidates.Add((ratio, a, b, dGeo));
+		}
+		candidates.Sort((x, y) => x.Ratio != y.Ratio ? y.Ratio.CompareTo(x.Ratio) : x.A != y.A ? x.A.CompareTo(y.A) : x.B.CompareTo(y.B));
+		Stats.Count("loop_candidates", candidates.Count);
+		Stats.Time("loop_select", t0);
+		var outPaths = new Godot.Collections.Array();
+		var outWhat = new Godot.Collections.Array();
+		var outPairs = new Godot.Collections.Array();
+		foreach (var (_, a, b, dGeo) in candidates)
+		{
+			if (outPaths.Count >= limit) { Stats.Reject("loop_limit"); continue; }
+			double dNet = NetDistance(a, b);
+			if (dNet / Math.Max(dGeo, 1.0) <= _p.LoopRatio) { Stats.Reject("loop_short_now"); continue; }
+			string why = TryLoop(a, b, dNet, dGeo, out int[] path);
+			if (why.Length > 0) { Stats.Reject(why); continue; }
+			Accept(path);
+			outPaths.Add(path);
+			outWhat.Add(_t.Length(path) < dNet ? "shortcut" : "alternative");
+			outPairs.Add(new Godot.Collections.Array { a, b });
+			Stats.Count("loops");
+		}
+		Stats.Time("total", total);
+		return Result(outPaths, outWhat, outPairs);
+	}
+
+	private double NetDistance(int a, int b)
+	{
+		int na = Graph.SettleNode[a], nb = Graph.SettleNode[b];
+		if (na < 0 || nb < 0) return double.PositiveInfinity;
+		return Graph.Dijkstra(na).Dist[nb];
+	}
+
+	/// <summary>Одна петля между поселениями a и b; пустая строка — принята (path), иначе причина отказа.</summary>
+	private string TryLoop(int a, int b, double dNet, double dGeo, out int[] path)
+	{
+		path = Array.Empty<int>();
+		int sa = _settle[a], sb = _settle[b];
+		// Старый путь по сети — коридор избегания (StageTrails._corridor/_avoiding), без кругов выездов (_open_ends)
+		var (_, via) = Graph.Dijkstra(Graph.SettleNode[a]);
+		var oldCells = new List<int>();
+		foreach (int e in Graph.PathEdges(via, Graph.SettleNode[b])) Rasterize(Graph.EPts[e], oldCells);
+		var touched = new List<int>();
+		int W = _t.W, H = _t.H, ar = (int)_p.AvoidR;
+		var avoid = new HashSet<int>();
+		foreach (int c in oldCells)
+			for (int y = Math.Max(0, c / W - ar); y < Math.Min(H, c / W + ar + 1); y++)
+				for (int x = Math.Max(0, c % W - ar); x < Math.Min(W, c % W + ar + 1); x++)
+					avoid.Add(y * W + x);
+		var sorted = new List<int>(avoid);
+		sorted.Sort();
+		foreach (int c in sorted)
+		{
+			if (_t.Dist(c, sa) <= _p.ExitR || _t.Dist(c, sb) <= _p.ExitR) continue;
+			if (float.IsFinite(_scratch[c])) { _scratch[c] = (float)(_scratch[c] * _p.AvoidCost); touched.Add(c); }
+		}
+		// Новая земля в кругах выездов дороже (StageTrails._exit_ring, EXIT_MUL)
+		int r = (int)Math.Ceiling(_p.ExitR);
+		foreach (int o in new[] { sa, sb })
+			for (int y = Math.Max(0, o / W - r); y < Math.Min(H, o / W + r + 1); y++)
+				for (int x = Math.Max(0, o % W - r); x < Math.Min(W, o % W + r + 1); x++)
+				{
+					int c = y * W + x;
+					if (_t.Mask[c] >= 2 || !float.IsFinite(_scratch[c])) continue;
+					if ((x - o % W) * (x - o % W) + (y - o / W) * (y - o / W) > _p.ExitR * _p.ExitR) continue;
+					_scratch[c] = (float)(_scratch[c] * _p.ExitMul);
+					touched.Add(c);
+				}
+		try
+		{
+			long t0 = NetStats.Now();
+			int ca = Coarse.CompNear(sa), cb = Coarse.CompNear(sb);
+			var (_, prev) = Coarse.Dijkstra(ca);
+			if (ca < 0 || cb < 0) return "loop_no_geo";
+			var chain = CoarseGraph.Chain(prev, cb);
+			Stats.Time("coarse_path", t0);
+			path = Router.Route(_scratch, sa, sb, Coarse.Bounds(chain), false, Stats);
+			if (path.Length == 0 && chain.Count >= 2)
+			{
+				// одна перепланировка: середина грубого пути закрыта
+				int m = chain.Count / 2;
+				Coarse.Close(chain[m - 1], chain[m]);
+				var (_, prev2) = Coarse.Dijkstra(ca);
+				Coarse.Open();
+				if (cb == ca || prev2[cb] >= 0)
+				{
+					Stats.Count("loop_replans");
+					path = Router.Route(_scratch, sa, sb, Coarse.Bounds(CoarseGraph.Chain(prev2, cb)), false, Stats);
+				}
+			}
+		}
+		finally
+		{
+			foreach (int c in touched) _scratch[c] = Base[c];
+		}
+		if (path.Length == 0) return "loop_no_path";
+		long c0 = NetStats.Now();
+		try
+		{
+			double length = _t.Length(path);
+			if (length > _p.LoopLenOld * dNet) return "loop_long";
+			if (Math.Min(dNet, length) / Math.Max(dGeo, 1.0) > _p.LoopAccept) return "loop_ratio";
+			if (!Validator.Ford(path)) return "loop_ford";
+			var core = Core(path);
+			if (!NewGround(core)) return "loop_not_new";
+			if (ExitLoop(path, false) || ExitLoop(path, true)) return "loop_exit_loop";
+			var beyond = BeyondExits(path);
+			var (share, longest) = ParallelStats(beyond);
+			if (share > _p.ParallelShare || longest > _p.ParallelRun) return "loop_parallel";
+			if (Rejoins(beyond)) return "loop_rejoin";
+			if (Graph.DoubleCross(Polyline(path, 0, path.Length - 1), 20.0)) return "loop_double_cross";
+			if (FarShare(core, oldCells) < _p.FarShare) return "loop_duplicate";
+			string node = NodeRules(Attachments(path));
+			if (node.Length > 0) return "loop_" + node;
+			return "";
+		}
+		finally
+		{
+			Stats.Time("checks", c0);
+		}
+	}
+
+	private void Rasterize(double[] pts, List<int> cells)
+	{
+		for (int k = 2; k + 1 < pts.Length; k += 2)
+		{
+			double ax = pts[k - 2], ay = pts[k - 1], bx = pts[k], by = pts[k + 1];
+			int steps = Math.Max(1, (int)Math.Ceiling(RoadGraph.Hypot(bx - ax, by - ay) * 2.0));
+			for (int s = 0; s <= steps; s++)
+			{
+				double t = (double)s / steps;
+				int x = Math.Clamp((int)Math.Floor(ax + (bx - ax) * t), 0, _t.W - 1), y = Math.Clamp((int)Math.Floor(ay + (by - ay) * t), 0, _t.H - 1);
+				cells.Add(y * _t.W + x);
+			}
+		}
+	}
+
+	/// <summary>Доля клеток core дальше FarR от клеток from (StageTrails._far_share) — по окну вокруг пути.</summary>
+	private double FarShare(int[] core, List<int> from)
+	{
+		if (core.Length == 0) return 0.0;
+		int far = 0;
+		double r2 = _p.FarR * _p.FarR;
+		var set = new HashSet<int>(from);
+		int fr = (int)Math.Ceiling(_p.FarR);
+		foreach (int c in core)
+		{
+			bool near = false;
+			int cx = c % _t.W, cy = c / _t.W;
+			for (int dy = -fr; dy <= fr && !near; dy++)
+				for (int dx = -fr; dx <= fr && !near; dx++)
+				{
+					int x = cx + dx, y = cy + dy;
+					if (x < 0 || y < 0 || x >= _t.W || y >= _t.H || dx * dx + dy * dy > r2) continue;
+					near = set.Contains(y * _t.W + x);
+				}
+			if (!near) far++;
+		}
+		return (double)far / core.Length;
+	}
+
+	// ---------------------------------------------------------------- ответвления
+
+	/// <summary>Цели (targets/kinds/anchors) готовит GDScript правилами V1 (_shore, _overlook, вершины без тропы);
+	/// здесь — расстановка (SHORE_GAP, VIEW_GAP, пределы числа), выбор точки съезда по правилам узлов, поиск в коридоре
+	/// и проверки: длина (BRANCH_LEN), новая земля, «вдоль сети», двойные касания, брод, берег (доля у воды).</summary>
+	public Godot.Collections.Dictionary PlanSpurs()
+	{
+		long total = NetStats.Now();
+		bool mountainRun = _in.ContainsKey("mountain") && _in["mountain"].AsBool();
+		Prepare(mountainRun, false);
+		var targets = _in["targets"].AsInt32Array();
+		var kinds = _in["target_kinds"].AsInt32Array();
+		var anchors = _in["anchors"].AsInt32Array();
+		var keepPeaks = _in.ContainsKey("peaks_keep") ? _in["peaks_keep"].AsInt32Array() : Array.Empty<int>();
+		int maxShores = (int)Params.Num(_in, "max_shores"), maxViews = (int)Params.Num(_in, "max_views");
+		if (kinds.Length != targets.Length || anchors.Length != targets.Length) throw new ArgumentException("V2: цели ответвлений разной длины");
+		var order = new List<int>();
+		for (int k = 0; k < targets.Length; k++) order.Add(k);
+		order.Sort((x, y) => kinds[x] != kinds[y] ? kinds[x].CompareTo(kinds[y]) : targets[x] != targets[y] ? targets[x].CompareTo(targets[y]) : x.CompareTo(y));
+		var outPaths = new Godot.Collections.Array();
+		var outWhat = new Godot.Collections.Array();
+		var outPairs = new Godot.Collections.Array();
+		var tried = new List<(int Cell, int Kind)>();
+		int shores = 0, views = 0;
+		foreach (int k in order)
+		{
+			int target = targets[k], kind = kinds[k];
+			string what = kind == 0 ? "shore" : kind == 1 ? "view" : "mountain";
+			Stats.Count(what + "_targets");
+			if (_t.Mask[target] >= 2) { Stats.Reject(what + "_on_net"); continue; }
+			if (kind == 0 && shores >= maxShores || kind == 1 && views >= maxViews) { Stats.Reject(what + "_limit"); continue; }
+			bool spaced = true;
+			foreach (var (cell, tk) in tried)
+			{
+				double d = _t.Dist(cell, target);
+				if (kind == 0 && tk == 0 && d < _p.ShoreGap || kind == 1 && d < _p.ViewGap || kind == 0 && tk == 1 && d < _p.ViewGap) spaced = false;
+			}
+			if (kind == 1)
+				foreach (int pk in keepPeaks) if (_t.Dist(pk, target) < _p.ViewGap) spaced = false;
+			if (!spaced) { Stats.Reject(what + "_spacing"); continue; }
+			if (kind != 2) tried.Add((target, kind));
+			string why = TrySpur(target, kind, anchors[k], out int[] path);
+			if (why.Length > 0) { Stats.Reject(why); continue; }
+			Accept(path);
+			outPaths.Add(path);
+			outWhat.Add(what);
+			outPairs.Add(new Godot.Collections.Array { path[0], target });
+			if (kind == 0) shores++;
+			else if (kind == 1) views++;
+			Stats.Count(what);
+		}
+		Stats.Time("total", total);
+		return Result(outPaths, outWhat, outPairs);
+	}
+
+	/// <summary>Точка съезда: клетка сети ближе всего к цели, которая проходит правила узлов; поиск в радиусе reach.</summary>
+	private int Source(int target, double reach, int anchor, out string why)
+	{
+		why = "";
+		int W = _t.W, H = _t.H, tx = target % W, ty = target / W, r = (int)Math.Ceiling(reach);
+		var list = new List<(double D, int C)>();
+		for (int y = Math.Max(0, ty - r); y < Math.Min(H, ty + r + 1); y++)
+			for (int x = Math.Max(0, tx - r); x < Math.Min(W, tx + r + 1); x++)
+			{
+				int c = y * W + x;
+				if (_t.Owner[c] < 0 || !float.IsFinite(Base[c])) continue;
+				double d = RoadGraph.Hypot(x - tx, y - ty);
+				if (d <= reach) list.Add((d, c));
+			}
+		if (anchor >= 0 && _t.Owner[anchor] >= 0) list.Add((_t.Dist(anchor, target) + 1e-6, anchor));
+		list.Sort((a, b) => a.D != b.D ? a.D.CompareTo(b.D) : a.C.CompareTo(b.C));
+		string first = "";
+		foreach (var (_, c) in list)
+		{
+			string rule = NodeRule(c, false);
+			if (rule.Length == 0) return c;
+			if (first.Length == 0) first = rule;
+		}
+		why = list.Count == 0 ? "no_source" : "source_" + first;
+		return -1;
+	}
+
+	private string TrySpur(int target, int kind, int anchor, out int[] path)
+	{
+		path = Array.Empty<int>();
+		string what = kind == 0 ? "shore" : kind == 1 ? "view" : "mountain";
+		double reach;
+		if (kind == 2)
+		{
+			// Ближайшая клетка сети (как FastGrid.NearestPath V1); дальше W·0,4 — без тропы
+			double bd = double.PositiveInfinity;
+			int tx = target % _t.W, ty = target / _t.W;
+			for (int i = 0; i < _t.N; i++)
+				if (_t.Owner[i] >= 0 && float.IsFinite(_t.Cost[i]))
+					bd = Math.Min(bd, RoadGraph.Hypot(i % _t.W + 0.5 - (tx + 0.5), i / _t.W + 0.5 - (ty + 0.5)));
+			if (!(bd < _t.W * 0.4)) return what + "_far";
+			reach = bd * _p.MountainReach + 8.0;
+		}
+		else reach = kind == 0 ? _p.ShoreReach : _p.ViewReach;
+		int source = Source(target, reach, anchor, out string why);
+		if (source < 0) return what + "_" + why;
+		var area = CellRect.Of(source, target, _t.W);
+		path = Router.Route(Base, source, target, area, kind == 2, Stats);
+		if (path.Length == 0) return what + "_no_path";
+		long c0 = NetStats.Now();
+		try
+		{
+			double straight = _t.Dist(source, target);
+			if (kind != 2 && _t.Length(path) > straight * _p.BranchLen) return what + "_long";
+			if (!Validator.Ford(path)) return what + "_ford";
+			if (kind != 2 && !NewGround(path)) return what + "_not_new";
+			if (kind != 2 && !AddsNetwork(path)) return what + "_parallel";
+			if (kind == 2 && Rejoins(path)) return what + "_rejoin";
+			if (Graph.DoubleCross(Polyline(path, 0, path.Length - 1), 20.0)) return what + "_double_cross";
+			if (kind == 0)
+			{
+				int wet = 0, count = Math.Max(0, path.Length - 4);
+				for (int k = 0; k < count; k++) if (Fields.ShoreDist[path[k]] <= _p.ShoreBand) wet++;
+				if (count > 0 && (double)wet / count > _p.ShoreShare) return what + "_along_shore";
+			}
+			string node = NodeRules(Attachments(path));
+			if (node.Length > 0) return what + "_" + node;
+			return "";
+		}
+		finally
+		{
+			Stats.Time("checks", c0);
+		}
+	}
+
+	// ---------------------------------------------------------------- выход
+
+	private Godot.Collections.Dictionary Result(Godot.Collections.Array paths, Godot.Collections.Array what, Godot.Collections.Array pairs)
+	{
+		Stats.Count("searches", Router.Searches);
+		Stats.Count("window_retries", Router.Retries);
+		var outPaths = new Godot.Collections.Array();
+		foreach (var p in paths) outPaths.Add(p);
+		return new Godot.Collections.Dictionary { ["paths"] = outPaths, ["what"] = what, ["pairs"] = pairs, ["network_v2"] = Stats.ToDictionary() };
+	}
+}

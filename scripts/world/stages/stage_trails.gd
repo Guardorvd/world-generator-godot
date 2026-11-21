@@ -1272,7 +1272,9 @@ static func _try_road_structures(w: WorldData, path: PackedInt32Array, finder: P
 
 ## Новая связь полезна, если сокращает реальный обход по сети. Второй проход нужен,
 ## если идёт по другому уровню рельефа. Оба ищутся по суше, без обязательного числа петель.
-static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, state: Dictionary, step: Callable = Callable()) -> void:
+## Соседи по пространству (Габриэль: внутри круга с диаметром a–b нет другого поселения), без связей остова и не дальше
+## 0,45 карты: [a, b, расстояние], от близких к дальним. Общий отбор пар вторых путей V1 и петель V2.
+static func _gabriel_pairs(w: WorldData, paths: Array) -> Array:
 	var st := w.settlements
 	var n := st.size()
 	var have := {}
@@ -1284,7 +1286,6 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			var d := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
 			if have.has(_key(a, b)) or d >= w.W * 0.45:
 				continue
-			# Соседи по пространству: внутри круга с диаметром a–b нет другого поселения.
 			var neighbor := true
 			for s in st:
 				if (s.x - st[a].x) * (s.x - st[b].x) + (s.y - st[a].y) * (s.y - st[b].y) < 0.0:
@@ -1293,6 +1294,12 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if neighbor:
 				pairs.append([a, b, d])
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] < q[2] if p[2] != q[2] else _key(p[0], p[1]) < _key(q[0], q[1]))
+	return pairs
+
+
+static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, state: Dictionary, step: Callable = Callable()) -> void:
+	var st := w.settlements
+	var pairs := _gabriel_pairs(w, paths)
 	w.generation_profile.second_ways = []
 	var forks := RoadForks.new(w, state.on_axis)
 	var network := _network_cost(w)

@@ -1,0 +1,392 @@
+extends SceneTree
+## Стенд ядра дорожной сети V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md, фаза 1) без генерации мира: синтетические
+## сцены 96×96 — равнина, холм, крутой склон, вода поперёк долины (озеро — без брода, река — с бродом), сеть из
+## шести мест. Проверки: земля и глубина C# = Heightfield; валидатор (вода, крен, уклон, радиус, зазор, брод);
+## профиль C# = RoadLine.profile_ok; грубый граф = обход по клеткам и путь в окне; D_net = Дейкстра по осям;
+## двойное пересечение; порты правил V1 = StageTrails; повтор планировщика даёт тот же результат.
+##   godot --headless --path . --script res://tools/road_v2_test.gd
+## Лимит 60 с (обычно несколько секунд). Нужен dotnet build после правки .cs.
+
+const V2 := preload("res://scripts/world/road_network_v2.gd")
+const S := 96
+var fails := 0
+
+
+func check(ok: bool, label: String) -> void:
+	print(("OK " if ok else "FAIL ") + label)
+	fails += int(not ok)
+
+
+func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
+	var started := Time.get_ticks_msec()
+	if Grid.native_grid() == null:
+		print("FAIL нужен C# (dotnet build)")
+		quit(1)
+		return
+	_ground_parity()
+	_validator()
+	_coarse()
+	_graph()
+	_ports()
+	_repeat()
+	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
+	quit(1 if fails else 0)
+
+
+## Синтетический мир: water — "none" | "lake" | "river" (полоса x = 44..45 поперёк карты)
+func _world(water: String) -> WorldData:
+	var w := WorldData.new()
+	w.W = S; w.H = S; w.N = S * S
+	w.seed_text = "road v2 fixture"
+	for owner in [w.geology, w.climate, w.civil]:
+		for property: Dictionary in owner.get_property_list():
+			var value: Variant = owner.get(property.name)
+			if value is GridBuffer2D.Float32 or value is GridBuffer2D.Byte or value is GridBuffer2D.Int32: value.resize()
+	w.dist_water.fill(100)
+	var cost := PackedFloat32Array()
+	cost.resize(w.N)
+	for y in S:
+		for x in S:
+			var i := y * S + x
+			var h := 0.1 + x * 0.0002
+			var d2 := float((x - 24) * (x - 24) + (y - 72) * (y - 72))
+			if d2 < 100.0: h += 0.06 * (1.0 - d2 / 100.0)  # холм
+			if x >= 64: h += minf(x - 64, 16) * 0.0123     # крутой склон 0,8
+			w.h[i] = h
+			w.filled[i] = h
+			w.biome[i] = Biomes.FOREST if x < 20 else Biomes.GRASS
+			cost[i] = 2.0
+			if x in [44, 45]:
+				if water == "lake":
+					w.lake[i] = 1
+					w.filled[i] = h + 0.004
+					cost[i] = INF
+				elif water == "river":
+					w.river[i] = 1
+					w.geology.river_area.data[i] = 1
+					cost[i] = 14.0
+	w.cost = cost
+	w.path_mask = PackedByteArray()
+	w.path_mask.resize(w.N)
+	w.trails = []
+	StageTrails._net_reset(w)
+	return w
+
+
+func _surface(w: WorldData) -> Heightfield:
+	var h := Heightfield.new(w, false)
+	# короткая лента реки у (82, 20) для глубины по треугольникам (как fast_water_test)
+	h.ribbons = [[{left = Vector3(326, h.hv[20 * S + 81] + 0.6, 76), right = Vector3(334, h.hv[20 * S + 83] + 0.6, 76)},
+		{left = Vector3(326, h.hv[24 * S + 81] + 0.6, 96), right = Vector3(334, h.hv[24 * S + 83] + 0.6, 96)}]]
+	h.index_ribbons()
+	h._fast_water = null # снимок воды C# — заново, с этой лентой
+	return h
+
+
+func _finder(w: WorldData, surface: Heightfield) -> Pathfinder:
+	var finder := Pathfinder.new(w.W, w.H, StageTrails._route_heights(w, surface))
+	finder.max_cross_grade = StageTrails.BENCH_CROSS
+	finder.set_world_corridor(surface.hv, surface.water_level, w.ocean, w.lake, w.river_cells(), GameConfig.TILE,
+		RoadTuning.current().section.widths.trail * 0.5)
+	return finder
+
+
+func _core(w: WorldData, surface: Heightfield, finder: Pathfinder, extra: Dictionary, unsafe := PackedByteArray()) -> Dictionary:
+	if unsafe.is_empty(): unsafe.resize(w.N)
+	var on_axis := PackedByteArray()
+	on_axis.resize(w.N)
+	var d := V2.params(w)
+	var xs := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var starts := PackedInt32Array()
+	for t: Dictionary in w.trails:
+		starts.append(xs.size())
+		for p: Dictionary in t.pts:
+			xs.append(p.x)
+			ys.append(p.y)
+	starts.append(xs.size())
+	var noise := PackedFloat64Array()
+	noise.resize(w.N)
+	for i in w.N: noise[i] = sin(i % S * 0.21) * cos(i / S * 0.17)
+	d.merge({cost = w.cost, heights = finder.heights, links = PackedByteArray(), hv = surface.hv, h = w.h, ocean = w.ocean,
+		lake = w.lake, river = w.river_cells(), biome = w.biome, unsafe = unsafe, on_axis = on_axis, noise = noise,
+		forest_biomes = PackedInt32Array([Biomes.FOREST]), owner = w.generation.road_owner, mask = w.path_mask,
+		sections = w.trails.size(), sec_x = xs, sec_y = ys, sec_start = starts, settle = PackedInt32Array(), remote = PackedByteArray()})
+	d.merge(extra, true)
+	var out: Dictionary = finder.fast().PlanNetworkV2(d, surface.fast_water())
+	if out.has("error"):
+		print("FAIL ошибка ядра: ", out.error)
+		fails += 1
+		return {}
+	return out
+
+
+func _ground_parity() -> void:
+	var w := _world("lake")
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	var pts := PackedFloat64Array()
+	for k in 400:
+		pts.append(4.0 + fmod(k * 37.7, 370.0))
+		pts.append(4.0 + fmod(k * 53.3, 370.0))
+	for k in 20: # над озером и лентой реки
+		pts.append(176.0 + k * 0.3)
+		pts.append(200.0)
+		pts.append(330.0)
+		pts.append(78.0 + k)
+	var out := _core(w, surface, finder, {mode = "probe", probe = "ground", points = pts})
+	if out.is_empty(): return
+	var worst_g := 0.0
+	var worst_d := 0.0
+	var wet := 0
+	for k in pts.size() / 2:
+		worst_g = maxf(worst_g, absf(out.ground[k] - surface.ground_at(pts[2 * k], pts[2 * k + 1])))
+		var d := surface.depth_at(pts[2 * k], pts[2 * k + 1])
+		worst_d = maxf(worst_d, absf(out.depth[k] - d))
+		if absf(out.depth[k] - d) > 1e-5 and OS.get_cmdline_user_args().has("--debug"): print("  глубина (%.2f, %.2f): C# %.3f, GDScript %.3f" % [pts[2 * k], pts[2 * k + 1], out.depth[k], d])
+		if d > 0.0: wet += 1
+	check(worst_g <= 1e-5 and worst_d <= 1e-5 and wet > 10, "земля и глубина C# = Heightfield (расхождение %s / %s м, точек в воде %d)" % [str(worst_g), str(worst_d), wet])
+
+
+func _line(ax: float, ay: float, bx: float, by: float) -> PackedFloat64Array:
+	var out := PackedFloat64Array()
+	var n := maxi(1, ceili(Vector2(ax, ay).distance_to(Vector2(bx, by)) / 0.25))
+	for k in n + 1:
+		out.append(lerpf(ax, bx, float(k) / n))
+		out.append(lerpf(ay, by, float(k) / n))
+	return out
+
+
+func _network(w: WorldData) -> Array:
+	# Шесть мест: кольцо P0-P1-P2-P3-P5-P0 и ветка J-P4 (J на оси P1-P2)
+	var p := [Vector2(8.5, 8.5), Vector2(30.5, 8.5), Vector2(30.5, 30.5), Vector2(8.5, 30.5), Vector2(40.5, 19.5), Vector2(8.5, 19.5)]
+	var j := Vector2(30.5, 19.5)
+	var lines := [[p[0], p[1]], [p[1], p[2]], [p[2], p[3]], [j, p[4]], [p[3], p[5]], [p[5], p[0]]]
+	w.trails = []
+	for k in lines.size():
+		var a: Vector2 = lines[k][0]
+		var b: Vector2 = lines[k][1]
+		var pts: Array = []
+		var n := ceili(a.distance_to(b))
+		for s in n + 1:
+			var q := a.lerp(b, float(s) / n)
+			pts.append({x = q.x, y = q.y, w = 0.55})
+			var c := floori(q.y) * S + floori(q.x)
+			if w.generation.road_owner[c] < 0: w.generation.road_owner[c] = k
+			w.path_mask[c] = 2
+		w.trails.append({kind = "trail", pts = pts})
+	return p
+
+
+func _validator() -> void:
+	var w := _world("lake")
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	_network(w)
+	var tw: float = RoadTuning.current().section.widths.trail
+	var cases := [
+		{name = "ровная прямая", pts = _line(50.5, 50.5, 60.5, 50.5), width = tw, grade = 0.4, want = 0},
+		{name = "через озеро", pts = _line(40.5, 50.5, 50.5, 50.5), width = tw, grade = 0.4, want = V2Flags.WATER},
+		{name = "вдоль крутого склона (крен)", pts = _line(72.5, 40.5, 72.5, 50.5), width = 1.0, grade = 0.4, want = V2Flags.CROSS},
+		{name = "в лоб на склон (уклон)", pts = _line(66.5, 45.5, 76.5, 45.5), width = tw, grade = 0.4, want = V2Flags.GRADE},
+		{name = "острый угол (радиус)", pts = PackedFloat64Array([55.5, 60.5, 55.9, 60.5, 55.9, 60.9]), width = tw, grade = 0.4, want = V2Flags.RADIUS},
+		{name = "вплотную вдоль дороги (зазор)", pts = _line(14.5, 9.5, 24.5, 9.5), width = tw, grade = 0.4, gap = true, want = V2Flags.GAP},
+	]
+	var data := []
+	for c: Dictionary in cases: data.append({pts = c.pts, width = c.width, grade = c.grade, gap = c.get("gap", false)})
+	var out := _core(w, surface, finder, {mode = "probe", probe = "validator", cases = data})
+	if out.is_empty(): return
+	for k in cases.size():
+		var got: int = out.flags[k]
+		var want: int = cases[k].want
+		check(got == want if want == 0 else (got & want) != 0, "валидатор: %s (флаги %d)" % [cases[k].name, got])
+	# профиль: C# = RoadLine.profile_ok на подъёме по склону и по холму
+	var same := true
+	for line: PackedFloat64Array in [_line(60.5, 45.5, 70.5, 45.5), _line(14.5, 72.5, 34.5, 72.5), _line(20.5, 60.5, 28.5, 84.5)]:
+		for grade: float in [0.1, 0.3, 0.5, 0.9]:
+			var pts: Array = []
+			for k in line.size() / 2: pts.append(Vector2(line[2 * k], line[2 * k + 1]))
+			var r := _core(w, surface, finder, {mode = "probe", probe = "profile", pts = line, grade = grade})
+			same = same and not r.is_empty() and bool(r.ok) == StageTrails.RoadLine.profile_ok(surface, pts, grade)
+	check(same, "профиль C# = RoadLine.profile_ok (3 линии × 4 предела)")
+	# брод: две клетки реки — можно, три подряд или небезопасная — нет
+	var rw := _world("river")
+	var rs := _surface(rw)
+	var rf := _finder(rw, rs)
+	var across := PackedInt32Array([50 * S + 43, 50 * S + 44, 50 * S + 45, 50 * S + 46])
+	var along := PackedInt32Array([50 * S + 44, 51 * S + 44, 52 * S + 44, 53 * S + 44])
+	var unsafe := PackedByteArray()
+	unsafe.resize(rw.N)
+	unsafe[60 * S + 44] = 1
+	var bad := PackedInt32Array([60 * S + 43, 60 * S + 44, 60 * S + 45, 60 * S + 46])
+	var fords := [{pts = _line(43.5, 50.5, 46.5, 50.5), cells = across, width = tw, grade = 0.4},
+		{pts = _line(44.5, 50.5, 44.5, 53.5), cells = along, width = tw, grade = 0.4},
+		{pts = _line(43.5, 60.5, 46.5, 60.5), cells = bad, width = tw, grade = 0.4}]
+	var fo := _core(rw, rs, rf, {mode = "probe", probe = "validator", cases = fords}, unsafe)
+	if not fo.is_empty():
+		check(fo.flags[0] & V2Flags.FORD == 0 and fo.flags[1] & V2Flags.FORD != 0 and fo.flags[2] & V2Flags.FORD != 0,
+			"брод: поперёк 2 клетки — да, вдоль 3 — нет, небезопасный — нет (%s)" % str(fo.flags))
+
+
+## Обход по клеткам (то же правило шага, что у грубого графа): достижима ли t из s
+func _bfs(w: WorldData, heights: PackedFloat32Array, cost: PackedFloat32Array, s: int, t: int) -> bool:
+	var seen := PackedByteArray()
+	seen.resize(w.N)
+	var queue := PackedInt32Array([s])
+	seen[s] = 1
+	var at := 0
+	while at < queue.size():
+		var c := queue[at]
+		at += 1
+		if c == t: return true
+		for k in 8:
+			var nx: int = c % S + Grid.DX[k]
+			var ny: int = c / S + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= S or ny >= S: continue
+			var n := ny * S + nx
+			if seen[n] != 0 or cost[n] == INF: continue
+			var diag := Grid.DX[k] != 0 and Grid.DY[k] != 0
+			if absf(heights[n] - heights[c]) > 0.4 * (Grid.SQRT2 if diag else 1.0) + 1e-9: continue
+			if diag and cost[(c / S) * S + nx] == INF and cost[ny * S + c % S] == INF: continue
+			seen[n] = 1
+			queue.append(n)
+	return false
+
+
+func _coarse() -> void:
+	var pairs := PackedInt32Array([50 * S + 20, 50 * S + 60, 72 * S + 10, 72 * S + 36, 40 * S + 60, 40 * S + 90, 10 * S + 10, 90 * S + 40])
+	var expect := {lake = [false, true, false, true], river = [true, true, false, true], none = [true, true, false, true]}
+	for water: String in ["none", "lake", "river"]:
+		var w := _world(water)
+		var surface := _surface(w)
+		var finder := _finder(w, surface)
+		var out := _core(w, surface, finder, {mode = "probe", probe = "coarse", pairs = pairs})
+		if out.is_empty(): continue
+		var same := true
+		var routed := true
+		for k in pairs.size() / 2:
+			var bfs := _bfs(w, finder.heights, w.cost, pairs[2 * k], pairs[2 * k + 1])
+			same = same and bool(out.linked[k]) == bfs and bfs == expect[water][k]
+			if out.linked[k]: routed = routed and bool(out.routed[k])
+		check(same, "грубый граф (%s): связность = обход по клеткам %s, компонент %d" % [water, str(out.linked), out.components])
+		check(routed, "грубый граф (%s): связано ⇒ путь FindPath в окне %s" % [water, str(out.routed)])
+
+
+func _graph() -> void:
+	var w := _world("none")
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	var p := _network(w)
+	var settle := PackedInt32Array()
+	for q: Vector2 in p: settle.append(floori(q.y) * S + floori(q.x))
+	var u := PackedFloat64Array([14.5, 5.5, 14.5, 12.5, 20.5, 12.5, 20.5, 5.5])
+	var once := PackedFloat64Array([14.5, 5.5, 14.5, 12.5, 14.5, 16.0])
+	var out := _core(w, surface, finder, {mode = "probe", probe = "graph", settle = settle, remote = PackedByteArray([0, 0, 0, 0, 0, 0]),
+		polylines = [u, once]})
+	if out.is_empty(): return
+	# Ожидание: Флойд по узлам P0..P5, J с длинами осей
+	var j := Vector2(30.5, 19.5)
+	var nodes: Array = p + [j]
+	var edges := [[0, 1], [1, 6], [6, 2], [2, 3], [6, 4], [3, 5], [5, 0]]
+	var n := nodes.size()
+	var d := []
+	for a in n:
+		d.append([])
+		for b in n: d[a].append(0.0 if a == b else INF)
+	for e: Array in edges:
+		var l: float = (nodes[e[0]] as Vector2).distance_to(nodes[e[1]])
+		d[e[0]][e[1]] = l
+		d[e[1]][e[0]] = l
+	for k in n:
+		for a in n:
+			for b in n: d[a][b] = minf(d[a][b], d[a][k] + d[k][b])
+	var worst := 0.0
+	for a in 6:
+		for b in 6: worst = maxf(worst, absf(out.dnet[a * 6 + b] - d[a][b]))
+	check(worst < 1e-6, "D_net на 6 местах = Дейкстра по осям (расхождение %s), узлов %d, развилок %d" % [str(worst), out.nodes, out.junctions])
+	check(out.junctions == 1, "одна развилка (J на оси P1–P2)")
+	check(out.double_cross[0] and not out.double_cross[1], "двойное пересечение найдено, одиночное — нет (%s)" % str(out.double_cross))
+
+
+func _ports() -> void:
+	var w := _world("none")
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	_network(w)
+	var paths := []
+	# вдоль дороги P0–P1 через клетку (20 клеток), поперёк с двумя касаниями, от места и обратно, по новой земле
+	var along := PackedInt32Array()
+	along.append(8 * S + 8)
+	for x in range(8, 32): along.append(10 * S + x)
+	paths.append(along)
+	var zig := PackedInt32Array()
+	for y in range(4, 14): zig.append(y * S + 16)
+	for x in range(17, 22): zig.append(13 * S + x)
+	for y in range(12, 3, -1): zig.append(y * S + 22)
+	paths.append(zig)
+	var loop := PackedInt32Array()
+	for x in range(8, 14): loop.append(8 * S + x)
+	for x in range(14, 18): loop.append(12 * S + x)
+	for x in range(18, 22): loop.append(8 * S + x)
+	for y in range(9, 30): loop.append(y * S + 22)
+	paths.append(loop)
+	var fresh := PackedInt32Array()
+	for k in 40: fresh.append((40 + k / 2) * S + 50 + k)
+	paths.append(fresh)
+	var out := _core(w, surface, finder, {mode = "probe", probe = "ports", paths = paths})
+	if out.is_empty(): return
+	var near := StageTrails._net_near(w)
+	var net := StageTrails._net_cells(w)
+	var same := true
+	for k in paths.size():
+		var r: Dictionary = out.ports[k]
+		var q: PackedInt32Array = paths[k]
+		var side := StageTrails._parallel_stats(w, q, near, net)
+		var ok: bool = is_equal_approx(r.share, side.x) and int(r.longest) == int(side.y) and bool(r.rejoins) == StageTrails._rejoins(w, q) \
+			and bool(r.exit_a) == StageTrails._exit_loop(w, q, false) and bool(r.exit_b) == StageTrails._exit_loop(w, q, true) \
+			and PackedInt32Array(r.beyond) == StageTrails._beyond_exits(w, q) and PackedInt32Array(r.core) == StageTrails._core(w, q) \
+			and bool(r.new_ground) == StageTrails._new_ground(w, q)
+		if not ok: print("  путь %d: C# %s, GDScript %.3f/%d %s %s %s" % [k, str(r).left(200), side.x, side.y, StageTrails._rejoins(w, q),
+			StageTrails._exit_loop(w, q, false), StageTrails._exit_loop(w, q, true)])
+		same = same and ok
+	var varied: bool = out.ports[0].longest > 0 and out.ports[1].rejoins
+	check(same and varied, "порты правил V1 = StageTrails (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground)")
+
+
+func _repeat() -> void:
+	var hashes := []
+	for run in 2:
+		var w := _world("river")
+		var surface := _surface(w)
+		var finder := _finder(w, surface)
+		var p := _network(w)
+		var settle := PackedInt32Array()
+		for q: Vector2 in p: settle.append(floori(q.y) * S + floori(q.x))
+		var pairs := PackedInt32Array()
+		for a in 6:
+			for b in range(a + 1, 6):
+				pairs.append(a)
+				pairs.append(b)
+		var common := {settle = settle, remote = PackedByteArray([0, 0, 0, 0, 0, 0]), exit_r = 4.0, node_sep = 6.0}
+		var loops := _core(w, surface, finder, common.merged({mode = "loops", pairs = pairs}))
+		var spurs := _core(w, surface, finder, common.merged({mode = "spurs", targets = PackedInt32Array([72 * S + 24, 50 * S + 60]),
+			target_kinds = PackedInt32Array([1, 1]), anchors = PackedInt32Array([-1, -1]), max_shores = 2, max_views = 6}))
+		if loops.is_empty() or spurs.is_empty(): return
+		var key := []
+		for out: Dictionary in [loops, spurs]:
+			key.append([out.paths, out.what, out.network_v2.counts, out.network_v2.rejects])
+		if run == 0: print("  повтор: петли %s %s, ответвления %s %s" % [JSON.stringify(loops.network_v2.counts), JSON.stringify(loops.network_v2.rejects),
+			JSON.stringify(spurs.network_v2.counts), JSON.stringify(spurs.network_v2.rejects)])
+		hashes.append(var_to_bytes(key).hex_encode().sha256_text())
+	check(hashes.size() == 2 and hashes[0] == hashes[1], "повтор: два прогона планировщика — один результат")
+
+
+class V2Flags:
+	const WATER := 1
+	const GRADE := 2
+	const CROSS := 4
+	const PROFILE := 8
+	const FORD := 16
+	const RADIUS := 32
+	const GAP := 64

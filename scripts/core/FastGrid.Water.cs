@@ -172,6 +172,11 @@ public partial class FastGrid
 		return top;
 	}
 
+	/// <summary>21.11.2026, сеть V2: тонкие обёртки над Ground и Depth без изменения арифметики (точка в метрах).
+	/// Без готовых SetWater/SetGround — NaN и текст в WaterSetupError.</summary>
+	public double GroundAt(double x, double z) => RequireWater() ? Ground(x, z) : double.NaN;
+	public double DepthAt(double x, double z) => RequireWater() ? Depth(x, z) : double.NaN;
+
 	/// <summary>Heightfield.depth_at(x, z) без ног: настилы мостов не учитываются.</summary>
 	private double Depth(double x, double z)
 	{
