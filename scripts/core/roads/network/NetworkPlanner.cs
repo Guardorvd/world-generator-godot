@@ -642,6 +642,102 @@ public sealed class NetworkPlanner
 		return best;
 	}
 
+	private sealed record ConnectorAnchor(int Cell, int Edge, double Station);
+
+	internal Godot.Collections.Dictionary PlanInlandConnections()
+	{
+		long started = NetStats.Now();
+		var options = _in["inland_connector"].AsGodotDictionary();
+		double minimum = Params.Num(options, "min_m") / _p.Tile, maximum = Params.Num(options, "max_m") / _p.Tile;
+		int searchLimit = (int)Params.Num(options, "search_count"), acceptLimit = (int)Params.Num(options, "accept_count");
+		Prepare(false, false);
+		var anchors = ConnectorAnchors(minimum * 0.5);
+		var ranked = new List<(double Saved, int From, int To)>();
+		var distances = new Dictionary<int, double[]>();
+		double[] DistanceFrom(int node)
+		{
+			if (!distances.TryGetValue(node, out var distance)) distances[node] = distance = Graph.Dijkstra(node).Dist;
+			return distance;
+		}
+		for (int i = 0; i < anchors.Count; i++)
+		{
+			var a = anchors[i];
+			var da = DistanceFrom(Graph.EA[a.Edge]);
+			var db = DistanceFrom(Graph.EB[a.Edge]);
+			for (int j = i + 1; j < anchors.Count; j++)
+			{
+				var b = anchors[j];
+				if (a.Edge == b.Edge) continue;
+				double direct = _t.Dist(a.Cell, b.Cell);
+				if (direct < minimum || direct > maximum) continue;
+				int na = Graph.EA[b.Edge], nb = Graph.EB[b.Edge];
+				double start = a.Station, finish = Graph.ELen[a.Edge] - start;
+				double network = Math.Min(Math.Min(start + da[na], finish + db[na]) + b.Station,
+					Math.Min(start + da[nb], finish + db[nb]) + Graph.ELen[b.Edge] - b.Station);
+				if (double.IsFinite(network) && network >= _p.LoopRatio * direct)
+					ranked.Add((network - direct, a.Cell, b.Cell));
+			}
+		}
+		ranked.Sort((a, b) => a.Saved != b.Saved ? b.Saved.CompareTo(a.Saved) :
+			a.From != b.From ? a.From.CompareTo(b.From) : a.To.CompareTo(b.To));
+		var paths = new Godot.Collections.Array();
+		var kinds = new Godot.Collections.Array();
+		var checkedPairs = new List<(int From, int To)>();
+		foreach (var (_, from, to) in ranked)
+		{
+			if (checkedPairs.Count >= searchLimit || paths.Count >= acceptLimit) break;
+			if (NodeRule(from, false).Length > 0 || NodeRule(to, false).Length > 0) continue;
+			if (checkedPairs.Exists(p => _t.Dist(from, p.From) < minimum * 0.5 && _t.Dist(to, p.To) < minimum * 0.5 ||
+				_t.Dist(from, p.To) < minimum * 0.5 && _t.Dist(to, p.From) < minimum * 0.5)) continue;
+			checkedPairs.Add((from, to));
+			var area = CellRect.Of(from, to, _t.W);
+			var bounds = area.Grow((int)_p.WindowRetry, _t.W, _t.H);
+			if (_mark.Length != _t.N) _mark = new byte[_t.N];
+			var touched = new List<int>();
+			SoftAvoid(bounds, from, to, 1.5, _mark, touched);
+			int[] path;
+			try { path = Router.Route(_scratch, from, to, area, false, Stats, Fields.MinCost); }
+			finally { foreach (int c in touched) { _scratch[c] = Base[c]; _mark[c] = 0; } }
+			if (path.Length == 0) { Stats.Reject("connector_no_path"); continue; }
+			var fresh = InlandConnector(path);
+			if (fresh.Length == 0 || _t.Length(fresh) < minimum)
+			{
+				Stats.Reject("connector_no_inland_section", _t.Length(path) * _p.Tile);
+				continue;
+			}
+			Accept(fresh);
+			paths.Add(fresh);
+			kinds.Add("connector");
+		}
+		Stats.Count("connector_candidates", ranked.Count);
+		Stats.Time("total", started);
+		return Result(paths, kinds, new Godot.Collections.Array());
+	}
+
+	private List<ConnectorAnchor> ConnectorAnchors(double spacing)
+	{
+		var result = new List<ConnectorAnchor>();
+		var seen = new HashSet<int>();
+		for (int edge = 0; edge < Graph.EPts.Count; edge++)
+		{
+			if (Graph.EDead[edge]) continue;
+			var cells = new List<int>();
+			Rasterize(Graph.EPts[edge], cells);
+			int last = -1;
+			foreach (int cell in cells)
+			{
+				if (_t.Owner[cell] < 0 || !float.IsFinite(Base[cell]) || Fields.ShoreDist[cell] <= _p.ShoreRunBand ||
+					NodeRule(cell, false).Length > 0 || last >= 0 && _t.Dist(cell, last) < spacing || seen.Contains(cell)) continue;
+				var (actualEdge, _, station) = Graph.Nearest(_t.X(cell), _t.Y(cell), 1.5);
+				if (actualEdge != edge) continue;
+				result.Add(new ConnectorAnchor(cell, edge, station));
+				seen.Add(cell);
+				last = cell;
+			}
+		}
+		return result;
+	}
+
 	private double NetDistance(int a, int b)
 	{
 		int na = Graph.SettleNode[a], nb = Graph.SettleNode[b];

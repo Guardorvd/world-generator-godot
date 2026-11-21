@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 8
+const VERSION := 9
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
@@ -51,7 +51,8 @@ static func cache_suffix(enabled: bool) -> String:
 	keys.sort()
 	var digest := RoadTuning._digest_values([keys.map(func(key: String) -> Array: return [key, values[key]]),
 		RoadTuning.Routing.KINDS.map(func(kind: String) -> Array: return [routing.broad_spacing_m[kind], routing.broad_radius_m[kind],
-			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled, routing.ride_search_reserve])
+			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled, routing.ride_search_reserve,
+		[routing.inland_connector.min_m, routing.inland_connector.max_m, routing.inland_connector.search_count, routing.inland_connector.accept_count]])
 	return "|net=v2.%d.%s" % [VERSION, digest]
 
 
@@ -285,6 +286,23 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 			paths.append([pair[0], pair[1], cells, false, Grid.hypot(w.settlements[pair[0]].x - w.settlements[pair[1]].x,
 				w.settlements[pair[0]].y - w.settlements[pair[1]].y)])
 	_profile(w, "loops", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
+
+
+## Сухие связи между существующими осями. Не добавляют связи в список пар поселений.
+static func plan_inland_connections(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray) -> void:
+	var started := Time.get_ticks_usec()
+	var known := _unsafe_cache if _unsafe_cache.size() == w.N and _unsafe_axis == on_axis else unsafe_mask(w, surface, on_axis)
+	var data := input(w, finder, surface, on_axis, known)
+	data.mode = "connectors"
+	data.session = _session
+	data.inland_connector = RoadTuning.current().routing.inland_connector
+	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_trail_ms")
+	var out := call_core(finder, surface, data)
+	if out.is_empty(): return
+	var publish := Time.get_ticks_usec()
+	for cells: PackedInt32Array in out.paths:
+		StageTrails._note_way(w, "connector", _publish(w, out, cells, "trail", PackedFloat32Array(), on_axis, surface))
+	_profile(w, "connectors", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0)
 
 
 ## Цели ответвлений правилами V1: берег (_shore от точек перегонов), смотровые (_overlook), вершины без тропы.

@@ -122,6 +122,8 @@ static func run(w: WorldData, step: Callable) -> void:
 	detail_us = Time.get_ticks_usec()
 	var on_axis := _mountain_trails(w, finder, surface)
 	w.generation_profile.mountain_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	if network_v2:
+		RoadNetworkV2.plan_inland_connections(w, finder, surface, on_axis)
 	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
 	step.call(0.76, "Природные велосипедные маршруты")
 	RideRoutes.run(w, finder, surface, on_axis)

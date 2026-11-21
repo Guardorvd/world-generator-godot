@@ -436,6 +436,7 @@ public partial class FastGrid
 			return mode switch
 			{
 				"loops" => planner.PlanLoops(),
+				"connectors" => planner.PlanInlandConnections(),
 				"spurs" => planner.PlanSpurs(),
 				"nodes" => planner.CheckNodes(),
 				"node_dist" => planner.NodeField(),

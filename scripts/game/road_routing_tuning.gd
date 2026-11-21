@@ -41,6 +41,8 @@ const KINDS := ["road", "trail", "mountain"]
 @export var broad_straight_m := 0.35
 ## Дополнительные поиски V2, чтобы проверить запасные финиши после основных.
 @export var ride_search_reserve := 0.40
+## Перегоны для сухих связей между уже опубликованными осями, в метрах.
+@export var inland_connector := {min_m = 240.0, max_m = 980.0, search_count = 16, accept_count = 4}
 ## Допуск срезания лесенки сетки в клетках.
 @export var straighten: Dictionary
 ## Множитель допуска на локальный бугор при пробе хорды или дуги.
