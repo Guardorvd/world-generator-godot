@@ -429,6 +429,8 @@ public sealed class LineBuilder
 	public const double SmoothStep = 0.5;   // доля сдвига к середине соседей
 	public const double ApexReach = 3.0;    // RoadRefinement.REACH, м: вынос вершины разворота
 	public int SmoothMoved, SmoothRejected, Hairpins, HairpinsMoved;
+	/// <summary>Фаза 3.3: дополнительный член Δ⁴ после Лапласа.</summary>
+	public bool Biharmonic;
 
 	/// <summary>Сглаживание линии: каждая свободная точка сдвигается к середине соседей (Лаплас) на SmoothStep; сдвиг
 	/// проверяет GeometryValidator на окне [i−3, i+3] (отрезки с пределом вида × поблажка и крен, профиль 12 м на окне
@@ -460,6 +462,19 @@ public sealed class LineBuilder
 				if (dx * dx + dy * dy < 1e-8) continue;
 				TryMove(pts, orig, i, dx, dy, validator, local, false);
 			}
+		// 3.3: член Δ⁴ — сдвиг к точке, у которой вторые разности с соседями наименьшие:
+		// (−p[i−2] + 4·p[i−1] + 4·p[i+1] − p[i+2]) / 6; те же проверки (TryMove)
+		if (Biharmonic)
+			for (int pass = 0; pass < SmoothPasses; pass++)
+				for (int i = 2; i < n - 2; i++)
+				{
+					if (pinned[i]) continue;
+					double tx = (-pts[i - 2].X + 4.0 * pts[i - 1].X + 4.0 * pts[i + 1].X - pts[i + 2].X) / 6.0;
+					double ty = (-pts[i - 2].Y + 4.0 * pts[i - 1].Y + 4.0 * pts[i + 1].Y - pts[i + 2].Y) / 6.0;
+					double dx = (tx - pts[i].X) * SmoothStep, dy = (ty - pts[i].Y) * SmoothStep;
+					if (dx * dx + dy * dy < 1e-8) continue;
+					TryMove(pts, orig, i, dx, dy, validator, local, false);
+				}
 		// развороты: вершина наружу
 		for (int i = 2; i < n - 2; i++)
 		{

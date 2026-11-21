@@ -203,6 +203,7 @@ public partial class FastGrid
 			var smoothStats = new Godot.Collections.Dictionary();
 			if (input.ContainsKey("smooth_line") && input["smooth_line"].AsBool())
 			{
+				builder.Biharmonic = input.ContainsKey("biharmonic") && input["biharmonic"].AsBool();
 				line = builder.Smooth(line, new GeometryValidator(water, 4.0, input["profile_base"].AsDouble()));
 				smoothStats["moved"] = builder.SmoothMoved;
 				smoothStats["rejected"] = builder.SmoothRejected;
