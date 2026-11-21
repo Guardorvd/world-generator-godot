@@ -4,7 +4,6 @@ const DIRECTORY := "user://session_performance"
 static var dir := DIRECTORY
 const WINDOW_US := 1_000_000
 const TOP_FRAMES := 20
-const UNMARKED_MIN_MS := 2.0 # неразмеченная работа _process меньше этого в доказательства долгого кадра не идёт
 const GPU_EVIDENCE_MS := 1.0
 const AFTER_SWITCH_US := 600_000 # кадр в пределах 0,6 с после смены режима помечается этой сменой
 const MISSED_REFRESH := 1.5     # кадр дольше полутора кадров экрана — пропуск обновления экрана (видно глазом)
@@ -132,6 +131,10 @@ func sample(game: Node, next_mode: String, now_us: int) -> void:
 		row.render.gpu_next_ms = _render.gpu_ms
 		if _render.gpu_ms != null and _render.gpu_ms >= GPU_EVIDENCE_MS:
 			row.evidence.append({part = "gpu_next", ms = _render.gpu_ms})
+		# 21.11.2026: CPU отрисовки тоже приходит с опозданием — дописывается к долгому кадру так же
+		row.render.render_cpu_next_ms = _render.render_cpu_ms
+		if _render.render_cpu_ms != null and _render.render_cpu_ms >= GPU_EVIDENCE_MS:
+			row.evidence.append({part = "render_cpu_next", ms = _render.render_cpu_ms})
 	_gpu_pending.clear()
 	# события игры этого кадра (открытие места, обзор, падение, снимок)
 	_frame_events.clear()
@@ -287,15 +290,9 @@ func _frame_details(game: Node, began_us: int, ms: float, limit: float, hitch: b
 			vegetation_ms[vegetation.names[i]] = vegetation.last_us[i] / 1000.0
 		_add_largest(evidence, stream_ms, "stream/")
 		_add_largest(evidence, vegetation_ms, "vegetation/")
-	# 20.11: _process всех узлов за кадр минус размеченные части кадра GameWorld (frame_*) — работа интерфейса,
-	# main и прочих узлов, которую замеры не называют (так прятались ~50 мс у открытия мест)
-	var marked_ms := 0.0
-	for part: String in tick_ms:
-		if part.begins_with("frame_"):
-			marked_ms += tick_ms[part]
-	var unmarked_ms: float = _render.process_ms - marked_ms
-	if unmarked_ms >= UNMARKED_MIN_MS:
-		evidence.append({part = "process_unmarked", ms = unmarked_ms})
+	# 21.11.2026: «неразмеченная работа» (TIME_PROCESS минус frame_*) убрана: TIME_PROCESS движка — наибольшее время
+	# _process за прошлую секунду, обновляется раз в секунду, поэтому было 13–17 мс в каждом кадре и опаздывало на
+	# 1–2 с. Вместо него размечены сами узлы: щит доски («board»), Main._process («main»)
 	if _render.gpu_ms != null and _render.gpu_ms >= 1.0:
 		evidence.append({part = "gpu", ms = _render.gpu_ms})
 	if _render.render_cpu_ms != null and _render.render_cpu_ms >= 1.0:

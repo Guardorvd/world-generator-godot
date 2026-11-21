@@ -24,6 +24,7 @@ const WORK_LABELS := {
 	"gpu": "GPU", "render_cpu": "CPU отрисовки", "chunk_upload": "Передача чанков",
 	"pipeline_compilation": "Компиляции конвейеров", "dotnet_gc": "Пауза GC .NET",
 	"process_unmarked": "Неразмеченная работа _process", "gpu_next": "GPU следующего кадра",
+	"render_cpu_next": "CPU отрисовки следующего кадра", "board": "Щит доски", "main": "Главный цикл меню и записи",
 	"event_discovery": "Открыто место", "event_look_around": "Обзор с вышки или вершины", "event_crash": "Падение",
 	"event_photo": "Снимок",
 }

@@ -1741,6 +1741,7 @@ func _process(delta: float) -> void:
 	_tick_hub_previews()
 	if _session_performance != null:
 		_session_performance.sample(game, _session_mode(), Time.get_ticks_usec())
+	var main_began_us := Time.get_ticks_usec()
 	if _ui_stack != null:
 		_ui_stack.tick()
 	if display_options != null:
@@ -1761,6 +1762,9 @@ func _process(delta: float) -> void:
 			_queue_auto_save()
 	if busy:
 		_tick_loading(delta)
+	# 21.11.2026: своя работа главного цикла (меню, настройки, автосохранение) — часть «main» записи сессии
+	if game != null and _session_performance != null:
+		game.tick_us["main"] = game.tick_us.get("main", 0) + Time.get_ticks_usec() - main_began_us
 
 
 func _session_mode() -> String:
