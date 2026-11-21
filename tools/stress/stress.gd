@@ -1117,6 +1117,16 @@ func _board_case() -> void:
 		if lazy != full:
 			report.failed.append("отбор листков доски %s: %s вместо %s" % [g, lazy, full])
 	print("OFFERS_FULL_MS %.1f" % full_ms)
+	# 21.11.2026: цена смены задания (взяли груз у доски): весь отклик на quests.changed и его части
+	var carry: Array = svc.offers(boards[0].place).filter(func(q: QuestData) -> bool: return q.kind in ["fragile", "supplies"])
+	if not carry.is_empty():
+		var hud: Node = game.hud
+		var accept_ms: float = clock_us.call(func() -> void: svc.quests.accept(carry[0]))
+		var pickup_ms: float = clock_us.call(func() -> void: svc.quests.pick_up())
+		print("QUEST_CHANGE_MS accept=%.1f pickup=%.1f hud=%.1f map_places=%.1f tracker=%.1f world=%.1f" % [accept_ms, pickup_ms,
+			clock_us.call(func() -> void: hud.quest_changed()), clock_us.call(func() -> void: hud.sync_map_places()),
+			clock_us.call(func() -> void: hud.update_tracker()), clock_us.call(func() -> void: game._quest_changed())])
+		svc.quests.abandon()
 	var trip: Dictionary = svc.travel.call()
 	var prefer := svc.quests.prefer(here, trip)
 	print("OFFERS_MS all=%.1f places=%.1f travel=%.1f beacons=%.1f paint=%.1f" % [clock_us.call(func() -> void: svc.offers(boards[0].place)),

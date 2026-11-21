@@ -602,10 +602,12 @@ func prepare_render_pipelines() -> Node3D:
 	# точка): запись сессии показала 5 компиляций конвейеров разом у доски. Скрытые копии готовят их под заставкой
 	var bag := CargoBag.build()
 	var label := Label3D.new()
-	label.text = "1"
+	label.text = "▼ Сумка · E"  # те же глифы и размер, что у подписи сумки (_update_bag_label)
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.fixed_size = true
+	label.pixel_size = 0.0015
+	label.font_size = 28
 	label.outline_size = 8
 	bag.add_child(label)
 	bag.hide()
