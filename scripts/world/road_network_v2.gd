@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 1
+const VERSION := 2
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
 const NODE_SEP := 25.0      # клеток (100 м) между узлами необязательных путей
@@ -74,6 +74,7 @@ static func params(w: WorldData) -> Dictionary:
 		ridge_tpi = RIDGE_TPI, ridge_mul = RIDGE_MUL, eco_low = ECO_LOW, eco_high = ECO_HIGH, eco_mul = ECO_MUL,
 		meander_amp = MEANDER_AMP, meander_flat = 0.06, meander_slope = 0.01, shore_band = SHORE_BAND, shore_mul = SHORE_MUL,
 		branch_len = StageTrails.BRANCH_LEN, shore_gap = StageTrails.SHORE_GAP, view_gap = StageTrails.VIEW_GAP,
+		view_rise = StageTrails.VIEW_RISE,
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX, shore_share = SHORE_SHARE,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR, mountain_reach = MOUNTAIN_REACH,
 		exit_angle = EXIT_ANGLE, exit_chord = EXIT_CHORD, spur_net_floor = SPUR_NET_FLOOR, ride_node_sep = RIDE_NODE_SEP,
@@ -398,6 +399,8 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
+	if smooth_lines:
+		_add_near_axes(w, pts, data)
 	for end in 2:
 		var join: Dictionary = joins.get(end, {})
 		if not join.is_empty(): data["join%d" % end] = PackedFloat64Array([join.tangent.x, join.tangent.y])
@@ -422,6 +425,41 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 	var ow: PackedFloat64Array = out.w
 	for k in ox.size(): result.append({x = ox[k], y = oy[k], w = ow[k]})
 	return result
+
+
+## road_owner быстро находит кандидатов, а валидатор меряет зазор по опубликованной линии.
+static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
+	var owner: PackedInt32Array = w.generation.road_owner
+	if owner.size() != w.N or w.trails.is_empty() or pts.size() < 2: return
+	var width := 0.0
+	for p: Dictionary in pts:
+		width = maxf(width, p.w)
+	# Запас на сглаживание оси хозяина и новой линии, плюс диагональ клетки.
+	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + 3.0)
+	var hosts := {}
+	for p: Dictionary in pts:
+		var px := floori(p.x)
+		var py := floori(p.y)
+		for y in range(maxi(0, py - radius), mini(w.H, py + radius + 1)):
+			for x in range(maxi(0, px - radius), mini(w.W, px + radius + 1)):
+				var host := owner[y * w.W + x]
+				if host >= 0: hosts[host] = true
+	if hosts.is_empty(): return
+	var starts := PackedInt32Array()
+	var xs := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var ordered := hosts.keys()
+	ordered.sort()
+	for host: int in ordered:
+		starts.append(xs.size())
+		for p: Dictionary in w.trails[host].pts:
+			xs.append(p.x)
+			ys.append(p.y)
+	starts.append(xs.size())
+	data.near_axis_start = starts
+	data.near_axis_x = xs
+	data.near_axis_y = ys
+	data.reach = RoadRefinement.REACH
 
 
 static var _line_core: Object = null

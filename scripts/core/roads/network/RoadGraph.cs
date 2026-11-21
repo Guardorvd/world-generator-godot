@@ -30,6 +30,24 @@ public sealed class RoadGraph
 	public int Degree(int n) => NEdges[n].Count;
 	public bool Junction(int n) => !NSettle[n] && NEdges[n].Count >= 3;
 
+	/// <summary>Индекс целых опубликованных осей для сглаживания, где деление на рёбра и узлы не нужно.</summary>
+	public void IndexAxes(double[] xs, double[] ys, int[] starts)
+	{
+		for (int s = 0; s + 1 < starts.Length; s++)
+		{
+			int a = starts[s], b = starts[s + 1];
+			if (b - a < 2) continue;
+			var pts = new double[2 * (b - a)];
+			for (int k = a; k < b; k++)
+			{
+				pts[2 * (k - a)] = xs[k];
+				pts[2 * (k - a) + 1] = ys[k];
+			}
+			AddEdge(NodeAt(xs[a], ys[a], false), NodeAt(xs[b - 1], ys[b - 1], false), pts, s);
+		}
+		Reindex();
+	}
+
 	/// <summary>Сеть из осей: xs/ys — точки всех участков подряд, starts — начало участка (S + 1 чисел),
 	/// settle — точки поселений (x, y попарно).</summary>
 	public void Build(double[] xs, double[] ys, int[] starts, double[] settle)

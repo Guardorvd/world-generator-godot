@@ -204,7 +204,16 @@ public partial class FastGrid
 			if (input.ContainsKey("smooth_line") && input["smooth_line"].AsBool())
 			{
 				builder.Biharmonic = input.ContainsKey("biharmonic") && input["biharmonic"].AsBool();
-				line = builder.Smooth(line, new GeometryValidator(water, 4.0, input["profile_base"].AsDouble()));
+				RoadGraph axes = null;
+				if (input.ContainsKey("near_axis_start"))
+				{
+					axes = new RoadGraph(0.05);
+					axes.IndexAxes(input["near_axis_x"].AsFloat64Array(), input["near_axis_y"].AsFloat64Array(),
+						input["near_axis_start"].AsInt32Array());
+				}
+				var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), axes,
+					input.ContainsKey("reach") ? input["reach"].AsDouble() : 0.0);
+				line = builder.Smooth(line, validator);
 				smoothStats["moved"] = builder.SmoothMoved;
 				smoothStats["rejected"] = builder.SmoothRejected;
 				smoothStats["hairpins"] = builder.Hairpins;

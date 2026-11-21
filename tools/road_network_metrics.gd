@@ -35,6 +35,7 @@ const CORNER_SEG := 0.3
 const STRAIGHT_MIN_M := 150.0
 const STRAIGHT_DEV_M := 1.5
 const FLAT_GRADE := 0.06
+const FLAT_GRADE_RADIUS_M := 32.0
 const BEND_CHORD := 2 # станций (8 м) по обе стороны
 const DEAD_END_M := 120.0
 const Samples := preload("res://tools/road_surface_samples.gd")
@@ -346,7 +347,7 @@ static func _measure_shape(w: WorldData, st: Array[Vector2], length_m: float, ki
 	steep.resize(st.size() + 1)
 	var ground := w.base_heights
 	for i in st.size():
-		steep[i + 1] = steep[i] + int(_terrain_grade(ground, st[i]) >= FLAT_GRADE)
+		steep[i + 1] = steep[i] + int(_terrain_grade(ground, st[i], FLAT_GRADE_RADIUS_M) >= FLAT_GRADE)
 	var covered := 0.0
 	var covered_flat := 0.0
 	var end := 0.0
@@ -386,14 +387,14 @@ static func _measure_shape(w: WorldData, st: Array[Vector2], length_m: float, ki
 		last_sign = signf(cross)
 
 
-static func _terrain_grade(ground: Heightfield, p: Vector2) -> float:
+static func _terrain_grade(ground: Heightfield, p: Vector2, radius_m := 4.0) -> float:
 	if ground == null: return INF
 	var tile := GameConfig.TILE
 	var x := p.x * tile
 	var y := p.y * tile
-	var dx := ground.ground_at(x + tile, y) - ground.ground_at(x - tile, y)
-	var dy := ground.ground_at(x, y + tile) - ground.ground_at(x, y - tile)
-	return Vector2(dx, dy).length() / (2.0 * tile)
+	var dx := ground.ground_at(x + radius_m, y, true) - ground.ground_at(x - radius_m, y, true)
+	var dy := ground.ground_at(x, y + radius_m, true) - ground.ground_at(x, y - radius_m, true)
+	return Vector2(dx, dy).length() / (2.0 * radius_m)
 
 
 static func _joins_axis(bins: Dictionary, section: int, p: Vector2) -> bool:

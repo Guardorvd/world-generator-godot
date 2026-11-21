@@ -516,7 +516,7 @@ public sealed class LineBuilder
 			var mRes = Stations(mRounded);
 			if (WholeProfileOk(line, _grade) && !WholeProfileOk(mRes, _grade))
 				return line;
-			return mRes;
+			return validator.KeepsCrossings(line, mRes) ? mRes : line;
 		}
 		var pts = new List<P>(m * 2);
 		var pinList = new List<byte>(m * 2);
@@ -544,8 +544,10 @@ public sealed class LineBuilder
 					double s0 = ts[idx], s1 = ts[idx + 1];
 					P p0 = SampleSpan(_raw, rawS, a, b, s0);
 					P p1 = SampleSpan(_raw, rawS, a, b, s1);
+					P mid = new((p0.X + p1.X) * 0.5, (p0.Y + p1.Y) * 0.5, p0.W);
 					bool ok = validator.Segment(p0.X, p0.Y, p1.X, p1.Y, p0.W, local, _cross);
-					if (s1 - s0 > 0.35 && (!ok || AxisBlocked(V.Of((p0.X + p1.X) * 0.5, (p0.Y + p1.Y) * 0.5))))
+					if (s1 - s0 > 0.35 && (!ok || AxisBlocked(V.Of(mid.X, mid.Y)) ||
+						!validator.KeepsClearance(SampleSpan(_raw, rawS, a, b, (s0 + s1) * 0.5), mid, _raw[0], _raw[^1])))
 					{
 						ts.Insert(idx + 1, 0.5 * (s0 + s1));
 						continue;
@@ -675,7 +677,7 @@ public sealed class LineBuilder
 		var result = Stations(rounded);
 		if (baseWholeOk && !WholeProfileOk(result, _grade))
 			return line;
-		return result;
+		return validator.KeepsCrossings(line, result) ? result : line;
 	}
 
 	private void EnsureInitialProfile(List<P> raw, double[] rawS, byte[] rawPin, List<P> pts, List<byte> pinList, List<double> ptsRawS, double grade)
@@ -870,7 +872,10 @@ public sealed class LineBuilder
 			inQueue[i] = false;
 			if (!moved[i]) continue;
 
-			bool fail = newSegBad[i - 1] > segBad[i - 1] || newSegBad[i] > segBad[i];
+			bool fail = newSegBad[i - 1] > segBad[i - 1] || newSegBad[i] > segBad[i]
+				|| !validator.KeepsClearance(prev[i], pts[i], pts[0], pts[^1])
+				|| !validator.KeepsClearance(Midpoint(prev[i - 1], prev[i]), Midpoint(pts[i - 1], pts[i]), pts[0], pts[^1])
+				|| !validator.KeepsClearance(Midpoint(prev[i], prev[i + 1]), Midpoint(pts[i], pts[i + 1]), pts[0], pts[^1]);
 			if (!fail)
 			{
 				double maxCur = 0.0;
@@ -1116,6 +1121,8 @@ public sealed class LineBuilder
 		return true;
 	}
 
+	private static P Midpoint(P a, P b) => new((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, a.W);
+
 	private bool TryMove(List<P> pts, List<P> orig, double[] heights, double[] midHeights, byte[] blocked, byte[] midBlocked, byte[] segBad,
 		int i, double dx, double dy, GeometryValidator validator, double local)
 	{
@@ -1138,6 +1145,9 @@ public sealed class LineBuilder
 				deviation = Math.Min(deviation, p.DistanceSquaredTo(ClosestOnSegment(p, V.Of(orig[j - 1].X, orig[j - 1].Y), V.Of(orig[j].X, orig[j].Y))));
 			if (deviation > TurnCorridor * TurnCorridor) continue;
 			if (AxisBlocked(p)) continue;
+			if (!validator.KeepsClearance(keep, moved, pts[0], pts[^1])
+				|| !validator.KeepsClearance(Midpoint(pts[i - 1], keep), Midpoint(pts[i - 1], moved), pts[0], pts[^1])
+				|| !validator.KeepsClearance(Midpoint(keep, pts[i + 1]), Midpoint(moved, pts[i + 1]), pts[0], pts[^1])) continue;
 			pts[i] = moved;
 			if (MaxTurnAngleWindow(pts, i) > maxAngleBefore + 1e-6) { pts[i] = keep; continue; }
 			int radAfter = MinRadiusWindow4m(pts, i) < needR ? 1 : 0;
@@ -1249,9 +1259,16 @@ public sealed class LineBuilder
 					V vp = V.Of(x, y);
 					if (AxisBlocked(vp)) { valid = false; break; }
 					double dev = double.PositiveInfinity;
+					V nearest = vp;
 					for (int j = Math.Max(1, i - 3); j <= Math.Min(orig.Count - 1, i + 3); j++)
-						dev = Math.Min(dev, vp.DistanceSquaredTo(ClosestOnSegment(vp, V.Of(orig[j - 1].X, orig[j - 1].Y), V.Of(orig[j].X, orig[j].Y))));
+					{
+						V q = ClosestOnSegment(vp, V.Of(orig[j - 1].X, orig[j - 1].Y), V.Of(orig[j].X, orig[j].Y));
+						double d = vp.DistanceSquaredTo(q);
+						if (d < dev) { dev = d; nearest = q; }
+					}
 					if (dev > TurnCorridor * TurnCorridor) { valid = false; break; }
+					if (!validator.KeepsClearance(new P(nearest.X, nearest.Y, b.W), new P(x, y, b.W), pts[0], pts[^1]))
+					{ valid = false; break; }
 					if (fillet.Count == 0 || Math.Sqrt((x - fillet[^1].X) * (x - fillet[^1].X) + (y - fillet[^1].Y) * (y - fillet[^1].Y)) > 1e-5)
 						fillet.Add(new P(x, y, b.W));
 				}

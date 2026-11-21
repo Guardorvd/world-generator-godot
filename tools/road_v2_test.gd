@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_refresh()
 	_repeat()
 	_line_port()
+	_smooth_foreign_axis()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
@@ -774,6 +775,32 @@ func _flag_check() -> void:
 		and saves_on == "user://saves_roads_v2" and cache_on == "user://world_cache_roads_v2",
 		"флаг --roads-v2: по умолчанию выключен (%s), папки %s / %s -> %s / %s, ключ кэша (%s -> %s)" % [
 			def_flag, saves_off, cache_off, saves_on, cache_on, s_off, s_on])
+
+
+func _smooth_foreign_axis() -> void:
+	var w := _world("none")
+	var surface := _surface(w)
+	var axis := PackedByteArray()
+	axis.resize(w.N)
+	var pts: Array = []
+	var host: Array = []
+	var owner := w.generation.road_owner
+	for x in range(12, 41):
+		host.append({x = x + 0.5, y = 20.5, w = 0.55})
+		owner[20 * S + x] = 0
+		pts.append({x = x + 0.5, y = 23.1 + sin((x - 12) * 0.35) * 0.65, w = 0.55})
+	w.trails = [{kind = "trail", pts = host}]
+	w.generation.road_owner = owner
+	V2.smooth_lines = false
+	var original := V2.line(w, pts, axis, surface, "trail")
+	V2.smooth_lines = true
+	var smoothed := V2.line(w, pts, axis, surface, "trail")
+	var before := INF
+	var after := INF
+	for p: Dictionary in original: before = minf(before, p.y - 20.5)
+	for p: Dictionary in smoothed: after = minf(after, p.y - 20.5)
+	check(after >= before - 0.05 and original[0] == smoothed[0] and original[-1] == smoothed[-1],
+		"сглаживание сохраняет зазор и концы рядом с чужой осью (%.2f → %.2f м)" % [before * GameConfig.TILE, after * GameConfig.TILE])
 
 
 class V2Flags:

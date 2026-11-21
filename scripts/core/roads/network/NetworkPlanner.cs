@@ -11,6 +11,8 @@ namespace Roads.Network;
 /// _new_ground; сверка с GDScript — стенд road_v2_test.</summary>
 public sealed class NetworkPlanner
 {
+	private const double SpurMinLength = 30.0; // клеток
+	private const int ShoreApproach = 4;       // последних клеток на подходе к воде
 	private readonly TerrainSnapshot _t;
 	private readonly Params _p;
 	private readonly Godot.Collections.Dictionary _in;
@@ -863,13 +865,17 @@ public sealed class NetworkPlanner
 	}
 
 	/// <summary>Точка съезда: клетка сети ближе всего к цели, которая проходит правила узлов; поиск в радиусе reach.</summary>
-	private int Source(int target, double reach, int anchor, out string why)
+	private int Source(int target, double reach, int anchor, int kind, out string why)
 	{
 		why = "";
 		var list = Candidates(target, reach, anchor);
 		string first = "";
-		foreach (var (_, c) in list)
+		foreach (var (d, c) in list)
 		{
+			// Нижняя граница по хорде сохраняется и после срезания углов при публикации.
+			if (d < SpurMinLength) { if (first.Length == 0) first = "short"; continue; }
+			if (kind == 1 && _t.Hv[target] - _t.Hv[c] < _p.ViewRise)
+			{ if (first.Length == 0) first = "low"; continue; }
 			string rule = NodeRule(c, false);
 			if (rule.Length == 0) { NoteNode(c, " — точка съезда"); return c; }
 			if (first.Length == 0) { first = rule; NoteNode(c, " — ближайшая точка съезда"); }
@@ -930,6 +936,7 @@ public sealed class NetworkPlanner
 	{
 		path = Array.Empty<int>();
 		string what = kind == 0 ? "shore" : kind == 1 ? "view" : "mountain";
+		if (kind == 0 && !OpenShore(target)) return what + "_no_open_water";
 		double reach;
 		if (kind == 2)
 		{
@@ -961,7 +968,7 @@ public sealed class NetworkPlanner
 		else reach = kind == 0 ? _p.ShoreReach : _p.ViewReach;
 		bool exitFree = false;
 		string why;
-		int source = kind == 2 ? MountainSource(target, reach, out exitFree, out why) : Source(target, reach, anchor, out why);
+		int source = kind == 2 ? MountainSource(target, reach, out exitFree, out why) : Source(target, reach, anchor, kind, out why);
 		if (source < 0) return what + "_" + why;
 		// Окно — компоненты грубого пути от точки съезда до цели; связи нет — пути нет
 		int cs = Coarse.CompNear(source), ct = Coarse.CompNear(target);
@@ -1020,8 +1027,13 @@ public sealed class NetworkPlanner
 			if (spurCore.Length >= 2 && Graph.DoubleCross(Polyline(spurCore, 0, spurCore.Length - 1), 20.0)) return what + "_double_cross";
 			if (kind == 0)
 			{
-				int wet = 0, count = Math.Max(0, path.Length - 4);
-				for (int k = 0; k < count; k++) if (Fields.ShoreDist[path[k]] <= _p.ShoreBand) wet++;
+				int wet = 0, run = 0, count = path.Length - ShoreApproach;
+				for (int k = 0; k < count; k++)
+				{
+					if (Fields.ShoreDist[path[k]] > _p.ShoreBand) { run = 0; continue; }
+					wet++;
+					if (++run >= ShoreApproach) return what + "_along_shore";
+				}
 				if (count > 0 && (double)wet / count > _p.ShoreShare) return what + "_along_shore";
 			}
 			var touches = AttachmentsAt(path);
@@ -1035,6 +1047,26 @@ public sealed class NetworkPlanner
 		{
 			Stats.Time("checks", c0);
 		}
+	}
+
+	/// <summary>Конец на кромке озера или моря у площадки воды хотя бы 3×3 клетки.</summary>
+	private bool OpenShore(int target)
+	{
+		if (Fields.ShoreDist[target] > 1.5) return false;
+		int tx = target % _t.W, ty = target / _t.W;
+		for (int y = Math.Max(1, ty - ShoreApproach); y <= Math.Min(_t.H - 2, ty + ShoreApproach); y++)
+			for (int x = Math.Max(1, tx - ShoreApproach); x <= Math.Min(_t.W - 2, tx + ShoreApproach); x++)
+			{
+				bool open = true;
+				for (int dy = -1; dy <= 1 && open; dy++)
+					for (int dx = -1; dx <= 1 && open; dx++)
+					{
+						int cell = (y + dy) * _t.W + x + dx;
+						open = _t.Ocean[cell] != 0 || _t.Lake[cell] != 0;
+					}
+				if (open) return true;
+			}
+		return false;
 	}
 
 	/// <summary>Правила узлов ответвления; exitFree — точка съезда (source) у поселения разрешена (горная тропа, V1).</summary>

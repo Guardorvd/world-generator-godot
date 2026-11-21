@@ -22,14 +22,46 @@ public sealed class GeometryValidator
 	private readonly TerrainSnapshot _t;
 	private readonly FastGrid _water;
 	private readonly double _tile, _profileBase;
+	private readonly RoadGraph _axes;
+	private readonly double _reach;
 	public GeometryValidator(TerrainSnapshot t) { _t = t; _water = t.Water; _tile = t.P.Tile; _profileBase = t.P.ProfileBase; }
 
-	/// <summary>Без снимка мира (линия пути, фаза 3.2): только отрезок, профиль и радиус.</summary>
-	public GeometryValidator(FastGrid water, double tile, double profileBase)
+	/// <summary>Сглаживание линии с проверкой зазора до уже опубликованных осей.</summary>
+	public GeometryValidator(FastGrid water, double tile, double profileBase, RoadGraph axes = null, double reach = 0.0)
 	{
 		_water = water ?? throw new ArgumentException("GeometryValidator: нет земли и воды");
 		_tile = tile;
 		_profileBase = profileBase;
+		_axes = axes;
+		_reach = reach;
+	}
+
+	/// <summary>Узел на конце и пересечение исходной оси допустимы. За их пределами сдвиг
+	/// сохраняет полный зазор или увеличивает уже недостаточный зазор.</summary>
+	public bool KeepsClearance(LineBuilder.P before, LineBuilder.P after, LineBuilder.P start, LineBuilder.P end)
+	{
+		if (_axes == null || RoadGraph.Hypot(after.X - start.X, after.Y - start.Y) < RoadGraph.EndSkip ||
+			RoadGraph.Hypot(after.X - end.X, after.Y - end.Y) < RoadGraph.EndSkip) return true;
+		double gap = (after.W * _tile + 2.0 * _reach + 2.0) / _tile;
+		double distance = _axes.Clearance(after.X, after.Y, gap, null);
+		if (distance >= gap) return true;
+		return distance + 1e-5 >= _axes.Clearance(before.X, before.Y, gap, null);
+	}
+
+	public bool KeepsCrossings(IReadOnlyList<LineBuilder.P> before, IReadOnlyList<LineBuilder.P> after)
+	{
+		if (_axes == null) return true;
+		static double[] Pack(IReadOnlyList<LineBuilder.P> points)
+		{
+			var pts = new double[2 * points.Count];
+			for (int k = 0; k < points.Count; k++)
+			{
+				pts[2 * k] = points[k].X;
+				pts[2 * k + 1] = points[k].Y;
+			}
+			return pts;
+		}
+		return !_axes.DoubleCross(Pack(after), 20.0) || _axes.DoubleCross(Pack(before), 20.0);
 	}
 
 	/// <summary>Отрезок полосы шириной width (клетки): FastGrid.RoadSegment.</summary>
