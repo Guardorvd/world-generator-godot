@@ -397,7 +397,7 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		relax = float(relaxation.get(design, 0.0)), tolerance = float(straightening.get(design, 0.0)),
 		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
-		smooth_line = smooth_lines and kind != "road", profile_base = StageTrails.RoadLine.PROFILE_BASE}
+		smooth_line = smooth_lines and design != "road", profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	for end in 2:
 		var join: Dictionary = joins.get(end, {})
 		if not join.is_empty(): data["join%d" % end] = PackedFloat64Array([join.tangent.x, join.tangent.y])
