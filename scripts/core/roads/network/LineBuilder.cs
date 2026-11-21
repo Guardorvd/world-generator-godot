@@ -468,9 +468,6 @@ public sealed class LineBuilder
 	private static readonly double[] RoundFractions = { 0.34, 0.22, 0.14, 0.08 };
 	private static readonly double[] MountainRoundFractions = { 0.14, 0.08 };
 	public int SmoothMoved, SmoothRejected, Hairpins, HairpinsMoved;
-	public readonly record struct WideBendTuning(double RadiusM, double ShiftM, double MinDegrees, double MaxDegrees);
-	public WideBendTuning WideBend;
-	public int WideBends;
 	/// <summary>Фаза 3.3+: сглаживание с бигармоническим членом Δ⁴.</summary>
 	public bool Biharmonic = true;
 
@@ -680,102 +677,7 @@ public sealed class LineBuilder
 		var result = Stations(rounded);
 		if (baseWholeOk && !WholeProfileOk(result, _grade))
 			return line;
-		if (WideBend.RadiusM > 0.0)
-		{
-			var wide = RoundWideBends(result, validator);
-			if (WideBends > 0 && WholeProfileOk(wide, _grade) && validator.KeepsCrossings(result, wide))
-				result = wide;
-			else
-				WideBends = 0;
-		}
-		if (validator.KeepsCrossings(line, result)) return result;
-		WideBends = 0;
-		return line;
-	}
-
-	// Строим дугу на свободной земле там, где за крутым локальным поворотом стоят длинные
-	// перегоны. Начальный и конечный касательные берутся с неизменённых отрезков.
-	private List<P> RoundWideBends(List<P> line, GeometryValidator validator)
-	{
-		int n = line.Count;
-		var along = new double[n];
-		var protectedCount = new int[n + 1];
-		for (int k = 0; k < n; k++)
-		{
-			if (k > 0) along[k] = along[k - 1] + RoadGraph.Hypot(line[k].X - line[k - 1].X, line[k].Y - line[k - 1].Y);
-			bool pinned = AxisBlocked(V.Of(line[k].X, line[k].Y)) || k > 0 && line[k - 1].W != line[k].W;
-			protectedCount[k + 1] = protectedCount[k] + (pinned ? 1 : 0);
-		}
-		var output = new List<P>(n);
-		var arc = new List<P>(64);
-		int copied = 0;
-		double minimum = Deg(WideBend.MinDegrees), maximum = Deg(WideBend.MaxDegrees);
-		for (int k = 2; k + 2 < n; k++)
-		{
-			double angle = TurnAngle(line, k, 6.0);
-			if (angle < minimum || angle > maximum || angle < TurnAngle(line, k + 1, 6.0)) continue;
-			double reach = WideBend.RadiusM / Tile * Math.Tan(angle * 0.5);
-			int a = k - 1, b = k + 1;
-			while (a > 1 && along[k] - along[a] < reach) a--;
-			while (b < n - 2 && along[b] - along[k] < reach) b++;
-			if (a < copied || along[k] - along[a] < reach || along[b] - along[k] < reach ||
-				protectedCount[b + 2] != protectedCount[a - 1]) continue;
-			if (!WideArc(line, a, b, minimum, maximum, validator, arc)) continue;
-			for (; copied < a; copied++) output.Add(line[copied]);
-			output.AddRange(arc);
-			copied = b + 1;
-			k = b;
-			WideBends++;
-		}
-		if (WideBends == 0) return line;
-		for (; copied < n; copied++) output.Add(line[copied]);
-		return output;
-	}
-
-	private bool WideArc(List<P> line, int a, int b, double minimum, double maximum, GeometryValidator validator, List<P> arc)
-	{
-		P start = line[a], end = line[b];
-		V av = V.Of(start.X, start.Y), bv = V.Of(end.X, end.Y);
-		V u = (av - V.Of(line[a - 1].X, line[a - 1].Y)).Normalized();
-		V v = (V.Of(line[b + 1].X, line[b + 1].Y) - bv).Normalized();
-		double angle = Math.Abs(u.AngleTo(v));
-		if (angle < minimum * 0.75 || angle > maximum) return false;
-		float det = u.Cross(v);
-		if (Math.Abs(det) < 1e-5f) return false;
-		float d1 = (bv - av).Cross(v) / det, d2 = u.Cross(bv - av) / det;
-		if (d1 < 1f || d2 < 1f || d1 > d2 * 1.8 || d2 > d1 * 1.8) return false;
-		V corner = av + u * d1;
-		V derivative = bv - av;
-		V second = (av + bv - corner * 2f) * 2f;
-		double cross = Math.Abs(derivative.Cross(second));
-		if (cross < 1e-6) return false;
-		double radius = Math.Pow(derivative.Length(), 3) * Tile / cross;
-		if (radius < 60.0 || radius > 200.0) return false;
-		int steps = Math.Max(2, (int)Math.Ceiling((d1 + d2) / 0.45));
-		arc.Clear();
-		arc.Add(start);
-		double maxShift = WideBend.ShiftM / Tile;
-		for (int k = 1; k <= steps; k++)
-		{
-			float t = (float)k / steps;
-			V sample = av.Lerp(corner, t).Lerp(corner.Lerp(bv, t), t);
-			P p = k == steps ? end : new P(sample.X, sample.Y, start.W);
-			if (AxisBlocked(sample)) return false;
-			double nearestDistance = double.PositiveInfinity;
-			V nearest = sample;
-			for (int j = a + 1; j <= b; j++)
-			{
-				V q = ClosestOnSegment(sample, V.Of(line[j - 1].X, line[j - 1].Y), V.Of(line[j].X, line[j].Y));
-				double distance = sample.DistanceSquaredTo(q);
-				if (distance < nearestDistance) { nearestDistance = distance; nearest = q; }
-			}
-			if (nearestDistance > maxShift * maxShift ||
-				!validator.KeepsClearance(new P(nearest.X, nearest.Y, start.W), p, line[0], line[^1]) ||
-				!validator.Segment(arc[^1].X, arc[^1].Y, p.X, p.Y, start.W, _grade, _cross))
-				return false;
-			arc.Add(p);
-		}
-		return true;
+		return validator.KeepsCrossings(line, result) ? result : line;
 	}
 
 	private void EnsureInitialProfile(List<P> raw, double[] rawS, byte[] rawPin, List<P> pts, List<byte> pinList, List<double> ptsRawS, double grade)
@@ -1095,12 +997,10 @@ public sealed class LineBuilder
 		}
 	}
 
-	private static double TurnAngle4m(IReadOnlyList<P> pts, int k) => TurnAngle(pts, k, 1.0);
-
-	private static double TurnAngle(IReadOnlyList<P> pts, int k, double chord)
+	private static double TurnAngle4m(IReadOnlyList<P> pts, int k)
 	{
-		if (!ChordPoint(pts, k, -1, chord, out double ax, out double ay)) return 0.0;
-		if (!ChordPoint(pts, k, 1, chord, out double cx, out double cy)) return 0.0;
+		if (!ChordPoint(pts, k, -1, 1.0, out double ax, out double ay)) return 0.0;
+		if (!ChordPoint(pts, k, 1, 1.0, out double cx, out double cy)) return 0.0;
 		double vx0 = pts[k].X - ax, vy0 = pts[k].Y - ay;
 		double vx1 = cx - pts[k].X, vy1 = cy - pts[k].Y;
 		if (vx0 * vx0 + vy0 * vy0 < 1e-10 || vx1 * vx1 + vy1 * vy1 < 1e-10) return 0.0;

@@ -127,28 +127,18 @@ public sealed class GeomorphologyFields
 		double amplitude = _t.P.Meander(kind);
 		for (int c = 0; c < cost.Length; c++)
 			output[c] = planner && _t.Unsafe[c] != 0 ? float.PositiveInfinity :
-				WeightedCell(cost[c], c, amplitude, axis, planner && _t.Owner[c] >= 0, kind != "road");
+				WeightedCell(cost[c], c, amplitude, axis, planner && _t.Owner[c] >= 0);
 		return output;
 	}
 
-	public float WeightedCell(float cost, int cell, double amplitude, byte[] axis, bool owned = false, bool optionalPath = false)
+	public float WeightedCell(float cost, int cell, double amplitude, byte[] axis, bool owned = false)
 	{
 		if (!float.IsFinite(cost) || owned || Wet(cell) || axis.Length != 0 && axis[cell] != 0) return cost;
-		return (float)(cost * Multiplier(cell, amplitude, optionalPath));
+		return (float)(cost * Multiplier(cell, amplitude));
 	}
 
-	private double Multiplier(int cell, double amplitude, bool optionalPath)
-	{
-		var p = _t.P;
-		double common = _common[cell];
-		if (optionalPath && ShoreDist[cell] < p.ShoreCostBand)
-		{
-			double original = 1.0 + (p.ShoreMul - 1.0) * SmoothStep(p.ShoreBand, 0.0, ShoreDist[cell]);
-			double wider = 1.0 + (p.ShoreCostMul - 1.0) * SmoothStep(p.ShoreCostBand, 0.0, ShoreDist[cell]);
-			common *= wider / original;
-		}
-		return Math.Clamp(common * (1.0 + amplitude * _wave[cell]), p.MulMin, p.MulMax);
-	}
+	private double Multiplier(int cell, double amplitude) =>
+		Math.Clamp(_common[cell] * (1.0 + amplitude * _wave[cell]), _t.P.MulMin, _t.P.MulMax);
 
 	/// <summary>Распределение множителей по сухим клеткам с уклоном сглаженного поля меньше 6 %.</summary>
 	public Godot.Collections.Dictionary FlatStatistics()
@@ -162,7 +152,7 @@ public sealed class GeomorphologyFields
 			for (int c = 0; c < _t.N; c++)
 			{
 				if (Slope[c] >= 0.06f || Wet(c) || !float.IsFinite(_t.Cost[c])) continue;
-				double mul = Multiplier(c, amplitude, kind != "road");
+				double mul = Multiplier(c, amplitude);
 				min = Math.Min(min, mul); max = Math.Max(max, mul); sum += mul;
 				count++;
 				if (mul < 1.0) discounted++;

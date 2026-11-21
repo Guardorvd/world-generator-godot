@@ -25,10 +25,8 @@ const KINDS := ["road", "trail", "mountain"]
 	meander_amp_road = 0.28, meander_amp = 0.35, meander_amp_mountain = 0.32, meander_amp_ride = 0.35,
 	ridge_tpi = 4.0, ridge_mul = 1.36, break_tpi = 2.5, break_mul = 0.88,
 	eco_radius = 4, eco_low = 0.16, eco_high = 0.84, eco_mul = 0.86,
-	shore_band = 4.0, shore_cost_band = 10.0, shore_mul = 1.65, shore_cost_mul = 2.05, mul_min = 0.7, mul_max = 1.8,
+	shore_band = 4.0, shore_mul = 1.65, mul_min = 0.7, mul_max = 1.8,
 	shape_radius = 18, shape_portal = 24, shape_min = 16,
-	wide_bend_radius_m = 105.0, wide_bend_shift_m = 9.0, wide_bend_min_turn_deg = 19.0,
-	wide_bend_max_turn_deg = 64.0,
 }
 
 @export_group("Линия по видам пути")

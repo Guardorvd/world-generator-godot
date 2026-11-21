@@ -1407,7 +1407,6 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	# Сеть V2: петли (t-спаннер) и ответвления к берегу и смотровым точкам вместо обходов, берега и смотровых V1
 	if network_v2:
 		finder.search_budget = -1
-		w.generation_profile.wide_bend_enabled = true
 		RoadNetworkV2.plan_loops(w, finder, paths, road_cost, state)
 		RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false, state.get("v2_unsafe", PackedByteArray()))
 		return
