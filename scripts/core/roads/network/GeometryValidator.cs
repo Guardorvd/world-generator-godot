@@ -73,6 +73,25 @@ public sealed class GeometryValidator
 		return ok;
 	}
 
+	internal double Ground(double x, double y) => _water.GroundAt(x * _tile, y * _tile);
+
+	internal double TerrainGrade(double x, double y) => RoadGraph.Hypot(
+		Ground(x + 1, y) - Ground(x - 1, y), Ground(x, y + 1) - Ground(x, y - 1)) / (2 * _tile);
+
+	internal bool HasClearance(LineBuilder.P a, LineBuilder.P b)
+	{
+		if (_axes == null) return true;
+		double length = RoadGraph.Hypot(b.X - a.X, b.Y - a.Y);
+		int steps = Math.Max(1, (int)Math.Ceiling(length / 0.25));
+		double gap = Math.Max(a.W, b.W) + (2 * _reach + 2) / _tile + length / (2 * steps);
+		for (int k = 0; k <= steps; k++)
+		{
+			double t = k / (double)steps;
+			if (_axes.Clearance(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, gap, null) < gap) return false;
+		}
+		return true;
+	}
+
 	/// <summary>Порт RoadLine.profile_ok (scripts/world/road_line.gd): точки (клетки) не реже 0,25 клетки; на каждом окне
 	/// не короче PROFILE_BASE уклон не круче grade; skip — точки на настилах начинают окно заново.</summary>
 	public bool Profile(double[] pts, double grade, byte[] skip = null)

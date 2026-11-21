@@ -5,7 +5,8 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 3
+const VERSION := 4
+const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
 const NODE_SEP := 25.0      # клеток (100 м) между узлами необязательных путей
@@ -565,6 +566,80 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 	data.near_axis_x = xs
 	data.near_axis_y = ys
 	data.reach = RoadRefinement.REACH
+
+
+## Перестраивает только конечную геометрию. Поиск, связи и записанные интервалы веломаршрутов уже готовы.
+static func reshape_climbs(w: WorldData, surface: Heightfield, on_axis: PackedByteArray) -> void:
+	var stats := {candidates = 0, rebuilt = 0, turns = 0, long_climb_turns = 0, refused = {}, placements = []}
+	w.generation_profile.road_switchbacks = stats
+	var water: Object = surface.fast_water()
+	if water == null:
+		push_error("Сеть V2: серпантинам нужна поверхность C#")
+		return
+	var core: Object = _line_core if _line_core != null else Grid.native_grid()
+	_line_core = core
+	var ride_sections := {}
+	for ride: Dictionary in w.road_rides.routes.values():
+		for leg: Dictionary in ride.legs: ride_sections[leg.section] = true
+	var anchors := {}
+	for t: Dictionary in w.trails:
+		if t.kind == "animal" or t.pts.is_empty(): continue
+		for i: int in [0, t.pts.size() - 1]:
+			var p: Dictionary = t.pts[i]
+			anchors[Topology.anchor_key(Vector2(p.x, p.y), w.world_origin)] = true
+	var axes := _published_axes(w)
+	for r in w.trails.size():
+		var t: Dictionary = w.trails[r]
+		if t.kind not in ["road", "trail", "mountain"] or t.has("trail_id") or t.pts.size() < 3: continue
+		var cells: PackedInt32Array = w.generation.road_cells[r]
+		if cells.size() < 4: continue
+		var raw := PackedFloat64Array()
+		for c: int in cells:
+			raw.append(c % w.W + 0.5)
+			raw.append(c / w.W + 0.5)
+		var packed := PackedFloat64Array()
+		var pins := PackedByteArray()
+		for p: Dictionary in t.pts:
+			packed.append(p.x)
+			packed.append(p.y)
+			packed.append(p.w)
+			pins.append(int(anchors.has(Topology.anchor_key(Vector2(p.x, p.y), w.world_origin))))
+		var grade := StageTrails.MOUNTAIN_GRADE if t.kind == "mountain" else (StageTrails.ROAD_LIMIT if t.kind == "road" else StageTrails.TRAIL_GRADE)
+		var input := {axis = packed, raw = raw, pins = pins, W = w.W, H = w.H, on_axis = on_axis,
+			profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = grade, bench_cross = StageTrails.BENCH_CROSS,
+			radius = 8.0 if t.kind == "road" else 6.0, protected_ride = ride_sections.has(t.road_id),
+			reach = RoadRefinement.REACH, foreign = axes, route_index = r}
+		var result: Dictionary = core.BuildRoadSwitchbacks(input, water)
+		stats.candidates += result.candidates
+		for reason: String in result.refused:
+			stats.refused[reason] = stats.refused.get(reason, 0) + result.refused[reason]
+		if result.placements.is_empty(): continue
+		for p: Dictionary in result.placements:
+			p.kind = t.kind
+			p.section = t.road_id
+			stats.placements.append(p)
+			stats.rebuilt += 1
+			stats.turns += p.turns.size()
+			if p.long_climb: stats.long_climb_turns += p.turns.size()
+		var points: PackedFloat64Array = result.points
+		var shaped := []
+		for i in range(0, points.size(), 3): shaped.append({x = points[i], y = points[i + 1], w = points[i + 2]})
+		t.pts = shaped
+		axes = _published_axes(w)
+
+
+static func _published_axes(w: WorldData) -> Dictionary:
+	var xs := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var starts := PackedInt32Array()
+	for t: Dictionary in w.trails:
+		starts.append(xs.size())
+		if t.kind == "animal": continue
+		for p: Dictionary in t.pts:
+			xs.append(p.x)
+			ys.append(p.y)
+	starts.append(xs.size())
+	return {x = xs, y = ys, starts = starts}
 
 
 static var _line_core: Object = null

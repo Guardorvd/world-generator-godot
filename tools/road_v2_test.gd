@@ -35,12 +35,68 @@ func _initialize() -> void:
 	_smooth_foreign_axis()
 	_character_on_flat()
 	_short_ride_turnback()
+	_switchback_climbs()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
 
 
 ## Синтетический мир: water — "none" | "lake" | "river" (полоса x = 44..45 поперёк карты)
+func _switchback_climbs() -> void:
+	var core: Object = Grid.native_grid()
+	var raw := PackedFloat64Array([48.5, 28.5, 57.5, 35.5, 59.5, 37.5, 59.5, 41.5, 57.5, 43.5, 48.5, 50.5])
+	var axis := PackedFloat64Array()
+	for i in range(0, raw.size(), 2): axis.append_array([raw[i], raw[i + 1], 0.65])
+	var pins := PackedByteArray([1, 0, 0, 0, 0, 1])
+	var cases := [
+		["склон 25 %", 0.25, StageTrails.ROAD_LIMIT, 8.0, true],
+		["склон 35 %", 0.35, StageTrails.TRAIL_GRADE, 6.0, true],
+		["склон 45 %", 0.45, StageTrails.MOUNTAIN_GRADE, 6.0, true],
+		["уступ", 0.35, StageTrails.TRAIL_GRADE, 6.0, true],
+		["узкий гребень", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
+		["склон над водой", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
+		["чужие оси", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
+	]
+	for row: Array in cases:
+		var w := _world("none")
+		for y in S:
+			for x in S:
+				var i := y * S + x
+				var h: float = 0.20 + row[1] * y / StageTrails.HEIGHT_SCALE
+				if row[0] == "уступ":
+					h -= 0.18 * clampf(y - 39.0, -3.5, 3.5) * clampf((x - 59.0) / 5.0, 0.0, 1.0) / StageTrails.HEIGHT_SCALE
+				if row[0] == "узкий гребень":
+					h -= maxf(48.0 - x, x - 60.0) / StageTrails.HEIGHT_SCALE if x < 48 or x > 60 else 0.0
+				w.h[i] = h
+				w.filled[i] = h
+				if row[0] == "склон над водой" and (x < 48 or x > 60):
+					w.lake[i] = 1
+					w.filled[i] = h + 0.03
+		var surface := Heightfield.new(w, false)
+		var input := {axis = axis, raw = raw, pins = pins, W = S, H = S,
+			on_axis = PackedByteArray(), profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = row[2],
+			bench_cross = StageTrails.BENCH_CROSS, radius = row[3], protected_ride = false}
+		if row[0] == "чужие оси":
+			input.reach = RoadRefinement.REACH
+			input.route_index = -1
+			input.foreign = {x = PackedFloat64Array([42.0, 42.0, 55.0, 55.0]), y = PackedFloat64Array([20.0, 55.0, 20.0, 55.0]),
+				starts = PackedInt32Array([0, 2, 4])}
+		var found: Dictionary = core.BuildRoadSwitchbacks(input, surface.fast_water())
+		var label := "серпантин: %s (%s кандидатов, %s)" % [row[0], found.candidates, str(found.refused)]
+		if row[4] and not found.placements.is_empty():
+			var p: Dictionary = found.placements[0]
+			var pts: PackedFloat64Array = found.points
+			var on_ledge: bool = row[0] != "уступ" or (p.turns[0][0] >= 64.0 and absf(p.turns[0][1] - 39.5) <= 2.5)
+			check(found.candidates > 0 and p.shortest_arm_m >= 25.0 and p.radius_m >= row[3] and p.long_climb and on_ledge
+				and pts[0] == axis[0] and pts[1] == axis[1] and pts[-3] == axis[-3] and pts[-2] == axis[-2],
+				"серпантин: %s (%s)" % [row[0], str(found.placements)])
+		else:
+			var reason_ok: bool = not found.refused.is_empty()
+			if row[0] == "склон над водой": reason_ok = found.refused.has("water")
+			if row[0] == "чужие оси": reason_ok = found.refused.has("clearance")
+			check(not row[4] and found.candidates > 0 and found.placements.is_empty() and reason_ok, label)
+
+
 func _world(water: String) -> WorldData:
 	var w := WorldData.new()
 	w.W = S; w.H = S; w.N = S * S

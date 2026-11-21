@@ -125,7 +125,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
 	step.call(0.76, "Природные велосипедные маршруты")
 	RideRoutes.run(w, finder, surface, on_axis)
-	_fit_sections(w, surface)
+	_fit_sections(w, surface, PackedByteArray(), Callable(), on_axis if network_v2 else PackedByteArray())
 	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
 	w.generation_profile.homes_laid = StageLandmarks.count_homes(w.settlements)
@@ -147,8 +147,13 @@ static func run(w: WorldData, step: Callable) -> void:
 
 
 ## Keep inherited plan marks and protected structure footprints when the final tread replaces the search ribbon.
-static func _fit_sections(w: WorldData, surface: Heightfield, inherited := PackedByteArray(), accept := Callable()) -> void:
+static func _fit_sections(w: WorldData, surface: Heightfield, inherited := PackedByteArray(), accept := Callable(),
+		switchback_axis := PackedByteArray()) -> void:
 	Section.fit(w, surface, accept)
+	if not switchback_axis.is_empty():
+		var started := Time.get_ticks_usec()
+		RoadNetworkV2.reshape_climbs(w, surface, switchback_axis)
+		_part("road_switchbacks", started)
 	var mask := w.path_mask
 	for i in mask.size():
 		if mask[i] >= 2:

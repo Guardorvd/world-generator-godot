@@ -31,10 +31,11 @@ public sealed class RoadGraph
 	public bool Junction(int n) => !NSettle[n] && NEdges[n].Count >= 3;
 
 	/// <summary>Индекс целых опубликованных осей для сглаживания, где деление на рёбра и узлы не нужно.</summary>
-	public void IndexAxes(double[] xs, double[] ys, int[] starts)
+	public void IndexAxes(double[] xs, double[] ys, int[] starts, int excluded = -1)
 	{
 		for (int s = 0; s + 1 < starts.Length; s++)
 		{
+			if (s == excluded) continue;
 			int a = starts[s], b = starts[s + 1];
 			if (b - a < 2) continue;
 			var pts = new double[2 * (b - a)];

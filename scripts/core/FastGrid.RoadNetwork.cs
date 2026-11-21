@@ -346,6 +346,55 @@ public partial class FastGrid
 		}
 	}
 
+	/// <summary>Локальная перестройка подъёма на готовой оси. Чужие оси нужны только после прохождения проверок рельефа.</summary>
+	public Godot.Collections.Dictionary BuildRoadSwitchbacks(Godot.Collections.Dictionary input, FastGrid water)
+	{
+		static System.Collections.Generic.List<LineBuilder.P> Unpack(double[] values, int stride)
+		{
+			var points = new System.Collections.Generic.List<LineBuilder.P>(values.Length / stride);
+			for (int i = 0; i < values.Length; i += stride)
+				points.Add(new LineBuilder.P(values[i], values[i + 1], stride == 3 ? values[i + 2] : 0));
+			return points;
+		}
+		var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble());
+		GeometryValidator foreign = null;
+		GeometryValidator Foreign()
+		{
+			if (foreign != null) return foreign;
+			if (!input.ContainsKey("foreign")) return foreign = validator;
+			var packed = input["foreign"].AsGodotDictionary();
+			var graph = new RoadGraph(0.05);
+			graph.IndexAxes(packed["x"].AsFloat64Array(), packed["y"].AsFloat64Array(), packed["starts"].AsInt32Array(),
+				input["route_index"].AsInt32());
+			return foreign = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), graph, input["reach"].AsDouble());
+		}
+		var bounds = new LineBuilder(water, input["on_axis"].AsByteArray(), input["W"].AsInt32(), input["H"].AsInt32());
+		var builder = new SwitchbackBuilder(validator, Foreign, bounds.AxisBlocked, input["grade"].AsDouble(),
+			input["bench_cross"].AsDouble(), input["radius"].AsDouble(), input["protected_ride"].AsBool());
+		var line = builder.Rebuild(Unpack(input["axis"].AsFloat64Array(), 3), Unpack(input["raw"].AsFloat64Array(), 2),
+			input["pins"].AsByteArray());
+		var placements = new Godot.Collections.Array();
+		foreach (var p in builder.Placements)
+		{
+			var turns = new Godot.Collections.Array();
+			foreach (var t in p.Turns) turns.Add(new double[] { t.X, t.Y });
+			placements.Add(new Godot.Collections.Dictionary { ["start"] = new double[] { p.Start.X, p.Start.Y },
+				["end"] = new double[] { p.End.X, p.End.Y }, ["turns"] = turns, ["radius_m"] = p.Radius,
+				["shortest_arm_m"] = p.ShortestArm, ["length_m"] = p.Length, ["rise_m"] = p.Rise, ["long_climb"] = p.Long });
+		}
+		var points = new double[builder.Placements.Count == 0 ? 0 : line.Count * 3];
+		for (int i = 0; i < points.Length / 3; i++)
+		{
+			points[3 * i] = line[i].X;
+			points[3 * i + 1] = line[i].Y;
+			points[3 * i + 2] = line[i].W;
+		}
+		var refused = new Godot.Collections.Dictionary();
+		foreach (var pair in builder.Refused) refused[pair.Key.ToString().ToLowerInvariant()] = pair.Value;
+		return new Godot.Collections.Dictionary { ["points"] = points, ["placements"] = placements,
+			["candidates"] = builder.Candidates, ["refused"] = refused };
+	}
+
 	/// <summary>mode: "loops" — петли (t-спаннер), "spurs" — ответвления; "probe" — проверки стенда road_v2_test.</summary>
 	public Godot.Collections.Dictionary PlanNetworkV2(Godot.Collections.Dictionary input, FastGrid water)
 	{
