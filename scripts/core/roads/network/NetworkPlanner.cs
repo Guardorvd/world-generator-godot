@@ -691,7 +691,11 @@ public sealed class NetworkPlanner
 	/// <summary>Мягкое избегание всей сети: новая земля ближе NearNet к сети на той же высоте (LevelGap, как правило
 	/// «вдоль сети» StageTrails._parallel_stats) вне кругов выезда sa и sb — в AvoidCost раз дороже, один раз на клетку
 	/// (mark). Клетки сети не трогаются: пересечь дорогу можно.</summary>
-	private void SoftAvoid(CellRect area, int sa, int sb, byte[] mark, List<int> touched)
+	private void SoftAvoid(CellRect area, int sa, int sb, byte[] mark, List<int> touched) =>
+		SoftAvoid(area, sa, sb, _p.ExitR, mark, touched);
+
+	/// <summary>То же с радиусом skipR вокруг sa и sb (у ответвлений — только точка съезда).</summary>
+	private void SoftAvoid(CellRect area, int sa, int sb, double skipR, byte[] mark, List<int> touched)
 	{
 		int W = _t.W, H = _t.H, r = (int)Math.Ceiling(_p.NearNet);
 		double scale = _p.HeightScale * _p.Tile;
@@ -700,7 +704,7 @@ public sealed class NetworkPlanner
 			{
 				int i = y * W + x;
 				if (mark[i] != 0 || _t.Owner[i] >= 0 || Near[i] > _p.NearNet || !float.IsFinite(_scratch[i])) continue;
-				if (_t.Dist(i, sa) <= _p.ExitR || _t.Dist(i, sb) <= _p.ExitR) continue;
+				if (_t.Dist(i, sa) <= skipR || _t.Dist(i, sb) <= skipR) continue;
 				double reach = Near[i] + 0.75;
 				bool level = false;
 				for (int dy = -r; dy <= r && !level; dy++)
@@ -845,6 +849,7 @@ public sealed class NetworkPlanner
 	/// <summary>Клетки сети (с конечной ценой) в круге reach вокруг цели и точка перегона anchor — по расстоянию.</summary>
 	private List<(double D, int C)> Candidates(int target, double reach, int anchor)
 	{
+		int ct = Coarse != null ? Coarse.CompNear(target) : -1;
 		int W = _t.W, H = _t.H, tx = target % W, ty = target / W, r = (int)Math.Ceiling(reach);
 		var list = new List<(double D, int C)>();
 		for (int y = Math.Max(0, ty - r); y < Math.Min(H, ty + r + 1); y++)
@@ -853,9 +858,11 @@ public sealed class NetworkPlanner
 				int c = y * W + x;
 				if (_t.Owner[c] < 0 || !float.IsFinite(Base[c])) continue;
 				double d = RoadGraph.Hypot(x - tx, y - ty);
-				if (d <= reach) list.Add((d, c));
+				// только точки, связные с целью по грубому графу (шаг 6): иначе выбор упирается в недостижимую точку
+				if (d <= reach && (Coarse == null || Coarse.Linked(Coarse.CompNear(c), ct))) list.Add((d, c));
 			}
-		if (anchor >= 0 && _t.Owner[anchor] >= 0) list.Add((_t.Dist(anchor, target) + 1e-6, anchor));
+		if (anchor >= 0 && _t.Owner[anchor] >= 0 && (Coarse == null || Coarse.Linked(Coarse.CompNear(anchor), ct)))
+			list.Add((_t.Dist(anchor, target) + 1e-6, anchor));
 		list.Sort((a, b) => a.D != b.D ? a.D.CompareTo(b.D) : a.C.CompareTo(b.C));
 		return list;
 	}
@@ -946,8 +953,15 @@ public sealed class NetworkPlanner
 				_scratch[c] = (float)(Math.Max(_p.SpurNetFloor, _scratch[c]) * _p.ExitMul);
 				touched.Add(c);
 			}
+		// Горные: мягкое избегание сети на той же высоте вокруг пути, кроме точки съезда (как у петель)
+		if (kind == 2)
+		{
+			if (_mark.Length != _t.N) _mark = new byte[_t.N];
+			foreach (int c in touched) _mark[c] = 1;
+			SoftAvoid(win, source, source, 1.5, _mark, touched);
+		}
 		try { path = Router.Route(_scratch, source, target, area, kind == 2, Stats); }
-		finally { foreach (int c in touched) _scratch[c] = Base[c]; }
+		finally { foreach (int c in touched) { _scratch[c] = Base[c]; if (_mark.Length == _t.N) _mark[c] = 0; } }
 		if (path.Length == 0) return what + "_no_path";
 		long c0 = NetStats.Now();
 		try
