@@ -22,6 +22,7 @@ public sealed class NetworkPlanner
 	public CoarseGraph Coarse;
 	public float[] Base = Array.Empty<float>();     // цена V2 с правилами узлов (дороже у узлов и поселений)
 	private float[] _scratch = Array.Empty<float>();
+	private byte[] _mark = Array.Empty<byte>();
 	public float[] Near = Array.Empty<float>();     // клеток до сети (StageTrails._net_near)
 	public float[] NodeDist = Array.Empty<float>(); // клеток до узла сети (развилки, не поселения)
 	public float[] SettleDist = Array.Empty<float>();
@@ -220,6 +221,15 @@ public sealed class NetworkPlanner
 	public List<(int Cell, bool Crossing)> Attachments(int[] p)
 	{
 		var outl = new List<(int, bool)>();
+		foreach (var a in AttachmentsAt(p)) outl.Add((a.Cell, a.Crossing));
+		return outl;
+	}
+
+	/// <summary>То же с местом в пути: Index — клетка узла в p, Dir — куда от неё идёт новая земля (+1 вперёд, -1 назад,
+	/// 0 — пересечение).</summary>
+	public List<(int Cell, bool Crossing, int Index, int Dir)> AttachmentsAt(int[] p)
+	{
+		var outl = new List<(int, bool, int, int)>();
 		int n = p.Length, k = 0;
 		while (k < n)
 		{
@@ -228,11 +238,11 @@ public sealed class NetworkPlanner
 			while (k < n && _t.Owner[p[k]] >= 0) k++;
 			int e = k - 1; // сеть p[s..e]
 			bool before = s > 0, after = k < n;
-			if (before && after && e - s + 1 <= _p.CrossRun) outl.Add((p[(s + e) / 2], true));
+			if (before && after && e - s + 1 <= _p.CrossRun) outl.Add((p[(s + e) / 2], true, (s + e) / 2, 0));
 			else
 			{
-				if (before) outl.Add((p[s], false));
-				if (after) outl.Add((p[e], false));
+				if (before) outl.Add((p[s], false, s, -1));
+				if (after) outl.Add((p[e], false, e, 1));
 			}
 		}
 		return outl;
@@ -268,22 +278,116 @@ public sealed class NetworkPlanner
 
 	public string LastNode = "";
 
+	private void NoteNode(int c, string extra = "") =>
+		LastNode = string.Format(System.Globalization.CultureInfo.InvariantCulture, " узел ({0},{1}): до поселения {2:F0}, до развилки {3:F0} кл{4}",
+			c % _t.W, c / _t.W, SettleDist[c], NodeDist[c], extra);
+
 	public string NodeRules(List<(int Cell, bool Crossing)> nodes)
 	{
-		foreach (var (c, x) in nodes)
+		var list = new List<(int, bool, int, int)>();
+		foreach (var (c, x) in nodes) list.Add((c, x, -1, 0));
+		return NodeRules(list, null, Array.Empty<int>());
+	}
+
+	/// <summary>Правила узлов пути p. own — свои поселения петли (номера в списке мест): выезд в круге ExitR своего
+	/// поселения разрешён, если направление нового выезда (хорда ExitChord клеток) отличается от каждого существующего
+	/// выезда этого поселения не меньше ExitAngle и степень узла поселения после добавления ≤ MaxDegree. У чужих
+	/// поселений и вне кругов своих выездов — строгие правила NodeRule.</summary>
+	public string NodeRules(List<(int Cell, bool Crossing, int Index, int Dir)> nodes, int[] own, int[] p)
+	{
+		var exits = new HashSet<int>();
+		for (int k = 0; k < nodes.Count; k++)
 		{
-			string why = NodeRule(c, x);
-			LastNode = string.Format(System.Globalization.CultureInfo.InvariantCulture, " узел ({0},{1}): до поселения {2:F0}, до развилки {3:F0} кл",
-				c % _t.W, c / _t.W, SettleDist[c], NodeDist[c]);
-			if (why.Length > 0) return why;
+			var (c, x, index, dir) = nodes[k];
+			NoteNode(c);
+			if (own != null && !x && dir != 0 && SettleDist[c] < _p.ExitR)
+			{
+				int home = NearestSettlement(c);
+				if (Array.IndexOf(own, home) >= 0)
+				{
+					string why = OwnExit(home, c, index, dir, p);
+					if (why.Length > 0) return why;
+					exits.Add(k);
+					continue;
+				}
+			}
+			string rule = NodeRule(c, x);
+			if (rule.Length > 0) return rule;
 		}
 		for (int a = 0; a < nodes.Count; a++)
 			for (int b = a + 1; b < nodes.Count; b++)
 			{
+				if (exits.Contains(a) || exits.Contains(b)) continue;
 				double d = _t.Dist(nodes[a].Cell, nodes[b].Cell);
 				if (d > 1.5 && d < _p.NodeSep) return "node_pair";
 			}
 		return "";
+	}
+
+	private int NearestSettlement(int cell)
+	{
+		int best = -1;
+		double bd = double.PositiveInfinity;
+		for (int k = 0; k < _settle.Length; k++)
+		{
+			double d = _t.Dist(_settle[k], cell);
+			if (d < bd) { bd = d; best = k; }
+		}
+		return best;
+	}
+
+	/// <summary>Свой выезд петли у поселения home из клетки сети c (место index в p, новая земля в сторону dir).</summary>
+	private string OwnExit(int home, int c, int index, int dir, int[] p)
+	{
+		int node = Graph.SettleNode[home];
+		if (node < 0) return "node_exit";
+		// новая хорда: от точки отхода до клетки пути ExitChord клеток дальше по новой земле
+		int far = index;
+		for (int k = index + dir; k >= 0 && k < p.Length; k += dir)
+		{
+			far = k;
+			if (_t.Dist(c, p[k]) >= _p.ExitChord) break;
+		}
+		double nx = _t.X(p[far]) - _t.X(c), ny = _t.Y(p[far]) - _t.Y(c);
+		if (RoadGraph.Hypot(nx, ny) < 1.0) return "node_exit";
+		foreach (int e in Graph.NEdges[node])
+		{
+			if (Graph.EDead[e]) continue;
+			var pts = Graph.EPts[e];
+			bool fromA = Graph.EA[e] == node;
+			var (ex, ey) = AlongEdge(pts, fromA, _p.ExitChord);
+			double ox = ex - Graph.NX[node], oy = ey - Graph.NY[node];
+			if (RoadGraph.Hypot(ox, oy) < 1e-6) continue;
+			double cos = (nx * ox + ny * oy) / (RoadGraph.Hypot(nx, ny) * RoadGraph.Hypot(ox, oy));
+			if (Math.Acos(Math.Clamp(cos, -1.0, 1.0)) * 180.0 / Math.PI < _p.ExitAngle)
+			{
+				NoteNode(c, " — выезд вдоль существующего");
+				return "node_exit_same";
+			}
+		}
+		bool atCentre = RoadGraph.Hypot(_t.X(c) - Graph.NX[node], _t.Y(c) - Graph.NY[node]) <= 1.5;
+		if (atCentre && Graph.Degree(node) + 1 > _p.MaxDegree) return "node_exit_degree";
+		return "";
+	}
+
+	/// <summary>Точка на ломаной ребра на дуге dist от начала (fromA) или от конца.</summary>
+	private static (double X, double Y) AlongEdge(double[] pts, bool fromA, double dist)
+	{
+		int n = pts.Length / 2;
+		double run = 0;
+		for (int j = 1; j < n; j++)
+		{
+			int a = fromA ? j - 1 : n - j, b = fromA ? j : n - j - 1;
+			double ax = pts[2 * a], ay = pts[2 * a + 1], bx = pts[2 * b], by = pts[2 * b + 1];
+			double len = RoadGraph.Hypot(bx - ax, by - ay);
+			if (run + len >= dist && len > 1e-9)
+			{
+				double t = (dist - run) / len;
+				return (ax + (bx - ax) * t, ay + (by - ay) * t);
+			}
+			run += len;
+		}
+		return fromA ? (pts[^2], pts[^1]) : (pts[0], pts[1]);
 	}
 
 	// ---------------------------------------------------------------- принятие ребра
@@ -417,10 +521,11 @@ public sealed class NetworkPlanner
 					avoid.Add(y * W + x);
 		var sorted = new List<int>(avoid);
 		sorted.Sort();
+		if (_mark.Length != _t.N) _mark = new byte[_t.N];
 		foreach (int c in sorted)
 		{
 			if (_t.Dist(c, sa) <= _p.ExitR || _t.Dist(c, sb) <= _p.ExitR) continue;
-			if (float.IsFinite(_scratch[c])) { _scratch[c] = (float)(_scratch[c] * _p.AvoidCost); touched.Add(c); }
+			if (float.IsFinite(_scratch[c])) { _scratch[c] = (float)(_scratch[c] * _p.AvoidCost); touched.Add(c); _mark[c] = 1; }
 		}
 		// Новая земля в кругах выездов дороже (StageTrails._exit_ring, EXIT_MUL)
 		int r = (int)Math.Ceiling(_p.ExitR);
@@ -442,6 +547,7 @@ public sealed class NetworkPlanner
 			if (ca < 0 || cb < 0) return "loop_no_geo";
 			var chain = CoarseGraph.Chain(prev, cb);
 			Stats.Time("coarse_path", t0);
+			SoftAvoid(Coarse.Bounds(chain).Grow((int)_p.WindowRetry, W, H), sa, sb, _mark, touched);
 			path = Router.Route(_scratch, sa, sb, Coarse.Bounds(chain), false, Stats);
 			if (path.Length == 0 && chain.Count >= 2)
 			{
@@ -453,13 +559,15 @@ public sealed class NetworkPlanner
 				if (cb == ca || prev2[cb] >= 0)
 				{
 					Stats.Count("loop_replans");
-					path = Router.Route(_scratch, sa, sb, Coarse.Bounds(CoarseGraph.Chain(prev2, cb)), false, Stats);
+					var bounds2 = Coarse.Bounds(CoarseGraph.Chain(prev2, cb));
+					SoftAvoid(bounds2.Grow((int)_p.WindowRetry, W, H), sa, sb, _mark, touched);
+					path = Router.Route(_scratch, sa, sb, bounds2, false, Stats);
 				}
 			}
 		}
 		finally
 		{
-			foreach (int c in touched) _scratch[c] = Base[c];
+			foreach (int c in touched) { _scratch[c] = Base[c]; _mark[c] = 0; }
 		}
 		if (path.Length == 0) return "loop_no_path";
 		long c0 = NetStats.Now();
@@ -482,7 +590,7 @@ public sealed class NetworkPlanner
 			if (Rejoins(beyond)) return "loop_rejoin";
 			if (core.Length >= 2 && Graph.DoubleCross(Polyline(core, 0, core.Length - 1), 20.0)) return "loop_double_cross";
 			if (FarShare(core, oldCells) < _p.FarShare) return "loop_duplicate";
-			string node = NodeRules(Attachments(path));
+			string node = NodeRules(AttachmentsAt(path), new[] { a, b }, path);
 			if (node.Length > 0) return "loop_" + node;
 			return "";
 		}
@@ -490,6 +598,36 @@ public sealed class NetworkPlanner
 		{
 			Stats.Time("checks", c0);
 		}
+	}
+
+	/// <summary>Мягкое избегание всей сети: новая земля ближе NearNet к сети на той же высоте (LevelGap, как правило
+	/// «вдоль сети» StageTrails._parallel_stats) вне кругов выезда sa и sb — в AvoidCost раз дороже, один раз на клетку
+	/// (mark). Клетки сети не трогаются: пересечь дорогу можно.</summary>
+	private void SoftAvoid(CellRect area, int sa, int sb, byte[] mark, List<int> touched)
+	{
+		int W = _t.W, H = _t.H, r = (int)Math.Ceiling(_p.NearNet);
+		double scale = _p.HeightScale * _p.Tile;
+		for (int y = area.Y0; y < area.Y1; y++)
+			for (int x = area.X0; x < area.X1; x++)
+			{
+				int i = y * W + x;
+				if (mark[i] != 0 || _t.Owner[i] >= 0 || Near[i] > _p.NearNet || !float.IsFinite(_scratch[i])) continue;
+				if (_t.Dist(i, sa) <= _p.ExitR || _t.Dist(i, sb) <= _p.ExitR) continue;
+				double reach = Near[i] + 0.75;
+				bool level = false;
+				for (int dy = -r; dy <= r && !level; dy++)
+					for (int dx = -r; dx <= r && !level; dx++)
+					{
+						int nx = x + dx, ny = y + dy;
+						if (nx < 0 || ny < 0 || nx >= W || ny >= H || dx * dx + dy * dy > reach * reach) continue;
+						int j = ny * W + nx;
+						level = _t.Owner[j] >= 0 && Math.Abs((double)_t.Hw[j] - _t.Hw[i]) * scale < _p.LevelGap;
+					}
+				if (!level) continue;
+				mark[i] = 1;
+				_scratch[i] = (float)(_scratch[i] * _p.AvoidCost);
+				touched.Add(i);
+			}
 	}
 
 	/// <summary>Длина пути по хордам через 4 клетки — без зубцов сетки (D_geo считается по центрам компонент, а не по

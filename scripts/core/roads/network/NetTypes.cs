@@ -37,6 +37,7 @@ public sealed class Params
 	public readonly double RidgeTpi, RidgeMul, EcoLow, EcoHigh, EcoMul, MeanderAmp, MeanderFlat, MeanderSlope, ShoreBand, ShoreMul;
 	public readonly double BranchLen, ShoreGap, ViewGap, ShoreReach, ViewReach, ShoreShare, MountainDetour, MountainReach;
 	public readonly double ProfileBase, LineRelax, Reach;
+	public readonly double ExitAngle, ExitChord, SpurNetFloor;
 
 	public Params(Godot.Collections.Dictionary d)
 	{
@@ -64,6 +65,7 @@ public sealed class Params
 		ShoreReach = Num(d, "shore_reach"); ViewReach = Num(d, "view_reach"); ShoreShare = Num(d, "shore_share");
 		MountainDetour = Num(d, "mountain_detour"); MountainReach = Num(d, "mountain_reach");
 		ProfileBase = Num(d, "profile_base"); LineRelax = Num(d, "line_relax"); Reach = Num(d, "reach");
+		ExitAngle = Num(d, "exit_angle"); ExitChord = Num(d, "exit_chord"); SpurNetFloor = Num(d, "spur_net_floor");
 		if (W <= 0 || H <= 0 || !(Tile > 0)) throw new ArgumentException("V2: неверный размер карты или клетки");
 	}
 

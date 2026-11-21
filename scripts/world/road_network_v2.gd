@@ -28,6 +28,9 @@ const MEANDER_AMP := 0.15
 const SHORE_BAND := 3.0     # клеток у моря и озера
 const SHORE_MUL := 1.5
 const SHORE_SHARE := 0.25   # береговое ответвление: доля клеток у воды (без последних 4) не больше
+const EXIT_ANGLE := 45.0    # петля: новый выезд своего поселения отличается от прежних выездов не меньше (градусы)
+const EXIT_CHORD := 10.0    # клеток: хорда направления выезда (8–12)
+const SPUR_NET_FLOOR := 2.0 # ответвление: клетка сети в окне не дешевле этого до множителя EXIT_MUL (как пол 2,0 в ride_routes.gd)
 const MOUNTAIN_REACH := 1.5 # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
 
 
@@ -64,6 +67,7 @@ static func params(w: WorldData) -> Dictionary:
 		branch_len = StageTrails.BRANCH_LEN, shore_gap = StageTrails.SHORE_GAP, view_gap = StageTrails.VIEW_GAP,
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX, shore_share = SHORE_SHARE,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR, mountain_reach = MOUNTAIN_REACH,
+		exit_angle = EXIT_ANGLE, exit_chord = EXIT_CHORD, spur_net_floor = SPUR_NET_FLOOR,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH}.merged(overrides, true)
 
 
