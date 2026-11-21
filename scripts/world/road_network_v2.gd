@@ -570,7 +570,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 
 ## Перестраивает только конечную геометрию. Поиск, связи и записанные интервалы веломаршрутов уже готовы.
 static func reshape_climbs(w: WorldData, surface: Heightfield, on_axis: PackedByteArray) -> void:
-	var stats := {candidates = 0, rebuilt = 0, turns = 0, long_climb_turns = 0, refused = {}, placements = []}
+	var stats := {candidates = 0, rebuilt = 0, turns = 0, long_climb_turns = 0, refused = {}, placements = [], refusals_at = []}
 	w.generation_profile.road_switchbacks = stats
 	var water: Object = surface.fast_water()
 	if water == null:
@@ -613,6 +613,10 @@ static func reshape_climbs(w: WorldData, surface: Heightfield, on_axis: PackedBy
 		stats.candidates += result.candidates
 		for reason: String in result.refused:
 			stats.refused[reason] = stats.refused.get(reason, 0) + result.refused[reason]
+		for spot: Dictionary in result.spots:
+			spot.kind = t.kind
+			spot.section = t.road_id
+			stats.refusals_at.append(spot)
 		if result.placements.is_empty(): continue
 		for p: Dictionary in result.placements:
 			p.kind = t.kind

@@ -391,8 +391,11 @@ public partial class FastGrid
 		}
 		var refused = new Godot.Collections.Dictionary();
 		foreach (var pair in builder.Refused) refused[pair.Key.ToString().ToLowerInvariant()] = pair.Value;
+		var spots = new Godot.Collections.Array();
+		foreach (var (at, why) in builder.RefusalSpots)
+			spots.Add(new Godot.Collections.Dictionary { ["at"] = new double[] { at.X, at.Y }, ["reason"] = why.ToString().ToLowerInvariant() });
 		return new Godot.Collections.Dictionary { ["points"] = points, ["placements"] = placements,
-			["candidates"] = builder.Candidates, ["refused"] = refused };
+			["candidates"] = builder.Candidates, ["refused"] = refused, ["spots"] = spots };
 	}
 
 	/// <summary>mode: "loops" — петли (t-спаннер), "spurs" — ответвления; "probe" — проверки стенда road_v2_test.</summary>

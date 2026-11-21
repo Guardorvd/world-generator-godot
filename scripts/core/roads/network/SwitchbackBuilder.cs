@@ -16,13 +16,17 @@ internal sealed class SwitchbackBuilder
 	private const double LengthLimit = 1.35;
 	private const double Corner = 35 * Math.PI / 180;
 	private const double Turn = 105 * Math.PI / 180;
-	private static readonly double[] AnchorDistances = { 9, 13, 18, 23 };
-	private static readonly float[] SideDistances = { 7, 10, 14, 18 };
+	private static readonly double[] AnchorDistances = { 8, 12, 17, 23, 30 };
+	private static readonly float[] SideDistances = { 7, 8.5f, 10, 12, 14, 16, 19 };
+	private static readonly float[] TurnBiases = { 0, -0.12f, 0.12f };
+	private static readonly int[] TurnCounts = { 1, 2 };
+	private static readonly float[] TurnSides = { -1, 1 };
 
 	internal enum Refusal { Anchors, Layout, Length, Structure, Water, Grade, Crossfall, Profile, Radius, Clearance, Ride }
 	internal sealed record Placement(P Start, P End, P[] Turns, double Radius, double ShortestArm, double Length, double Rise, bool Long);
 	internal readonly List<Placement> Placements = new();
 	internal readonly Dictionary<Refusal, int> Refused = new();
+	internal readonly List<(P At, Refusal Why)> RefusalSpots = new();
 	internal int Candidates;
 
 	private readonly GeometryValidator _validator;
@@ -50,6 +54,7 @@ internal sealed class SwitchbackBuilder
 		var along = Along(axis);
 		var result = new List<P>(axis.Count);
 		int written = 0;
+		double lengthReserve = along[^1] * (LengthLimit - 1);
 		foreach (P hit in Zigzags(raw, search))
 		{
 			int middle = Nearest(axis, hit);
@@ -57,15 +62,20 @@ internal sealed class SwitchbackBuilder
 			Candidates++;
 			Refusal cause = _protectedRide ? Refusal.Ride : Refusal.Anchors;
 			int first = written == 0 ? 0 : LowerBound(along, along[written - 1] + ProfileMargin);
-			if (!_protectedRide && middle > first && TrySection(axis, along, pins, middle, first, result, ref cause,
+			if (!_protectedRide && middle > first && TrySection(axis, along, pins, middle, first, result, lengthReserve, ref cause,
 				out int from, out int to, out var replacement, out var placement))
 			{
 				for (; written < from; written++) result.Add(axis[written]);
 				result.AddRange(replacement);
 				written = to + 1;
+				lengthReserve -= placement.Length / Tile - (along[to] - along[from]);
 				Placements.Add(placement);
 			}
-			else Refused[cause] = Refused.GetValueOrDefault(cause) + 1;
+			else
+			{
+				Refused[cause] = Refused.GetValueOrDefault(cause) + 1;
+				if (!_protectedRide) RefusalSpots.Add((axis[middle], cause));
+			}
 		}
 		if (Placements.Count == 0) return axis;
 		for (; written < axis.Count; written++) result.Add(axis[written]);
@@ -107,7 +117,8 @@ internal sealed class SwitchbackBuilder
 		}
 	}
 
-	private bool TrySection(List<P> axis, double[] along, byte[] pins, int middle, int firstAllowed, List<P> rebuilt, ref Refusal cause,
+	private bool TrySection(List<P> axis, double[] along, byte[] pins, int middle, int firstAllowed, List<P> rebuilt,
+		double lengthReserve, ref Refusal cause,
 		out int from, out int to, out List<P> result, out Placement placement)
 	{
 		from = to = 0;
@@ -138,21 +149,22 @@ internal sealed class SwitchbackBuilder
 			if (Math.Abs(riseRun) < 2 * _radius / Tile) continue;
 			cause = Later(cause, Refusal.Layout);
 			float shift = span.Dot(across);
-			foreach (int count in new[] { 1, 2 })
+			foreach (int count in TurnCounts)
 			foreach (float side in SideDistances)
-			foreach (float sign in new[] { -1f, 1f })
+			foreach (float sign in TurnSides)
+			foreach (float bias in TurnBiases)
 			{
 				var knots = new List<V>(4) { start };
 				for (int j = 1; j <= count; j++)
 				{
-					float frac = j / (float)(count + 1);
+					float frac = j / (float)(count + 1) + bias;
 					knots.Add(start + uphill * (riseRun * frac) + across * (shift * frac + sign * side * (j == 1 ? 1 : -1)));
 				}
 				knots.Add(end);
 				if (!Fillets(knots, uphill, a, b, out var candidate, out var turns, out double arm)) continue;
 				var candidateAlong = Along(candidate);
 				double length = candidateAlong[^1];
-				if (length > run * LengthLimit) { cause = Later(cause, Refusal.Length); continue; }
+				if (length > run + Math.Min(lengthReserve, 17.5)) { cause = Later(cause, Refusal.Length); continue; }
 				double score = 0;
 				foreach (P turn in turns) score += _validator.TerrainGrade(turn.X, turn.Y);
 				score = score / turns.Length + 0.12 * length / run;
