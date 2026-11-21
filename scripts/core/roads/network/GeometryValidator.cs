@@ -20,14 +20,24 @@ public sealed class GeometryValidator
 	}
 
 	private readonly TerrainSnapshot _t;
-	public GeometryValidator(TerrainSnapshot t) { _t = t; }
+	private readonly FastGrid _water;
+	private readonly double _tile, _profileBase;
+	public GeometryValidator(TerrainSnapshot t) { _t = t; _water = t.Water; _tile = t.P.Tile; _profileBase = t.P.ProfileBase; }
+
+	/// <summary>Без снимка мира (линия пути, фаза 3.2): только отрезок, профиль и радиус.</summary>
+	public GeometryValidator(FastGrid water, double tile, double profileBase)
+	{
+		_water = water ?? throw new ArgumentException("GeometryValidator: нет земли и воды");
+		_tile = tile;
+		_profileBase = profileBase;
+	}
 
 	/// <summary>Отрезок полосы шириной width (клетки): FastGrid.RoadSegment.</summary>
 	public bool Segment(double ax, double ay, double bx, double by, double width, double maxGrade, double maxCross)
 	{
-		bool ok = _t.Water.RoadSegment(ax, ay, bx, by, width, maxGrade, maxCross);
-		if (!ok && _t.Water.WaterSetupError().Length > 0)
-			throw new InvalidOperationException("V2: RoadSegment: " + _t.Water.WaterSetupError());
+		bool ok = _water.RoadSegment(ax, ay, bx, by, width, maxGrade, maxCross);
+		if (!ok && _water.WaterSetupError().Length > 0)
+			throw new InvalidOperationException("V2: RoadSegment: " + _water.WaterSetupError());
 		return ok;
 	}
 
@@ -35,7 +45,7 @@ public sealed class GeometryValidator
 	/// не короче PROFILE_BASE уклон не круче grade; skip — точки на настилах начинают окно заново.</summary>
 	public bool Profile(double[] pts, double grade, byte[] skip = null)
 	{
-		double T = _t.P.Tile, baseLen = _t.P.ProfileBase;
+		double T = _tile, baseLen = _profileBase;
 		int n = pts.Length / 2;
 		var heights = new double[n];
 		var along = new double[n];
@@ -44,7 +54,7 @@ public sealed class GeometryValidator
 		{
 			if (k > 0) run += RoadGraph.Hypot(pts[2 * k] - pts[2 * k - 2], pts[2 * k + 1] - pts[2 * k - 1]);
 			along[k] = run;
-			heights[k] = _t.GroundAt(pts[2 * k] * T, pts[2 * k + 1] * T);
+			heights[k] = _water.GroundAt(pts[2 * k] * T, pts[2 * k + 1] * T);
 		}
 		int j = 0;
 		for (int k = 1; k < n; k++)
@@ -77,7 +87,7 @@ public sealed class GeometryValidator
 	/// <summary>Наименьший радиус поворота по тройкам точек (отрезки не короче 0,3 клетки), м.</summary>
 	public double MinRadius(double[] pts)
 	{
-		double best = double.PositiveInfinity, T = _t.P.Tile;
+		double best = double.PositiveInfinity, T = _tile;
 		int n = pts.Length / 2;
 		for (int k = 1; k + 1 < n; k++)
 		{

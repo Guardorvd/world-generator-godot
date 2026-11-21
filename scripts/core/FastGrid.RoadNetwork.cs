@@ -199,11 +199,21 @@ public partial class FastGrid
 			var line = builder.Build(pts, input["kind"].AsString(), input["smooth"].AsString(), Join("join0"), Join("join1"),
 				input["relax"].AsDouble(), input["tolerance"].AsDouble(), input["road_limit"].AsDouble(), input["trail_grade"].AsDouble(),
 				input["mountain_grade"].AsDouble(), input["bench_cross"].AsDouble(), input["speed"].AsDouble(), input["accel"].AsDouble());
+			// фаза 3.2: сглаживание троп и горных троп (дороги road — нет)
+			var smoothStats = new Godot.Collections.Dictionary();
+			if (input.ContainsKey("smooth_line") && input["smooth_line"].AsBool())
+			{
+				line = builder.Smooth(line, new GeometryValidator(water, 4.0, input["profile_base"].AsDouble()));
+				smoothStats["moved"] = builder.SmoothMoved;
+				smoothStats["rejected"] = builder.SmoothRejected;
+				smoothStats["hairpins"] = builder.Hairpins;
+				smoothStats["hairpins_moved"] = builder.HairpinsMoved;
+			}
 			var ox = new double[line.Count];
 			var oy = new double[line.Count];
 			var ow = new double[line.Count];
 			for (int k = 0; k < line.Count; k++) { ox[k] = line[k].X; oy[k] = line[k].Y; ow[k] = line[k].W; }
-			return new Godot.Collections.Dictionary { ["x"] = ox, ["y"] = oy, ["w"] = ow, ["fallback"] = builder.Fallback };
+			return new Godot.Collections.Dictionary { ["x"] = ox, ["y"] = oy, ["w"] = ow, ["fallback"] = builder.Fallback, ["smooth"] = smoothStats };
 		}
 		catch (Exception e)
 		{

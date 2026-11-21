@@ -430,6 +430,7 @@ func _repeat() -> void:
 ## Фаза 3.1: линия на C# (LineBuilder) = RoadLine.build на синтетике: пути поиска по холму, крутому склону и равнине,
 ## виды road/trail/mountain, расчёт другого вида (smooth_kind), примыкания, оси сооружений; точки до 1e-6 клетки.
 func _line_port() -> void:
+	V2.smooth_lines = false # 3.1: линия ровно как RoadLine.build
 	var total := [0, 0, 0.0, [0, 0]]
 	for bumpy in [false, true]:
 		var r := _line_world(bumpy)
@@ -441,6 +442,55 @@ func _line_port() -> void:
 	# откат поблажки (профиль 12 м) на синтетике редок; на мире он есть (Ущелье) — там его сверяет --compare
 	check(total[0] >= 40 and total[1] == 0 and total[2] <= 1e-6 and total[3][0] == total[3][1],
 		"линия C# = RoadLine.build: случаев %d, разное число точек %d, наибольшее расхождение %s, откатов поблажки %s" % total)
+	V2.smooth_lines = true
+	_smooth_check()
+
+
+## Фаза 3.2: сглаживание не ухудшает линию: концы побитно, число точек то же, отрезков с нарушением (RoadLine.segment_ok
+## с пределом вида × поблажка) и окон профиля (profile_ok) не больше, чем до; хоть какие-то точки сдвинуты.
+func _smooth_check() -> void:
+	var w := _world("river")
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	var axis := PackedByteArray()
+	axis.resize(w.N)
+	var widths: Dictionary = RoadTuning.current().section.widths
+	var worse := 0
+	var moved := 0
+	var lines := 0
+	var ends_ok := true
+	for e: Array in [[8 * S + 8, 70 * S + 30], [30 * S + 10, 85 * S + 60], [60 * S + 30, 20 * S + 90], [90 * S + 8, 10 * S + 70], [12 * S + 50, 88 * S + 50]]:
+		for kind: String in ["trail", "mountain"]:
+			var grade: float = StageTrails.MOUNTAIN_GRADE if kind == "mountain" else StageTrails.TRAIL_GRADE
+			var cells := finder.find_path(w.cost, e[0], e[1], 1.0, grade, -1, 4.0, 0.0)
+			if cells.size() < 4: continue
+			var pts: Array = []
+			for c: int in cells: pts.append({x = c % S + 0.5, y = c / S + 0.5, w = widths[kind]})
+			V2.smooth_lines = false
+			var plain := V2.line(w, pts.duplicate(true), axis, surface, kind)
+			V2.smooth_lines = true
+			var smooth := V2.line(w, pts.duplicate(true), axis, surface, kind)
+			lines += 1
+			ends_ok = ends_ok and plain.size() == smooth.size() and plain[0].x == smooth[0].x and plain[0].y == smooth[0].y 				and plain[-1].x == smooth[-1].x and plain[-1].y == smooth[-1].y
+			var relax: float = RoadTuning.current().routing.line_relax[kind]
+			if _bad(surface, plain, grade, relax) < _bad(surface, smooth, grade, relax): worse += 1
+			for k in mini(plain.size(), smooth.size()):
+				if plain[k].x != smooth[k].x or plain[k].y != smooth[k].y:
+					moved += 1
+					break
+	check(lines >= 4 and ends_ok and worse == 0 and moved > 0,
+		"сглаживание: линий %d, сдвинуто %d, ухудшений %d, концы и число точек те же: %s" % [lines, moved, worse, ends_ok])
+
+
+func _bad(surface: Heightfield, line: Array, grade: float, relax: float) -> int:
+	var bad := 0
+	for k in range(1, line.size()):
+		if not StageTrails.RoadLine.segment_ok(surface, line[k - 1], line[k], grade * relax, StageTrails.MOUNTAIN_GRADE if grade == StageTrails.MOUNTAIN_GRADE else StageTrails.BENCH_CROSS, surface.fast_water()):
+			bad += 1
+	var profile: Array = []
+	for p: Dictionary in line: profile.append(Vector2(p.x, p.y))
+	if not StageTrails.RoadLine.profile_ok(surface, profile, grade): bad += 1
+	return bad
 
 
 func _line_world(bumpy: bool) -> Array:

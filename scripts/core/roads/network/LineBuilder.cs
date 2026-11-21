@@ -424,6 +424,112 @@ public sealed class LineBuilder
 		return curve;
 	}
 
+	// ---- фаза 3.2: монотонное сглаживание (план V2, 3.7, п. 2–4)
+	public const int SmoothPasses = 3;
+	public const double SmoothStep = 0.5;   // доля сдвига к середине соседей
+	public const double ApexReach = 3.0;    // RoadRefinement.REACH, м: вынос вершины разворота
+	public int SmoothMoved, SmoothRejected, Hairpins, HairpinsMoved;
+
+	/// <summary>Сглаживание линии: каждая свободная точка сдвигается к середине соседей (Лаплас) на SmoothStep; сдвиг
+	/// проверяет GeometryValidator на окне [i−3, i+3] (отрезки с пределом вида × поблажка и крен, профиль 12 м на окне
+	/// [i−6, i+6], радиус ≥ полуширины + 0,5 м), удержание в коридоре исходной линии (TURN_CORRIDOR) и оси сооружений;
+	/// при ухудшении шаг ×0,5 до трёх раз, иначе точка стоит. Нарушений после сдвига не больше, чем до (монотонно).
+	/// Концы, точки у осей сооружений и смены ширины закреплены. Разворот круче 105° — вершина выносится наружу до
+	/// радиуса полуширина + ApexReach + 1 м, если валидатор не против. Число точек не меняется.</summary>
+	public List<P> Smooth(List<P> line, GeometryValidator validator)
+	{
+		int n = line.Count;
+		if (n < 5) return line;
+		var orig = new List<P>(line);
+		var pts = new List<P>(line);
+		var pinned = new bool[n];
+		pinned[0] = pinned[n - 1] = true;
+		for (int k = 0; k < n; k++)
+		{
+			if (AxisBlocked(V.Of(pts[k].X, pts[k].Y)))
+				for (int j = Math.Max(0, k - 2); j < Math.Min(n, k + 3); j++) pinned[j] = true;
+			if (k > 0 && pts[k].W != pts[k - 1].W) { pinned[k] = true; pinned[k - 1] = true; }
+		}
+		double local = _relax > 1.0 ? _grade * _relax : _grade;
+		for (int pass = 0; pass < SmoothPasses; pass++)
+			for (int i = 1; i < n - 1; i++)
+			{
+				if (pinned[i]) continue;
+				double mx = (pts[i - 1].X + pts[i + 1].X) * 0.5, my = (pts[i - 1].Y + pts[i + 1].Y) * 0.5;
+				double dx = (mx - pts[i].X) * SmoothStep, dy = (my - pts[i].Y) * SmoothStep;
+				if (dx * dx + dy * dy < 1e-8) continue;
+				TryMove(pts, orig, i, dx, dy, validator, local, false);
+			}
+		// развороты: вершина наружу
+		for (int i = 2; i < n - 2; i++)
+		{
+			if (pinned[i]) continue;
+			double ax = pts[i].X - pts[i - 2].X, ay = pts[i].Y - pts[i - 2].Y, bx = pts[i + 2].X - pts[i].X, by = pts[i + 2].Y - pts[i].Y;
+			double la = Math.Sqrt(ax * ax + ay * ay), lb = Math.Sqrt(bx * bx + by * by);
+			if (la < 1e-6 || lb < 1e-6) continue;
+			double cos = (ax * bx + ay * by) / (la * lb);
+			if (Math.Acos(Math.Clamp(cos, -1.0, 1.0)) < Deg(105.0)) continue;
+			Hairpins++;
+			double need = (pts[i].W * 0.5 * Tile + ApexReach + 1.0) / Tile;
+			double have = validator.MinRadius(Flat(pts, i - 1, i + 1)) / Tile;
+			if (have >= need) continue;
+			// наружу — против середины соседей
+			double ox = pts[i].X - (pts[i - 1].X + pts[i + 1].X) * 0.5, oy = pts[i].Y - (pts[i - 1].Y + pts[i + 1].Y) * 0.5;
+			double lo = Math.Sqrt(ox * ox + oy * oy);
+			if (lo < 1e-6) continue;
+			double push = Math.Min(need - have, TurnCorridor);
+			if (TryMove(pts, orig, i, ox / lo * push, oy / lo * push, validator, local, true)) HairpinsMoved++;
+		}
+		return pts;
+	}
+
+	private static double[] Flat(List<P> pts, int from, int to)
+	{
+		from = Math.Max(0, from);
+		to = Math.Min(pts.Count - 1, to);
+		var outp = new double[(to - from + 1) * 2];
+		for (int k = from; k <= to; k++) { outp[2 * (k - from)] = pts[k].X; outp[2 * (k - from) + 1] = pts[k].Y; }
+		return outp;
+	}
+
+	/// <summary>Нарушения окна точки i: отрезки [i−3, i+3] (участок и крен), профиль на [i−6, i+6], радиус у i.</summary>
+	private int Violations(List<P> pts, int i, GeometryValidator validator, double local)
+	{
+		int bad = 0;
+		for (int k = Math.Max(1, i - 3); k <= Math.Min(pts.Count - 1, i + 3); k++)
+			if (!validator.Segment(pts[k - 1].X, pts[k - 1].Y, pts[k].X, pts[k].Y, pts[k - 1].W, local, _cross)) bad++;
+		if (!validator.Profile(Flat(pts, i - 6, i + 6), _grade)) bad++;
+		if (validator.MinRadius(Flat(pts, i - 1, i + 1)) < pts[i].W * 0.5 * Tile + 0.5) bad++;
+		return bad;
+	}
+
+	private bool TryMove(List<P> pts, List<P> orig, int i, double dx, double dy, GeometryValidator validator, double local, bool hairpin)
+	{
+		var keep = pts[i];
+		int before = Violations(pts, i, validator, local);
+		for (int attempt = 0; attempt < 3; attempt++, dx *= 0.5, dy *= 0.5)
+		{
+			var moved = new P(keep.X + dx, keep.Y + dy, keep.W);
+			// в коридоре исходной линии и не на осях сооружений по ширине
+			V p = V.Of(moved.X, moved.Y);
+			double deviation = double.PositiveInfinity;
+			for (int j = Math.Max(1, i - 4); j <= Math.Min(orig.Count - 1, i + 4); j++)
+				deviation = Math.Min(deviation, p.DistanceSquaredTo(ClosestOnSegment(p, V.Of(orig[j - 1].X, orig[j - 1].Y), V.Of(orig[j].X, orig[j].Y))));
+			if (deviation > TurnCorridor * TurnCorridor) continue;
+			if (AxisBlocked(p)) continue;
+			pts[i] = moved;
+			int after = Violations(pts, i, validator, local);
+			if (after <= before && (after == 0 || hairpin || after < before))
+			{
+				SmoothMoved++;
+				return true;
+			}
+			pts[i] = keep;
+		}
+		SmoothRejected++;
+		return false;
+	}
+
 	/// <summary>RoadLine.profile_ok: точки — float32 (Vector2), высоты и пробег — double.</summary>
 	public bool ProfileOk(V[] points, double grade, byte[] skip)
 	{

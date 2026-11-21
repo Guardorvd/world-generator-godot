@@ -396,7 +396,8 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 	var data := {x = xs, y = ys, w = ws, axis = on_axis, W = w.W, H = w.H, kind = kind, smooth = smooth_kind,
 		relax = float(relaxation.get(design, 0.0)), tolerance = float(straightening.get(design, 0.0)),
 		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
-		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design]}
+		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
+		smooth_line = smooth_lines and kind != "road", profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	for end in 2:
 		var join: Dictionary = joins.get(end, {})
 		if not join.is_empty(): data["join%d" % end] = PackedFloat64Array([join.tangent.x, join.tangent.y])
@@ -406,6 +407,11 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 	if out.has("error"):
 		push_error("Сеть V2: " + String(out.error))
 		return StageTrails.RoadLine.build(w, pts, on_axis, surface, kind, joins, Callable(), smooth_kind)
+	if not (out.smooth as Dictionary).is_empty():
+		var block: Dictionary = w.generation_profile.get_or_add("network_v2", {})
+		var smooth: Dictionary = block.get_or_add("smooth", {lines = 0, moved = 0, rejected = 0, hairpins = 0, hairpins_moved = 0})
+		smooth.lines += 1
+		for key: String in ["moved", "rejected", "hairpins", "hairpins_moved"]: smooth[key] += int(out.smooth[key])
 	if out.fallback:
 		StageTrails.RoadLine.fallbacks += 1
 		var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
@@ -419,3 +425,5 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 
 
 static var _line_core: Object = null
+## Фаза 3.2: монотонное сглаживание линий троп и горных троп (дорог road — нет). false — линия ровно как RoadLine.build.
+static var smooth_lines := true
