@@ -761,12 +761,19 @@ func _flag_check() -> void:
 	var tuning := RoadTuning.current()
 	var def_flag := StageTrails.network_v2
 	var s_off: String = WorldCache._road_layer_suffixes(tuning, false).places
+	var saves_off := QuickTrails.saves_dir()
+	var cache_off := QuickTrails.cache_dir()
 	StageTrails.network_v2 = true
 	var s_on: String = WorldCache._road_layer_suffixes(tuning, false).places
+	var saves_on := QuickTrails.saves_dir()
+	var cache_on := QuickTrails.cache_dir()
 	StageTrails.network_v2 = def_flag
 	var expected := V2.cache_suffix(true)
-	check(not def_flag and s_off != s_on and s_on.contains(expected),
-		"флаг --roads-v2: по умолчанию выключен (%s), с флагом меняет ключ кэша (%s -> %s)" % [def_flag, s_off, s_on])
+	check(not def_flag and s_off != s_on and s_on.contains(expected)
+		and saves_off == "user://saves" and cache_off == "user://world_cache"
+		and saves_on == "user://saves_roads_v2" and cache_on == "user://world_cache_roads_v2",
+		"флаг --roads-v2: по умолчанию выключен (%s), папки %s / %s -> %s / %s, ключ кэша (%s -> %s)" % [
+			def_flag, saves_off, cache_off, saves_on, cache_on, s_off, s_on])
 
 
 class V2Flags:
