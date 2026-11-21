@@ -17,6 +17,7 @@ internal sealed class SwitchbackBuilder
 	private const double Corner = 35 * Math.PI / 180;
 	private const double Turn = 105 * Math.PI / 180;
 	private static readonly double[] AnchorDistances = { 8, 12, 17, 23, 30 };
+	private static readonly double[] SteepAnchorDistances = { 8, 10, 12, 15, 17, 20, 23, 26, 30 };
 	private static readonly float[] SideDistances = { 7, 8.5f, 10, 12, 14, 16, 19 };
 	private static readonly float[] TurnBiases = { 0, -0.12f, 0.12f };
 	private static readonly int[] TurnCounts = { 1, 2 };
@@ -134,8 +135,9 @@ internal sealed class SwitchbackBuilder
 		while (last < axis.Count - 1 && !Pinned(axis, pins, last)) last++;
 		if (last <= first + 1) return false;
 		var visited = new HashSet<(int, int)>();
-		foreach (double back in AnchorDistances)
-		foreach (double ahead in AnchorDistances)
+		var distances = _grade >= 0.5 ? SteepAnchorDistances : AnchorDistances;
+		foreach (double back in distances)
+		foreach (double ahead in distances)
 		{
 			int lo = Math.Clamp(LowerBound(along, along[middle] - back), first, middle);
 			int hi = Math.Clamp(LowerBound(along, along[middle] + ahead), middle, last);
@@ -172,7 +174,15 @@ internal sealed class SwitchbackBuilder
 				if (!Validate(axis, along, lo, hi, candidate, candidateAlong, rebuilt, out Refusal failure, out double radius))
 				{
 					cause = Later(cause, failure);
-					continue;
+					if (failure != Refusal.Radius || !BlendSeams(axis, lo, hi, candidate, arm, out candidate, out arm)) continue;
+					candidateAlong = Along(candidate);
+					length = candidateAlong[^1];
+					if (length > run + Math.Min(lengthReserve, 17.5) ||
+						!Validate(axis, along, lo, hi, candidate, candidateAlong, rebuilt, out failure, out radius))
+					{
+						cause = Later(cause, failure);
+						continue;
+					}
 				}
 				bestScore = score;
 				from = lo;
@@ -227,6 +237,58 @@ internal sealed class SwitchbackBuilder
 		points.Add(b);
 		stations = LineBuilder.Stations(points);
 		return true;
+	}
+
+	private bool BlendSeams(List<P> axis, int lo, int hi, List<P> section, double arm, out List<P> shaped, out double remainingArm)
+	{
+		var start = BlendEnd(axis, lo, -1, section, 0, out int first, out double usedStart);
+		var finish = BlendEnd(axis, hi, 1, section, section.Count - 1, out int last, out double usedEnd);
+		remainingArm = arm - Math.Max(usedStart, usedEnd);
+		shaped = null;
+		if (remainingArm < MinArm || (start.Count == 0 && finish.Count == 0) || first >= last) return false;
+		shaped = start;
+		shaped.AddRange(section.GetRange(first, last - first + 1));
+		finish.Reverse();
+		shaped.AddRange(finish);
+		return true;
+	}
+
+	private List<P> BlendEnd(List<P> axis, int anchor, int outside, List<P> section, int end, out int cut, out double used)
+	{
+		cut = end;
+		used = 0;
+		var blend = new List<P>();
+		if (!LineBuilder.ChordPoint(axis, anchor, outside, 1, out double x, out double y)) return blend;
+		int inside = -outside;
+		P a = section[end];
+		V start = At(a);
+		V incoming = (start - V.Of(x, y)).Normalized();
+		V straight = (At(section[end + inside]) - start).Normalized();
+		double angle = Math.Abs(incoming.AngleTo(straight));
+		if (angle < 0.015 || angle > Math.PI / 3) return blend;
+		double reach = Math.Max(1.5, 5 * _radius / Tile * Math.Sin(angle));
+		for (int j = end + inside; j >= 0 && j < section.Count; j += inside)
+		{
+			V delta = At(section[j]) - start;
+			if (Math.Abs(delta.Cross(straight)) > 0.001) return blend;
+			if (delta.Dot(straight) < reach) continue;
+			cut = j;
+			used = delta.Length();
+			P b = section[j];
+			V p1 = start + incoming * (float)(used / 3);
+			V p2 = At(b) - straight * (float)(used / 3);
+			int steps = (int)Math.Ceiling(used * Tile);
+			blend.Add(a);
+			for (int k = 1; k < steps; k++)
+			{
+				float t = k / (float)steps;
+				V q0 = start.Lerp(p1, t), q1 = p1.Lerp(p2, t), q2 = p2.Lerp(At(b), t);
+				V p = q0.Lerp(q1, t).Lerp(q1.Lerp(q2, t), t);
+				blend.Add(new P(p.X, p.Y, a.W + (b.W - a.W) * t));
+			}
+			break;
+		}
+		return blend;
 	}
 
 	private bool Validate(List<P> axis, double[] along, int lo, int hi, List<P> section, double[] stations, List<P> rebuilt,
