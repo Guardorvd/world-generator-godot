@@ -79,6 +79,8 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		structures.append([Vector2(s.a % w.W + 0.5, s.a / w.W + 0.5), Vector2(s.b % w.W + 0.5, s.b / w.W + 0.5)])
 	var overlap := 0.0
 	var parallel := 0.0
+	var parallel_plain := 0.0 # без участков природных маршрутов (ни один из пары не ride)
+	var overlap_plain := 0.0
 	var spots: Array = [] # [point, "overlap" | "parallel"]
 	var pairs := {} # "r:other:вид" -> м
 	var kinks := {road = 0, trail = 0, mountain = 0}
@@ -201,10 +203,12 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 				if not aligned: continue
 				if d < OVERLAP:
 					overlap += SAMPLE * GameConfig.TILE * 0.5
+					if not t.has("ride") and not w.trails[other].has("ride"): overlap_plain += SAMPLE * GameConfig.TILE * 0.5
 					_tally(pairs, r, other, "overlap", SAMPLE * GameConfig.TILE * 0.5)
 					if spots.size() < 400 and n % 6 == 0: spots.append([p, "overlap"])
 				elif d >= NEAR_MIN and not near_node:
 					parallel += SAMPLE * GameConfig.TILE * 0.5
+					if not t.has("ride") and not w.trails[other].has("ride"): parallel_plain += SAMPLE * GameConfig.TILE * 0.5
 					_tally(pairs, r, other, "parallel", SAMPLE * GameConfig.TILE * 0.5)
 					if spots.size() < 400 and n % 6 == 0: spots.append([p, "parallel"])
 	var double_cross := 0
@@ -277,6 +281,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 			line_grade_fallbacks = w.generation_profile.get("road_line_grade_fallbacks"),
 			ride_rejections = w.generation_profile.get("rides", {}).get("rejected")},
 		length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
+		parallel_without_rides_m = roundi(parallel_plain), overlap_without_rides_m = roundi(overlap_plain),
 		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
 		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
