@@ -510,10 +510,9 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	if smooth_lines:
-		# Часть связей остова ещё отмечена тропой и получит класс дороги по потоку.
-		data.broad_spacing_m = float(routing.broad_spacing_m[design])
-		data.broad_radius_m = float(routing.broad_radius_m[design])
-		data.broad_offset_m = float(routing.broad_offset_m[design])
+		data.broad_spacing_m = float(routing.broad_spacing_m[kind])
+		data.broad_radius_m = float(routing.broad_radius_m[kind])
+		data.broad_offset_m = float(routing.broad_offset_m[kind])
 		data.broad_straight_m = routing.broad_straight_m
 		_add_near_axes(w, pts, data)
 	for end in 2:
@@ -532,7 +531,7 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		for key: String in ["moved", "rejected", "hairpins", "hairpins_moved"]: smooth[key] += int(out.smooth[key])
 	if not (out.broad as Dictionary).is_empty():
 		var profile: Dictionary = w.generation_profile.get_or_add("road_broad_curves", {})
-		var stats: Dictionary = profile.get_or_add(design, {accepted = 0, refused = {}})
+		var stats: Dictionary = profile.get_or_add(kind, {accepted = 0, refused = {}})
 		stats.accepted += out.broad.accepted
 		for reason: String in out.broad.refused:
 			stats.refused[reason] = int(stats.refused.get(reason, 0)) + int(out.broad.refused[reason])

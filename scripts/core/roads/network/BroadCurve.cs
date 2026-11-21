@@ -62,14 +62,6 @@ internal sealed class BroadCurve
 				int start = knots[i - 1], end = knots[i];
 				if (end > start + 1 && along[end] - along[start] >= 0.60 * _spacing)
 				{
-					// Leave already rounded spans alone, including their adjoining chords.
-					int shoulderStart = Math.Max(lo, start - 1), shoulderEnd = Math.Min(hi, end + 1);
-					if (_validator.MinRadius(Pack(source.GetRange(shoulderStart, shoulderEnd - shoulderStart + 1))) >= _radius * Tile)
-					{
-						Refused["already_rounded"] = Refused.GetValueOrDefault("already_rounded") + 1;
-						for (int j = start + 1; j <= end; j++) { result.Add(source[j]); pins.Add(sourcePins[j]); }
-						continue;
-					}
 					V startDirection = Direction(source, along, start, lo, hi);
 					V endDirection = Direction(source, along, end, lo, hi);
 					string reason = Curve(source[start], source[end], startDirection, endDirection, out var curve)
