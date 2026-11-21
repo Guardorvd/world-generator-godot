@@ -89,6 +89,8 @@ var _auto_save_result := {}
 var _save_status: Label
 var _load_manual: Button
 var _saved_discoveries := 0
+const AUTO_SAVE_GAP_MS := 2500  # мс между автосохранениями по открытиям мест
+var _auto_save_at_ms := -AUTO_SAVE_GAP_MS
 var _progress_enabled := false # инструменты не записывают пользовательский прогресс
 var _session_performance: SessionPerformance
 var display_options: DisplayOptions
@@ -1752,7 +1754,10 @@ func _process(delta: float) -> void:
 		_finish_auto_save()
 	if _progress_enabled and game != null and not busy and not game.paused and not game.travel_active():
 		_save_elapsed += delta
-		if _auto_save_task == -1 and (_save_elapsed >= 60.0 or hud.map_place_count() != _saved_discoveries):
+		# 21.11.2026: открытия мест подряд (место, доска рядом) — одно сохранение раз в AUTO_SAVE_GAP_MS, а не три за 0,1 с;
+		# смена задания (_save_elapsed = 60) пишется сразу
+		var discovered := hud.map_place_count() != _saved_discoveries and Time.get_ticks_msec() - _auto_save_at_ms >= AUTO_SAVE_GAP_MS
+		if _auto_save_task == -1 and (_save_elapsed >= 60.0 or discovered):
 			_queue_auto_save()
 	if busy:
 		_tick_loading(delta)
@@ -2146,7 +2151,11 @@ func _toggle_pause() -> void:
 		_resume()
 	else:
 		game.set_paused(true)
-		_save_current()
+		# 21.11.2026: сохранение при паузе — фоном, как автосохранение (было ~7,5 мс записи в кадре открытия паузы);
+		# выход и смена мира дожидаются его в _save_current
+		if _progress_enabled and game.quests != null:
+			_finish_auto_save()
+			_queue_auto_save()
 		_fade_hud(false, 0.18)   # подсказки и сообщения не лезут поверх панели паузы
 		%PauseWorld.text = "Мир «%s»" % game.world.seed_text
 		if _ui_stack != null:
@@ -2339,14 +2348,18 @@ func _queue_auto_save() -> void:
 	if _shop_progress != null:
 		_shop_progress.retry_rewards()
 	var state: Dictionary = game.save_state()
+	# 21.11.2026: в фон уходят готовые байты, а не словари игры (часть их — общие с живыми данными, например заезды)
+	var seed_text: String = state.seed
+	var raw := Saves.encode(state)
 	var result := {discoveries = hud.map_place_count(), error = ERR_BUSY, began_us = 0, ended_us = 0}
 	_auto_save_result = result
 	_save_elapsed = 0.0
+	_auto_save_at_ms = Time.get_ticks_msec()
 	if _session_performance != null:
 		_session_performance.work("autosave_snapshot", began_us, Time.get_ticks_usec())
 	_auto_save_task = WorkerThreadPool.add_task(func() -> void:
 		result.began_us = Time.get_ticks_usec()
-		result.error = Saves.write_slot(state)
+		result.error = Saves.write_bytes(seed_text, raw)
 		result.ended_us = Time.get_ticks_usec(),
 		false, "Автосохранение")
 

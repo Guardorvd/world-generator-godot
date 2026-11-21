@@ -79,11 +79,22 @@ static func _number(v: Variant) -> bool:
 static func write_slot(data: Dictionary, slot := "auto") -> Error:
 	if not valid(data):
 		return ERR_INVALID_DATA
+	return write_bytes(data.seed, var_to_bytes(EntityCodec.encode(data)), slot)
+
+
+## 21.11.2026: сохранение в байтах (var_to_bytes(EntityCodec.encode(data)) после valid) — готовый неизменяемый снимок.
+## Фоновая запись получает только его, а не живые словари игры
+static func encode(data: Dictionary) -> PackedByteArray:
+	return var_to_bytes(EntityCodec.encode(data)) if valid(data) else PackedByteArray()
+
+
+static func write_bytes(seed_text: String, raw: PackedByteArray, slot := "auto") -> Error:
+	if raw.is_empty():
+		return ERR_INVALID_DATA
 	var err := DirAccess.make_dir_recursive_absolute(dir)
 	if err != OK:
 		return err
-	var path := path_for(data.seed, slot)
-	var raw := var_to_bytes(EntityCodec.encode(data))
+	var path := path_for(seed_text, slot)
 	if raw.size() + 76 > MAX_BYTES:
 		return ERR_OUT_OF_MEMORY
 	var f := FileAccess.open(path + ".tmp", FileAccess.WRITE)
@@ -99,7 +110,7 @@ static func write_slot(data: Dictionary, slot := "auto") -> Error:
 	if err != OK:
 		return err
 	# Битый основной файл не вытесняет исправную резервную копию.
-	var old := read_slot(data.seed, slot)
+	var old := read_slot(seed_text, slot)
 	if FileAccess.file_exists(path) and not old.data.is_empty() and not old.backup:
 		if FileAccess.file_exists(path + ".bak"):
 			err = DirAccess.remove_absolute(path + ".bak")
