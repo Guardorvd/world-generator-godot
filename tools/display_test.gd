@@ -53,6 +53,7 @@ func run() -> void:
 	root.add_child(main)
 	main.set_script(Main)
 	main.set_process(false)
+	main._shop_progress = preload("res://scripts/ui/shop_panel.gd").Progress.new()
 	main.hud = main.get_node("%Hud")
 	main.seed_edit = main.get_node("%SeedEdit")
 	main.screens = {back = main.get_node("%Back"), menu = main.get_node("%Menu"), loading = main.get_node("%Loading"),
@@ -64,12 +65,9 @@ func run() -> void:
 	main._sync_settings_controls()
 	main.seed_edit.text = "Север-1234"
 	main._show_seed_tab("saved")
-	# 14.2: строка списка ставит своё зерно в поле — один источник выбора
+	# Выбор мира и поле создания теперь независимы.
 	main._pick_seed("Туман-4821")
-	check(main.seed_edit.text == "Туман-4821" and main._chosen_seed() == "Туман-4821", "picking a world fills the seed field")
-	main.seed_edit.text = "Север-1234"
-	main._choose_typed()
-	check(main._chosen_seed() == "Север-1234", "typing chooses the typed seed")
+	check(main.seed_edit.text == "Север-1234" and main._chosen_seed() == "Туман-4821", "picking a world preserves the creation field")
 	var camera := Camera3D.new()
 	main.add_child(camera)
 	camera.current = true
@@ -106,7 +104,7 @@ func run() -> void:
 		options.tabs.current_tab = 1
 		await settle()
 		var graphics: ScrollContainer = options.tabs.get_child(1)
-		check(graphics.get_v_scroll_bar().max_value <= graphics.size.y + 1, "graphics fits without scrolling %s" % size)
+		check(graphics.follow_focus and graphics.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED, "graphics scrolls vertically and follows focus %s" % size)
 		if DisplayServer.get_name() != "headless" and size == Vector2i(1280, 720):
 			root.get_texture().get_image().save_png(out.path_join("graphics_1280x720.png"))
 		options.tabs.current_tab = 0
@@ -178,6 +176,9 @@ func run() -> void:
 	options.resolution.select(pick)
 	options._update_apply()
 	check(not options.apply_button.disabled, "apply enabled for a new video mode")
+	main._close_settings()
+	check(main._confirm != null and options.has_unapplied_mode() and not options.pending(), "closing with a staged mode asks before discarding")
+	main._close_confirm()
 	options.preview()
 	check(options.pending() and GameContext.scope.settings.resolution == original.resolution, "video mode preview does not commit")
 	options._deadline = Time.get_ticks_msec() - 1

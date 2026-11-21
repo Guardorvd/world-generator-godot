@@ -210,11 +210,14 @@ func selected_state() -> Dictionary:
 func pending() -> bool:
 	return not _pending.is_empty()
 
+func has_unapplied_mode() -> bool:
+	var state := GameContext.scope.settings.display_state()
+	return mode.selected != (1 if state.fullscreen else 0) or _sizes[resolution.selected] != state.resolution
+
 ## «Применить» нужна, только когда выбран другой видеорежим
 func _update_apply() -> void:
-	var state := GameContext.scope.settings.display_state()
-	apply_button.disabled = pending() or (mode.selected == (1 if state.fullscreen else 0)
-		and _sizes[resolution.selected] == state.resolution)
+	apply_button.disabled = pending() or not has_unapplied_mode()
+	apply_button.text = "Применить режим экрана •" if has_unapplied_mode() else "Применить режим экрана"
 
 ## Графика: сразу в GameSettings, на экран и на диск (тени и дальность игра читает из GameSettings)
 func apply_graphics(category: StringName = &"graphics") -> void:

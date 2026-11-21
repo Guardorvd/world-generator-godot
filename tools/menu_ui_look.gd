@@ -59,6 +59,7 @@ func _run() -> void:
 	_main._on_start()
 	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%RestartWorld").has_focus() and not _main.busy,
 		"доступно восстановление через пересоздание")
+	await _capture_screen("world_corrupt", "%AllWorlds")
 	_main._return_to_menu_screen()
 	_main._pick_seed("Мир-6")
 	var previous_index: int = _main._carousel_seeds.find("Мир-6")
@@ -68,8 +69,34 @@ func _run() -> void:
 		"при удалении выбран сосед (%s)" % chosen)
 	_main._open_new_world()
 	await _capture_screen("create", "%AllWorlds")
+	_main._toggle_new_world()
 	_main._open_all_worlds()
 	await _capture_screen("worlds", "%AllWorlds")
+	var search: LineEdit = _main.get_node("%WorldSearch")
+	search.text = "Нет такого мира"
+	search.text_changed.emit(search.text)
+	await _capture_screen("worlds_no_results", "%AllWorlds")
+	search.text = ""
+	search.text_changed.emit(search.text)
+	_main._open_world_details()
+	await process_frame
+	await process_frame
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(OUT.path_join("details_960x720.png"))
+	_main.get_node("%MoreWorldActions").button_pressed = true
+	await process_frame
+	await process_frame
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(OUT.path_join("actions_960x720.png"))
+	_main.get_node("%MoreWorldActions").button_pressed = false
+	_main._return_to_menu_screen()
+	_main._open_settings()
+	await _capture_screen("settings_screen", "%Settings")
+	_main.display_options.tabs.current_tab = 1
+	await _capture_screen("settings_graphics", "%Settings")
+	_main._close_settings()
 	_main.get_node("%Title").text = "Мир «Сохранение-с-очень-длинным-именем»"
 	_main.get_node("%LoadPlaceholder").text = "Сохранение-с-очень-длинным-именем"
 	_main.get_node("%LoadPlaceholder").show()
@@ -109,7 +136,7 @@ func _clear_saves() -> void:
 	_main._show("menu")
 	_main._open_all_worlds()
 	var button: Button = _main.get_node("%ClearAllSaves")
-	_check(button.is_visible_in_tree() and not button.disabled, "очистка доступна рядом с хранилищем")
+	_check(not button.is_visible_in_tree() and not button.disabled, "очистка доступна через хранилище")
 	button.pressed.emit()
 	_check(_main._confirm != null and not Saves.active_files().is_empty(), "открытие диалога не меняет файлы")
 	_main._confirm.canceled.emit()
@@ -129,7 +156,7 @@ func _clear_saves() -> void:
 		"пустой список сохраняется после перезапуска")
 	await _capture_state("cleared")
 	_main._open_all_worlds()
-	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%SeedEdit").has_focus(), "пустой список открывает создание мира")
+	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%WorldSearch").has_focus(), "пустой список открывает библиотеку")
 	var restore: Button = _main.get_node("%Recommended")
 	restore.pressed.emit()
 	_check(_main._carousel_seeds.has(RecommendedSeeds.SEEDS[0].seed), "рекомендации можно вернуть")
@@ -203,7 +230,10 @@ func _navigation() -> void:
 	cancel.pressed = true
 	root.push_input(cancel)
 	await process_frame
-	_check(_main.get_node("%OpenWorlds").has_focus() and _main.get_node("%Menu").visible, "B возвращает в главное меню")
+	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%NewWorld").has_focus(), "B возвращает из создания к библиотеке")
+	root.push_input(cancel)
+	await process_frame
+	_check(_main.get_node("%OpenWorlds").has_focus() and _main.get_node("%Menu").visible, "повторное B возвращает в главное меню")
 	_main._open_all_worlds()
 	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%Storage").is_visible_in_tree(), "все миры и хранилище доступны")
 	_main._return_to_menu_screen()
