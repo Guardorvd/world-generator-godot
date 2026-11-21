@@ -31,6 +31,7 @@ func _initialize() -> void:
 	_ports()
 	_refresh()
 	_repeat()
+	_line_port()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
 
@@ -424,6 +425,74 @@ func _repeat() -> void:
 			JSON.stringify(spurs.network_v2.counts), JSON.stringify(spurs.network_v2.rejects)])
 		hashes.append(var_to_bytes(key).hex_encode().sha256_text())
 	check(hashes.size() == 2 and hashes[0] == hashes[1], "повтор: два прогона планировщика — один результат")
+
+
+## Фаза 3.1: линия на C# (LineBuilder) = RoadLine.build на синтетике: пути поиска по холму, крутому склону и равнине,
+## виды road/trail/mountain, расчёт другого вида (smooth_kind), примыкания, оси сооружений; точки до 1e-6 клетки.
+func _line_port() -> void:
+	var total := [0, 0, 0.0, [0, 0]]
+	for bumpy in [false, true]:
+		var r := _line_world(bumpy)
+		total[0] += r[0]
+		total[1] += r[1]
+		total[2] = maxf(total[2], r[2])
+		total[3][0] += r[3][0]
+		total[3][1] += r[3][1]
+	# откат поблажки (профиль 12 м) на синтетике редок; на мире он есть (Ущелье) — там его сверяет --compare
+	check(total[0] >= 40 and total[1] == 0 and total[2] <= 1e-6 and total[3][0] == total[3][1],
+		"линия C# = RoadLine.build: случаев %d, разное число точек %d, наибольшее расхождение %s, откатов поблажки %s" % total)
+
+
+func _line_world(bumpy: bool) -> Array:
+	var w := _world("river")
+	# бугры: прямая с поблажкой проходит отрезки, но окно 12 м круче — проверка отката
+	if bumpy:
+		for i in w.N:
+			var x := i % S
+			if x < 60: w.h[i] += 0.0045 * sin(x * 1.7) * sin(i / S * 1.3) + 0.0012 * x
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	var axis := PackedByteArray()
+	axis.resize(w.N)
+	for y in range(48, 53): axis[y * S + 44] = 1 # «мост» поперёк реки
+	var widths: Dictionary = RoadTuning.current().section.widths
+	var cases := 0
+	var worst := 0.0
+	var mismatch := 0
+	var fallbacks := [0, 0]
+	var ends := [[8 * S + 8, 70 * S + 30], [30 * S + 10, 85 * S + 60], [60 * S + 30, 20 * S + 90], [90 * S + 8, 10 * S + 70],
+		[50 * S + 20, 50 * S + 70], [75 * S + 15, 40 * S + 78], [12 * S + 50, 88 * S + 50], [66 * S + 60, 30 * S + 30]]
+	for e: Array in ends:
+		for kind: String in ["road", "trail", "mountain"]:
+			var grade: float = StageTrails.MOUNTAIN_GRADE if kind == "mountain" else (StageTrails.TRAIL_GRADE if kind == "trail" else StageTrails.ROAD_LIMIT)
+			var cells := finder.find_path(w.cost, e[0], e[1], 1.0, grade, -1, 4.0, 0.0)
+			if cells.size() < 4: continue
+			for variant in 4:
+				# вариант 3 — большая поблажка на бугры (2,5): профиль чаще круче предела, линия строится заново без неё
+				if variant == 3: StageTrails.routing_overrides.line_relax = {road = 2.5, trail = 2.5, mountain = 2.5}
+				var pts: Array = []
+				for c: int in cells: pts.append({x = c % S + 0.5, y = c / S + 0.5, w = widths[kind]})
+				var smooth := "road" if variant == 1 and kind == "trail" else ""
+				var joins := {}
+				if variant == 2:
+					joins[0] = {tangent = Vector2(1, 0.3).normalized()}
+					joins[1] = {tangent = Vector2(-0.2, 1).normalized()}
+					pts[pts.size() / 2].w = widths[kind] * 0.9 # смена ширины — вершина остаётся
+				var before := StageTrails.RoadLine.fallbacks
+				var gd := StageTrails.RoadLine.build(w, pts.duplicate(true), axis, surface, kind, joins, Callable(), smooth)
+				fallbacks[0] += StageTrails.RoadLine.fallbacks - before
+				before = StageTrails.RoadLine.fallbacks
+				var cs := V2.line(w, pts.duplicate(true), axis, surface, kind, joins, smooth)
+				fallbacks[1] += StageTrails.RoadLine.fallbacks - before
+				StageTrails.routing_overrides.erase("line_relax")
+				cases += 1
+				if gd.size() != cs.size():
+					mismatch += 1
+					print("  линия %s %s вариант %d: точек GDScript %d, C# %d" % [str(e), kind, variant, gd.size(), cs.size()])
+					continue
+				for k in gd.size():
+					worst = maxf(worst, maxf(absf(gd[k].x - cs[k].x), maxf(absf(gd[k].y - cs[k].y), absf(gd[k].w - cs[k].w))))
+	return [cases, mismatch, worst, fallbacks]
 
 
 class V2Flags:

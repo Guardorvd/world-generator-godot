@@ -335,7 +335,14 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 					pts[at] = {x = join.point.x, y = join.point.y, w = width}
 					joins[end] = join
 			var line_us := Time.get_ticks_usec()
-			var line := RoadLine.build(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind) if surface != null else Grid.chaikin(pts, 3)
+			var line: Array
+			if surface == null:
+				line = Grid.chaikin(pts, 3)
+			elif network_v2 and not corridor.is_valid():
+				# Сеть V2, фаза 3.1: та же линия на C# (LineBuilder, порт RoadLine.build один к одному)
+				line = RoadNetworkV2.line(w, pts, on_axis, surface, kind, joins, smooth_kind)
+			else:
+				line = RoadLine.build(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind)
 			_part("road_line", line_us)
 			var index := w.trails.size()
 			Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)

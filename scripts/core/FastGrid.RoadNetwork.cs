@@ -178,6 +178,39 @@ public partial class FastGrid
 		return near;
 	}
 
+	/// <summary>Фаза 3.1: линия пути (RoadLine.build) на C# — LineBuilder. water — Heightfield.fast_water() поверхности поиска.
+	/// Выход: x, y, w (точки линии), fallback — профиль с поблажкой вышел круче предела; ошибка — ключ error.</summary>
+	public Godot.Collections.Dictionary BuildRoadLine(Godot.Collections.Dictionary input, FastGrid water)
+	{
+		try
+		{
+			var xs = input["x"].AsFloat64Array();
+			var ys = input["y"].AsFloat64Array();
+			var ws = input["w"].AsFloat64Array();
+			var pts = new System.Collections.Generic.List<LineBuilder.P>(xs.Length);
+			for (int k = 0; k < xs.Length; k++) pts.Add(new LineBuilder.P(xs[k], ys[k], ws[k]));
+			LineBuilder.V? Join(string key)
+			{
+				if (!input.ContainsKey(key)) return null;
+				var t = input[key].AsFloat64Array();
+				return t.Length == 2 ? new LineBuilder.V((float)t[0], (float)t[1]) : null;
+			}
+			var builder = new LineBuilder(water, input["axis"].AsByteArray(), input["W"].AsInt32(), input["H"].AsInt32());
+			var line = builder.Build(pts, input["kind"].AsString(), input["smooth"].AsString(), Join("join0"), Join("join1"),
+				input["relax"].AsDouble(), input["tolerance"].AsDouble(), input["road_limit"].AsDouble(), input["trail_grade"].AsDouble(),
+				input["mountain_grade"].AsDouble(), input["bench_cross"].AsDouble(), input["speed"].AsDouble(), input["accel"].AsDouble());
+			var ox = new double[line.Count];
+			var oy = new double[line.Count];
+			var ow = new double[line.Count];
+			for (int k = 0; k < line.Count; k++) { ox[k] = line[k].X; oy[k] = line[k].Y; ow[k] = line[k].W; }
+			return new Godot.Collections.Dictionary { ["x"] = ox, ["y"] = oy, ["w"] = ow, ["fallback"] = builder.Fallback };
+		}
+		catch (Exception e)
+		{
+			return new Godot.Collections.Dictionary { ["error"] = "LineBuilder: " + e.GetType().Name + ": " + e.Message + " " + e.StackTrace };
+		}
+	}
+
 	/// <summary>mode: "loops" — петли (t-спаннер), "spurs" — ответвления; "probe" — проверки стенда road_v2_test.</summary>
 	public Godot.Collections.Dictionary PlanNetworkV2(Godot.Collections.Dictionary input, FastGrid water)
 	{

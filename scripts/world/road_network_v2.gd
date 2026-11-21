@@ -370,3 +370,52 @@ static func ride_anchors(w: WorldData, finder: Pathfinder, surface: Heightfield,
 	if out.is_empty(): return anchors
 	var dist: PackedFloat32Array = out.node_dist
 	return anchors.filter(func(a: Dictionary) -> bool: return dist[a.i] <= NODE_SAME or dist[a.i] >= RIDE_NODE_SEP)
+
+
+## Фаза 3.1: линия пути на C# (LineBuilder, порт RoadLine.build один к одному) для всех путей при network_v2.
+## Вход и правила — те же, что у RoadLine.build (поблажка, срезание лесенки, скорость и ускорение поворота вида);
+## счётчики отказов поблажки — те же (RoadLine.fallbacks, generation_profile.road_line_grade_fallbacks).
+## Коридор областей (Callable) — только GDScript: вызывающий проверяет его сам.
+static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield, kind := "road", joins := {},
+		smooth_kind := "") -> Array:
+	var water: Object = surface.fast_water()
+	if water == null:
+		push_error("Сеть V2: линия на C# требует земли и воды на C# (Heightfield.fast_water)")
+		return StageTrails.RoadLine.build(w, pts, on_axis, surface, kind, joins, Callable(), smooth_kind)
+	var routing := RoadTuning.current().routing
+	var design := kind if smooth_kind.is_empty() else smooth_kind
+	var relaxation: Dictionary = StageTrails.routing_overrides.get("line_relax", routing.line_relax)
+	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", routing.straighten)
+	var xs := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var ws := PackedFloat64Array()
+	for p: Dictionary in pts:
+		xs.append(p.x)
+		ys.append(p.y)
+		ws.append(p.w)
+	var data := {x = xs, y = ys, w = ws, axis = on_axis, W = w.W, H = w.H, kind = kind, smooth = smooth_kind,
+		relax = float(relaxation.get(design, 0.0)), tolerance = float(straightening.get(design, 0.0)),
+		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
+		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design]}
+	for end in 2:
+		var join: Dictionary = joins.get(end, {})
+		if not join.is_empty(): data["join%d" % end] = PackedFloat64Array([join.tangent.x, join.tangent.y])
+	var core: Object = _line_core if _line_core != null else Grid.native_grid()
+	_line_core = core
+	var out: Dictionary = core.BuildRoadLine(data, water)
+	if out.has("error"):
+		push_error("Сеть V2: " + String(out.error))
+		return StageTrails.RoadLine.build(w, pts, on_axis, surface, kind, joins, Callable(), smooth_kind)
+	if out.fallback:
+		StageTrails.RoadLine.fallbacks += 1
+		var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
+		decisions[kind] = int(decisions.get(kind, 0)) + 1
+	var result: Array = []
+	var ox: PackedFloat64Array = out.x
+	var oy: PackedFloat64Array = out.y
+	var ow: PackedFloat64Array = out.w
+	for k in ox.size(): result.append({x = ox[k], y = oy[k], w = ow[k]})
+	return result
+
+
+static var _line_core: Object = null
