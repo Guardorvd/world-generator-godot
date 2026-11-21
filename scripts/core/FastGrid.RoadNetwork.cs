@@ -21,6 +21,11 @@ public partial class FastGrid
 	private NetworkSession _v2Session;
 	private GeomorphologyFields _routeCharacter;
 	private Params _characterOptions;
+	public bool TraceCharacterPaths { get; set; }
+	public int DryCharacterSearches { get; private set; }
+	private Godot.Collections.Array _dryCharacterPaths;
+	public Godot.Collections.Array DryCharacterPaths() => _dryCharacterPaths;
+	public Godot.Collections.Dictionary FlatCharacterStats() => _routeCharacter.FlatStatistics();
 	internal int CorridorVersion => _corridorVersion;
 
 	/// <summary>Двухпроходная фаска 1 / √2 (копия PropagateDistances, FastGrid.cs) только в окне x0..x1, y0..y1 поверх
@@ -88,6 +93,8 @@ public partial class FastGrid
 	{
 		if (_routeCharacter == null) throw new InvalidOperationException("V2: поле характера не подготовлено");
 		var p = _characterOptions;
+		DryCharacterSearches = 0;
+		if (TraceCharacterPaths) _dryCharacterPaths = new Godot.Collections.Array();
 		if (path.Length < p.ShapeMin) return path;
 		var pinned = new bool[path.Length];
 		int wetAt = -p.ShapePortal - 1;
@@ -124,7 +131,10 @@ public partial class FastGrid
 					shaped = FindDryShape(path, start, end, cost, scratch, axis, heights, links, kind, climb, grade, crossGrade);
 				}
 				if (shaped.Length > 1)
+				{
+					if (TraceCharacterPaths) _dryCharacterPaths.Add(shaped);
 					for (int k = 1; k < shaped.Length; k++) result.Add(shaped[k]);
+				}
 				else
 					for (int k = start + 1; k <= end; k++) result.Add(path[k]);
 				start = end;
@@ -167,6 +177,7 @@ public partial class FastGrid
 			}
 		HeuristicScale = CharacterHeuristic(p.MulMin, min);
 		SetWindow(x0, y0, x1, y1);
+		DryCharacterSearches++;
 		return FindPath(scratch, path[start], path[end], heights, climb, grade, links, true, crossGrade);
 	}
 

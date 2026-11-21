@@ -80,6 +80,8 @@ func _initialize() -> void:
 	if "--v2" in args:
 		StageTrails.network_v2 = true
 		print("дорожная сеть V2")
+	var character_audit := "--character-audit" in args
+	StageTrails.RoadNetworkV2.audit_character = character_audit
 	# --v2-param k=v,k=v: числа V2 на время запуска (RoadNetworkV2.overrides) — подбор без правки кода
 	var v2_param := _arg(args, "--v2-param", "")
 	if not v2_param.is_empty():
@@ -132,6 +134,15 @@ func _initialize() -> void:
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
 	print("линий без поблажки на бугры (профиль круче предела): ", StageTrails.RoadLine.fallbacks)
 	print("PROFILE ", JSON.stringify(profile))
+	if character_audit:
+		print("CHARACTER AUDIT ", JSON.stringify(w.generation_profile.get("character_search", {})))
+		var branches := {view = [], shore = []}
+		for note: Array in w.generation_profile.get("second_ways", []):
+			if not branches.has(note[0]): continue
+			var length := 0.0
+			for k: int in note[1]: length += StageTrails._kind_length_of(w.trails[k]) * GameConfig.TILE
+			branches[note[0]].append(snappedf(length, 0.1))
+		print("BRANCH AUDIT ", JSON.stringify(branches))
 	print("SECOND WAYS ", JSON.stringify(w.generation_profile.get("second_ways", [])), " повышено до дорог, м: ", w.generation_profile.get("upgraded_m", 0))
 	for link: Array in w.generation_profile.get("road_links", []):
 		print("  связь %d→%d, %d клеток: запас %d, %s, %.0f мс (поиск %.0f)" % link)

@@ -999,8 +999,10 @@ public sealed class NetworkPlanner
 			foreach (int c in touched) _mark[c] = 1;
 			SoftAvoid(win, source, source, 1.5, _mark, touched);
 		}
+		int searchesBefore = Router.Searches;
 		try { path = Router.Route(_scratch, source, target, area, kind == 2, Stats, Math.Min(0.3, Fields.MinCost)); }
 		finally { foreach (int c in touched) { _scratch[c] = Base[c]; if (_mark.Length == _t.N) _mark[c] = 0; } }
+		Stats.Count(what + "_searches", Router.Searches - searchesBefore);
 		if (path.Length == 0) return what + "_no_path";
 		long c0 = NetStats.Now();
 		try

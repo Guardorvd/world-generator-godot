@@ -134,8 +134,35 @@ public sealed class GeomorphologyFields
 	public float WeightedCell(float cost, int cell, double amplitude, byte[] axis, bool owned = false)
 	{
 		if (!float.IsFinite(cost) || owned || Wet(cell) || axis.Length != 0 && axis[cell] != 0) return cost;
-		double mul = Math.Clamp(_common[cell] * (1.0 + amplitude * _wave[cell]), _t.P.MulMin, _t.P.MulMax);
-		return (float)(cost * mul);
+		return (float)(cost * Multiplier(cell, amplitude));
+	}
+
+	private double Multiplier(int cell, double amplitude) =>
+		Math.Clamp(_common[cell] * (1.0 + amplitude * _wave[cell]), _t.P.MulMin, _t.P.MulMax);
+
+	/// <summary>Распределение множителей по сухим клеткам с уклоном сглаженного поля меньше 6 %.</summary>
+	public Godot.Collections.Dictionary FlatStatistics()
+	{
+		var report = new Godot.Collections.Dictionary();
+		foreach (string kind in new[] { "road", "trail", "mountain", "ride" })
+		{
+			int count = 0, discounted = 0;
+			double min = double.PositiveInfinity, max = 0.0, sum = 0.0;
+			double amplitude = _t.P.Meander(kind);
+			for (int c = 0; c < _t.N; c++)
+			{
+				if (Slope[c] >= 0.06f || Wet(c) || !float.IsFinite(_t.Cost[c])) continue;
+				double mul = Multiplier(c, amplitude);
+				min = Math.Min(min, mul); max = Math.Max(max, mul); sum += mul;
+				count++;
+				if (mul < 1.0) discounted++;
+			}
+			if (count > 0) report[kind] = new Godot.Collections.Dictionary
+			{
+				["cells"] = count, ["discounted"] = discounted, ["min"] = min, ["max"] = max, ["mean"] = sum / count
+			};
+		}
+		return report;
 	}
 
 	public static double Minimum(float[] cost)

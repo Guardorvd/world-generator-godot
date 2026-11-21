@@ -136,6 +136,8 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.generation_profile.merge(finder.search_stats())
 	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	w.generation_profile.parts_ms = parts.duplicate()
+	if network_v2:
+		w.generation_profile.character_search = RoadNetworkV2.character_report(w, finder, on_axis)
 	finder.release()
 	var issue := RoadRecords.validation_error(w.trails, "StageTrails (%s)" % w.seed_text, RoadRecords.Phase.PUBLISHED)
 	if issue.is_empty():
@@ -366,6 +368,8 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		if legs != null:
 			_trace_ride(w, path, reused, pieces, legs)
 	_trodden(w, path, kind, road_cost)
+	if network_v2 and RoadNetworkV2.audit_character:
+		RoadNetworkV2.record_dry_publication(w, added)
 	var protect_us := Time.get_ticks_usec()
 	_protect_structures(w, road_cost)
 	_part("protect_structures", protect_us)

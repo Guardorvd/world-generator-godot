@@ -31,6 +31,7 @@ const RIDE_NODE_SEP := 12.0      # примыкание ближе этого (�
 
 ## Подмена чисел V2 на время запуска стенда (road_plan_test -- --v2-param ключ=значение,…); в кэш игры не попадает.
 static var overrides := {}
+static var audit_character := false
 ## Сессия ядра на этап путей: новый номер у петель (первый вызов V2 в этапе), ответвления и горные тропы — тот же.
 ## Ядро кэширует по нему неизменные поля и грубый граф (каждый кэш ещё и с ключом своих входов).
 static var _session := -1
@@ -126,6 +127,7 @@ static func prepare_character(w: WorldData, finder: Pathfinder, surface: Heightf
 	_session = Time.get_ticks_usec()
 	data.mode = "character"
 	data.session = _session
+	finder.fast().TraceCharacterPaths = audit_character
 	call_core(finder, surface, data)
 
 
@@ -141,9 +143,90 @@ static func shape_land(w: WorldData, finder: Pathfinder, cost: PackedFloat32Arra
 	var stats: Dictionary = w.generation_profile.get_or_add("network_v2", {}).get_or_add("character_land", {})
 	var entry: Dictionary = stats.get_or_add(kind, {calls = 0, changed = 0, ms = 0.0})
 	entry.calls += 1
+	entry.searches = int(entry.get("searches", 0)) + int(finder.fast().DryCharacterSearches)
 	entry.changed += int(result != path)
 	entry.ms += (Time.get_ticks_usec() - t0) / 1000.0
+	if audit_character:
+		var edges := {}
+		for part: PackedInt32Array in finder.fast().DryCharacterPaths():
+			for k in range(1, part.size()):
+				edges[_edge_key(w.N, part[k - 1], part[k])] = true
+		w.generation_profile._character_pending = edges
 	return result
+
+
+static func _edge_key(size: int, a: int, b: int) -> int:
+	return mini(a, b) * size + maxi(a, b)
+
+
+static func record_dry_publication(w: WorldData, added: Array) -> void:
+	if not w.generation_profile.has("_character_pending"): return
+	var pending: Dictionary = w.generation_profile._character_pending
+	w.generation_profile.erase("_character_pending")
+	var published: Dictionary = w.generation_profile.get_or_add("_character_edges", {})
+	for k: int in added:
+		var cells: PackedInt32Array = w.generation.road_cells[k]
+		for j in range(1, cells.size()):
+			var key := _edge_key(w.N, cells[j - 1], cells[j])
+			if pending.has(key): published[key] = true
+
+
+## Длина уникального опубликованного полотна. Доля сырых рёбер переносится на длину каждой готовой оси.
+## Существующее полотно, повторно использованное маршрутом, учитывается только по исходному поиску.
+static func character_report(w: WorldData, finder: Pathfinder, axis: PackedByteArray) -> Dictionary:
+	var block: Dictionary = w.generation_profile.get("network_v2", {})
+	var land: Dictionary = block.get("character_land", {})
+	var spurs: Dictionary = block.get("spurs", {}).get("counts", {})
+	var searches := {
+		skeleton = land.get("road", {}).get("searches", 0), bridge_gap = land.get("trail", {}).get("searches", 0),
+		rides = w.generation_profile.get("rides", {}).get("searches", 0),
+		mountain = block.get("mountain", {}).get("counts", {}).get("searches", 0),
+		loops = block.get("loops", {}).get("counts", {}).get("searches", 0),
+		view = spurs.get("view_searches", 0), shore = spurs.get("shore_searches", 0),
+	}
+	var out := {searches = searches}
+	if not audit_character: return out
+	var dry: Dictionary = w.generation_profile.get("_character_edges", {})
+	w.generation_profile.erase("_character_edges")
+	var groups := {}
+	for note: Array in w.generation_profile.get("second_ways", []):
+		for k: int in note[1]: groups[k] = note[0]
+	var river := w.river_cells()
+	var by_group := {}
+	var axis_m := 0.0
+	var field_m := 0.0
+	var raw_m := 0.0
+	var raw_field_m := 0.0
+	for k in w.trails.size():
+		var t: Dictionary = w.trails[k]
+		if t.kind == "animal" or t.has("trail_id") or t.pts.size() < 2: continue
+		var group: String = "rides" if t.has("ride") else groups.get(k, "skeleton")
+		if group in ["shortcut", "alternative"]: group = "loops"
+		var cells: PackedInt32Array = w.generation.road_cells[k]
+		var full_field := group not in ["skeleton", "bridge_gap"]
+		var run := 0.0
+		var with_field := 0.0
+		for j in range(1, cells.size()):
+			var a := cells[j - 1]
+			var b := cells[j]
+			var length := Grid.hypot(a % w.W - b % w.W, a / w.W - b / w.W) * GameConfig.TILE
+			run += length
+			var land_edge := axis[a] == 0 and axis[b] == 0 and w.ocean[a] == 0 and w.ocean[b] == 0 \
+				and w.lake[a] == 0 and w.lake[b] == 0 and river[a] == 0 and river[b] == 0
+			if land_edge and (full_field or dry.has(_edge_key(w.N, a, b))):
+				with_field += length
+		var length_m := StageTrails._kind_length_of(t) * GameConfig.TILE
+		var weighted_m := length_m * with_field / run if run > 0.0 else 0.0
+		var entry: Dictionary = by_group.get_or_add(group, {axis_m = 0.0, field_m = 0.0})
+		entry.axis_m += length_m
+		entry.field_m += weighted_m
+		axis_m += length_m
+		field_m += weighted_m
+		raw_m += run
+		raw_field_m += with_field
+	out.merge({axis_m = axis_m, field_m = field_m, share = field_m / maxf(axis_m, 1.0), by_group = by_group,
+		raw_m = raw_m, raw_field_m = raw_field_m, flat_mul = finder.fast().FlatCharacterStats()})
+	return out
 
 
 ## Клетки небезопасных бродов (правило V1 StageTrails._unsafe_ford) одним массивом W·H.
