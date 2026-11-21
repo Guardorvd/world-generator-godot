@@ -17,6 +17,47 @@ public partial class FastGrid
 		{ X0 = x0; Y0 = y0; X1 = x1; Y1 = y1; Budget = budget; Turn = turn; Bend = bend; CostVersion = costVersion; }
 	}
 
+	private NetworkSession _v2Session;
+	internal int CorridorVersion => _corridorVersion;
+
+	/// <summary>Двухпроходная фаска 1 / √2 (копия PropagateDistances, FastGrid.cs) только в окне x0..x1, y0..y1 поверх
+	/// готового поля d: новые источники sources получают 0, значения окна — минимум старого и нового. В пределах окна
+	/// это то же, что полный пересчёт Grid.distance_field со старыми и новыми источниками (сверка — road_v2_test).</summary>
+	internal static void LocalChamfer(float[] d, int w, int h, int x0, int y0, int x1, int y1, System.Collections.Generic.List<int> sources)
+	{
+		const double Sqrt2 = 1.4142135623730951;
+		x0 = Math.Max(0, x0); y0 = Math.Max(0, y0); x1 = Math.Min(w, x1); y1 = Math.Min(h, y1);
+		foreach (int s in sources) d[s] = 0f;
+		for (int y = y0; y < y1; y++)
+			for (int x = x0; x < x1; x++)
+			{
+				int i = y * w + x;
+				double v = d[i];
+				if (x > x0) v = Math.Min(v, d[i - 1] + 1.0);
+				if (y > y0)
+				{
+					v = Math.Min(v, d[i - w] + 1.0);
+					if (x > x0) v = Math.Min(v, d[i - w - 1] + Sqrt2);
+					if (x < x1 - 1) v = Math.Min(v, d[i - w + 1] + Sqrt2);
+				}
+				d[i] = (float)v;
+			}
+		for (int y = y1 - 1; y >= y0; y--)
+			for (int x = x1 - 1; x >= x0; x--)
+			{
+				int i = y * w + x;
+				double v = d[i];
+				if (x < x1 - 1) v = Math.Min(v, d[i + 1] + 1.0);
+				if (y < y1 - 1)
+				{
+					v = Math.Min(v, d[i + w] + 1.0);
+					if (x < x1 - 1) v = Math.Min(v, d[i + w + 1] + Sqrt2);
+					if (x > x0) v = Math.Min(v, d[i + w - 1] + Sqrt2);
+				}
+				d[i] = (float)v;
+			}
+	}
+
 	internal SearchState SaveSearchState() => new(_winX0, _winY0, _winX1, _winY1, SearchBudget, TurnCost, BendCost, CostVersion);
 
 	internal void RestoreSearchState(SearchState s)
@@ -53,10 +94,16 @@ public partial class FastGrid
 	}
 
 	/// <summary>Номер шага FastGrid (Dx, Dy) для смещения (dx, dy), -1 — не сосед.</summary>
-	internal static int StepIndex(int dx, int dy)
+	internal static int StepIndex(int dx, int dy) => (uint)(dx + 1) < 3 && (uint)(dy + 1) < 3 ? StepTable[(dy + 1) * 3 + dx + 1] : -1;
+
+	private static readonly int[] StepTable = BuildStepTable();
+
+	private static int[] BuildStepTable()
 	{
-		for (int k = 0; k < 8; k++) if (Dx[k] == dx && Dy[k] == dy) return k;
-		return -1;
+		var t = new int[9];
+		Array.Fill(t, -1);
+		for (int k = 0; k < 8; k++) t[(Dy[k] + 1) * 3 + Dx[k] + 1] = k;
+		return t;
 	}
 
 	/// <summary>Порт StageTrails._water_dist: расстояние (клеток, Grid.distance_field) до моря или озера.</summary>
@@ -65,6 +112,55 @@ public partial class FastGrid
 		var water = new byte[checked(w * h)];
 		for (int i = 0; i < water.Length; i++) water[i] = (byte)(ocean[i] != 0 || lake[i] != 0 ? 1 : 0);
 		return DistanceField(w, h, water);
+	}
+
+	/// <summary>Порт StageTrails._shore для каждой точки anchors: ближайшая клетка морского или озёрного берега
+	/// (waterD ≤ 1,5) от shoreMin до shoreMax клеток, не в коридоре near, с конечной ценой; -1 — нет. Сверка — road_v2_test.</summary>
+	public int[] ShoreTargets(int w, int h, int[] anchors, byte[] near, float[] cost, float[] waterD, int shoreMin, int shoreMax)
+	{
+		var outv = new int[anchors.Length];
+		for (int k = 0; k < anchors.Length; k++)
+		{
+			int s = anchors[k], sx = s % w, sy = s / w, best = -1;
+			double bd = double.PositiveInfinity;
+			for (int y = Math.Max(0, sy - shoreMax); y < Math.Min(h, sy + shoreMax + 1); y++)
+				for (int x = Math.Max(0, sx - shoreMax); x < Math.Min(w, sx + shoreMax + 1); x++)
+				{
+					int i = y * w + x;
+					int d = (x - sx) * (x - sx) + (y - sy) * (y - sy);
+					if (d < shoreMin * shoreMin || d >= bd || near[i] != 0 || float.IsPositiveInfinity(cost[i]) || waterD[i] > 1.5f) continue;
+					bd = d;
+					best = i;
+				}
+			outv[k] = best;
+		}
+		return outv;
+	}
+
+	/// <summary>Порт StageTrails._overlook для каждой точки anchors: самая высокая клетка суши в кольце vmin..vmax (шаг step),
+	/// выше точки на rise (единицы w.h), не в коридоре near и не на краю кольца; -1 — нет. Сверка — road_v2_test.</summary>
+	public int[] Overlooks(int w, int h, int[] anchors, byte[] near, float[] cost, float[] height, byte[] ocean, byte[] lake,
+		double rise, int vmin, int vmax, int step)
+	{
+		var outv = new int[anchors.Length];
+		for (int k = 0; k < anchors.Length; k++)
+		{
+			int s = anchors[k], sx = s % w, sy = s / w, best = -1, bestD = 0;
+			double top = height[s] + rise;
+			for (int y = Math.Max(0, sy - vmax); y < Math.Min(h, sy + vmax + 1); y += step)
+				for (int x = Math.Max(0, sx - vmax); x < Math.Min(w, sx + vmax + 1); x += step)
+				{
+					int d = (x - sx) * (x - sx) + (y - sy) * (y - sy);
+					if (d < vmin * vmin || d > vmax * vmax) continue;
+					int i = y * w + x;
+					if (height[i] <= top || near[i] != 0 || float.IsPositiveInfinity(cost[i]) || ocean[i] != 0 || lake[i] != 0) continue;
+					top = height[i];
+					best = i;
+					bestD = d;
+				}
+			outv[k] = best < 0 || bestD > (vmax - 3) * (vmax - 3) ? -1 : best;
+		}
+		return outv;
 	}
 
 	/// <summary>Порт StageTrails._corridor: клетки ближе r (квадрат) к клеткам cells. Сверка — road_v2_test.</summary>
@@ -89,7 +185,10 @@ public partial class FastGrid
 		{
 			var mode = input.ContainsKey("mode") ? input["mode"].AsString() : "";
 			var snapshot = new TerrainSnapshot(input, water, this);
-			var planner = new NetworkPlanner(snapshot, input);
+			// Сессия этапа: новая при session_new (первый вызов этапа) или другом номере сессии
+			long id = input.ContainsKey("session") ? input["session"].AsInt64() : -1;
+			if (_v2Session == null || id < 0 || _v2Session.Id != id) _v2Session = new NetworkSession { Id = id };
+			var planner = new NetworkPlanner(snapshot, input, id >= 0 ? _v2Session : null);
 			return mode switch
 			{
 				"loops" => planner.PlanLoops(),

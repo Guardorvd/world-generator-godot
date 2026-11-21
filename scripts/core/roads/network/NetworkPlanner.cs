@@ -30,8 +30,11 @@ public sealed class NetworkPlanner
 	private readonly byte[] _remote;
 	private int _virtual;
 
-	public NetworkPlanner(TerrainSnapshot t, Godot.Collections.Dictionary input)
+	private readonly NetworkSession _session;
+
+	public NetworkPlanner(TerrainSnapshot t, Godot.Collections.Dictionary input, NetworkSession session = null)
 	{
+		_session = session;
 		_t = t;
 		_p = t.P;
 		_in = input;
@@ -49,7 +52,7 @@ public sealed class NetworkPlanner
 
 	public void Prepare(bool ridge, bool coarse, double coarseGrade = double.NaN)
 	{
-		Fields.Build(ridge, Stats);
+		Fields.Build(ridge, Stats, _session);
 		long t0 = NetStats.Now();
 		Graph = new RoadGraph(_p.NodeSame);
 		var settlePts = new double[_settle.Length * 2];
@@ -63,14 +66,67 @@ public sealed class NetworkPlanner
 		if (coarse)
 		{
 			t0 = NetStats.Now();
-			Coarse = new CoarseGraph(_t, Base, double.IsNaN(coarseGrade) ? _p.TrailGrade : coarseGrade, _p.BenchCross);
+			double grade = double.IsNaN(coarseGrade) ? _p.TrailGrade : coarseGrade;
+			// Ключ грубого графа: проходимость цены, высоты и связи поиска, версия коридора ширины, пределы
+			ulong key = NetworkSession.Hash(NetworkSession.Hash(NetworkSession.Seed, _t.Heights), _t.Links);
+			key = NetworkSession.Hash(NetworkSession.Hash(NetworkSession.Hash(key, _t.Router.CorridorVersion), BitConverter.DoubleToInt64Bits(grade)),
+				BitConverter.DoubleToInt64Bits(_p.BenchCross));
+			for (int i = 0; i < _t.N; i++) if (!float.IsFinite(Base[i])) key = NetworkSession.Hash(key, i);
+			if (_session != null && _session.Coarse != null && _session.CoarseKey == key)
+			{
+				Coarse = _session.Coarse;
+				Stats.Count("coarse_cached");
+			}
+			else
+			{
+				Coarse = new CoarseGraph(_t, Base, grade, _p.BenchCross);
+				if (_session != null) { _session.Coarse = Coarse; _session.CoarseKey = key; }
+			}
 			Stats.Count("coarse_components", Coarse.Comps);
 			Stats.Time("coarse", t0);
 		}
 	}
 
-	/// <summary>Поля расстояний до сети и узлов и цена с правилами узлов — после каждого принятого ребра.</summary>
-	private void Refresh()
+	/// <summary>Радиус локального обновления полей: дальше значения Near и NodeDist не читаются правилами
+	/// (NearNet, NodeSep, полоса цены 2 клетки).</summary>
+	public int LocalRadius => (int)Math.Ceiling(Math.Max(_p.NearNet, _p.NodeSep)) + 2;
+
+	/// <summary>После принятого пути: Near и NodeDist — локально (фаска в окне вокруг новых клеток и новых развилок),
+	/// цена с правилами узлов — только в этом окне. В пределах LocalRadius то же, что полный Refresh (road_v2_test).</summary>
+	public void RefreshLocal(List<int> cells, List<int> junctions, int[] path)
+	{
+		long t0 = NetStats.Now();
+		int W = _t.W, H = _t.H, m = LocalRadius + 2;
+		int x0 = int.MaxValue, y0 = int.MaxValue, x1 = 0, y1 = 0;
+		foreach (var list in new[] { cells, junctions, new List<int>(path) })
+			foreach (int c in list)
+			{
+				x0 = Math.Min(x0, c % W); y0 = Math.Min(y0, c / W); x1 = Math.Max(x1, c % W + 1); y1 = Math.Max(y1, c / W + 1);
+			}
+		if (x0 == int.MaxValue) { Stats.Time("refresh", t0); return; }
+		x0 = Math.Max(0, x0 - m); y0 = Math.Max(0, y0 - m); x1 = Math.Min(W, x1 + m); y1 = Math.Min(H, y1 + m);
+		if (cells.Count > 0) FastGrid.LocalChamfer(Near, W, H, x0, y0, x1, y1, cells);
+		if (junctions.Count > 0) FastGrid.LocalChamfer(NodeDist, W, H, x0, y0, x1, y1, junctions);
+		var raw = Fields.Raw;
+		for (int y = y0; y < y1; y++)
+			for (int x = x0; x < x1; x++)
+			{
+				int i = y * W + x;
+				float c = raw[i];
+				if (_t.Owner[i] < 0 && float.IsFinite(c) && Near[i] <= 2.0f && (NodeDist[i] < _p.NodeSep || SettleDist[i] < _p.ExitR))
+					c = (float)(c * _p.ExitMul);
+				Base[i] = c;
+				_scratch[i] = c;
+			}
+		Stats.Time("refresh", t0);
+	}
+
+	/// <summary>Клетка узла графа (как в Refresh).</summary>
+	private int NodeCell(int n) =>
+		Math.Clamp((int)Math.Floor(Graph.NY[n]), 0, _t.H - 1) * _t.W + Math.Clamp((int)Math.Floor(Graph.NX[n]), 0, _t.W - 1);
+
+	/// <summary>Поля расстояний до сети и узлов и цена с правилами узлов — полный пересчёт (подготовка, стенд).</summary>
+	public void Refresh()
 	{
 		long t0 = NetStats.Now();
 		int N = _t.N, W = _t.W, H = _t.H;
@@ -403,6 +459,8 @@ public sealed class NetworkPlanner
 	{
 		long t0 = NetStats.Now();
 		int sec = _virtual++;
+		var wasJunction = new bool[Graph.NX.Count];
+		for (int j = 0; j < wasJunction.Length; j++) wasJunction[j] = Graph.Junction(j);
 		// Куски новой земли с клетками сети по краям — новые рёбра графа
 		int n = p.Length, k = 0;
 		var pieces = new List<(int From, int To)>();
@@ -427,16 +485,24 @@ public sealed class NetworkPlanner
 			Graph.AddPath(a, b, pts, sec);
 		}
 		// Своя копия сети: клетки, маска и «протоптанность» (StageTrails._trodden: max(0,3; цена × human_reuse))
+		var fresh = new List<int>();
 		foreach (int c in p)
 		{
-			if (_t.Owner[c] < 0) _t.Owner[c] = sec;
+			if (_t.Owner[c] < 0) { _t.Owner[c] = sec; fresh.Add(c); }
 			if (_t.Mask[c] < 2) _t.Mask[c] = 2;
 			var raw = Fields.Raw;
 			if (float.IsFinite(raw[c])) raw[c] = (float)Math.Max(0.3, Math.Min(raw[c], _t.Cost[c]) * _p.HumanReuse);
 		}
+		var junctions = new List<int>();
+		for (int j = 0; j < Graph.NX.Count; j++)
+			if (Graph.Junction(j) && (j >= wasJunction.Length || !wasJunction[j])) junctions.Add(NodeCell(j));
 		Stats.Time("accept", t0);
-		Refresh();
+		// окно — весь путь: у его клеток сменилась цена «протоптанности»; источники Near — новые клетки сети
+		RefreshLocal(fresh, junctions, p);
 	}
+
+	/// <summary>Для стенда: принять путь и вернуть (Near, NodeDist) после локального обновления.</summary>
+	public void AcceptForTest(int[] p) => Accept(p);
 
 	// ---------------------------------------------------------------- петли
 
@@ -779,13 +845,15 @@ public sealed class NetworkPlanner
 	{
 		exitFree = false;
 		why = "";
-		var list = Candidates(target, _t.W * 0.4, -1);
+		long s0 = NetStats.Now();
 		double limit = nearest * _p.MountainDetour + 4.0;
-		foreach (var (d, c) in list)
+		try
 		{
-			if (d > limit) break;
-			if (NodeRule(c, false).Length == 0) { NoteNode(c, " — точка съезда"); return c; }
+			foreach (var (d, c) in Candidates(target, limit, -1))
+				if (NodeRule(c, false).Length == 0) { NoteNode(c, " — точка съезда"); return c; }
 		}
+		finally { Stats.Time("sources", s0); }
+		var list = Candidates(target, _t.W * 0.4, -1);
 		string first = "";
 		foreach (var (_, c) in list)
 		{
@@ -804,12 +872,28 @@ public sealed class NetworkPlanner
 		double reach;
 		if (kind == 2)
 		{
-			// Ближайшая клетка сети (как FastGrid.NearestPath V1); дальше W·0,4 — без тропы
+			// Ближайшая клетка сети (как FastGrid.NearestPath V1); дальше W·0,4 — без тропы. Перебор — в квадрате радиуса
+			// Near + 2: фаска 1 / √2 не меньше евклидова расстояния, ближайшая клетка сети внутри него
+			long s0 = NetStats.Now();
 			double bd = double.PositiveInfinity;
 			int tx = target % _t.W, ty = target / _t.W;
-			for (int i = 0; i < _t.N; i++)
-				if (_t.Owner[i] >= 0 && float.IsFinite(_t.Cost[i]))
-					bd = Math.Min(bd, RoadGraph.Hypot(i % _t.W + 0.5 - (tx + 0.5), i / _t.W + 0.5 - (ty + 0.5)));
+			int nr = (int)Math.Ceiling(Math.Min(Near[target], _t.W)) + 2;
+			for (int y = Math.Max(0, ty - nr); y < Math.Min(_t.H, ty + nr + 1); y++)
+				for (int x = Math.Max(0, tx - nr); x < Math.Min(_t.W, tx + nr + 1); x++)
+				{
+					int i = y * _t.W + x;
+					if (_t.Owner[i] >= 0 && float.IsFinite(_t.Cost[i]))
+						bd = Math.Min(bd, RoadGraph.Hypot(x + 0.5 - (tx + 0.5), y + 0.5 - (ty + 0.5)));
+				}
+			if (!(bd <= nr - 1))
+			{
+				// ближайшая клетка сети с конечной ценой дальше квадрата — полный перебор, как раньше
+				bd = double.PositiveInfinity;
+				for (int i = 0; i < _t.N; i++)
+					if (_t.Owner[i] >= 0 && float.IsFinite(_t.Cost[i]))
+						bd = Math.Min(bd, RoadGraph.Hypot(i % _t.W + 0.5 - (tx + 0.5), i / _t.W + 0.5 - (ty + 0.5)));
+			}
+			Stats.Time("sources", s0);
 			if (!(bd < _t.W * 0.4)) return what + "_far";
 			reach = bd;
 		}
@@ -821,7 +905,10 @@ public sealed class NetworkPlanner
 		// Окно — компоненты грубого пути от точки съезда до цели; связи нет — пути нет
 		int cs = Coarse.CompNear(source), ct = Coarse.CompNear(target);
 		if (cs < 0 || ct < 0) return what + "_no_geo";
+		if (!Coarse.Linked(cs, ct)) return what + "_no_geo";
+		long g0 = NetStats.Now();
 		var (geoDist, geoPrev) = Coarse.Dijkstra(cs, ct);
+		Stats.Time("coarse_path", g0);
 		if (!double.IsFinite(geoDist[ct])) return what + "_no_geo";
 		var area = Coarse.Bounds(CoarseGraph.Chain(geoPrev, ct));
 		// Ответвление не идёт по сети: клетки сети в окне (кроме точки съезда) в EXIT_MUL раз дороже, пересечь дорогу можно

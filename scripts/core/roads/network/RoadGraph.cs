@@ -44,15 +44,38 @@ public sealed class RoadGraph
 		}
 		// Узлы из концов (одинаковые ближе _same — один узел)
 		foreach (var (x, y) in candidates) NodeAt(x, y, false);
-		// На каждом участке: узлы, лежащие на его оси, — точки деления
+		// На каждом участке: узлы, лежащие на его оси, — точки деления. Кандидаты — по ячейкам отрезков (BIN): узел ближе
+		// OnAxis к оси или ближе _same к её концу лежит в ячейке одного из её отрезков, расширенной на 1 клетку.
 		var cuts = new List<(double S, int Node)>[S];
+		var near = new Dictionary<long, List<int>>();
 		for (int s = 0; s < S; s++)
 		{
 			cuts[s] = new List<(double, int)>();
 			int a = starts[s], b = starts[s + 1];
-			if (b - a < 2) continue;
-			for (int n = 0; n < NX.Count; n++)
+			for (int k = a + 1; k < b; k++)
 			{
+				int bx0 = (int)Math.Floor((Math.Min(xs[k - 1], xs[k]) - 1.0) / BIN), bx1 = (int)Math.Floor((Math.Max(xs[k - 1], xs[k]) + 1.0) / BIN);
+				int by0 = (int)Math.Floor((Math.Min(ys[k - 1], ys[k]) - 1.0) / BIN), by1 = (int)Math.Floor((Math.Max(ys[k - 1], ys[k]) + 1.0) / BIN);
+				for (int by = by0; by <= by1; by++)
+					for (int bx = bx0; bx <= bx1; bx++)
+					{
+						long key = (long)by << 32 | (uint)bx;
+						if (!near.TryGetValue(key, out var list)) near[key] = list = new List<int>();
+						if (list.Count == 0 || list[^1] != s) list.Add(s);
+					}
+			}
+		}
+		for (int n = 0; n < NX.Count; n++)
+		{
+			long key = (long)(int)Math.Floor(NY[n] / BIN) << 32 | (uint)(int)Math.Floor(NX[n] / BIN);
+			if (!near.TryGetValue(key, out var list)) continue;
+			int last = -1;
+			foreach (int s in list)
+			{
+				if (s == last) continue;
+				last = s;
+				int a = starts[s], b = starts[s + 1];
+				if (b - a < 2) continue;
 				var (d, at) = Project(xs, ys, a, b, NX[n], NY[n]);
 				if (d < OnAxis || Hypot(NX[n] - xs[a], NY[n] - ys[a]) < _same || Hypot(NX[n] - xs[b - 1], NY[n] - ys[b - 1]) < _same)
 					cuts[s].Add((at, n));

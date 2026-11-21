@@ -29,6 +29,7 @@ func _initialize() -> void:
 	_coarse()
 	_graph()
 	_ports()
+	_refresh()
 	_repeat()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
@@ -355,8 +356,46 @@ func _ports() -> void:
 	same = same and finder.fast().CorridorMask(w.W, w.H, cells, StageTrails.AVOID_R) == StageTrails._corridor(w, paths)
 	var lw := _world("lake")
 	same = same and finder.fast().WaterDistance(lw.W, lw.H, lw.ocean, lw.lake) == StageTrails._water_dist(lw)
+	# берег и смотровые точки: точки вокруг озера и холма
+	var water_d := StageTrails._water_dist(lw)
+	var corr := StageTrails._corridor(lw, [PackedInt32Array([50 * S + 30, 51 * S + 30])])
+	var anchors := PackedInt32Array()
+	for k in 40: anchors.append((10 + (k * 7) % 76) * S + 8 + (k * 13) % 80)
+	var shores: PackedInt32Array = finder.fast().ShoreTargets(lw.W, lw.H, anchors, corr, lw.cost, water_d, StageTrails.SHORE_MIN, StageTrails.SHORE_MAX)
+	var views: PackedInt32Array = finder.fast().Overlooks(lw.W, lw.H, anchors, corr, lw.cost, lw.h, lw.ocean, lw.lake,
+		StageTrails.VIEW_RISE / (StageTrails.HEIGHT_SCALE * GameConfig.TILE), StageTrails.VIEW_MIN, StageTrails.VIEW_MAX, StageTrails.VIEW_STEP)
+	var found := [0, 0]
+	for k in anchors.size():
+		same = same and shores[k] == StageTrails._shore(lw, anchors[k], corr, water_d) and views[k] == StageTrails._overlook(lw, anchors[k], corr)
+		found[0] += int(shores[k] >= 0)
+		found[1] += int(views[k] >= 0)
+	print("  берег найден у %d, смотровая у %d из %d точек" % [found[0], found[1], anchors.size()])
+	same = same and found[0] > 0 and found[1] > 0
 	var varied: bool = out.ports[0].longest > 0 and out.ports[1].rejoins
-	check(same and varied, "порты правил V1 = StageTrails (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground, _corridor, _water_dist)")
+	check(same and varied, "порты правил V1 = StageTrails (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground, _corridor, _water_dist, _shore, _overlook)")
+
+
+## Шаг 3: локальное обновление полей после принятия путей = полный пересчёт (в радиусе, где их читают правила)
+func _refresh() -> void:
+	var w := _world("none")
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	var p := _network(w)
+	var settle := PackedInt32Array()
+	for q: Vector2 in p: settle.append(floori(q.y) * S + floori(q.x))
+	# ветка от дороги P0–P1 на юг, вторая — от неё же через поле к P4, третья — тупик у холма
+	var a := PackedInt32Array()
+	for y in range(8, 40): a.append(y * S + 20)
+	var b := PackedInt32Array()
+	for x in range(20, 41): b.append(39 * S + x)
+	for y in range(38, 19, -1): b.append(y * S + 40)
+	var c := PackedInt32Array()
+	for k in 20: c.append((60 + k) * S + 8 + k / 2)
+	var out := _core(w, surface, finder, {mode = "probe", probe = "refresh", settle = settle, remote = PackedByteArray([0, 0, 0, 0, 0, 0]),
+		accept = [a, b, c]})
+	if out.is_empty(): return
+	check(out.compared > 1000 and out.mismatch == 0 and out.mismatch_cost == 0 and out.worst[0] < 1e-5 and out.worst[1] < 1e-5,
+		"локальное обновление = полному пересчёту: пороги правил и цена совпали, значения до округления float (сравнено %d, смен порога %d, цена %d, наибольшее отличие %s)" % [out.compared, out.mismatch, out.mismatch_cost, str(out.worst)])
 
 
 func _repeat() -> void:

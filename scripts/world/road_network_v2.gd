@@ -36,6 +36,12 @@ const MOUNTAIN_REACH := 1.5 # точка съезда горной тропы н
 
 ## Подмена чисел V2 на время запуска стенда (road_plan_test -- --v2-param ключ=значение,…); в кэш игры не попадает.
 static var overrides := {}
+## Сессия ядра на этап путей: новый номер у петель (первый вызов V2 в этапе), ответвления и горные тропы — тот же.
+## Ядро кэширует по нему неизменные поля и грубый граф (каждый кэш ещё и с ключом своих входов).
+static var _session := -1
+## Клетки небезопасных бродов этапа и оси, по которым они посчитаны: горные тропы берут их, если оси те же
+static var _unsafe_cache := PackedByteArray()
+static var _unsafe_axis := PackedByteArray()
 
 
 ## Суффикс ключа слоя places: пусто при выключенном флаге (ключ побайтно прежний).
@@ -139,11 +145,16 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 	var started := Time.get_ticks_usec()
 	var surface: Heightfield = state.get("surface")
 	var unsafe := unsafe_mask(w, surface, state.on_axis)
+	state.v2_unsafe = unsafe # те же оси и поверхность у ответвлений этого этапа
+	_unsafe_cache = unsafe
+	_unsafe_axis = state.on_axis.duplicate()
+	_session = Time.get_ticks_usec()
 	var prep := {unsafe = (Time.get_ticks_usec() - started) / 1000.0}
 	var t0 := Time.get_ticks_usec()
 	var data := input(w, finder, surface, state.on_axis, unsafe)
 	prep.input = (Time.get_ticks_usec() - t0) / 1000.0
 	data.mode = "loops"
+	data.session = _session
 	var pairs := PackedInt32Array()
 	for e: Array in StageTrails._gabriel_pairs(w, paths):
 		pairs.append(e[0])
@@ -162,8 +173,8 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 
 
 ## Цели ответвлений правилами V1: берег (_shore от точек перегонов), смотровые (_overlook), вершины без тропы.
-## Коридор прежних путей и расстояние до воды — StageTrails._corridor и _water_dist (порты на C#: CorridorMask,
-## WaterDistance; сверка — road_v2_test). Береговые цели расставлены через
+## Коридор прежних путей, расстояние до воды, берег и смотровые — StageTrails._corridor, _water_dist, _shore, _overlook
+## (порты на C#: CorridorMask, WaterDistance, ShoreTargets, Overlooks; сверка — road_v2_test). Береговые цели расставлены через
 ## SHORE_GAP, как в V1 (и неудачная попытка занимает место); их не больше 3 × предел троп к берегу.
 ## Возвращает {targets, kinds, anchors, peaks_keep}.
 static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountain: bool, max_shores: int, times := {}) -> Dictionary:
@@ -188,9 +199,12 @@ static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountai
 	times.fields = (Time.get_ticks_usec() - t0) / 1000.0
 	t0 = Time.get_ticks_usec()
 	var spaced: Array[Vector2i] = []
-	for a: int in StageTrails._shore_anchors(w, paths, settle_d, water_d):
+	var shore_anchors := StageTrails._shore_anchors(w, paths, settle_d, water_d)
+	var shore_found: PackedInt32Array = finder.fast().ShoreTargets(w.W, w.H, shore_anchors, corr, w.cost, water_d,
+		StageTrails.SHORE_MIN, StageTrails.SHORE_MAX)
+	for k in shore_anchors.size():
 		if spaced.size() >= 3 * max_shores: break
-		var t := StageTrails._shore(w, a, corr, water_d)
+		var t := shore_found[k]
 		if t < 0: continue
 		var tv := Vector2i(t % w.W, t / w.W)
 		var free := true
@@ -200,15 +214,18 @@ static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountai
 		spaced.append(tv)
 		targets.append(t)
 		kinds.append(0)
-		anchors.append(a)
+		anchors.append(shore_anchors[k])
 	times.shore = (Time.get_ticks_usec() - t0) / 1000.0
 	t0 = Time.get_ticks_usec()
-	for a: int in StageTrails._shore_anchors(w, paths, settle_d, PackedFloat32Array()):
-		var t := StageTrails._overlook(w, a, corr)
+	var view_anchors := StageTrails._shore_anchors(w, paths, settle_d, PackedFloat32Array())
+	var view_found: PackedInt32Array = finder.fast().Overlooks(w.W, w.H, view_anchors, corr, w.cost, w.h, w.ocean, w.lake,
+		StageTrails.VIEW_RISE / (StageTrails.HEIGHT_SCALE * GameConfig.TILE), StageTrails.VIEW_MIN, StageTrails.VIEW_MAX, StageTrails.VIEW_STEP)
+	for k in view_anchors.size():
+		var t := view_found[k]
 		if t < 0: continue
 		targets.append(t)
 		kinds.append(1)
-		anchors.append(a)
+		anchors.append(view_anchors[k])
 	times.view = (Time.get_ticks_usec() - t0) / 1000.0
 	return {targets = targets, kinds = kinds, anchors = anchors, peaks_keep = keep}
 
@@ -216,9 +233,11 @@ static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountai
 ## Ответвления (план V2, 3.6): mountain = false — берег и смотровые (коридор троп, вместо веток _second_ways),
 ## true — горные тропы (коридор горных троп, вместо _mountain_trails). on_axis — оси сооружений.
 static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, on_axis: PackedByteArray,
-		surface: Heightfield, mountain: bool) -> void:
+		surface: Heightfield, mountain: bool, known_unsafe := PackedByteArray()) -> void:
 	var started := Time.get_ticks_usec()
-	var unsafe := unsafe_mask(w, surface, on_axis)
+	if known_unsafe.size() != w.N and _unsafe_cache.size() == w.N and _unsafe_axis == on_axis:
+		known_unsafe = _unsafe_cache
+	var unsafe := known_unsafe if known_unsafe.size() == w.N else unsafe_mask(w, surface, on_axis)
 	var prep := {unsafe = (Time.get_ticks_usec() - started) / 1000.0}
 	var t0 := Time.get_ticks_usec()
 	var data := input(w, finder, surface, on_axis, unsafe)
@@ -228,6 +247,8 @@ static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 	var goals := spur_targets(w, finder, paths, mountain, max_shores, prep)
 	prep.targets = (Time.get_ticks_usec() - t0) / 1000.0
 	data.mode = "spurs"
+	if _session < 0: _session = Time.get_ticks_usec()
+	data.session = _session
 	data.mountain = mountain
 	data.targets = goals.targets
 	data.target_kinds = goals.kinds

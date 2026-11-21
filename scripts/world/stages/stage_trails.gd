@@ -1311,7 +1311,11 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			step.call(0.69 + 0.015 * index / maxi(1, pairs.size()), "Дополнительные тропы: %d/%d" % [index + 1, pairs.size()])
 		var a: int = st[e[0]].i
 		var b: int = st[e[1]].i
-		var old := finder.find_path(network, a, b) if finder.can_reach(network, a, b) else PackedInt32Array()
+		# Сеть V2: путь по сети нужен только сокращениям V1 — здесь достаточно знать, связаны ли места сетью
+		var reach_net := finder.can_reach(network, a, b)
+		if network_v2 and reach_net:
+			continue
+		var old := finder.find_path(network, a, b) if reach_net else PackedInt32Array()
 		if old.is_empty():
 			# С 9.8: соседи из разных сетей дорог (между ними река без места для моста) —
 			# тропа между сетями: вброд, по мосту для тропы или в обход.
@@ -1349,7 +1353,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	if network_v2:
 		finder.search_budget = -1
 		RoadNetworkV2.plan_loops(w, finder, paths, road_cost, state)
-		RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false)
+		RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false, state.get("v2_unsafe", PackedByteArray()))
 		return
 	# Проверяем каждую основную связь; плоская копия соседней дороги сама по себе не повод для петли.
 	var primary_paths := paths.duplicate()

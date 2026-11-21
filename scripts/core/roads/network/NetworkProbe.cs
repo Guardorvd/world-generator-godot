@@ -112,6 +112,44 @@ public static class NetworkProbe
 				outd["ports"] = res;
 				break;
 			}
+			case "refresh":
+			{
+				// Локальное обновление полей после принятия путей = полный пересчёт в пределах LocalRadius
+				planner.Prepare(false, false);
+				int bad = 0, badBase = 0, compared = 0;
+				double worst = 0, worstNode = 0;
+				foreach (var v in input["accept"].AsGodotArray())
+				{
+					planner.AcceptForTest(v.AsInt32Array());
+					var near = (float[])planner.Near.Clone();
+					var nodes = (float[])planner.NodeDist.Clone();
+					var cost = (float[])planner.Base.Clone();
+					planner.Refresh();
+					int r = planner.LocalRadius;
+					for (int i = 0; i < t.N; i++)
+					{
+						// значения могут отличаться на округление float (порядок сложения 1 и √2); решения — пороги: их сверяем точно
+						if (planner.Near[i] <= r)
+						{
+							compared++;
+							worst = Math.Max(worst, Math.Abs(near[i] - planner.Near[i]));
+							if ((near[i] <= t.P.NearNet) != (planner.Near[i] <= t.P.NearNet) || (near[i] <= 2.0f) != (planner.Near[i] <= 2.0f)) bad++;
+						}
+						if (planner.NodeDist[i] <= r)
+						{
+							compared++;
+							worstNode = Math.Max(worstNode, Math.Abs(nodes[i] - planner.NodeDist[i]));
+							if ((nodes[i] < t.P.NodeSep) != (planner.NodeDist[i] < t.P.NodeSep) || (nodes[i] > 1.5) != (planner.NodeDist[i] > 1.5)) bad++;
+						}
+						if (cost[i] != planner.Base[i] && !(float.IsNaN(cost[i]) && float.IsNaN(planner.Base[i]))) badBase++;
+					}
+				}
+				outd["compared"] = compared;
+				outd["mismatch"] = bad;
+				outd["mismatch_cost"] = badBase;
+				outd["worst"] = new Godot.Collections.Array { worst, worstNode };
+				break;
+			}
 			default:
 				throw new ArgumentException("V2: неизвестная проверка «" + probe + "»");
 		}

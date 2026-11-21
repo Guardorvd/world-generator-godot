@@ -121,6 +121,35 @@ public sealed class CoarseGraph
 		return best;
 	}
 
+	private int[] _label = Array.Empty<int>();
+
+	/// <summary>Связны ли компоненты a и b в грубом графе (без закрытых рёбер): метки связности считаются один раз.
+	/// Несвязные — Дейкстра не нужна (она обошла бы всю связную часть впустую).</summary>
+	public bool Linked(int a, int b)
+	{
+		if (a < 0 || b < 0) return false;
+		if (_label.Length != Comps)
+		{
+			_label = new int[Comps];
+			Array.Fill(_label, -1);
+			var queue = new int[Comps];
+			for (int s = 0; s < Comps; s++)
+			{
+				if (_label[s] >= 0) continue;
+				int head = 0, tail = 0;
+				queue[tail++] = s;
+				_label[s] = s;
+				while (head < tail)
+				{
+					int u = queue[head++];
+					foreach (var (v, _) in _adj[u])
+						if (_label[v] < 0) { _label[v] = s; queue[tail++] = v; }
+				}
+			}
+		}
+		return _label[a] == _label[b];
+	}
+
 	public void Close(int a, int b) => _closed.Add(Key(a, b));
 	public void Open() => _closed.Clear();
 
