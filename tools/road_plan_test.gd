@@ -240,6 +240,58 @@ func _initialize() -> void:
 			if best <= 12.0:
 				print("  путь %d %s%s: %d точек, %.0f м, (%.1f,%.1f)→(%.1f,%.1f), до точки %.1f кл" % [k, t.kind, " " + str(t.ride) if t.has("ride") else "",
 					t.pts.size(), StageTrails._kind_length_of(t) * GameConfig.TILE, t.pts[0].x, t.pts[0].y, t.pts[-1].x, t.pts[-1].y, best])
+	# --probe-h x,y: высоты готовой поверхности (surface_at) и рельефа без полотна вокруг точки (клетки), точки путей рядом
+	var probe_h := _arg(args, "--probe-h", "")
+	if not probe_h.is_empty():
+		var at := Vector2(float(probe_h.get_slice(",", 0)), float(probe_h.get_slice(",", 1)))
+		var raw := Heightfield.new(w, false)
+		for dy in range(-2, 3):
+			var row := ""
+			for dx in range(-2, 3):
+				var q := (at + Vector2(dx, dy) * 0.25) * GameConfig.TILE
+				row += "%6.2f/%6.2f/%6.2f/%6.2f " % [final.surface_at(q.x, q.y, INF), final.ground_at(q.x, q.y), final.deck_at(q.x, q.y, INF), raw.ground_at(q.x, q.y)]
+			print("  высоты ", row)
+		var rock := raw.copy()
+		RockRelief.apply(rock)
+		var bed := raw.copy()
+		RoadBed.refine(bed)
+		var stages := ""
+		for dx in range(-2, 3):
+			var q := (at + Vector2(dx, 0) * 0.25) * GameConfig.TILE
+			stages += "%.2f/%.2f/%.2f " % [raw.ground_at(q.x, q.y), rock.ground_at(q.x, q.y), bed.ground_at(q.x, q.y)]
+		print("  рельеф / скалы / полотно: ", stages, " refinement ", final.road_refinement != null)
+		var rr: RoadRefinement = final.road_refinement
+		var key := floori(at.y) * w.W + floori(at.x)
+		var patch: Dictionary = rr.patches.get(key, {})
+		var info := {}
+		for f: String in patch:
+			var v: Variant = patch[f]
+			info[f] = v if not (v is PackedFloat32Array or v is PackedByteArray or v is PackedInt32Array) else "%s[%d] %s" % [type_string(typeof(v)), v.size(), str(Array(v).slice(0, 12))]
+		print("  патч клетки: ", JSON.stringify(info).left(900))
+		for k in w.trails.size():
+			if w.trails[k].has("ride") and String(w.trails[k].get("road_id", "")).begins_with("55d8619da7"):
+				var fit: Dictionary = rr.fit_routes.get(k, {})
+				print("  подгонка пути %d: есть %s, точек %d, маршрутов с подгонкой %d" % [k, not fit.is_empty(), (fit.get("points", []) as Array).size(), rr.fit_routes.size()])
+				if not fit.is_empty():
+					var pts: Array = fit.points
+					for j in pts.size():
+						var q: Vector2 = Vector2(pts[j].x, pts[j].y) if pts[j] is Dictionary else pts[j]
+						if q.distance_to(at * GameConfig.TILE) < 3.0: print("    м %d: %s профиль %.2f сила %.2f предел %.2f" % [j, str(q), fit.profile[j], fit.strength[j], fit.limit[j]])
+		var mrow := ""
+		for dy in range(-3, 4):
+			for dx in range(-3, 4): mrow += str(w.path_mask[(floori(at.y) + dy) * w.W + floori(at.x) + dx])
+			mrow += " "
+		print("  маска путей 7×7: ", mrow, " мест ", w.sites.size(), " rock ", w.generation.surface_rock.size())
+		for site: SiteData in w.sites:
+			if Vector2(site.x, site.y).distance_to(at) < 20.0: print("  место ", site.kind if "kind" in site else "", " (%.1f,%.1f) clear %.1f" % [site.x, site.y, site.clear])
+		for s: Dictionary in final.structures:
+			if Grid.segment_dist(at.x * GameConfig.TILE, at.y * GameConfig.TILE, s.ax, s.az, s.bx, s.bz) < 40.0: print("  сооружение ", JSON.stringify(s).left(300))
+		for k in w.trails.size():
+			var t: Dictionary = w.trails[k]
+			for j in t.pts.size():
+				var p := Vector2(t.pts[j].x, t.pts[j].y)
+				if p.distance_to(at) < 0.6: print("  точка пути %d %s №%d (%.2f,%.2f) w %.2f surf %s style %s id %s" % [k, t.kind, j, p.x, p.y, t.pts[j].w,
+					str(t.surf[j]) if t.has("surf") and j < t.surf.size() else "-", t.get("ride_style", ""), String(t.get("road_id", "")).left(10)])
 	# Через JSON, как в файле: числа сравниваются одного вида.
 	var print_out: Dictionary = JSON.parse_string(JSON.stringify(_fingerprint(w)))
 	print("FINGERPRINT ", JSON.stringify(print_out))
@@ -405,7 +457,17 @@ func _nav(w: WorldData, final: Heightfield) -> int:
 		var key := Vector2i(mini(edge.from, edge.to), maxi(edge.from, edge.to))
 		if seen.has(key) or not nav.points.has(edge.from) or not nav.points.has(edge.to): continue
 		seen[key] = true
-		if not nav._edges.has(key): gaps += 1
+		if not nav._edges.has(key):
+			gaps += 1
+			# где разрыв: точки (клетки), уровни концов, высота конца по пути ребра, участок и его вид
+			var pa: Vector2 = nav.points[edge.from]
+			var pb: Vector2 = nav.points[edge.to]
+			var end: float = nav._edge_level(pa, pb, nav.levels[edge.from])
+			var kind := "?"
+			for k in w.trails.size():
+				if String(w.trails[k].get("road_id", "")) == String(edge.section): kind = "%d %s%s" % [k, w.trails[k].kind, " ride" if w.trails[k].has("ride") else ""]
+			if gaps <= 5: print("  разрыв: (%.1f,%.1f)→(%.1f,%.1f) кл, уровни %.2f / %.2f м, по ребру %.2f м, участок %s" % [pa.x / GameConfig.TILE,
+				pa.y / GameConfig.TILE, pb.x / GameConfig.TILE, pb.y / GameConfig.TILE, nav.levels[edge.from], nav.levels[edge.to], end, kind])
 	var pairs := 0
 	var broken: Array = []
 	var st := w.settlements

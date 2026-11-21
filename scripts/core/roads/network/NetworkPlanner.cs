@@ -262,9 +262,9 @@ public sealed class NetworkPlanner
 	}
 
 	/// <summary>Правила узлов 3.4 для точки примыкания; пустая строка — годится, иначе причина отказа.</summary>
-	public string NodeRule(int cell, bool crossing)
+	public string NodeRule(int cell, bool crossing, bool ignoreExit = false)
 	{
-		if (SettleDist[cell] < _p.ExitR) return "node_exit";
+		if (!ignoreExit && SettleDist[cell] < _p.ExitR) return "node_exit";
 		if (_t.OnAxis[cell] != 0) return "node_structure";
 		double d = NodeDist[cell];
 		if (d < _p.NodeSep)
@@ -724,7 +724,7 @@ public sealed class NetworkPlanner
 			if (kind != 2) tried.Add((target, kind));
 			string why = TrySpur(target, kind, anchors[k], out int[] path);
 			Stats.Log.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} ({1},{2}): путь {3:F0} кл — {4}",
-				what, target % _t.W, target / _t.W, path.Length > 0 ? _t.Length(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") ? LastNode : "") : "принято"));
+				what, target % _t.W, target / _t.W, path.Length > 0 ? _t.Length(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") || why.Contains("parallel") ? LastNode : "") : "принято" + LastNode));
 			if (why.Length > 0) { Stats.Reject(why); continue; }
 			Accept(path);
 			outPaths.Add(path);
@@ -742,6 +742,21 @@ public sealed class NetworkPlanner
 	private int Source(int target, double reach, int anchor, out string why)
 	{
 		why = "";
+		var list = Candidates(target, reach, anchor);
+		string first = "";
+		foreach (var (_, c) in list)
+		{
+			string rule = NodeRule(c, false);
+			if (rule.Length == 0) { NoteNode(c, " — точка съезда"); return c; }
+			if (first.Length == 0) { first = rule; NoteNode(c, " — ближайшая точка съезда"); }
+		}
+		why = list.Count == 0 ? "no_source" : "source_" + first;
+		return -1;
+	}
+
+	/// <summary>Клетки сети (с конечной ценой) в круге reach вокруг цели и точка перегона anchor — по расстоянию.</summary>
+	private List<(double D, int C)> Candidates(int target, double reach, int anchor)
+	{
 		int W = _t.W, H = _t.H, tx = target % W, ty = target / W, r = (int)Math.Ceiling(reach);
 		var list = new List<(double D, int C)>();
 		for (int y = Math.Max(0, ty - r); y < Math.Min(H, ty + r + 1); y++)
@@ -754,12 +769,29 @@ public sealed class NetworkPlanner
 			}
 		if (anchor >= 0 && _t.Owner[anchor] >= 0) list.Add((_t.Dist(anchor, target) + 1e-6, anchor));
 		list.Sort((a, b) => a.D != b.D ? a.D.CompareTo(b.D) : a.C.CompareTo(b.C));
+		return list;
+	}
+
+	/// <summary>Точка съезда горной тропы (как V1 _mountain_trails): ближайшая клетка сети, проходящая все правила узлов
+	/// (вне ExitR и NodeSep), если она не дальше ближайшей точки сети × MOUNTAIN_DETOUR + 4 клетки; иначе ближайшая,
+	/// проходящая правила узлов без ExitR (exitFree — съезд у поселения разрешён только в этой точке).</summary>
+	private int MountainSource(int target, double nearest, out bool exitFree, out string why)
+	{
+		exitFree = false;
+		why = "";
+		var list = Candidates(target, _t.W * 0.4, -1);
+		double limit = nearest * _p.MountainDetour + 4.0;
+		foreach (var (d, c) in list)
+		{
+			if (d > limit) break;
+			if (NodeRule(c, false).Length == 0) { NoteNode(c, " — точка съезда"); return c; }
+		}
 		string first = "";
 		foreach (var (_, c) in list)
 		{
-			string rule = NodeRule(c, false);
-			if (rule.Length == 0) return c;
-			if (first.Length == 0) first = rule;
+			string rule = NodeRule(c, false, true);
+			if (rule.Length == 0) { exitFree = true; NoteNode(c, " — точка съезда у поселения"); return c; }
+			if (first.Length == 0) { first = rule; NoteNode(c, " — ближайшая точка съезда"); }
 		}
 		why = list.Count == 0 ? "no_source" : "source_" + first;
 		return -1;
@@ -779,10 +811,12 @@ public sealed class NetworkPlanner
 				if (_t.Owner[i] >= 0 && float.IsFinite(_t.Cost[i]))
 					bd = Math.Min(bd, RoadGraph.Hypot(i % _t.W + 0.5 - (tx + 0.5), i / _t.W + 0.5 - (ty + 0.5)));
 			if (!(bd < _t.W * 0.4)) return what + "_far";
-			reach = bd * _p.MountainReach + 8.0;
+			reach = bd;
 		}
 		else reach = kind == 0 ? _p.ShoreReach : _p.ViewReach;
-		int source = Source(target, reach, anchor, out string why);
+		bool exitFree = false;
+		string why;
+		int source = kind == 2 ? MountainSource(target, reach, out exitFree, out why) : Source(target, reach, anchor, out why);
 		if (source < 0) return what + "_" + why;
 		// Окно — компоненты грубого пути от точки съезда до цели; связи нет — пути нет
 		int cs = Coarse.CompNear(source), ct = Coarse.CompNear(target);
@@ -798,7 +832,9 @@ public sealed class NetworkPlanner
 			{
 				int c = y * _t.W + x;
 				if (c == source || _t.Owner[c] < 0 || !float.IsFinite(_scratch[c])) continue;
-				_scratch[c] = (float)(_scratch[c] * _p.ExitMul);
+				// пол цены, как у природных маршрутов (ride_routes.gd: клетка сети не дешевле 2,0), иначе дорога ×ExitMul
+				// дешевле земли и ответвление идёт по ней
+				_scratch[c] = (float)(Math.Max(_p.SpurNetFloor, _scratch[c]) * _p.ExitMul);
 				touched.Add(c);
 			}
 		try { path = Router.Route(_scratch, source, target, area, kind == 2, Stats); }
@@ -812,8 +848,20 @@ public sealed class NetworkPlanner
 			if (!Validator.Ford(path)) return what + "_ford";
 			if (kind != 2 && !NewGround(path)) return what + "_not_new";
 			if (kind != 2 && !AddsNetwork(path)) return what + "_parallel";
-			if (kind == 2 && Rejoins(path)) return what + "_rejoin";
 			var spurCore = Core(path);
+			if (kind == 2)
+			{
+				// вершина у самой сети — тропа не нужна; горная тропа тоже не идёт вдоль сети (правило V1 _adds_network)
+				int fresh = 0;
+				foreach (int c in spurCore) if (_t.Mask[c] < 2) fresh++;
+				if (fresh < 4) return what + "_short";
+				if (!AddsNetwork(spurCore))
+				{
+					var (share, longest) = ParallelStats(spurCore);
+					LastNode = string.Format(System.Globalization.CultureInfo.InvariantCulture, " (доля {0:F2}, подряд {1})", share, longest);
+					return what + "_parallel";
+				}
+			}
 			if (spurCore.Length >= 2 && Graph.DoubleCross(Polyline(spurCore, 0, spurCore.Length - 1), 20.0)) return what + "_double_cross";
 			if (kind == 0)
 			{
@@ -821,7 +869,7 @@ public sealed class NetworkPlanner
 				for (int k = 0; k < count; k++) if (Fields.ShoreDist[path[k]] <= _p.ShoreBand) wet++;
 				if (count > 0 && (double)wet / count > _p.ShoreShare) return what + "_along_shore";
 			}
-			string node = NodeRules(Attachments(path));
+			string node = SpurNodeRules(AttachmentsAt(path), source, exitFree);
 			if (node.Length > 0) return what + "_" + node;
 			return "";
 		}
@@ -829,6 +877,24 @@ public sealed class NetworkPlanner
 		{
 			Stats.Time("checks", c0);
 		}
+	}
+
+	/// <summary>Правила узлов ответвления; exitFree — точка съезда (source) у поселения разрешена (горная тропа, V1).</summary>
+	private string SpurNodeRules(List<(int Cell, bool Crossing, int Index, int Dir)> nodes, int source, bool exitFree)
+	{
+		foreach (var (c, x, _, _) in nodes)
+		{
+			NoteNode(c);
+			string rule = NodeRule(c, x, exitFree && c == source);
+			if (rule.Length > 0) return rule;
+		}
+		for (int a = 0; a < nodes.Count; a++)
+			for (int b = a + 1; b < nodes.Count; b++)
+			{
+				double d = _t.Dist(nodes[a].Cell, nodes[b].Cell);
+				if (d > 1.5 && d < _p.NodeSep) return "node_pair";
+			}
+		return "";
 	}
 
 	// ---------------------------------------------------------------- выход
