@@ -431,6 +431,22 @@ public sealed class NetworkPlanner
 		return "";
 	}
 
+	/// <summary>Единичные направления существующих выездов поселения home (хорда ExitChord по каждому ребру его узла).</summary>
+	private List<(double X, double Y)> ExitDirections(int home)
+	{
+		var outl = new List<(double, double)>();
+		int node = Graph.SettleNode[home];
+		if (node < 0) return outl;
+		foreach (int e in Graph.NEdges[node])
+		{
+			if (Graph.EDead[e]) continue;
+			var (ex, ey) = AlongEdge(Graph.EPts[e], Graph.EA[e] == node, _p.ExitChord);
+			double ox = ex - Graph.NX[node], oy = ey - Graph.NY[node], l = RoadGraph.Hypot(ox, oy);
+			if (l > 1e-6) outl.Add((ox / l, oy / l));
+		}
+		return outl;
+	}
+
 	/// <summary>Точка на ломаной ребра на дуге dist от начала (fromA) или от конца.</summary>
 	private static (double X, double Y) AlongEdge(double[] pts, bool fromA, double dist)
 	{
@@ -620,18 +636,29 @@ public sealed class NetworkPlanner
 			if (_t.Dist(c, sa) <= _p.ExitR || _t.Dist(c, sb) <= _p.ExitR) continue;
 			if (float.IsFinite(_scratch[c])) { _scratch[c] = (float)(_scratch[c] * _p.AvoidCost); touched.Add(c); _mark[c] = 1; }
 		}
-		// Новая земля в кругах выездов дороже (StageTrails._exit_ring, EXIT_MUL)
+		// Шаг 8: в кругах выездов своих поселений дороже (EXIT_MUL) только новая земля в секторе ±ExitAngle от
+		// существующих выездов этого поселения (там новый выезд шёл бы вдоль старого); другие направления — обычная цена
 		int r = (int)Math.Ceiling(_p.ExitR);
-		foreach (int o in new[] { sa, sb })
+		double cosLimit = Math.Cos(_p.ExitAngle * Math.PI / 180.0);
+		foreach (int home in new[] { a, b })
+		{
+			int o = _settle[home];
+			var dirs = ExitDirections(home);
 			for (int y = Math.Max(0, o / W - r); y < Math.Min(H, o / W + r + 1); y++)
 				for (int x = Math.Max(0, o % W - r); x < Math.Min(W, o % W + r + 1); x++)
 				{
 					int c = y * W + x;
 					if (_t.Mask[c] >= 2 || !float.IsFinite(_scratch[c])) continue;
-					if ((x - o % W) * (x - o % W) + (y - o / W) * (y - o / W) > _p.ExitR * _p.ExitR) continue;
+					double dx = x - o % W, dy = y - o / W, len = Math.Sqrt(dx * dx + dy * dy);
+					if (len > _p.ExitR || len < 1e-9) continue;
+					bool along = false;
+					foreach (var (ux, uy) in dirs)
+						if ((dx * ux + dy * uy) / len >= cosLimit) { along = true; break; }
+					if (!along) continue;
 					_scratch[c] = (float)(_scratch[c] * _p.ExitMul);
 					touched.Add(c);
 				}
+		}
 		try
 		{
 			long t0 = NetStats.Now();
