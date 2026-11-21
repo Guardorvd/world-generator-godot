@@ -1098,12 +1098,25 @@ func _board_case() -> void:
 		bd._next_check_ms = 0
 		bd.tick(at * Vector3(0.0, 0.0, 60.0 if t < 1.0 else 20.0))
 	await _case("world.board", "Мир: щит доски строится у камеры", MOVE, step)
+	print("BOARD_STEPS_MS ", Array(bd.step_ms).map(func(ms: float) -> String: return "%.1f" % ms))
 	var svc := game.interaction_service
 	var here := svc.target(game.world.place(WorldData.place_id("settlement", boards[0].place.x, boards[0].place.y)))
 	var clock_us := func(f: Callable) -> float:
 		var t0 := Time.get_ticks_usec()
 		f.call()
 		return (Time.get_ticks_usec() - t0) / 1000.0
+	# 21.11.2026: отбор с отложенными полями (offers) против прежнего полного (все поля, потом board_pick) — те же листки
+	var ids := func(list: Array) -> Array: return list.map(func(q: QuestData) -> String: return q.id)
+	var giver := WorldData.place_id("settlement", boards[0].place.x, boards[0].place.y)
+	var full_ms: float = clock_us.call(func() -> void: svc.quests.board_pick(svc.offers_all(boards[0].place), giver, svc.quests.done, svc.quests.active.id))
+	for b: Dictionary in boards.slice(0, 8):
+		var g := WorldData.place_id("settlement", b.place.x, b.place.y)
+		var lazy: Array = ids.call(svc.offers(b.place))
+		var full: Array = ids.call(svc.quests.board_pick(svc.offers_all(b.place), g, svc.quests.done, svc.quests.active.id))
+		print("BOARD_PICK %s same=%s %s" % [g, lazy == full, lazy])
+		if lazy != full:
+			report.failed.append("отбор листков доски %s: %s вместо %s" % [g, lazy, full])
+	print("OFFERS_FULL_MS %.1f" % full_ms)
 	var trip: Dictionary = svc.travel.call()
 	var prefer := svc.quests.prefer(here, trip)
 	print("OFFERS_MS all=%.1f places=%.1f travel=%.1f beacons=%.1f paint=%.1f" % [clock_us.call(func() -> void: svc.offers(boards[0].place)),

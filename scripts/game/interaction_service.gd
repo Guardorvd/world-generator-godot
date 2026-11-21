@@ -59,9 +59,23 @@ static func _ray_box(o: Vector3, d: Vector3, half: Vector3) -> float:
 
 
 ## Листки доски village: не больше Quests.BOARD_OFFERS из всех предложений (offers_all)
+## 21.11.2026: маяки и метки краской (обход путей, самое дорогое) считаются, только если попали в отбор
 func offers(village: Variant, catalog: Variant = null) -> Array:
-	var here_key := WorldData.place_id("settlement", village.x, village.y)
-	return Quests.board_pick(offers_all(village, catalog), here_key, quests.done, quests.active.id) # 19.11.2026
+	var plan := offers_plan(village, catalog)
+	var picked: Variant = null
+	while picked == null:
+		picked = offers_next(plan)
+	return picked
+
+
+## Отбор листков по шагам (щит доски — шаг за кадр): offers_plan дёшев, каждый offers_next считает не больше
+## одного поля; null — нужен ещё шаг, иначе — листки (то же, что offers)
+func offers_plan(village: Variant, catalog: Variant = null) -> Dictionary:
+	return {giver = WorldData.place_id("settlement", village.x, village.y), list = offers_all(village, catalog, true)}
+
+
+func offers_next(plan: Dictionary) -> Variant:
+	return quests.board_step(plan.list, plan.giver, quests.active.id)
 
 
 ## 20.11.2026: указатели путей мира для маяков и меток краской — при загрузке, а не у первой доски
@@ -72,7 +86,7 @@ func warm() -> void:
 
 
 ## Все предложения доски village (Quests.offers) — до отбора трёх листков
-func offers_all(village: Variant, catalog: Variant = null) -> Array:
+func offers_all(village: Variant, catalog: Variant = null, defer_fields := false) -> Array:
 	var here := target(world.place(WorldData.place_id("settlement", village.x, village.y)))
 	var neighbors: Array = []
 	for r: Dictionary in world.routes(here.id):
@@ -83,7 +97,7 @@ func offers_all(village: Variant, catalog: Variant = null) -> Array:
 	var prefer := quests.prefer(here, trip)
 	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num, is_broken,
 		BeaconSites.route.bind(world, heights, here, quests.installed_beacons, prefer),
-		PaintTargets.route.bind(world, heights, here, quests.painted_objects, prefer), trip)
+		PaintTargets.route.bind(world, heights, here, quests.painted_objects, prefer), trip, defer_fields)
 
 func accept(q: QuestData) -> void:
 	quests.accept(q)

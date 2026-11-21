@@ -186,7 +186,7 @@ var thanks := {}
 ## Задания доски поселения here (место с key). places — все места мира, neighbors — поселения по дорогам,
 ## far — дальнее поселение по сети или пусто, visited — посещённые id. Порядок и выбор устойчивы для мира и счёта done
 func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, visited: Dictionary, seed_num: int,
-		broken := Callable(), beacon_route := Callable(), paint_route := Callable(), travel := {}) -> Array:
+		broken := Callable(), beacon_route := Callable(), paint_route := Callable(), travel := {}, defer_fields := false) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("%s|%d|%d" % [here.key, seed_num, done])
 	var center := Vector2(here.x, here.y)
@@ -201,17 +201,15 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 		towns.append(far)
 	var out: Array = []
 	var aims: Array[Vector2] = []  # направления уже предложенных заданий этой доски, м
-	if _offers_field("beacons", here.key, beacon_route):
-		var cells: Array[Vector2i] = beacon_route.call()
-		if cells.size() == BeaconSites.COUNT:
-			var targets: Array[Dictionary] = []
-			for i in cells.size():
-				targets.append(BeaconSites.place(cells[i], i + 1))
-			out.append(_make("beacons", here, targets))
-	if _offers_field("paint", here.key, paint_route):
-		var targets: Array[Dictionary] = paint_route.call()
-		if targets.size() == PaintTargets.COUNT:
-			out.append(_make("paint", here, targets))
+	# 21.11.2026: маяки и метки краской — заготовкой (field_stub), если отложены: дорогой обход путей считается
+	# только для попавшего на доску (board_step); не попавшее — никогда. Прочие задания от них не зависят
+	for field: Array in [["beacons", beacon_route], ["paint", paint_route]]:
+		if defer_fields and _offers_field(field[0], here.key, field[1]):
+			out.append(field_stub(field[0], here, field[1]))
+		elif not defer_fields:
+			var q := field_offer(field[0], here, field[1])
+			if q != null:
+				out.append(q)
 	# припасы: на вышку (сумку надо занести наверх по лестнице) и в одинокий дом или на хутор; ближние места первыми
 	if "supplies" in OFFERED:
 		for group: Array in SUPPLY_GROUPS:
@@ -325,6 +323,49 @@ static func board_pick(offers: Array, giver: String, done_count: int, active_id 
 	for i: int in chosen:
 		out.append(offers[i])
 	return out
+
+
+## Задание поля kind («beacons», «paint») от here по точкам route() или null (поле не предлагается, точек не хватило)
+func field_offer(kind: String, here: Dictionary, route: Callable) -> QuestData:
+	if not _offers_field(kind, here.key, route):
+		return null
+	if kind == "beacons":
+		var cells: Array[Vector2i] = route.call()
+		if cells.size() != BeaconSites.COUNT:
+			return null
+		var targets: Array[Dictionary] = []
+		for i in cells.size():
+			targets.append(BeaconSites.place(cells[i], i + 1))
+		return _make("beacons", here, targets)
+	var marks: Array[Dictionary] = route.call()
+	return _make("paint", here, marks) if marks.size() == PaintTargets.COUNT else null
+
+
+## Заготовка задания поля: id и вид как у настоящего (board_pick отбирает по ним), точки ещё не посчитаны
+static func field_stub(kind: String, here: Dictionary, route: Callable) -> QuestData:
+	var q := QuestData.new(_field_id(kind, here.key), kind, here.key, here)
+	q.set_meta(&"field_here", here)
+	q.set_meta(&"field_route", route)
+	return q
+
+
+## Один шаг отбора листков из offers с заготовками полей (offers меняется на месте). Возвращает листки, когда в
+## отборе не осталось заготовок; иначе считает точки одной отобранной заготовки (заменяет её заданием или убирает,
+## если точек нет) и возвращает null — нужен ещё шаг. Итог тот же, что board_pick по полностью посчитанным offers:
+## отбор зависит только от id и вида, а не попавшее на доску поле ни на что не влияет
+func board_step(offers: Array, giver: String, active_id := "") -> Variant:
+	var picked := board_pick(offers, giver, done, active_id)
+	for q: QuestData in picked:
+		if not q.has_meta(&"field_route"):
+			continue
+		var i := offers.find(q)
+		var real := field_offer(q.kind, q.get_meta(&"field_here"), q.get_meta(&"field_route"))
+		if real == null:
+			offers.remove_at(i)
+		else:
+			offers[i] = real
+		return null
+	return picked
 
 
 func _offers_field(kind: String, giver: String, route: Callable) -> bool:

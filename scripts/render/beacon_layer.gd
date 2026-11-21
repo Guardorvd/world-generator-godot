@@ -60,6 +60,22 @@ func sync(installed: Dictionary, goal: Dictionary, heights: Heightfield) -> void
 	_marker.show()
 
 
+## 21.11.2026: скрытый маяк и метка площадки для прогрева шейдеров под заставкой (GameWorld.prepare_render_pipelines):
+## первый маяк иначе появляется посреди игры вместе с компиляцией beacon_signal
+func make_pipeline_probe() -> Node3D:
+	if _meshes.is_empty():
+		_prepare_meshes()
+	var probe := Node3D.new()
+	for i in _meshes.size():
+		_add_part(probe, _meshes[i], PARTS[i].y)
+	var ring := MeshInstance3D.new()
+	ring.mesh = TorusMesh.new()
+	ring.material_override = _material(POSITION, true)
+	probe.add_child(ring)
+	probe.hide()
+	return probe
+
+
 func _prepare_meshes() -> void:
 	var signal_material := ShaderMaterial.new()
 	signal_material.shader = SIGNAL_SHADER

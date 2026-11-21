@@ -88,6 +88,23 @@ func reveal(id: String, eye: Vector3) -> Vector3:
 	return at + direction * Vector3(box.size.x, 0.0, box.size.z) * 0.46
 
 
+## 21.11.2026: скрытая накладка краски и указатель «▼» для прогрева шейдеров под заставкой (GameWorld.prepare_render_pipelines)
+func make_pipeline_probe() -> MeshInstance3D:
+	var node := MeshInstance3D.new()
+	node.mesh = BoxMesh.new()
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var material := ShaderMaterial.new()
+	material.shader = PAINT
+	node.material_override = material
+	var marker := Label3D.new()
+	marker.text = "▼"
+	marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	marker.outline_size = 8
+	node.add_child(marker)
+	node.hide()
+	return node
+
+
 func _overlay(place: Dictionary, highlight: bool) -> MeshInstance3D:
 	var surface := vegetation.paint_surface(place.object)
 	if surface.is_empty():

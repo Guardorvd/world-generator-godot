@@ -28,12 +28,15 @@ const NOTICE := Vector2(176, 404)
 
 var boards: Callable          # () -> Array досок {at, place, label}
 var offers: Callable          # (place) -> Array[QuestData], как для панели доски
+var offers_next: Callable     # (plan) -> Array листков или null (InteractionService.offers_next)
 var pins: Callable            # (place) -> Array мест для карты, как для панели доски
+var tick_us := {}             # накопленное время частей кадра (GameWorld.tick_us): сборка щита — «board»
 var quests: Quests
 var map_source: MapData       # общая подложка карты (Hud.map_data); у щита свой вид на неё
 var world: WorldData
 
 var builds := 0               # сколько раз щит перерисовывался (проверка tools/quest_look.gd)
+var step_ms := PackedFloat32Array()  # время шагов последней сборки, мс (tools/stress world.board)
 var _next_check_ms := 0
 var _board := {}              # доска, у которой сейчас щит
 var _key := ""                # что нарисовано: доска и ревизия заданий
@@ -52,13 +55,15 @@ func _ready() -> void:
 	set_process(false)
 
 
-func setup(w: WorldData, q: Quests, source: MapData, list: Callable, offers_of: Callable, pins_of: Callable) -> void:
+func setup(w: WorldData, q: Quests, source: MapData, list: Callable, offers_of: Callable, pins_of: Callable,
+		next_of := Callable()) -> void:
 	world = w
 	quests = q
 	map_source = source
 	boards = list
 	offers = offers_of
 	pins = pins_of
+	offers_next = next_of
 	if quests != null and not quests.changed.is_connected(invalidate):
 		quests.changed.connect(invalidate)
 	_ensure_nodes()  # вьюпорт и прямоугольник — при загрузке мира, не в кадре у доски
@@ -174,6 +179,7 @@ func _build_content(place: Variant) -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_viewport.add_child(root)
 	_steps = [_step_frame.bind(root, place), _step_offers.bind(place)]
+	step_ms.clear()
 	_list = []
 	_painted = false
 	_frames_left = BUILD_FRAMES
@@ -216,8 +222,26 @@ func _step_frame(root: Control, place: Variant) -> void:
 	_atlas.configure_board(map_source, pins.call(place)) # у карты свой вид на общую подложку (Data.new(world, source))
 
 
+## 21.11.2026: offers даёт листки (Array) или план отбора (Dictionary, InteractionService.offers_plan) — тогда
+## дорогие поля (маяки, метки) считаются по одному за кадр через offers_next, и только попавшие на доску
 func _step_offers(place: Variant) -> void:
-	_list = (offers.call(place) if offers.is_valid() else []).slice(0, Quests.BOARD_OFFERS)
+	var got: Variant = offers.call(place) if offers.is_valid() else []
+	if got is Dictionary:
+		_steps.append(_step_pick.bind(got, place))
+	else:
+		_post_offers(got, place)
+
+
+func _step_pick(plan: Dictionary, place: Variant) -> void:
+	var got: Variant = offers_next.call(plan)
+	if got == null:
+		_steps.push_front(_step_pick.bind(plan, place))  # ещё поле — следующим кадром
+	else:
+		_post_offers(got, place)
+
+
+func _post_offers(list: Array, place: Variant) -> void:
+	_list = list.slice(0, Quests.BOARD_OFFERS)
 	var root: Control = _viewport.get_child(0)
 	if _list.is_empty():
 		var empty := Label.new()
@@ -244,8 +268,13 @@ func _step_notice(root: Control, place: Variant, i: int) -> void:
 ## Пока щит строится: шаги сборки по одному за кадр, потом ждём, пока карта соберёт участки, последний кадр — и всё замирает
 func _process(_delta: float) -> void:
 	if not _steps.is_empty():
+		var t0 := Time.get_ticks_usec()
 		var step: Callable = _steps.pop_front()
 		step.call()
+		# 21.11.2026: сборка щита видна в записи сессии частью «board» (раньше пряталась в неразмеченной работе)
+		var spent := Time.get_ticks_usec() - t0
+		tick_us["board"] = tick_us.get("board", 0) + spent
+		step_ms.append(spent / 1000.0)
 		return
 	_frames_left -= 1
 	var map_busy := _atlas != null and (_atlas._base_dirty or (_atlas._data != null and _atlas._data.pending))

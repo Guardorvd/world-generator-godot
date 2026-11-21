@@ -568,8 +568,10 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(board_display)
 	board_display.setup(world, quests, hud.map_data,
 		func() -> Array: return _boards + (regions.boards if regions != null else []),
-		func(place: Variant) -> Array: return _offers(place),
-		func(place: Variant) -> Array: return hud.board_places(place))
+		func(place: Variant) -> Dictionary: return interaction_service.offers_plan(place),
+		func(place: Variant) -> Array: return hud.board_places(place),
+		interaction_service.offers_next)
+	board_display.tick_us = tick_us
 	bike_controller.message.connect(hud.toast.bind(&"warning"))
 	bike_controller.mount_changed.connect(_bike_mount_changed)
 	bike_controller.recovered.connect(func() -> void:
@@ -596,6 +598,22 @@ func prepare_render_pipelines() -> Node3D:
 	var mist: Node3D = local_mist.make_pipeline_probe()
 	if mist != null:
 		probes.add_child(mist)
+	# 21.11.2026: сумка груза с подписью, маяки и метки краской впервые появляются посреди игры (взяли задание, следующая
+	# точка): запись сессии показала 5 компиляций конвейеров разом у доски. Скрытые копии готовят их под заставкой
+	var bag := CargoBag.build()
+	var label := Label3D.new()
+	label.text = "1"
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.fixed_size = true
+	label.outline_size = 8
+	bag.add_child(label)
+	bag.hide()
+	probes.add_child(bag)
+	if _beacon_layer != null:
+		probes.add_child(_beacon_layer.make_pipeline_probe())
+	if _paint_layer != null:
+		probes.add_child(_paint_layer.make_pipeline_probe())
 	add_child(probes)
 	return probes
 
