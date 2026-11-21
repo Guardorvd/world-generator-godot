@@ -32,7 +32,9 @@ const EXIT_ANGLE := 45.0    # петля: новый выезд своего п�
 const EXIT_CHORD := 10.0    # клеток: хорда направления выезда (8–12)
 const SPUR_NET_FLOOR := 2.0 # ответвление: клетка сети в окне не дешевле этого до множителя EXIT_MUL (как пол 2,0 в ride_routes.gd)
 const MOUNTAIN_REACH := 1.5
-const JOIN_SAME := 1.5      # примыкание ближе этого (клеток) к развилке — в саму развилку (общий узел) # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
+const JOIN_SAME := 1.5
+## Шаг 7: развилки природных маршрутов не ближе CROWD_R измерителя (10 клеток, 40 м) + 2 к другим развилкам
+const RIDE_NODE_SEP := 12.0      # примыкание ближе этого (клеток) к развилке — в саму развилку (общий узел) # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
 
 
 ## Подмена чисел V2 на время запуска стенда (road_plan_test -- --v2-param ключ=значение,…); в кэш игры не попадает.
@@ -74,7 +76,7 @@ static func params(w: WorldData) -> Dictionary:
 		branch_len = StageTrails.BRANCH_LEN, shore_gap = StageTrails.SHORE_GAP, view_gap = StageTrails.VIEW_GAP,
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX, shore_share = SHORE_SHARE,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR, mountain_reach = MOUNTAIN_REACH,
-		exit_angle = EXIT_ANGLE, exit_chord = EXIT_CHORD, spur_net_floor = SPUR_NET_FLOOR,
+		exit_angle = EXIT_ANGLE, exit_chord = EXIT_CHORD, spur_net_floor = SPUR_NET_FLOOR, ride_node_sep = RIDE_NODE_SEP,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH}.merged(overrides, true)
 
 
@@ -290,13 +292,13 @@ static func ride_nodes(w: WorldData, finder: Pathfinder, surface: Heightfield, o
 	_profile(w, "rides", out, 0.0, (Time.get_ticks_usec() - started) / 1000.0, {})
 
 
-## Точки примыкания маршрута nodes не ближе NODE_SEP к точкам уже принятых маршрутов (совпадающие — общий узел).
+## Точки примыкания маршрута nodes не ближе RIDE_NODE_SEP к точкам уже принятых маршрутов (совпадающие — общий узел).
 static func ride_nodes_spaced(w: WorldData, nodes: PackedInt32Array, chosen: Array) -> bool:
 	for other: PackedInt32Array in chosen:
 		for a: int in nodes:
 			for b: int in other:
 				var d := Vector2(a % w.W - b % w.W, a / w.W - b / w.W).length()
-				if d > 1.5 and d < NODE_SEP: return false
+				if d > 1.5 and d < RIDE_NODE_SEP: return false
 	return true
 
 
@@ -321,3 +323,17 @@ static func _publish(w: WorldData, out: Dictionary, cells: PackedInt32Array, kin
 	var added := StageTrails._add_trail(w, cells, kind, road_cost, on_axis, surface)
 	StageTrails.v2_junctions = {}
 	return added
+
+
+## Шаг 7: опорные точки природных маршрутов (RideRoutes._anchors) без точек в кольце 0,6 < до развилки < RIDE_NODE_SEP:
+## отбор идёт по точкам, годным для узла (у самой развилки — общий узел). Подъёмы к виртуальным вершинам начинаются
+## от тех же опорных точек.
+static func ride_anchors(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray, anchors: Array) -> Array:
+	var known := _unsafe_cache if _unsafe_cache.size() == w.N and _unsafe_axis == on_axis else unsafe_mask(w, surface, on_axis)
+	var data := input(w, finder, surface, on_axis, known)
+	data.mode = "node_dist"
+	data.session = _session
+	var out := call_core(finder, surface, data)
+	if out.is_empty(): return anchors
+	var dist: PackedFloat32Array = out.node_dist
+	return anchors.filter(func(a: Dictionary) -> bool: return dist[a.i] <= NODE_SAME or dist[a.i] >= RIDE_NODE_SEP)

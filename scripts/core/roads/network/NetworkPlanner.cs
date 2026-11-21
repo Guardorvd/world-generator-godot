@@ -318,12 +318,13 @@ public sealed class NetworkPlanner
 	}
 
 	/// <summary>Правила узлов 3.4 для точки примыкания; пустая строка — годится, иначе причина отказа.</summary>
-	public string NodeRule(int cell, bool crossing, bool ignoreExit = false)
+	public string NodeRule(int cell, bool crossing, bool ignoreExit = false, double sep = double.NaN)
 	{
+		if (double.IsNaN(sep)) sep = _p.NodeSep;
 		if (!ignoreExit && SettleDist[cell] < _p.ExitR) return "node_exit";
 		if (_t.OnAxis[cell] != 0) return "node_structure";
 		double d = NodeDist[cell];
-		if (d < _p.NodeSep)
+		if (d < sep)
 		{
 			if (d > 1.5) return "node_crowded";
 			int j = NearestJunction(cell);
@@ -349,7 +350,11 @@ public sealed class NetworkPlanner
 	/// поселения разрешён, если направление нового выезда (хорда ExitChord клеток) отличается от каждого существующего
 	/// выезда этого поселения не меньше ExitAngle и степень узла поселения после добавления ≤ MaxDegree. У чужих
 	/// поселений и вне кругов своих выездов — строгие правила NodeRule.</summary>
-	public string NodeRules(List<(int Cell, bool Crossing, int Index, int Dir)> nodes, int[] own, int[] p)
+	public string NodeRules(List<(int Cell, bool Crossing, int Index, int Dir)> nodes, int[] own, int[] p) =>
+		NodeRules(nodes, own, p, false, _p.NodeSep);
+
+	/// <summary>ignoreExit, sep — для природных маршрутов (шаг 7): без правила ExitR и с RideNodeSep.</summary>
+	public string NodeRules(List<(int Cell, bool Crossing, int Index, int Dir)> nodes, int[] own, int[] p, bool ignoreExit, double sep)
 	{
 		var exits = new HashSet<int>();
 		for (int k = 0; k < nodes.Count; k++)
@@ -367,7 +372,7 @@ public sealed class NetworkPlanner
 					continue;
 				}
 			}
-			string rule = NodeRule(c, x);
+			string rule = NodeRule(c, x, ignoreExit, sep);
 			if (rule.Length > 0) return rule;
 		}
 		for (int a = 0; a < nodes.Count; a++)
@@ -375,7 +380,7 @@ public sealed class NetworkPlanner
 			{
 				if (exits.Contains(a) || exits.Contains(b)) continue;
 				double d = _t.Dist(nodes[a].Cell, nodes[b].Cell);
-				if (d > 1.5 && d < _p.NodeSep) return "node_pair";
+				if (d > 1.5 && d < sep) return "node_pair";
 			}
 		return "";
 	}
@@ -1040,7 +1045,8 @@ public sealed class NetworkPlanner
 			var att = AttachmentsAt(p);
 			var cells = new int[att.Count];
 			for (int k = 0; k < att.Count; k++) cells[k] = att[k].Cell;
-			string why = NodeRules(att, null, p);
+			// шаг 7: у природных маршрутов без ExitR (мера тесных узлов узлы у поселений не считает), развилки — RideNodeSep
+			string why = NodeRules(att, null, p, true, _p.RideNodeSep);
 			verdicts.Add(why.Length > 0 ? why + LastNode : "");
 			nodes.Add(cells);
 			Stats.Count(why.Length > 0 ? "rides_rejected" : "rides_ok");
@@ -1048,6 +1054,13 @@ public sealed class NetworkPlanner
 		}
 		Stats.Time("total", total);
 		return new Godot.Collections.Dictionary { ["verdicts"] = verdicts, ["nodes"] = nodes, ["network_v2"] = Stats.ToDictionary() };
+	}
+
+	/// <summary>Шаг 7: расстояние до развилок сети (клетки) — по нему RideRoutes отбирает опорные точки маршрутов.</summary>
+	public Godot.Collections.Dictionary NodeField()
+	{
+		Prepare(false, false);
+		return new Godot.Collections.Dictionary { ["node_dist"] = NodeDist, ["network_v2"] = Stats.ToDictionary() };
 	}
 
 	// ---------------------------------------------------------------- выход

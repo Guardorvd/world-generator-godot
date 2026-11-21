@@ -103,6 +103,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var bw := ceili(float(W) / BLOCK)
 	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
 	var anchors := _anchors(w, hv, on_axis, cost)
+	# Сеть V2 (шаг 7): без опорных точек рядом с развилками (RoadNetworkV2.ride_anchors)
+	if StageTrails.network_v2:
+		anchors = StageTrails.RoadNetworkV2.ride_anchors(w, finder, surface, on_axis, anchors)
 	stats.anchors = anchors.size()
 	var virtual := _virtual_tops(w, hv, dist, block, bw, anchors)
 	stats.virtual_tops = virtual.map(func(v: Dictionary) -> Array: return [v.x, v.y, roundi(v.rise)])
