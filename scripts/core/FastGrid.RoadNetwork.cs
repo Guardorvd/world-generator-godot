@@ -199,7 +199,7 @@ public partial class FastGrid
 			var line = builder.Build(pts, input["kind"].AsString(), input["smooth"].AsString(), Join("join0"), Join("join1"),
 				input["relax"].AsDouble(), input["tolerance"].AsDouble(), input["road_limit"].AsDouble(), input["trail_grade"].AsDouble(),
 				input["mountain_grade"].AsDouble(), input["bench_cross"].AsDouble(), input["speed"].AsDouble(), input["accel"].AsDouble());
-			// фаза 3.2: сглаживание троп и горных троп (дороги road — нет)
+			// фаза 4: сглаживание линий всех видов (road, trail, mountain и связей остова)
 			var smoothStats = new Godot.Collections.Dictionary();
 			if (input.ContainsKey("smooth_line") && input["smooth_line"].AsBool())
 			{

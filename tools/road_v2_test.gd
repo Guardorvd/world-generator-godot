@@ -463,8 +463,8 @@ func _smooth_check() -> void:
 	var ends_ok := true
 	var density_ok := true
 	for e: Array in [[8 * S + 8, 70 * S + 30], [30 * S + 10, 85 * S + 60], [60 * S + 30, 20 * S + 90], [90 * S + 8, 10 * S + 70], [12 * S + 50, 88 * S + 50]]:
-		for kind: String in ["trail", "mountain"]:
-			var grade: float = StageTrails.MOUNTAIN_GRADE if kind == "mountain" else StageTrails.TRAIL_GRADE
+		for kind: String in ["road", "trail", "mountain"]:
+			var grade: float = StageTrails.MOUNTAIN_GRADE if kind == "mountain" else (StageTrails.TRAIL_GRADE if kind == "trail" else StageTrails.ROAD_LIMIT)
 			var cells := finder.find_path(w.cost, e[0], e[1], 1.0, grade, -1, 4.0, 0.0)
 			if cells.size() < 4: continue
 			var pts: Array = []
@@ -552,42 +552,43 @@ func _smooth_check() -> void:
 		angle_worse += 1
 	check(angle_worse == 0, "угол на хорде 4 м не острее (ухудшений %d)" % angle_worse)
 
-	# Случай 4: концы, подходы к сооружениям (on_axis ± 2 кл) и смена ширины не сдвинуты
+	# Случай 4: концы, подходы к сооружениям (on_axis ± 2 кл) и смена ширины не сдвинуты (trail и road)
 	var rw := _world("river")
 	var rs := _surface(rw)
 	var raxis := PackedByteArray()
 	raxis.resize(rw.N)
 	raxis[50 * S + 44] = 1
 	raxis[50 * S + 45] = 1
-	var bpts: Array = []
-	for q: Vector2 in [Vector2(33.5, 45.5), Vector2(35.5, 45.5), Vector2(36.5, 47.5), Vector2(38.5, 47.5), Vector2(40.5, 49.5),
-			Vector2(42.5, 50.5), Vector2(43.5, 50.5), Vector2(44.5, 50.5), Vector2(45.5, 50.5), Vector2(46.5, 50.5),
-			Vector2(47.5, 50.5), Vector2(49.5, 51.5), Vector2(51.5, 51.5), Vector2(52.5, 53.5), Vector2(54.5, 53.5), Vector2(56.5, 55.5)]:
-		bpts.append({x = q.x, y = q.y, w = widths.trail})
-	bpts[13].w = widths.trail * 0.8
-	bpts[14].w = widths.trail * 0.8
-	bpts[15].w = widths.trail * 0.8
-	StageTrails.routing_overrides.straighten = {road = 0.0, trail = 0.0, mountain = 0.0}
-	V2.smooth_lines = false
-	var pb := V2.line(rw, bpts.duplicate(true), raxis, rs, "trail")
-	V2.smooth_lines = true
-	var sb := V2.line(rw, bpts.duplicate(true), raxis, rs, "trail")
-	StageTrails.routing_overrides.erase("straighten")
-	var pinned_ok: bool = pb[0].x == sb[0].x and pb[0].y == sb[0].y and pb[-1].x == sb[-1].x and pb[-1].y == sb[-1].y
-	for p: Dictionary in [bpts[6], bpts[7], bpts[8], bpts[9], bpts[10], bpts[12], bpts[13]]:
-		var found := false
-		for q: Dictionary in sb:
-			if absf(p.x - q.x) < 1e-6 and absf(p.y - q.y) < 1e-6:
-				found = true
-				break
-		if not found: pinned_ok = false
-	var free_moved := false
-	for p: Dictionary in [bpts[2], bpts[3]]:
-		var exact := false
-		for q: Dictionary in sb:
-			if absf(p.x - q.x) < 1e-4 and absf(p.y - q.y) < 1e-4: exact = true
-		if not exact: free_moved = true
-	check(pinned_ok and free_moved, "концы, подходы к сооружениям и смена ширины не сдвинуты (закреплены %s, свободные сдвинуты %s)" % [pinned_ok, free_moved])
+	for bkind: String in ["trail", "road"]:
+		var bpts: Array = []
+		for q: Vector2 in [Vector2(33.5, 45.5), Vector2(35.5, 45.5), Vector2(36.5, 47.5), Vector2(38.5, 47.5), Vector2(40.5, 49.5),
+				Vector2(42.5, 50.5), Vector2(43.5, 50.5), Vector2(44.5, 50.5), Vector2(45.5, 50.5), Vector2(46.5, 50.5),
+				Vector2(47.5, 50.5), Vector2(49.5, 51.5), Vector2(51.5, 51.5), Vector2(52.5, 53.5), Vector2(54.5, 53.5), Vector2(56.5, 55.5)]:
+			bpts.append({x = q.x, y = q.y, w = widths[bkind]})
+		bpts[13].w = widths[bkind] * 0.8
+		bpts[14].w = widths[bkind] * 0.8
+		bpts[15].w = widths[bkind] * 0.8
+		StageTrails.routing_overrides.straighten = {road = 0.0, trail = 0.0, mountain = 0.0}
+		V2.smooth_lines = false
+		var pb := V2.line(rw, bpts.duplicate(true), raxis, rs, bkind)
+		V2.smooth_lines = true
+		var sb := V2.line(rw, bpts.duplicate(true), raxis, rs, bkind)
+		StageTrails.routing_overrides.erase("straighten")
+		var pinned_ok: bool = pb[0].x == sb[0].x and pb[0].y == sb[0].y and pb[-1].x == sb[-1].x and pb[-1].y == sb[-1].y
+		for p: Dictionary in [bpts[6], bpts[7], bpts[8], bpts[9], bpts[10], bpts[12], bpts[13]]:
+			var found := false
+			for q: Dictionary in sb:
+				if absf(p.x - q.x) < 1e-6 and absf(p.y - q.y) < 1e-6:
+					found = true
+					break
+			if not found: pinned_ok = false
+		var free_moved := false
+		for p: Dictionary in [bpts[2], bpts[3]]:
+			var exact := false
+			for q: Dictionary in sb:
+				if absf(p.x - q.x) < 1e-4 and absf(p.y - q.y) < 1e-4: exact = true
+			if not exact: free_moved = true
+		check(pinned_ok and free_moved, "%s: концы, подходы к сооружениям и смена ширины не сдвинуты (закреплены %s, свободные сдвинуты %s)" % [bkind, pinned_ok, free_moved])
 
 	# Случай 5: бугристый склон с relax = 1.4 — сглаживание двигает вершины, не откатывает линию и не ухудшает _bad / corners
 	var bw := _world("none")
