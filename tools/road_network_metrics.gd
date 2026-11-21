@@ -110,6 +110,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		for k: int in note[1]:
 			non_skeleton[k] = true
 	var grade_acc := {} # вид -> [длина, длина круче STEEP, сумма уклон×длина, наибольший]
+	var mountain_grades: Array[Vector2] = []
 	var grade_at := {} # вид -> [путь, x, y, рядом с концом пути (16 м)] — где наибольший уклон
 	var crossings := {} # пара -> [точки]
 	var line_cells := PackedByteArray()
@@ -210,6 +211,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 						if not grade_acc.has(t.kind): grade_acc[t.kind] = [0.0, 0.0, 0.0, 0.0, 0]
 						var acc: Array = grade_acc[t.kind]
 						var share := run * 0.5 # хорды через одну станцию перекрываются вдвое
+						if t.kind == "mountain": mountain_grades.append(Vector2(gr, share))
 						acc[0] += share
 						acc[4] += 1
 						if gr > STEEP: acc[1] += share
@@ -298,6 +300,15 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	for kind: String in grade_acc:
 		var acc: Array = grade_acc[kind]
 		grade[kind] = {samples = acc[4], weighted_chord_m = snappedf(acc[0], 0.01), steep_share = snappedf(acc[1] / maxf(acc[0], 1.0), 0.001), mean = snappedf(acc[2] / maxf(acc[0], 1.0), 0.001), max = snappedf(acc[3], 0.001), max_at = grade_at.get(kind, [])}
+	if not mountain_grades.is_empty():
+		mountain_grades.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x < b.x)
+		var target: float = grade_acc.mountain[0] * 0.95
+		var cumulative := 0.0
+		for sample: Vector2 in mountain_grades:
+			cumulative += sample.y
+			if cumulative >= target:
+				grade.mountain.p95 = snappedf(sample.x, 0.001)
+				break
 	var raw_turns := {}
 	var road_cells: Array = w.generation.road_cells if w.generation != null else []
 	var raw_acc := {}
@@ -321,6 +332,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		sections = routes.size(), excluded = excluded, character_by_kind = Samples.measure(w, routes, surface, forest),
 		decisions = {width = w.generation_profile.get("road_width_decisions"),
 			line_grade_fallbacks = w.generation_profile.get("road_line_grade_fallbacks"),
+			switchbacks = w.generation_profile.get("road_switchbacks", {}),
 			ride_rejections = w.generation_profile.get("rides", {}).get("rejected")},
 		length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
 		parallel_without_rides_m = roundi(parallel_plain), overlap_without_rides_m = roundi(overlap_plain),

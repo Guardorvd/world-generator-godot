@@ -497,27 +497,6 @@ public sealed class LineBuilder
 					PinAxisSpan(rawS, rawPin, k, m);
 		}
 		double local = _relax > 1.0 ? _grade * _relax : _grade;
-		if (_mountain)
-		{
-			var mPts = new List<P>(_raw);
-			var mHardPin = new bool[m];
-			var mBlock = new byte[m];
-			for (int k = 0; k < m; k++)
-			{
-				mHardPin[k] = rawPin[k] != 0;
-				if (AxisBlocked(V.Of(mPts[k].X, mPts[k].Y)))
-				{
-					mBlock[k] = 1;
-					for (int j = k; j >= 0 && rawS[k] - rawS[j] <= AxisPinCells + 1e-6; j--) mHardPin[j] = true;
-					for (int j = k; j < m && rawS[j] - rawS[k] <= AxisPinCells + 1e-6; j++) mHardPin[j] = true;
-				}
-			}
-			var mRounded = RoundBends(mPts, _raw, mHardPin, mBlock, validator, local);
-			var mRes = Stations(mRounded);
-			if (WholeProfileOk(line, _grade) && !WholeProfileOk(mRes, _grade))
-				return line;
-			return validator.KeepsCrossings(line, mRes) ? mRes : line;
-		}
 		var pts = new List<P>(m * 2);
 		var pinList = new List<byte>(m * 2);
 		var ptsRawS = new List<double>(m * 2);
@@ -969,7 +948,7 @@ public sealed class LineBuilder
 
 	/// <summary>Точка вдоль ломаной на расстоянии targetLen от вершины k в направлении dir (−1 / +1); у конца ≥ 0,3 кл
 	/// фиксируется на концевой точке (без скачка угла/радиуса при длине краевого отрезка 0,87..1,0 кл).</summary>
-	private static bool ChordPoint(IReadOnlyList<P> pts, int k, int dir, double targetLen, out double px, out double py)
+	internal static bool ChordPoint(IReadOnlyList<P> pts, int k, int dir, double targetLen, out double px, out double py)
 	{
 		double rem = targetLen, walked = 0.0;
 		int cur = k, n = pts.Count;

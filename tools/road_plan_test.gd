@@ -7,6 +7,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/road_plan_test.gd -- [--seed Север-1234] [--save <файл.json>] [--compare <файл.json>]
 ## --save пишет отпечаток (было), --compare сверяет с ним (стало): тот же мир — рефакторинг, разный — изменение маршрутов.
 ## --metrics-json <файл> сохраняет сравнимый отчёт о готовой сети; --metrics также пишет картинку.
+## --climb-data <файл> сохраняет оси и профиль земли горных троп для сравнения подъёмов.
 ## --forks — где отходят необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты): у поселения или на перегоне.
 ## --v2 — дорожная сеть V2 (StageTrails.network_v2, docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md); --nav — навигация игры
 ## (RoadNavigation на готовой поверхности) между каждой парой поселений: сколько пар, неполных маршрутов и рёбер
@@ -180,6 +181,24 @@ func _initialize() -> void:
 		StageTrails.BRIDGE_LANDING_GAP, worst.size(), str(worst.slice(0, 8)), Time.get_ticks_msec() - started])
 	# --rides: природные велосипедные маршруты (RideRoutes): сводка, проходимость на готовой поверхности, картинка.
 	var fails := 0
+	var climbs_file := _arg(args, "--climb-data", "")
+	if not climbs_file.is_empty():
+		var climbs := []
+		for t: Dictionary in w.trails:
+			if t.kind != "mountain": continue
+			var stations := []
+			var along := 0.0
+			var previous := Vector2.ZERO
+			for p: Dictionary in t.pts:
+				var at := Vector2(p.x, p.y) * GameConfig.TILE
+				if not stations.is_empty(): along += at.distance_to(previous)
+				stations.append([p.x, p.y, along, final.ground_at(at.x, at.y)])
+				previous = at
+			climbs.append({id = t.road_id, stations = stations})
+		var output := FileAccess.open(climbs_file, FileAccess.WRITE)
+		if output == null or not output.store_string(JSON.stringify(climbs) + "\n"):
+			printerr("Не записаны профили ", climbs_file)
+			fails += 1
 	if "--rides" in args:
 		fails += _rides(w, final, seed_text)
 	# --metrics: измеритель сети (tools/road_network_metrics.gd) и картинка tools/control/runs/network/<сид>[-<метка>].png
