@@ -1095,10 +1095,14 @@ func _start_adaptive_resolution() -> void:
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 
 
+func _adaptive_wanted() -> bool:
+	return services.settings.adaptive_resolution and is_equal_approx(services.settings.render_scale, 1.0)
+
+
 func _tick_adaptive_resolution(delta: float) -> void:
 	var settings := services.settings
 	var changed: bool
-	if settings.adaptive_resolution and is_equal_approx(settings.render_scale, 1.0):
+	if _adaptive_wanted():
 		# запись сессии на выходе выключает замер вьюпорта — тогда время 0, и ступень просто держится
 		changed = _adaptive.update(RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid()),
 			delta, _adaptive_budget_ms)
@@ -1812,6 +1816,10 @@ func _process(delta: float) -> void:
 	hud.lock_hint.visible = (not paused and not _opening and not has_cursor_overlay() and not photo.active
 		and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 	if paused:
+		# 21.11.2026: «Авто» выключили в настройках на паузе — полное разрешение сразу, а не после выхода из паузы
+		# (запись сессии: ступень 0,8 держалась все 6,6 с в настройках). Замер ступеней на паузе не идёт
+		if _adaptive_budget_ms > 0.0 and DisplayConfig.adaptive_scale != 1.0 and not _adaptive_wanted():
+			_tick_adaptive_resolution(delta)
 		_tick_paused_preview(delta)
 		_tick_mark("frame_paused_preview", t0)
 		return
