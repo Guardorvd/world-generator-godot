@@ -5,11 +5,12 @@ namespace Roads.Network;
 
 /// <summary>Грубый граф (план V2, 3.5): блоки B×B клеток, в блоке — компоненты проходимых клеток (8-связность;
 /// проходимо — конечная цена V2: суша и броды, без моря, озёр и небезопасных бродов). Ребро соседних компонент —
-/// только при общей проходимой границе: две соседние клетки разных блоков, шаг между ними не круче maxGrade
-/// (высоты поиска). Вес ребра — расстояние между центрами компонент, клеток. Дейкстра даёт D_geo и коридор поиска.</summary>
+/// только при общей проходимой границе: две соседние клетки разных блоков, шаг между ними проходим для FastGrid.FindPath
+/// (FastGrid.StepOk: уклон, коридор ширины и крена, диагонали, связи сооружений). Вес ребра — расстояние между центрами компонент, клеток. Дейкстра даёт D_geo и коридор поиска.</summary>
 public sealed class CoarseGraph
 {
 	public const int B = 4;
+	private const double Sqrt2 = 1.4142135623730951;
 	public int Comps => _cx.Count;
 	public readonly int[] CompOf;               // клетка → компонента или -1
 	private readonly List<double> _cx = new(), _cy = new();
@@ -18,51 +19,59 @@ public sealed class CoarseGraph
 	private readonly HashSet<long> _closed = new();
 	private readonly int _w, _h;
 
-	public CoarseGraph(TerrainSnapshot t, float[] cost, double maxGrade)
+	public CoarseGraph(TerrainSnapshot t, float[] cost, double maxGrade, double maxCross)
 	{
+		var router = t.Router;
+		var links = t.Links;
 		_w = t.W; _h = t.H;
 		int W = _w, H = _h;
 		CompOf = new int[t.N];
 		Array.Fill(CompOf, -1);
-		var stack = new Stack<int>();
+		var stack = new int[B * B];
+		var heights = t.Heights;
 		for (int by = 0; by < H; by += B)
 			for (int bx = 0; bx < W; bx += B)
-				for (int y = by; y < Math.Min(H, by + B); y++)
-					for (int x = bx; x < Math.Min(W, bx + B); x++)
+			{
+				int ex = Math.Min(W, bx + B), ey = Math.Min(H, by + B);
+				for (int y = by; y < ey; y++)
+					for (int x = bx; x < ex; x++)
 					{
 						int s = y * W + x;
 						if (CompOf[s] >= 0 || !float.IsFinite(cost[s])) continue;
 						int id = _cx.Count;
 						double sx = 0, sy = 0;
-						int count = 0, x0 = int.MaxValue, y0 = int.MaxValue, x1 = 0, y1 = 0;
+						int count = 0, x0 = int.MaxValue, y0 = int.MaxValue, x1 = 0, y1 = 0, top = 0;
 						CompOf[s] = id;
-						stack.Push(s);
-						while (stack.Count > 0)
+						stack[top++] = s;
+						while (top > 0)
 						{
-							int c = stack.Pop();
+							int c = stack[--top];
 							int cx = c % W, cy = c / W;
 							sx += cx + 0.5; sy += cy + 0.5; count++;
-							x0 = Math.Min(x0, cx); y0 = Math.Min(y0, cy); x1 = Math.Max(x1, cx + 1); y1 = Math.Max(y1, cy + 1);
+							if (cx < x0) x0 = cx; if (cy < y0) y0 = cy; if (cx + 1 > x1) x1 = cx + 1; if (cy + 1 > y1) y1 = cy + 1;
 							for (int dy = -1; dy <= 1; dy++)
+							{
+								int ny = cy + dy;
+								if (ny < by || ny >= ey) continue;
 								for (int dx = -1; dx <= 1; dx++)
 								{
-									int nx = cx + dx, ny = cy + dy;
-									if ((dx == 0 && dy == 0) || nx < bx || ny < by || nx >= Math.Min(W, bx + B) || ny >= Math.Min(H, by + B)) continue;
+									int nx = cx + dx;
+									if ((dx | dy) == 0 || nx < bx || nx >= ex) continue;
 									int n = ny * W + nx;
 									if (CompOf[n] >= 0 || !float.IsFinite(cost[n])) continue;
-									double step = dx != 0 && dy != 0 ? Math.Sqrt(2.0) : 1.0;
-									if (Math.Abs(t.Heights[n] - t.Heights[c]) > maxGrade * step + 1e-9) continue;
-									if (dx != 0 && dy != 0 && !float.IsFinite(cost[cy * W + nx]) && !float.IsFinite(cost[ny * W + cx])) continue;
+									if (!router.StepOk(cost, heights, links, c, FastGrid.StepIndex(dx, dy), maxGrade, maxCross)) continue;
 									CompOf[n] = id;
-									stack.Push(n);
+									stack[top++] = n;
 								}
+							}
 						}
 						_cx.Add(sx / count); _cy.Add(sy / count);
 						_x0.Add(x0); _y0.Add(y0); _x1.Add(x1); _y1.Add(y1);
-						_adj.Add(new List<(int, double)>());
+						_adj.Add(new List<(int, double)>(8));
 					}
-		// Рёбра: соседние клетки разных блоков, проходимый шаг (уклон по высотам поиска)
-		var seen = new HashSet<long>();
+			}
+		// Рёбра: соседние клетки разных компонент, проходимый шаг (уклон по высотам поиска). Повтор пары — поиском
+		// в коротком списке соседей компоненты (их не больше нескольких десятков).
 		for (int y = 0; y < H; y++)
 			for (int x = 0; x < W; x++)
 			{
@@ -79,17 +88,13 @@ public sealed class CoarseGraph
 					int n = ny * W + nx;
 					int b = CompOf[n];
 					if (b < 0 || b == a) continue;
-					double len = dx != 0 && dy != 0 ? Math.Sqrt(2.0) : 1.0;
-					if (Math.Abs(t.Heights[n] - t.Heights[c]) > maxGrade * len + 1e-9) continue;
-					if (dx != 0 && dy != 0)
-					{
-						// диагональ между двумя непроходимыми клетками — не проход
-						if (!float.IsFinite(cost[y * W + nx]) && !float.IsFinite(cost[ny * W + x])) continue;
-					}
-					long key = Key(a, b);
-					if (!seen.Add(key)) continue;
+					if (!router.StepOk(cost, heights, links, c, FastGrid.StepIndex(dx, dy), maxGrade, maxCross)) continue;
+					var la = _adj[a];
+					bool known = false;
+					for (int j = 0; j < la.Count && !known; j++) known = la[j].To == b;
+					if (known) continue;
 					double d = Math.Sqrt((_cx[a] - _cx[b]) * (_cx[a] - _cx[b]) + (_cy[a] - _cy[b]) * (_cy[a] - _cy[b]));
-					_adj[a].Add((b, d));
+					la.Add((b, d));
 					_adj[b].Add((a, d));
 				}
 			}
@@ -120,7 +125,7 @@ public sealed class CoarseGraph
 	public void Open() => _closed.Clear();
 
 	/// <summary>Дейкстра от компоненты s: расстояния (клеток) и предшественники.</summary>
-	public (double[] Dist, int[] Prev) Dijkstra(int s)
+	public (double[] Dist, int[] Prev) Dijkstra(int s, int stopAt = -1)
 	{
 		var dist = new double[Comps];
 		var prev = new int[Comps];
@@ -134,6 +139,7 @@ public sealed class CoarseGraph
 		{
 			var (d, u) = heap.Pop();
 			if (d > dist[u]) continue;
+			if (u == stopAt) break;
 			foreach (var (v, w) in _adj[u])
 			{
 				if (_closed.Count > 0 && _closed.Contains(Key(u, v))) continue;

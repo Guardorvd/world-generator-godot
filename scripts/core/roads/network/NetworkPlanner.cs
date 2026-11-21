@@ -46,7 +46,7 @@ public sealed class NetworkPlanner
 
 	// ---------------------------------------------------------------- подготовка
 
-	public void Prepare(bool ridge, bool coarse)
+	public void Prepare(bool ridge, bool coarse, double coarseGrade = double.NaN)
 	{
 		Fields.Build(ridge, Stats);
 		long t0 = NetStats.Now();
@@ -62,7 +62,7 @@ public sealed class NetworkPlanner
 		if (coarse)
 		{
 			t0 = NetStats.Now();
-			Coarse = new CoarseGraph(_t, Base, _p.TrailGrade);
+			Coarse = new CoarseGraph(_t, Base, double.IsNaN(coarseGrade) ? _p.TrailGrade : coarseGrade, _p.BenchCross);
 			Stats.Count("coarse_components", Coarse.Comps);
 			Stats.Time("coarse", t0);
 		}
@@ -266,11 +266,15 @@ public sealed class NetworkPlanner
 		return "";
 	}
 
+	public string LastNode = "";
+
 	public string NodeRules(List<(int Cell, bool Crossing)> nodes)
 	{
 		foreach (var (c, x) in nodes)
 		{
 			string why = NodeRule(c, x);
+			LastNode = string.Format(System.Globalization.CultureInfo.InvariantCulture, " узел ({0},{1}): до поселения {2:F0}, до развилки {3:F0} кл",
+				c % _t.W, c / _t.W, SettleDist[c], NodeDist[c]);
 			if (why.Length > 0) return why;
 		}
 		for (int a = 0; a < nodes.Count; a++)
@@ -375,10 +379,12 @@ public sealed class NetworkPlanner
 			double dNet = NetDistance(a, b);
 			if (dNet / Math.Max(dGeo, 1.0) <= _p.LoopRatio) { Stats.Reject("loop_short_now"); continue; }
 			string why = TryLoop(a, b, dNet, dGeo, out int[] path);
+			Stats.Log.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "петля {0}-{1}: D_net {2:F0}, D_geo {3:F0}, путь {4:F0} кл — {5}",
+				a, b, dNet, dGeo, path.Length > 0 ? SmoothLength(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") || why.Contains("parallel") ? LastNode : "") : "принята"));
 			if (why.Length > 0) { Stats.Reject(why); continue; }
 			Accept(path);
 			outPaths.Add(path);
-			outWhat.Add(_t.Length(path) < dNet ? "shortcut" : "alternative");
+			outWhat.Add(SmoothLength(path) < dNet ? "shortcut" : "alternative");
 			outPairs.Add(new Godot.Collections.Array { a, b });
 			Stats.Count("loops");
 		}
@@ -432,7 +438,7 @@ public sealed class NetworkPlanner
 		{
 			long t0 = NetStats.Now();
 			int ca = Coarse.CompNear(sa), cb = Coarse.CompNear(sb);
-			var (_, prev) = Coarse.Dijkstra(ca);
+			var (_, prev) = Coarse.Dijkstra(ca, cb);
 			if (ca < 0 || cb < 0) return "loop_no_geo";
 			var chain = CoarseGraph.Chain(prev, cb);
 			Stats.Time("coarse_path", t0);
@@ -442,7 +448,7 @@ public sealed class NetworkPlanner
 				// одна перепланировка: середина грубого пути закрыта
 				int m = chain.Count / 2;
 				Coarse.Close(chain[m - 1], chain[m]);
-				var (_, prev2) = Coarse.Dijkstra(ca);
+				var (_, prev2) = Coarse.Dijkstra(ca, cb);
 				Coarse.Open();
 				if (cb == ca || prev2[cb] >= 0)
 				{
@@ -459,7 +465,7 @@ public sealed class NetworkPlanner
 		long c0 = NetStats.Now();
 		try
 		{
-			double length = _t.Length(path);
+			double length = SmoothLength(path);
 			if (length > _p.LoopLenOld * dNet) return "loop_long";
 			if (Math.Min(dNet, length) / Math.Max(dGeo, 1.0) > _p.LoopAccept) return "loop_ratio";
 			if (!Validator.Ford(path)) return "loop_ford";
@@ -468,9 +474,13 @@ public sealed class NetworkPlanner
 			if (ExitLoop(path, false) || ExitLoop(path, true)) return "loop_exit_loop";
 			var beyond = BeyondExits(path);
 			var (share, longest) = ParallelStats(beyond);
-			if (share > _p.ParallelShare || longest > _p.ParallelRun) return "loop_parallel";
+			if (share > _p.ParallelShare || longest > _p.ParallelRun)
+			{
+				LastNode = string.Format(System.Globalization.CultureInfo.InvariantCulture, " (доля {0:F2}, подряд {1})", share, longest);
+				return "loop_parallel";
+			}
 			if (Rejoins(beyond)) return "loop_rejoin";
-			if (Graph.DoubleCross(Polyline(path, 0, path.Length - 1), 20.0)) return "loop_double_cross";
+			if (core.Length >= 2 && Graph.DoubleCross(Polyline(core, 0, core.Length - 1), 20.0)) return "loop_double_cross";
 			if (FarShare(core, oldCells) < _p.FarShare) return "loop_duplicate";
 			string node = NodeRules(Attachments(path));
 			if (node.Length > 0) return "loop_" + node;
@@ -480,6 +490,17 @@ public sealed class NetworkPlanner
 		{
 			Stats.Time("checks", c0);
 		}
+	}
+
+	/// <summary>Длина пути по хордам через 4 клетки — без зубцов сетки (D_geo считается по центрам компонент, а не по
+	/// шагам сетки; восьмисвязный путь длиннее прямой до 8 %).</summary>
+	public double SmoothLength(int[] p)
+	{
+		double length = 0;
+		int last = 0;
+		for (int k = 4; k < p.Length; k += 4) { length += _t.Dist(p[last], p[k]); last = k; }
+		if (last < p.Length - 1) length += _t.Dist(p[last], p[^1]);
+		return length;
 	}
 
 	private void Rasterize(double[] pts, List<int> cells)
@@ -530,7 +551,7 @@ public sealed class NetworkPlanner
 	{
 		long total = NetStats.Now();
 		bool mountainRun = _in.ContainsKey("mountain") && _in["mountain"].AsBool();
-		Prepare(mountainRun, false);
+		Prepare(mountainRun, true, mountainRun ? _p.MountainGrade : _p.TrailGrade);
 		var targets = _in["targets"].AsInt32Array();
 		var kinds = _in["target_kinds"].AsInt32Array();
 		var anchors = _in["anchors"].AsInt32Array();
@@ -539,7 +560,8 @@ public sealed class NetworkPlanner
 		if (kinds.Length != targets.Length || anchors.Length != targets.Length) throw new ArgumentException("V2: цели ответвлений разной длины");
 		var order = new List<int>();
 		for (int k = 0; k < targets.Length; k++) order.Add(k);
-		order.Sort((x, y) => kinds[x] != kinds[y] ? kinds[x].CompareTo(kinds[y]) : targets[x] != targets[y] ? targets[x].CompareTo(targets[y]) : x.CompareTo(y));
+		// Порядок целей: вид, затем порядок точек перегонов (как перебор V1)
+		order.Sort((x, y) => kinds[x] != kinds[y] ? kinds[x].CompareTo(kinds[y]) : x.CompareTo(y));
 		var outPaths = new Godot.Collections.Array();
 		var outWhat = new Godot.Collections.Array();
 		var outPairs = new Godot.Collections.Array();
@@ -563,6 +585,8 @@ public sealed class NetworkPlanner
 			if (!spaced) { Stats.Reject(what + "_spacing"); continue; }
 			if (kind != 2) tried.Add((target, kind));
 			string why = TrySpur(target, kind, anchors[k], out int[] path);
+			Stats.Log.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} ({1},{2}): путь {3:F0} кл — {4}",
+				what, target % _t.W, target / _t.W, path.Length > 0 ? _t.Length(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") ? LastNode : "") : "принято"));
 			if (why.Length > 0) { Stats.Reject(why); continue; }
 			Accept(path);
 			outPaths.Add(path);
@@ -622,8 +646,25 @@ public sealed class NetworkPlanner
 		else reach = kind == 0 ? _p.ShoreReach : _p.ViewReach;
 		int source = Source(target, reach, anchor, out string why);
 		if (source < 0) return what + "_" + why;
-		var area = CellRect.Of(source, target, _t.W);
-		path = Router.Route(Base, source, target, area, kind == 2, Stats);
+		// Окно — компоненты грубого пути от точки съезда до цели; связи нет — пути нет
+		int cs = Coarse.CompNear(source), ct = Coarse.CompNear(target);
+		if (cs < 0 || ct < 0) return what + "_no_geo";
+		var (geoDist, geoPrev) = Coarse.Dijkstra(cs, ct);
+		if (!double.IsFinite(geoDist[ct])) return what + "_no_geo";
+		var area = Coarse.Bounds(CoarseGraph.Chain(geoPrev, ct));
+		// Ответвление не идёт по сети: клетки сети в окне (кроме точки съезда) в EXIT_MUL раз дороже, пересечь дорогу можно
+		var win = area.Grow((int)_p.WindowRetry, _t.W, _t.H);
+		var touched = new List<int>();
+		for (int y = win.Y0; y < win.Y1; y++)
+			for (int x = win.X0; x < win.X1; x++)
+			{
+				int c = y * _t.W + x;
+				if (c == source || _t.Owner[c] < 0 || !float.IsFinite(_scratch[c])) continue;
+				_scratch[c] = (float)(_scratch[c] * _p.ExitMul);
+				touched.Add(c);
+			}
+		try { path = Router.Route(_scratch, source, target, area, kind == 2, Stats); }
+		finally { foreach (int c in touched) _scratch[c] = Base[c]; }
 		if (path.Length == 0) return what + "_no_path";
 		long c0 = NetStats.Now();
 		try
@@ -634,7 +675,8 @@ public sealed class NetworkPlanner
 			if (kind != 2 && !NewGround(path)) return what + "_not_new";
 			if (kind != 2 && !AddsNetwork(path)) return what + "_parallel";
 			if (kind == 2 && Rejoins(path)) return what + "_rejoin";
-			if (Graph.DoubleCross(Polyline(path, 0, path.Length - 1), 20.0)) return what + "_double_cross";
+			var spurCore = Core(path);
+			if (spurCore.Length >= 2 && Graph.DoubleCross(Polyline(spurCore, 0, spurCore.Length - 1), 20.0)) return what + "_double_cross";
 			if (kind == 0)
 			{
 				int wet = 0, count = Math.Max(0, path.Length - 4);

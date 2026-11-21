@@ -85,6 +85,7 @@ public sealed class NetStats
 		_ms[key] = (_ms.TryGetValue(key, out var v) ? v : 0.0) + (System.Diagnostics.Stopwatch.GetTimestamp() - since) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 	public void Count(string key, int add = 1) => _counts[key] = (_counts.TryGetValue(key, out var v) ? v : 0) + add;
 	public void Reject(string reason) => _rejects[reason] = (_rejects.TryGetValue(reason, out var v) ? v : 0) + 1;
+	public readonly List<string> Log = new();
 	public static long Now() => System.Diagnostics.Stopwatch.GetTimestamp();
 
 	public Godot.Collections.Dictionary ToDictionary()
@@ -95,7 +96,9 @@ public sealed class NetStats
 		foreach (var (k, v) in _counts) counts[k] = v;
 		var rejects = new Godot.Collections.Dictionary();
 		foreach (var (k, v) in _rejects) rejects[k] = v;
-		return new Godot.Collections.Dictionary { ["ms"] = ms, ["counts"] = counts, ["rejects"] = rejects };
+		var log = new Godot.Collections.Array();
+		foreach (var line in Log) log.Add(line);
+		return new Godot.Collections.Dictionary { ["ms"] = ms, ["counts"] = counts, ["rejects"] = rejects, ["log"] = log };
 	}
 }
 

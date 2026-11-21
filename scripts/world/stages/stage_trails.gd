@@ -1323,6 +1323,9 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 				network = _network_cost(w)
 				near = _net_near(w)
 			continue
+		# 21.11.2026: в сети V2 из этого цикла остаётся только тропа между сетями (bridge_gap); петли — RoadNetworkV2
+		if network_v2:
+			continue
 		var old_len := _length(w, old)
 		if old.is_empty() or old_len <= e[2] * SHORTCUT:
 			continue
@@ -1342,6 +1345,12 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		paths.append([e[0], e[1], q, false, e[2]])
 		network = _network_cost(w)
 		near = _net_near(w)
+	# Сеть V2: петли (t-спаннер) и ответвления к берегу и смотровым точкам вместо обходов, берега и смотровых V1
+	if network_v2:
+		finder.search_budget = -1
+		RoadNetworkV2.plan_loops(w, finder, paths, road_cost, state)
+		RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false)
+		return
 	# Проверяем каждую основную связь; плоская копия соседней дороги сама по себе не повод для петли.
 	var primary_paths := paths.duplicate()
 	for index in primary_paths.size():
@@ -2684,6 +2693,12 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	for i: int in _unsafe_fords(w, surface, on_axis):
 		w.cost[i] = INF
 	w.generation_profile.mountain_fords_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	# Сеть V2: горные тропы — ответвления к вершинам по правилам узлов (RoadNetworkV2.plan_spurs)
+	if network_v2:
+		var spur_us := Time.get_ticks_usec()
+		RoadNetworkV2.plan_spurs(w, finder, [], PackedFloat32Array(), on_axis, surface, true)
+		w.generation_profile.mountain_search_ms = (Time.get_ticks_usec() - spur_us) / 1000.0
+		return on_axis
 	var fast := finder.fast() # 9.7: ближайший путь к вершине ищет C# (FastGrid.NearestPath), тот же перебор
 	var settle_d := _settle_dist(w)
 	var forks := RoadForks.new(w, on_axis)

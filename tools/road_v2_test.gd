@@ -350,8 +350,13 @@ func _ports() -> void:
 		if not ok: print("  путь %d: C# %s, GDScript %.3f/%d %s %s %s" % [k, str(r).left(200), side.x, side.y, StageTrails._rejoins(w, q),
 			StageTrails._exit_loop(w, q, false), StageTrails._exit_loop(w, q, true)])
 		same = same and ok
+	var cells := PackedInt32Array()
+	for q: PackedInt32Array in paths: cells.append_array(q)
+	same = same and finder.fast().CorridorMask(w.W, w.H, cells, StageTrails.AVOID_R) == StageTrails._corridor(w, paths)
+	var lw := _world("lake")
+	same = same and finder.fast().WaterDistance(lw.W, lw.H, lw.ocean, lw.lake) == StageTrails._water_dist(lw)
 	var varied: bool = out.ports[0].longest > 0 and out.ports[1].rejoins
-	check(same and varied, "порты правил V1 = StageTrails (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground)")
+	check(same and varied, "порты правил V1 = StageTrails (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground, _corridor, _water_dist)")
 
 
 func _repeat() -> void:

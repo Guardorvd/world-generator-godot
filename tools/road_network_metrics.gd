@@ -227,6 +227,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		if not base_cost.is_empty() and base_cost[i] != INF and w.cost[i] < base_cost[i] * 0.5 and dist[i] > 1.5: ghost += 1
 	var junctions := 0
 	var junction_points: Array[Vector2] = []
+	var ride_points := {} # узлы — концы участков природных маршрутов
 	for r: int in routes:
 		var pts: Array = w.trails[r].pts
 		for p: Dictionary in [pts[0], pts[-1]]:
@@ -239,8 +240,10 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 							junctions += 1
 							hit = true
 							break
-			if hit: junction_points.append(at)
-	var crowded := _crowded_nodes(w, junction_points, structures)
+			if hit:
+				junction_points.append(at)
+				if w.trails[r].has("ride"): ride_points[at] = true
+	var crowded := _crowded_nodes(w, junction_points, structures, ride_points)
 	var shore := _shore_m(w, routes, structures)
 	var wiggle := _wiggle(w, routes)
 	var lengths := {}
@@ -277,7 +280,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
 		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
-		crowded_nodes = crowded.pairs, nodes = crowded.nodes, shore_m = shore, wiggle = wiggle,
+		crowded_nodes = crowded.pairs, crowded_without_rides = crowded.without_rides, nodes = crowded.nodes, shore_m = shore, wiggle = wiggle,
 		second_ways = _second_way_counts(w), rides = _ride_counts(w),
 		spots = spots, kink_spots = kink_spots, double_spots = double_spots, crowded_spots = crowded.spots, pairs = _top(pairs, 8)}
 
@@ -285,7 +288,8 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 ## 21.11.2026, план V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md, фаза 0; определения плана 19.11, шаг 0.2).
 ## crowded_nodes — пары узлов сети ближе CROWD_R (40 м). Узел — конец участка на оси другого участка (junction_ends),
 ## точки ближе NODE_SAME (0,6 клетки) — один узел. Узлы у поселений (ближе EXIT_NODE клеток к центру) и у
-## сооружений (ближе 3 клеток к оси моста или туннеля) не считаются: там узлы нужны.
+## сооружений (ближе 3 клеток к оси моста или туннеля) не считаются: там узлы нужны. crowded_without_rides — пары, где
+## ни один узел не конец участка природного маршрута (RideRoutes строит их после сети и V2 их не выбирает).
 const CROWD_R := 10.0     # 40 м
 const NODE_SAME := 0.6
 const EXIT_NODE := 35.0   # = StageTrails.EXIT_R
@@ -296,31 +300,41 @@ const WIGGLE_STEP := 5
 const WIGGLE_RATIO := 1.05
 
 
-static func _crowded_nodes(w: WorldData, points: Array[Vector2], structures: Array) -> Dictionary:
+static func _crowded_nodes(w: WorldData, points: Array[Vector2], structures: Array, ride_points := {}) -> Dictionary:
 	var nodes: Array[Vector2] = []
+	var ride: Array[bool] = []
 	for p: Vector2 in points:
-		var same := false
-		for q: Vector2 in nodes:
-			if q.distance_to(p) < NODE_SAME:
-				same = true
+		var same := -1
+		for k in nodes.size():
+			if nodes[k].distance_to(p) < NODE_SAME:
+				same = k
 				break
-		if not same: nodes.append(p)
+		if same < 0:
+			nodes.append(p)
+			ride.append(ride_points.has(p))
+		elif ride_points.has(p): ride[same] = true
 	var kept: Array[Vector2] = []
-	for p: Vector2 in nodes:
+	var kept_ride: Array[bool] = []
+	for k in nodes.size():
+		var p := nodes[k]
 		var settled := false
 		for s: SettlementData in w.settlements:
 			if Vector2(s.i % w.W + 0.5, s.i / w.W + 0.5).distance_to(p) < EXIT_NODE:
 				settled = true
 				break
-		if not settled and not _near_structure(structures, p, 3.0): kept.append(p)
+		if not settled and not _near_structure(structures, p, 3.0):
+			kept.append(p)
+			kept_ride.append(ride[k])
 	var pairs := 0
+	var without_rides := 0
 	var spots: Array = []
 	for a in kept.size():
 		for b in range(a + 1, kept.size()):
 			if kept[a].distance_to(kept[b]) <= CROWD_R:
 				pairs += 1
+				if not kept_ride[a] and not kept_ride[b]: without_rides += 1
 				spots.append((kept[a] + kept[b]) * 0.5)
-	return {pairs = pairs, nodes = kept.size(), spots = spots}
+	return {pairs = pairs, nodes = kept.size(), spots = spots, without_rides = without_rides}
 
 
 ## shore_m — длина путей, где станции через 1 клетку ближе SHORE_R к морю или озеру подряд не меньше SHORE_RUN

@@ -11,6 +11,8 @@ public sealed class RoadGraph
 	public const double OnAxis = 0.05;   // конец участка на чужой оси (road_network_metrics: junction_ends)
 	public const double SettleSnap = 3.0; // точка поселения не дальше стольких клеток от оси
 	private const int BIN = 10;
+	/// <summary>Пересечение ближе этого (клеток) к концу ломаной — её узел примыкания, не пересечение.</summary>
+	public const double EndSkip = 2.0;
 
 	public readonly List<double> NX = new(), NY = new();
 	public readonly List<bool> NSettle = new();
@@ -325,7 +327,7 @@ public sealed class RoadGraph
 						if (!seen.Add((e, seg))) continue;
 						var p = EPts[e];
 						if (!Intersect(ax, ay, bx, by, p[2 * seg - 2], p[2 * seg - 1], p[2 * seg], p[2 * seg + 1], out double hx, out double hy)) continue;
-						if (Hypot(hx - ex0, hy - ey0) < 0.6 || Hypot(hx - ex1, hy - ey1) < 0.6) continue;
+						if (Hypot(hx - ex0, hy - ey0) < EndSkip || Hypot(hx - ex1, hy - ey1) < EndSkip) continue;
 						if (!hits.TryGetValue(ESec[e], out var h)) hits[ESec[e]] = h = new List<(double, double)>();
 						h.Add((hx, hy));
 					}

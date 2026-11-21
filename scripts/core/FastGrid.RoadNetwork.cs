@@ -25,6 +25,63 @@ public partial class FastGrid
 		SearchBudget = s.Budget; TurnCost = s.Turn; BendCost = s.Bend; CostVersion = s.CostVersion;
 	}
 
+	/// <summary>Шаг c → c + шаг k проходим для FindPath с этими входами (окно не в счёт): копия условий шага из
+	/// FastGrid.Path.cs (Search.Run: цена, диагональ между непроходимыми, уклон с серединой диагонали 4/7, коридор
+	/// ширины и крена, связи сооружений). Грубый граф V2 строится только по таким шагам, поэтому связность грубого
+	/// графа означает путь FindPath в окне его компонент (проверка — road_v2_test).</summary>
+	internal bool StepOk(float[] cost, float[] heights, byte[] links, int c, int k, double maxGrade, double maxCross)
+	{
+		int W = _w;
+		int n = c + _off[k];
+		if (float.IsPositiveInfinity(cost[c]) || float.IsPositiveInfinity(cost[n])) return false;
+		bool linked = links.Length > 0 && (links[c] & (1 << k)) != 0;
+		if (k >= 4 && !linked && (float.IsPositiveInfinity(cost[c + Dx[k]]) || float.IsPositiveInfinity(cost[c + Dy[k] * W]))) return false;
+		double grade = Math.Abs((double)heights[n] - heights[c]) / Dl[k];
+		if ((k == 4 || k == 7) && !linked)
+		{
+			double mid = ((double)heights[c + Dx[k]] + heights[c + Dy[k] * W]) * 0.5;
+			grade = Math.Max(Math.Abs(mid - heights[c]), Math.Abs(heights[n] - mid)) * 2.0 / Dl[k];
+		}
+		double cross = 0.0;
+		if (_hasCorridor && !linked)
+		{
+			grade = Math.Max(grade, _corridor[c * 16 + k * 2]);
+			cross = _corridor[c * 16 + k * 2 + 1];
+			if (double.IsPositiveInfinity(grade)) return false;
+		}
+		return grade <= maxGrade && cross <= maxCross;
+	}
+
+	/// <summary>Номер шага FastGrid (Dx, Dy) для смещения (dx, dy), -1 — не сосед.</summary>
+	internal static int StepIndex(int dx, int dy)
+	{
+		for (int k = 0; k < 8; k++) if (Dx[k] == dx && Dy[k] == dy) return k;
+		return -1;
+	}
+
+	/// <summary>Порт StageTrails._water_dist: расстояние (клеток, Grid.distance_field) до моря или озера.</summary>
+	public float[] WaterDistance(int w, int h, byte[] ocean, byte[] lake)
+	{
+		var water = new byte[checked(w * h)];
+		for (int i = 0; i < water.Length; i++) water[i] = (byte)(ocean[i] != 0 || lake[i] != 0 ? 1 : 0);
+		return DistanceField(w, h, water);
+	}
+
+	/// <summary>Порт StageTrails._corridor: клетки ближе r (квадрат) к клеткам cells. Сверка — road_v2_test.</summary>
+	public byte[] CorridorMask(int w, int h, int[] cells, int r)
+	{
+		var near = new byte[checked(w * h)];
+		foreach (int i in cells)
+		{
+			if ((uint)i >= (uint)near.Length) throw new ArgumentException("CorridorMask: клетка вне карты");
+			int cx = i % w, cy = i / w;
+			for (int y = Math.Max(0, cy - r); y < Math.Min(h, cy + r + 1); y++)
+				for (int x = Math.Max(0, cx - r); x < Math.Min(w, cx + r + 1); x++)
+					near[y * w + x] = 1;
+		}
+		return near;
+	}
+
 	/// <summary>mode: "loops" — петли (t-спаннер), "spurs" — ответвления; "probe" — проверки стенда road_v2_test.</summary>
 	public Godot.Collections.Dictionary PlanNetworkV2(Godot.Collections.Dictionary input, FastGrid water)
 	{

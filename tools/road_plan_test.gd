@@ -80,6 +80,12 @@ func _initialize() -> void:
 	if "--v2" in args:
 		StageTrails.network_v2 = true
 		print("дорожная сеть V2")
+	# --v2-param k=v,k=v: числа V2 на время запуска (RoadNetworkV2.overrides) — подбор без правки кода
+	var v2_param := _arg(args, "--v2-param", "")
+	if not v2_param.is_empty():
+		for pair: String in v2_param.split(","):
+			StageTrails.RoadNetworkV2.overrides[pair.get_slice("=", 0)] = float(pair.get_slice("=", 1))
+		print("числа V2: ", StageTrails.RoadNetworkV2.overrides)
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true

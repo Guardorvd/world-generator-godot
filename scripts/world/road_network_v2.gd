@@ -31,6 +31,10 @@ const SHORE_SHARE := 0.25   # береговое ответвление: дол�
 const MOUNTAIN_REACH := 1.5 # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
 
 
+## Подмена чисел V2 на время запуска стенда (road_plan_test -- --v2-param ключ=значение,…); в кэш игры не попадает.
+static var overrides := {}
+
+
 ## Суффикс ключа слоя places: пусто при выключенном флаге (ключ побайтно прежний).
 static func cache_suffix(enabled: bool) -> String:
 	return "|net=v2.%d" % VERSION if enabled else ""
@@ -60,7 +64,7 @@ static func params(w: WorldData) -> Dictionary:
 		branch_len = StageTrails.BRANCH_LEN, shore_gap = StageTrails.SHORE_GAP, view_gap = StageTrails.VIEW_GAP,
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX, shore_share = SHORE_SHARE,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR, mountain_reach = MOUNTAIN_REACH,
-		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH}
+		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH}.merged(overrides, true)
 
 
 ## Вход C#: поля мира (ссылки на массивы), оси путей людей, поселения. unsafe — клетки небезопасных бродов
@@ -114,9 +118,10 @@ static func unsafe_mask(w: WorldData, surface: Heightfield, on_axis: PackedByteA
 
 
 ## Профиль: блок generation_profile.network_v2[часть] = вывод C# + время адаптера и публикации.
-static func _profile(w: WorldData, part: String, out: Dictionary, publish_ms: float, total_ms: float) -> void:
+static func _profile(w: WorldData, part: String, out: Dictionary, publish_ms: float, total_ms: float, prep := {}) -> void:
 	var block: Dictionary = w.generation_profile.get("network_v2", {})
 	var entry: Dictionary = out.get("network_v2", {}).duplicate(true)
+	entry.prepare_ms = prep
 	entry.publish_ms = snappedf(publish_ms, 0.001)
 	entry.total_ms = snappedf(total_ms, 0.001)
 	entry.accepted = (out.get("paths", []) as Array).size()
@@ -129,7 +134,11 @@ static func _profile(w: WorldData, part: String, out: Dictionary, publish_ms: fl
 static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, state: Dictionary) -> void:
 	var started := Time.get_ticks_usec()
 	var surface: Heightfield = state.get("surface")
-	var data := input(w, finder, surface, state.on_axis, unsafe_mask(w, surface, state.on_axis))
+	var unsafe := unsafe_mask(w, surface, state.on_axis)
+	var prep := {unsafe = (Time.get_ticks_usec() - started) / 1000.0}
+	var t0 := Time.get_ticks_usec()
+	var data := input(w, finder, surface, state.on_axis, unsafe)
+	prep.input = (Time.get_ticks_usec() - t0) / 1000.0
 	data.mode = "loops"
 	var pairs := PackedInt32Array()
 	for e: Array in StageTrails._gabriel_pairs(w, paths):
@@ -145,12 +154,15 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 		StageTrails._note_way(w, out.what[k], StageTrails._add_trail(w, cells, "trail", road_cost, state.on_axis, surface))
 		paths.append([pair[0], pair[1], cells, false, Grid.hypot(w.settlements[pair[0]].x - w.settlements[pair[1]].x,
 			w.settlements[pair[0]].y - w.settlements[pair[1]].y)])
-	_profile(w, "loops", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0)
+	_profile(w, "loops", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
 
 
 ## Цели ответвлений правилами V1: берег (_shore от точек перегонов), смотровые (_overlook), вершины без тропы.
+## Коридор прежних путей и расстояние до воды — StageTrails._corridor и _water_dist (порты на C#: CorridorMask,
+## WaterDistance; сверка — road_v2_test). Береговые цели расставлены через
+## SHORE_GAP, как в V1 (и неудачная попытка занимает место); их не больше 3 × предел троп к берегу.
 ## Возвращает {targets, kinds, anchors, peaks_keep}.
-static func spur_targets(w: WorldData, paths: Array, mountain: bool) -> Dictionary:
+static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountain: bool, max_shores: int, times := {}) -> Dictionary:
 	var targets := PackedInt32Array()
 	var kinds := PackedInt32Array()
 	var anchors := PackedInt32Array()
@@ -162,24 +174,38 @@ static func spur_targets(w: WorldData, paths: Array, mountain: bool) -> Dictiona
 			targets.append(i)
 			kinds.append(2)
 			anchors.append(-1)
-	else:
-		var all_paths: Array = []
-		for e: Array in paths: all_paths.append(e[2])
-		var corr := StageTrails._corridor(w, all_paths)
-		var settle_d := StageTrails._settle_dist(w)
-		var water_d := StageTrails._water_dist(w)
-		for a: int in StageTrails._shore_anchors(w, paths, settle_d, water_d):
-			var t := StageTrails._shore(w, a, corr, water_d)
-			if t < 0: continue
-			targets.append(t)
-			kinds.append(0)
-			anchors.append(a)
-		for a: int in StageTrails._shore_anchors(w, paths, settle_d, PackedFloat32Array()):
-			var t := StageTrails._overlook(w, a, corr)
-			if t < 0: continue
-			targets.append(t)
-			kinds.append(1)
-			anchors.append(a)
+		return {targets = targets, kinds = kinds, anchors = anchors, peaks_keep = keep}
+	var t0 := Time.get_ticks_usec()
+	var cells := PackedInt32Array()
+	for e: Array in paths: cells.append_array(e[2])
+	var corr: PackedByteArray = finder.fast().CorridorMask(w.W, w.H, cells, StageTrails.AVOID_R)
+	var settle_d := StageTrails._settle_dist(w)
+	var water_d: PackedFloat32Array = finder.fast().WaterDistance(w.W, w.H, w.ocean, w.lake)
+	times.fields = (Time.get_ticks_usec() - t0) / 1000.0
+	t0 = Time.get_ticks_usec()
+	var spaced: Array[Vector2i] = []
+	for a: int in StageTrails._shore_anchors(w, paths, settle_d, water_d):
+		if spaced.size() >= 3 * max_shores: break
+		var t := StageTrails._shore(w, a, corr, water_d)
+		if t < 0: continue
+		var tv := Vector2i(t % w.W, t / w.W)
+		var free := true
+		for o: Vector2i in spaced:
+			if (o - tv).length_squared() < StageTrails.SHORE_GAP * StageTrails.SHORE_GAP: free = false
+		if not free: continue
+		spaced.append(tv)
+		targets.append(t)
+		kinds.append(0)
+		anchors.append(a)
+	times.shore = (Time.get_ticks_usec() - t0) / 1000.0
+	t0 = Time.get_ticks_usec()
+	for a: int in StageTrails._shore_anchors(w, paths, settle_d, PackedFloat32Array()):
+		var t := StageTrails._overlook(w, a, corr)
+		if t < 0: continue
+		targets.append(t)
+		kinds.append(1)
+		anchors.append(a)
+	times.view = (Time.get_ticks_usec() - t0) / 1000.0
 	return {targets = targets, kinds = kinds, anchors = anchors, peaks_keep = keep}
 
 
@@ -188,15 +214,22 @@ static func spur_targets(w: WorldData, paths: Array, mountain: bool) -> Dictiona
 static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, on_axis: PackedByteArray,
 		surface: Heightfield, mountain: bool) -> void:
 	var started := Time.get_ticks_usec()
-	var data := input(w, finder, surface, on_axis, unsafe_mask(w, surface, on_axis))
-	var goals := spur_targets(w, paths, mountain)
+	var unsafe := unsafe_mask(w, surface, on_axis)
+	var prep := {unsafe = (Time.get_ticks_usec() - started) / 1000.0}
+	var t0 := Time.get_ticks_usec()
+	var data := input(w, finder, surface, on_axis, unsafe)
+	prep.input = (Time.get_ticks_usec() - t0) / 1000.0
+	t0 = Time.get_ticks_usec()
+	var max_shores := maxi(2, w.settlements.size() / 4)
+	var goals := spur_targets(w, finder, paths, mountain, max_shores, prep)
+	prep.targets = (Time.get_ticks_usec() - t0) / 1000.0
 	data.mode = "spurs"
 	data.mountain = mountain
 	data.targets = goals.targets
 	data.target_kinds = goals.kinds
 	data.anchors = goals.anchors
 	data.peaks_keep = goals.peaks_keep
-	data.max_shores = maxi(2, w.settlements.size() / 4)
+	data.max_shores = max_shores
 	data.max_views = w.settlements.size()
 	var out := call_core(finder, surface, data)
 	if out.is_empty(): return
@@ -208,4 +241,4 @@ static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 			StageTrails._note_way(w, what, StageTrails._add_trail(w, cells, "mountain", PackedFloat32Array(), on_axis, surface))
 		else:
 			StageTrails._note_way(w, what, StageTrails._add_trail(w, cells, "trail", road_cost, on_axis, surface))
-	_profile(w, "mountain" if mountain else "spurs", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0)
+	_profile(w, "mountain" if mountain else "spurs", out, (Time.get_ticks_usec() - publish) / 1000.0, (Time.get_ticks_usec() - started) / 1000.0, prep)
