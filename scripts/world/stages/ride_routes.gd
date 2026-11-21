@@ -114,9 +114,13 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var bw := ceili(float(W) / BLOCK)
 	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
 	var anchors := _anchors(w, hv, on_axis, cost)
-	# Сеть V2 (шаг 7): без опорных точек рядом с развилками (RoadNetworkV2.ride_anchors)
+	var shared_junctions := {}
 	if StageTrails.network_v2:
-		anchors = StageTrails.RoadNetworkV2.ride_anchors(w, finder, surface, on_axis, anchors)
+		stats.density = {anchors_before = anchors.size(), anchors_blocked = 0, anchors_combined = 0,
+			anchors_snapped = 0, refused = {}, trimmed = {count = 0, m = 0.0}}
+		var adjusted := StageTrails.RoadNetworkV2.ride_anchors(w, finder, surface, on_axis, anchors, cost, stats.density)
+		anchors = adjusted.anchors
+		shared_junctions = adjusted.junctions
 	stats.anchors = anchors.size()
 	var virtual := _virtual_tops(w, hv, dist, block, bw, anchors)
 	stats.virtual_tops = virtual.map(func(v: Dictionary) -> Array: return [v.x, v.y, roundi(v.rise)])
@@ -170,6 +174,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if StageTrails.network_v2 and s.virtual:
 				var turnback := _short_turnback(w, s.approach, path)
 				if turnback > 0:
+					stats.density.trimmed.count += 1
+					stats.density.trimmed.m += (StageTrails._length(w, path.slice(0, turnback + 1)) +
+						StageTrails._length(w, s.approach.slice(s.approach.size() - turnback - 1))) * GameConfig.TILE
 					var trimmed: Dictionary = s.get_or_add("trimmed_ride_tops", {})
 					top = trimmed.get_or_add(turnback, {i = s.i, virtual = true, mountain = s.mountain,
 						approach = s.approach.slice(0, s.approach.size() - turnback), turnback = turnback})
@@ -188,7 +195,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 				if _echo_share(w, path, top.approach if s.virtual else echo, NEAR_R if style == "traverse" else ECHO_R) > ECHO_SHARE:
 					c.reason = "повторяет путь сети"
 			if not c.reason.is_empty():
-				stats.rejected[c.reason] = int(stats.rejected.get(c.reason, 0)) + 1
+				_reject(stats, c.reason, c.length)
 				continue
 			tally[2] += 1
 			c.top = top
@@ -207,6 +214,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var chosen := _select(w, candidates, stats, forks)
 	var publish_us := Time.get_ticks_usec()
 	var number := 0
+	StageTrails.v2_junctions = shared_junctions
 	for c: Dictionary in chosen:
 		var top: Dictionary = c.top
 		if top.has("turnback"): stats.trimmed_turnbacks = int(stats.get("trimmed_turnbacks", 0)) + 1
@@ -240,11 +248,20 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		woods.append(roundi(c.wood * 100.0))
 		stats.wood[c.style] = woods
 		if c.top.mountain: stats.from_mountain += 1
+	StageTrails.v2_junctions = {}
 	stats.publish_ms = (Time.get_ticks_usec() - publish_us) / 1000.0
 	stats.accepted = chosen.size()
 	stats.km = snappedf(stats.km, 0.01)
 	stats.climb_km = snappedf(stats.climb_km, 0.01)
 	stats.ms = (Time.get_ticks_usec() - started) / 1000.0
+
+
+static func _reject(stats: Dictionary, reason: String, length_m: float) -> void:
+	stats.rejected[reason] = int(stats.rejected.get(reason, 0)) + 1
+	if not stats.has("density"): return
+	var entry: Dictionary = stats.density.refused.get_or_add(reason, {count = 0, m = 0.0})
+	entry.count += 1
+	entry.m += length_m
 
 
 static func _net_mask(mask: PackedByteArray) -> PackedByteArray:
@@ -298,8 +315,11 @@ static func cost_fields(w: WorldData, hv: PackedFloat32Array, net: PackedByteArr
 static func _anchors(w: WorldData, hv: PackedFloat32Array, on_axis: PackedByteArray, cost: PackedFloat32Array) -> Array:
 	var out: Array = []
 	var seen := {}
+	var section := -1
 	for t: Dictionary in w.trails:
-		if t.kind == "animal" or t.has("ride"): continue
+		if t.kind == "animal": continue
+		section += 1
+		if t.has("ride"): continue
 		var pts: Array = t.pts
 		var run := ANCHOR_STEP # первая точка — конец пути (поселение, вершина горной тропы)
 		for k in pts.size():
@@ -309,7 +329,7 @@ static func _anchors(w: WorldData, hv: PackedFloat32Array, on_axis: PackedByteAr
 			if seen.has(i) or on_axis[i] != 0 or cost[i] == INF or StageTrails._wet(w, i): continue
 			seen[i] = true
 			run = 0.0
-			out.append({i = i, x = i % w.W, y = i / w.W, h = hv[i], mountain = t.kind == "mountain", virtual = false})
+			out.append({i = i, x = i % w.W, y = i / w.W, h = hv[i], mountain = t.kind == "mountain", virtual = false, section = section})
 	return out
 
 
@@ -625,13 +645,13 @@ static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: R
 				var why: String = c.v2_reject
 				if why.is_empty() and not StageTrails.RoadNetworkV2.ride_nodes_spaced(w, c.v2_nodes, v2_chosen): why = "node_pair_rides"
 				if not why.is_empty():
-					if pass_n == 3: stats.rejected["узлы V2: " + why.get_slice(" ", 0)] = int(stats.rejected.get("узлы V2: " + why.get_slice(" ", 0), 0)) + 1
+					if pass_n == 3: _reject(stats, "узлы V2: " + why.get_slice(" ", 0), c.length)
 					continue
 			var same := 0
 			for i: int in path:
 				if near[i] != 0: same += 1
 			if float(same) / path.size() > SAME_SHARE:
-				if pass_n == 3: stats.rejected["похож на принятый"] = int(stats.rejected.get("похож на принятый", 0)) + 1
+				if pass_n == 3: _reject(stats, "похож на принятый", c.length)
 				continue
 			chosen.append(c)
 			if c.has("v2_nodes"): v2_chosen.append(c.v2_nodes)

@@ -596,7 +596,7 @@ public sealed class NetworkPlanner
 			string why = TryLoop(a, b, dNet, dGeo, out int[] path);
 			Stats.Log.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "петля {0}-{1}: D_net {2:F0}, D_geo {3:F0}, путь {4:F0} кл — {5}",
 				a, b, dNet, dGeo, path.Length > 0 ? SmoothLength(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") || why.Contains("parallel") ? LastNode : "") : "принята"));
-			if (why.Length > 0) { Stats.Reject(why); continue; }
+			if (why.Length > 0) { Stats.Reject(why, path.Length > 0 ? _t.Length(path) * _p.Tile : null); continue; }
 			Accept(path);
 			outPaths.Add(path);
 			outWhat.Add(SmoothLength(path) < dNet ? "shortcut" : "alternative");
@@ -852,7 +852,7 @@ public sealed class NetworkPlanner
 			string why = TrySpur(target, kind, anchors[k], out int[] path);
 			Stats.Log.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0} ({1},{2}): путь {3:F0} кл — {4}",
 				what, target % _t.W, target / _t.W, path.Length > 0 ? _t.Length(path) : 0.0, why.Length > 0 ? why + (why.Contains("node") || why.Contains("parallel") ? LastNode : "") : "принято" + LastNode));
-			if (why.Length > 0) { Stats.Reject(why); continue; }
+			if (why.Length > 0) { Stats.Reject(why, path.Length > 0 ? _t.Length(path) * _p.Tile : null); continue; }
 			Accept(path);
 			outPaths.Add(path);
 			outWhat.Add(what);
@@ -1130,7 +1130,7 @@ public sealed class NetworkPlanner
 			verdicts.Add(why.Length > 0 ? why + LastNode : "");
 			nodes.Add(cells);
 			Stats.Count(why.Length > 0 ? "rides_rejected" : "rides_ok");
-			if (why.Length > 0) Stats.Reject("ride_" + why);
+			if (why.Length > 0) Stats.Reject("ride_" + why, _t.Length(p) * _p.Tile);
 		}
 		// Шаг 9: подъёмы к виртуальным вершинам — те же правила узлов и «вдоль сети» (_adds_network по новой части)
 		var approachVerdicts = new Godot.Collections.Array();
@@ -1157,7 +1157,7 @@ public sealed class NetworkPlanner
 				approachVerdicts.Add(why);
 				approachNodes.Add(cells);
 				Stats.Count(why.Length > 0 ? "approach_rejected" : "approach_ok");
-				if (why.Length > 0) Stats.Reject("approach_" + why.Split(' ')[0]);
+				if (why.Length > 0) Stats.Reject("approach_" + why.Split(' ')[0], _t.Length(p) * _p.Tile);
 			}
 		Stats.Time("total", total);
 		return new Godot.Collections.Dictionary { ["verdicts"] = verdicts, ["nodes"] = nodes, ["approach_verdicts"] = approachVerdicts,
@@ -1168,7 +1168,24 @@ public sealed class NetworkPlanner
 	public Godot.Collections.Dictionary NodeField()
 	{
 		Prepare(false, false);
-		return new Godot.Collections.Dictionary { ["node_dist"] = NodeDist, ["network_v2"] = Stats.ToDictionary() };
+		var anchors = _in["ride_anchor_cells"].AsInt32Array();
+		var sections = _in["ride_anchor_sections"].AsInt32Array();
+		var snapped = new int[anchors.Length];
+		for (int i = 0; i < anchors.Length; i++)
+		{
+			int cell = anchors[i];
+			snapped[i] = cell;
+			if (NodeDist[cell] <= _p.NodeSame || NodeDist[cell] >= _p.RideNodeSep) continue;
+			snapped[i] = -1;
+			int junction = NearestJunction(cell);
+			if (junction < 0 || Graph.Degree(junction) >= _p.MaxDegree ||
+				!Graph.NEdges[junction].Exists(edge => Graph.ESec[edge] == sections[i])) continue;
+			int target = NodeCell(junction);
+			if (_t.Owner[target] >= 0 && _t.OnAxis[target] == 0 && _t.Unsafe[target] == 0 && float.IsFinite(Base[target]))
+				snapped[i] = target;
+		}
+		return new Godot.Collections.Dictionary { ["ride_anchor_cells"] = snapped, ["junctions"] = JunctionPoints(),
+			["network_v2"] = Stats.ToDictionary() };
 	}
 
 	// ---------------------------------------------------------------- выход
@@ -1179,10 +1196,15 @@ public sealed class NetworkPlanner
 		Stats.Count("window_retries", Router.Retries);
 		var outPaths = new Godot.Collections.Array();
 		foreach (var p in paths) outPaths.Add(p);
+		return new Godot.Collections.Dictionary { ["paths"] = outPaths, ["what"] = what, ["pairs"] = pairs,
+			["junctions"] = JunctionPoints(), ["network_v2"] = Stats.ToDictionary() };
+	}
+
+	private double[] JunctionPoints()
+	{
 		var junctions = new List<double>();
 		for (int n = 0; n < Graph.NX.Count; n++)
 			if (Graph.Junction(n)) { junctions.Add(Graph.NX[n]); junctions.Add(Graph.NY[n]); }
-		return new Godot.Collections.Dictionary { ["paths"] = outPaths, ["what"] = what, ["pairs"] = pairs, ["junctions"] = junctions.ToArray(),
-			["network_v2"] = Stats.ToDictionary() };
+		return junctions.ToArray();
 	}
 }

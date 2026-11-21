@@ -106,11 +106,18 @@ public sealed class NetStats
 	private readonly SortedDictionary<string, double> _ms = new(StringComparer.Ordinal);
 	private readonly SortedDictionary<string, int> _counts = new(StringComparer.Ordinal);
 	private readonly SortedDictionary<string, int> _rejects = new(StringComparer.Ordinal);
+	private readonly SortedDictionary<string, (int Count, double Metres)> _rejectedPaths = new(StringComparer.Ordinal);
 
 	public void Time(string key, long since) =>
 		_ms[key] = (_ms.TryGetValue(key, out var v) ? v : 0.0) + (System.Diagnostics.Stopwatch.GetTimestamp() - since) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 	public void Count(string key, int add = 1) => _counts[key] = (_counts.TryGetValue(key, out var v) ? v : 0) + add;
-	public void Reject(string reason) => _rejects[reason] = (_rejects.TryGetValue(reason, out var v) ? v : 0) + 1;
+	public void Reject(string reason, double? lengthMetres = null)
+	{
+		_rejects[reason] = _rejects.GetValueOrDefault(reason) + 1;
+		if (lengthMetres is not double length) return;
+		var past = _rejectedPaths.GetValueOrDefault(reason);
+		_rejectedPaths[reason] = (past.Count + 1, past.Metres + length);
+	}
 	public readonly List<string> Log = new();
 	public static long Now() => System.Diagnostics.Stopwatch.GetTimestamp();
 
@@ -122,9 +129,13 @@ public sealed class NetStats
 		foreach (var (k, v) in _counts) counts[k] = v;
 		var rejects = new Godot.Collections.Dictionary();
 		foreach (var (k, v) in _rejects) rejects[k] = v;
+		var rejectedLengths = new Godot.Collections.Dictionary();
+		foreach (var (reason, totals) in _rejectedPaths)
+			rejectedLengths[reason] = new Godot.Collections.Dictionary { ["count"] = totals.Count, ["m"] = Math.Round(totals.Metres) };
 		var log = new Godot.Collections.Array();
 		foreach (var line in Log) log.Add(line);
-		return new Godot.Collections.Dictionary { ["ms"] = ms, ["counts"] = counts, ["rejects"] = rejects, ["log"] = log };
+		return new Godot.Collections.Dictionary { ["ms"] = ms, ["counts"] = counts, ["rejects"] = rejects,
+			["rejected_lengths"] = rejectedLengths, ["log"] = log };
 	}
 }
 

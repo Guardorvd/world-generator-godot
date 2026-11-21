@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 6
+const VERSION := 7
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
@@ -469,18 +469,35 @@ static func _publish(w: WorldData, out: Dictionary, cells: PackedInt32Array, kin
 	return added
 
 
-## Шаг 7: опорные точки природных маршрутов (RideRoutes._anchors) без точек в кольце 0,6 < до развилки < RIDE_NODE_SEP:
-## отбор идёт по точкам, годным для узла (у самой развилки — общий узел). Подъёмы к виртуальным вершинам начинаются
-## от тех же опорных точек.
-static func ride_anchors(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray, anchors: Array) -> Array:
+## Опорная точка около развилки переносится на общий узел своего перегона, если у развилки есть место.
+static func ride_anchors(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray,
+		anchors: Array, cost: PackedFloat32Array, stats: Dictionary) -> Dictionary:
 	var known := _unsafe_cache if _unsafe_cache.size() == w.N and _unsafe_axis == on_axis else unsafe_mask(w, surface, on_axis)
 	var data := input(w, finder, surface, on_axis, known)
 	data.mode = "node_dist"
 	data.session = _session
+	data.ride_anchor_cells = PackedInt32Array(anchors.map(func(a: Dictionary) -> int: return a.i))
+	data.ride_anchor_sections = PackedInt32Array(anchors.map(func(a: Dictionary) -> int: return a.section))
 	var out := call_core(finder, surface, data)
-	if out.is_empty(): return anchors
-	var dist: PackedFloat32Array = out.node_dist
-	return anchors.filter(func(a: Dictionary) -> bool: return dist[a.i] <= NODE_SAME or dist[a.i] >= RIDE_NODE_SEP)
+	if out.is_empty(): return {anchors = anchors, junctions = {}}
+	var cells: PackedInt32Array = out.ride_anchor_cells
+	var seen := {}
+	var result := []
+	for k in anchors.size():
+		var i := cells[k]
+		if i < 0 or not is_finite(cost[i]) or StageTrails._wet(w, i):
+			stats.anchors_blocked += 1
+			continue
+		if seen.has(i):
+			stats.anchors_combined += 1
+			continue
+		seen[i] = true
+		var anchor: Dictionary = anchors[k]
+		if i != anchor.i:
+			stats.anchors_snapped += 1
+			anchor = anchor.merged({i = i, x = i % w.W, y = i / w.W, h = surface.hv[i]}, true)
+		result.append(anchor)
+	return {anchors = result, junctions = junctions(out)}
 
 
 ## Фаза 3.1: линия пути на C# (LineBuilder, порт RoadLine.build один к одному) для всех путей при network_v2.
