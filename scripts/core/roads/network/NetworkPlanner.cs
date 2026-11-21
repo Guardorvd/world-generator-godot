@@ -1079,8 +1079,35 @@ public sealed class NetworkPlanner
 			Stats.Count(why.Length > 0 ? "rides_rejected" : "rides_ok");
 			if (why.Length > 0) Stats.Reject("ride_" + why);
 		}
+		// Шаг 9: подъёмы к виртуальным вершинам — те же правила узлов и «вдоль сети» (_adds_network по новой части)
+		var approachVerdicts = new Godot.Collections.Array();
+		var approachNodes = new Godot.Collections.Array();
+		if (_in.ContainsKey("approaches"))
+			foreach (var v in _in["approaches"].AsGodotArray())
+			{
+				var p = v.AsInt32Array();
+				var att = AttachmentsAt(p);
+				var cells = new int[att.Count];
+				for (int k = 0; k < att.Count; k++) cells[k] = att[k].Cell;
+				string why = NodeRules(att, null, p, true, _p.RideNodeSep);
+				if (why.Length > 0) why += LastNode;
+				else
+				{
+					var core = Core(p);
+					if (!AddsNetwork(core))
+					{
+						var (share, longest) = ParallelStats(core);
+						why = string.Format(System.Globalization.CultureInfo.InvariantCulture, "parallel (доля {0:F2}, подряд {1})", share, longest);
+					}
+				}
+				approachVerdicts.Add(why);
+				approachNodes.Add(cells);
+				Stats.Count(why.Length > 0 ? "approach_rejected" : "approach_ok");
+				if (why.Length > 0) Stats.Reject("approach_" + why.Split(' ')[0]);
+			}
 		Stats.Time("total", total);
-		return new Godot.Collections.Dictionary { ["verdicts"] = verdicts, ["nodes"] = nodes, ["network_v2"] = Stats.ToDictionary() };
+		return new Godot.Collections.Dictionary { ["verdicts"] = verdicts, ["nodes"] = nodes, ["approach_verdicts"] = approachVerdicts,
+			["approach_nodes"] = approachNodes, ["network_v2"] = Stats.ToDictionary() };
 	}
 
 	/// <summary>Шаг 7: расстояние до развилок сети (клетки) — по нему RideRoutes отбирает опорные точки маршрутов.</summary>

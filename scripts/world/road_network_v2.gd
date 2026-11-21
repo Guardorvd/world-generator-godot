@@ -284,12 +284,45 @@ static func ride_nodes(w: WorldData, finder: Pathfinder, surface: Heightfield, o
 	var paths: Array = []
 	for c: Dictionary in candidates: paths.append(c.path)
 	data.paths = paths
+	# шаг 9: подъёмы к виртуальным вершинам (по одному на вершину)
+	var tops: Array = []
+	var approaches: Array = []
+	for c: Dictionary in candidates:
+		var top: Dictionary = c.top
+		if top.virtual and not tops.has(top) and not top.get("approach", PackedInt32Array()).is_empty():
+			tops.append(top)
+			approaches.append(top.approach)
+	data.approaches = approaches
 	var out := call_core(finder, surface, data)
 	if out.is_empty(): return
 	for k in candidates.size():
-		candidates[k].v2_reject = String(out.verdicts[k])
-		candidates[k].v2_nodes = PackedInt32Array(out.nodes[k])
+		var c: Dictionary = candidates[k]
+		c.v2_reject = String(out.verdicts[k])
+		c.v2_nodes = PackedInt32Array(out.nodes[k])
+		var t := tops.find(c.top)
+		if t < 0: continue
+		var why := String(out.approach_verdicts[t])
+		if why.is_empty() and _touches_approach(w, c.path, c.top.approach): why = "spur_touch спуск касается подъёма"
+		if c.v2_reject.is_empty() and not why.is_empty(): c.v2_reject = "approach_" + why
+		var both: PackedInt32Array = c.v2_nodes.duplicate()
+		both.append_array(PackedInt32Array(out.approach_nodes[t]))
+		c.v2_nodes = both
 	_profile(w, "rides", out, 0.0, (Time.get_ticks_usec() - started) / 1000.0, {})
+
+
+## Шаг 9: спуск path касается или пересекает свой подъём approach где-то кроме общей вершины (начала спуска):
+## клетка спуска на подъёме или рядом с ним (8 соседей) вне первой такой серии от вершины.
+static func _touches_approach(w: WorldData, path: PackedInt32Array, approach: PackedInt32Array) -> bool:
+	var near := {}
+	for c: int in approach:
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				near[c + dy * w.W + dx] = true
+	var k := 0
+	while k < path.size() and near.has(path[k]): k += 1 # общая вершина и спуск вдоль самого подъёма у неё
+	for j in range(k, path.size()):
+		if near.has(path[j]): return true
+	return false
 
 
 ## Точки примыкания маршрута nodes не ближе RIDE_NODE_SEP к точкам уже принятых маршрутов (совпадающие — общий узел).
