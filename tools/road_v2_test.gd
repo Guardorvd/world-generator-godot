@@ -49,13 +49,14 @@ func _switchback_climbs() -> void:
 	for i in range(0, raw.size(), 2): axis.append_array([raw[i], raw[i + 1], 0.65])
 	var pins := PackedByteArray([1, 0, 0, 0, 0, 1])
 	var cases := [
-		["склон 25 %", 0.25, StageTrails.ROAD_LIMIT, 8.0, true],
-		["склон 35 %", 0.35, StageTrails.TRAIL_GRADE, 6.0, true],
-		["склон 45 %", 0.45, StageTrails.MOUNTAIN_GRADE, 6.0, true],
-		["уступ", 0.35, StageTrails.TRAIL_GRADE, 6.0, true],
-		["узкий гребень", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
-		["склон над водой", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
-		["чужие оси", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
+		["склон 30 %", 0.30, StageTrails.ROAD_LIMIT, 8.0, true],
+		["склон 42 %", 0.42, StageTrails.TRAIL_GRADE, 6.0, true],
+		["склон 57 %", 0.57, StageTrails.MOUNTAIN_GRADE, 6.0, true],
+		["уступ", 0.42, StageTrails.TRAIL_GRADE, 6.0, true],
+		["узкий гребень", 0.42, StageTrails.TRAIL_GRADE, 6.0, false],
+		["склон над водой", 0.42, StageTrails.TRAIL_GRADE, 6.0, false],
+		["чужие оси", 0.42, StageTrails.TRAIL_GRADE, 6.0, false],
+		["пологая хорда", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
 	]
 	for row: Array in cases:
 		var w := _world("none")
@@ -65,6 +66,10 @@ func _switchback_climbs() -> void:
 				var h: float = 0.20 + row[1] * y / StageTrails.HEIGHT_SCALE
 				if row[0] == "уступ":
 					h -= 0.18 * clampf(y - 39.0, -3.5, 3.5) * clampf((x - 59.0) / 5.0, 0.0, 1.0) / StageTrails.HEIGHT_SCALE
+				elif row[0] != "пологая хорда":
+					# Хорда остаётся крутой, а площадки для разворота лежат в стороне от неё.
+					var shoulder := clampf(maxf(48.0 - x, x - 58.0) / 7.0, 0.0, 1.0)
+					h -= 0.12 * clampf(y - 39.5, -6.0, 6.0) * shoulder / StageTrails.HEIGHT_SCALE
 				if row[0] == "узкий гребень":
 					h -= maxf(48.0 - x, x - 60.0) / StageTrails.HEIGHT_SCALE if x < 48 or x > 60 else 0.0
 				w.h[i] = h
@@ -94,6 +99,7 @@ func _switchback_climbs() -> void:
 			var reason_ok: bool = not found.refused.is_empty()
 			if row[0] == "склон над водой": reason_ok = found.refused.has("water")
 			if row[0] == "чужие оси": reason_ok = found.refused.has("clearance")
+			if row[0] == "пологая хорда": reason_ok = found.refused.has("chordgrade")
 			check(not row[4] and found.candidates > 0 and found.placements.is_empty() and reason_ok, label)
 
 

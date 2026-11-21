@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 4
+const VERSION := 5
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
@@ -44,7 +44,9 @@ static var _unsafe_axis := PackedByteArray()
 ## Суффикс ключа слоя places: пусто при выключенном флаге (ключ побайтно прежний).
 static func cache_suffix(enabled: bool) -> String:
 	if not enabled: return ""
-	var values := RoadTuning.current().routing.character_field
+	var routing := RoadTuning.current().routing
+	var values: Dictionary = routing.character_field.duplicate()
+	values.switchbacks_enabled = routing.switchbacks_enabled
 	var keys := values.keys()
 	keys.sort()
 	var digest := RoadTuning._digest_values(keys.map(func(key: String) -> Array: return [key, values[key]]))
@@ -570,8 +572,11 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 
 ## Перестраивает только конечную геометрию. Поиск, связи и записанные интервалы веломаршрутов уже готовы.
 static func reshape_climbs(w: WorldData, surface: Heightfield, on_axis: PackedByteArray) -> void:
-	var stats := {candidates = 0, rebuilt = 0, turns = 0, long_climb_turns = 0, refused = {}, placements = [], refusals_at = []}
+	var enabled: bool = RoadTuning.current().routing.switchbacks_enabled
+	var stats := {enabled = enabled, candidates = 0, rebuilt = 0, turns = 0, long_climb_turns = 0,
+		refused = {}, placements = [], refusals_at = []}
 	w.generation_profile.road_switchbacks = stats
+	if not enabled: return
 	var water: Object = surface.fast_water()
 	if water == null:
 		push_error("Сеть V2: серпантинам нужна поверхность C#")

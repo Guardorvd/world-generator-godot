@@ -23,7 +23,7 @@ internal sealed class SwitchbackBuilder
 	private static readonly int[] TurnCounts = { 1, 2 };
 	private static readonly float[] TurnSides = { -1, 1 };
 
-	internal enum Refusal { Anchors, Layout, Length, Structure, Water, Grade, Crossfall, Profile, Radius, Clearance, Ride }
+	internal enum Refusal { Anchors, ChordGrade, Layout, Length, Structure, Water, Grade, Crossfall, Profile, Radius, Clearance, Ride }
 	internal sealed record Placement(P Start, P End, P[] Turns, double Radius, double ShortestArm, double Length, double Rise, bool Long);
 	internal readonly List<Placement> Placements = new();
 	internal readonly Dictionary<Refusal, int> Refused = new();
@@ -145,8 +145,12 @@ internal sealed class SwitchbackBuilder
 			if (_blocked(At(axis[lo])) || _blocked(At(axis[hi]))) continue;
 			P a = axis[lo], b = axis[hi];
 			double run = along[hi] - along[lo];
-			if (Math.Abs(Height(b) - Height(a)) < run * Tile * 0.08) continue;
 			V start = At(a), end = At(b), span = end - start;
+			if (Math.Abs(Height(b) - Height(a)) <= span.Length() * Tile * _grade)
+			{
+				cause = Later(cause, Refusal.ChordGrade);
+				continue;
+			}
 			float riseRun = span.Dot(uphill);
 			if (Math.Abs(riseRun) < 2 * _radius / Tile) continue;
 			cause = Later(cause, Refusal.Layout);

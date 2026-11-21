@@ -31,6 +31,8 @@ const KINDS := ["road", "trail", "mountain"]
 }
 
 @export_group("Линия по видам пути")
+## Локальная перестройка крутого подъёма в V2.
+@export var switchbacks_enabled := false
 ## Допуск срезания лесенки сетки в клетках.
 @export var straighten: Dictionary
 ## Множитель допуска на локальный бугор при пробе хорды или дуги.
