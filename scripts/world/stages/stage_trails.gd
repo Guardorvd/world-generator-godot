@@ -110,6 +110,10 @@ static func run(w: WorldData, step: Callable) -> void:
 	detail_us = Time.get_ticks_usec()
 	_animal_trails(w, finder)
 	w.generation_profile.animal_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	if network_v2:
+		detail_us = Time.get_ticks_usec()
+		RoadNetworkV2.prepare_character(w, finder, surface)
+		_part("road_character_fields", detail_us)
 	_route_surface(finder, surface, widths.road, "corridor_road_ms")
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder, surface, step)
@@ -840,10 +844,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		finder.search_budget = budgets[b]
 		var attempt_us := Time.get_ticks_usec()
 		var search_ms: float = finder.search_stats().get("call_ms", 0.0)
-		var structures := w.bridges.size() + w.tunnels.size()
-		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state)
-		if not q.is_empty() and structures == w.bridges.size() + w.tunnels.size():
-			q = _prefer_dry_connection(w, finder, forks, road_cost, q, state, structures)
+		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state, forks)
 		# Каждая попытка: пара, прямое расстояние, списанный запас, исход, время попытки и поиска в ней, мс
 		# (поиск — только с Pathfinder.profile_searches; стенд road_plan_test).
 		link_log.append([a, b, roundi(distance), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", ""),
@@ -1201,10 +1202,19 @@ static func _windows(finder: Pathfinder, a: int, b: int) -> Array[Rect2i]:
 
 
 static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
-		a: int, b: int, state: Dictionary) -> PackedInt32Array:
+		a: int, b: int, state: Dictionary, forks: RefCounted = null) -> PackedInt32Array:
 	finder.window = Rect2i()
+	var structures := w.bridges.size() + w.tunnels.size()
 	var q := _connect_in_windows(w, finder, cost, a, b, state)
 	finder.window = Rect2i()
+	if forks != null and not q.is_empty():
+		var limit: float = state.get("v2_road_limit", ROAD_LIMIT)
+		if structures == w.bridges.size() + w.tunnels.size():
+			var preferred := _prefer_dry_connection(w, finder, forks, cost, q, state, structures)
+			if preferred != q: limit = ROAD_GRADE
+			q = preferred
+		if network_v2:
+			q = RoadNetworkV2.shape_land(w, finder, cost, q, state.on_axis, "road", limit)
 	return q
 
 
@@ -1257,6 +1267,7 @@ static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFl
 			if not q.is_empty():
 				finder.cancel_prefetch()
 				finder.use_corridor = true
+				if network_v2: state.v2_road_limit = limit
 				return q
 			if state.failure == "repeat" and not previous_failure.is_empty():
 				state.failure = previous_failure
@@ -1360,6 +1371,8 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			var link := _land_path(finder, w.cost, a, b, "trail")
 			var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
 			if not joint.is_empty():
+				if network_v2:
+					joint = RoadNetworkV2.shape_land(w, finder, w.cost, joint, state.on_axis, "trail", TRAIL_GRADE)
 				_note_way(w, "bridge_gap", _add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface")))
 				paths.append([e[0], e[1], joint, false, e[2]])
 				network = _network_cost(w)

@@ -99,6 +99,17 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var fields := cost_fields(w, hv, net, dist, fast)
 	var cost: PackedFloat32Array = fields.cost
 	var wood: PackedFloat32Array = fields.wood
+	var uphill := cost
+	var heuristic_scale := 1.0
+	if StageTrails.network_v2:
+		var core: Object = finder.fast()
+		var flow_fields: Dictionary = core.CharacterCosts(cost, on_axis, "ride")
+		var forest_fields: Dictionary = core.CharacterCosts(wood, on_axis, "ride")
+		var uphill_fields: Dictionary = core.CharacterCosts(cost, on_axis, "mountain")
+		heuristic_scale = minf(flow_fields.heuristic_scale, minf(forest_fields.heuristic_scale, uphill_fields.heuristic_scale))
+		cost = flow_fields.cost
+		wood = forest_fields.cost
+		uphill = uphill_fields.cost
 	var block: PackedInt32Array = fields.block
 	var bw := ceili(float(W) / BLOCK)
 	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
@@ -114,6 +125,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var candidates: Array = []
 	var cost_version := finder.next_cost_version()
 	var wood_version := finder.next_cost_version()
+	var uphill_version := finder.next_cost_version() if StageTrails.network_v2 else cost_version
 	var network := StageTrails._network_cost(w)
 	var network_version := finder.next_cost_version()
 	finder.use_corridor = true
@@ -127,7 +139,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if not s.has("approach") and stats.searches < budget:
 				s.approach = PackedInt32Array()
 				for from: int in s.from:
-					s.approach = _search(finder, w, cost, cost_version, from, s.i, approach, stats)
+					s.approach = _search(finder, w, uphill, uphill_version, from, s.i, approach, stats, heuristic_scale)
 					if not s.approach.is_empty(): break
 				# Не поднялись: вокруг вершины стены круче горной тропы (замер 07.11: путь есть только с уклоном больше 55 %)
 				if s.approach.is_empty(): stats.virtual_failed.append([s.x, s.y, roundi(s.rise)])
@@ -142,12 +154,12 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if spec.via:
 				var via := _via(w, hv, dist, s, t)
 				if via < 0: continue
-				var a := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, via, spec, stats)
-				var b := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, via, t.i, spec, stats) if not a.is_empty() else a
+				var a := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, via, spec, stats, heuristic_scale)
+				var b := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, via, t.i, spec, stats, heuristic_scale) if not a.is_empty() else a
 				if not b.is_empty():
 					path = _join(w, a, b)
 			else:
-				path = _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, t.i, spec, stats)
+				path = _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, t.i, spec, stats, heuristic_scale)
 			var tally: Array = stats.by_search.get(style, [0, 0, 0])
 			stats.by_search[style] = tally
 			tally[0] += 1
@@ -427,7 +439,8 @@ static func _via(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Array,
 	return best
 
 
-static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, version: int, a: int, b: int, spec: Dictionary, stats: Dictionary) -> PackedInt32Array:
+static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, version: int, a: int, b: int,
+		spec: Dictionary, stats: Dictionary, heuristic_scale: float) -> PackedInt32Array:
 	stats.searches += 1
 	var x0 := mini(a % w.W, b % w.W) - WINDOW_MARGIN
 	var y0 := mini(a / w.W, b / w.W) - WINDOW_MARGIN
@@ -435,7 +448,7 @@ static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, 
 	var y1 := maxi(a / w.W, b / w.W) + WINDOW_MARGIN + 1
 	finder.window = Rect2i(maxi(0, x0), maxi(0, y0), mini(w.W, x1) - maxi(0, x0), mini(w.H, y1) - maxi(0, y0))
 	finder.search_budget = SEARCH_BUDGET
-	return finder.find_path(cost, a, b, spec.climb, spec.grade, version)
+	return finder.find_path(cost, a, b, spec.climb, spec.grade, version, 0.0, 0.0, heuristic_scale)
 
 
 ## Две части через ориентир без «шипа»: срезаем возврат в общей клетке частей.

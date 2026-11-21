@@ -8,12 +8,11 @@ namespace Roads.Network;
 public sealed class NetworkSession
 {
 	public long Id = -1;
-	// Поля рельефа: Hσ, |∇Hσ|, TPI, сглаженный шум, полоса воды, интеграл леса (ключ — hv, вода, шум, биомы)
+	// Поля рельефа и множителей (ключ — высота, вода, шум, биомы, параметры).
 	public ulong FieldsKey;
-	public float[] Smooth = Array.Empty<float>(), Slope = Array.Empty<float>(), Tpi = Array.Empty<float>(), Low = Array.Empty<float>();
+	public float[] Smooth = Array.Empty<float>(), Slope = Array.Empty<float>(), Tpi = Array.Empty<float>();
 	public float[] ShoreDist = Array.Empty<float>();
-	public int[] ForestSum = Array.Empty<int>();
-	public double LowTop;
+	public float[] CharacterCommon = Array.Empty<float>(), CharacterWave = Array.Empty<float>();
 	// Грубый граф по пределу уклона (ключ — проходимость цены, высоты, связи, версия коридора, предел)
 	public ulong CoarseKey;
 	public CoarseGraph Coarse;

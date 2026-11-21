@@ -65,7 +65,7 @@ public static class NetworkProbe
 					bool ok = cb >= 0 && double.IsFinite(dist[cb]);
 					linked.Add(ok);
 					if (!ok) { routed.Add(false); continue; }
-					var path = planner.Router.Route(planner.Base, cells[k], cells[k + 1], cg.Bounds(CoarseGraph.Chain(prev, cb)), false, planner.Stats);
+					var path = planner.Router.Route(planner.Base, cells[k], cells[k + 1], cg.Bounds(CoarseGraph.Chain(prev, cb)), false, planner.Stats, planner.Fields.MinCost);
 					routed.Add(path.Length > 0);
 				}
 				outd["linked"] = linked;

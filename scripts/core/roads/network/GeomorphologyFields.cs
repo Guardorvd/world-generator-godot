@@ -3,148 +3,147 @@ using System.Threading.Tasks;
 
 namespace Roads.Network;
 
-/// <summary>Поля рельефа для цены V2 (план V2, 3.3), по одному разу на вызов, плоские массивы W·H:
-/// Hσ — сглаженная земля (σ = 3 клетки, вода маскируется), |∇Hσ|, TPI = Hσ − H3σ (только для горных ответвлений),
-/// экотон — доля леса 5×5 в [EcoLow; EcoHigh], меандр — низкочастотный готовый шум мира, полоса у моря и озера.
-/// Цена V2 = w.cost × множители только на клетках вне сети и не дешевле наименьшей цены w.cost.</summary>
+/// <summary>Общее поле характера: широкая волна на равнине, кромка леса, перегибы склонов, гребни и берег.
+/// Множитель применяется к цене суши. Запреты прохода, вода и сооружения сохраняют исходную цену.</summary>
 public sealed class GeomorphologyFields
 {
-	public float[] Smooth = Array.Empty<float>();   // Hσ, м
-	public float[] Slope = Array.Empty<float>();    // |∇Hσ|, м/м
-	public float[] Tpi = Array.Empty<float>();      // Hσ − H3σ, м (пусто, если не нужен)
-	public float[] Raw = Array.Empty<float>();      // цена V2 без правил узлов
-	public float[] ShoreDist = Array.Empty<float>(); // клеток до моря или озера
-	public double MinCost;
+	public float[] Smooth = Array.Empty<float>();
+	public float[] Slope = Array.Empty<float>();
+	public float[] Tpi = Array.Empty<float>();
+	public float[] Raw = Array.Empty<float>();
+	public float[] ShoreDist = Array.Empty<float>();
+	public double MinCost { get; private set; }
+	private float[] _common = Array.Empty<float>(), _wave = Array.Empty<float>();
 
 	private readonly TerrainSnapshot _t;
 	public GeomorphologyFields(TerrainSnapshot t) { _t = t; }
 
-	/// <summary>ridge — множитель хребтов (горные ответвления), иначе без него. session — неизменные поля рельефа
-	/// (Hσ, |∇Hσ|, TPI, сглаженный шум, полоса воды, лес) берутся из сессии, если её ключ совпал с входами.</summary>
-	public void Build(bool ridge, NetStats stats, NetworkSession session = null)
+	public void Build(bool mountain, NetStats stats, NetworkSession session = null)
+	{
+		Prepare(stats, session);
+		long t0 = NetStats.Now();
+		Raw = Weighted(_t.Cost, mountain ? "mountain" : "trail", _t.OnAxis, true);
+		MinCost = Minimum(Raw);
+		stats.Time("fields_cost", t0);
+	}
+
+	public void Prepare(NetStats stats, NetworkSession session)
 	{
 		long t0 = NetStats.Now();
 		int W = _t.W, H = _t.H, N = _t.N;
-		var P = _t.P;
+		var p = _t.P;
 		ulong key = NetworkSession.Hash(NetworkSession.Hash(NetworkSession.Hash(NetworkSession.Hash(NetworkSession.Hash(
 			NetworkSession.Seed, _t.Hv), _t.Noise), _t.Ocean), _t.Lake), _t.River);
-		key = NetworkSession.Hash(NetworkSession.Hash(key, _t.Biome), (long)(P.Tile * 1e6));
+		key = NetworkSession.Hash(NetworkSession.Hash(key, _t.Biome), W);
+		foreach (double value in new double[] { p.Tile, p.ReliefSigma, p.ReliefWideSigma, p.MeanderSigma, p.MeanderRms,
+			p.MeanderFlat, p.MeanderSlope, p.RidgeTpi, p.RidgeMul, p.BreakTpi, p.BreakMul, p.EcoRadius,
+			p.EcoLow, p.EcoHigh, p.EcoMul, p.ShoreBand, p.ShoreMul })
+			key = NetworkSession.Hash(key, BitConverter.DoubleToInt64Bits(value));
 		for (int b = 0; b < 256; b++) if (_t.Forest[b]) key = NetworkSession.Hash(key, b + 1000);
-		bool cached = session != null && session.FieldsKey == key && session.Smooth.Length == N;
-		var land = new float[0];
-		if (!cached)
+		if (session != null && session.FieldsKey == key && session.Smooth.Length == N)
 		{
-			land = new float[N];
-			for (int i = 0; i < N; i++) land[i] = _t.Wet(i) ? 0f : 1f;
-			Smooth = Gauss(_t.Hv, land, 3.0);
-			Slope = new float[N];
-			double step = 2.0 * P.Tile;
-			Parallel.For(0, H, y =>
-			{
-				for (int x = 0; x < W; x++)
-				{
-					int i = y * W + x;
-					double gx = (Smooth[y * W + Math.Min(W - 1, x + 1)] - Smooth[y * W + Math.Max(0, x - 1)]) / step;
-					double gy = (Smooth[Math.Min(H - 1, y + 1) * W + x] - Smooth[Math.Max(0, y - 1) * W + x]) / step;
-					Slope[i] = (float)Math.Sqrt(gx * gx + gy * gy);
-				}
-			});
-		}
-		else
-		{
-			Smooth = session.Smooth;
-			Slope = session.Slope;
-			Tpi = session.Tpi;
-		}
-		if (ridge && Tpi.Length != N)
-		{
-			if (land.Length != N)
-			{
-				land = new float[N];
-				for (int i = 0; i < N; i++) land[i] = _t.Wet(i) ? 0f : 1f;
-			}
-			var wide = Gauss(_t.Hv, land, 9.0);
-			Tpi = new float[N];
-			for (int i = 0; i < N; i++) Tpi[i] = Smooth[i] - wide[i];
-		}
-		stats.Time("fields_relief", t0);
-		t0 = NetStats.Now();
-		int[] sum;
-		float[] low;
-		double top;
-		if (!cached)
-		{
-			// Экотон: доля леса в квадрате 5×5 по интегральной сумме
-			sum = new int[(W + 1) * (H + 1)];
-			for (int y = 0; y < H; y++)
-			{
-				int row = 0;
-				for (int x = 0; x < W; x++)
-				{
-					row += _t.Forest[_t.Biome[y * W + x]] ? 1 : 0;
-					sum[(y + 1) * (W + 1) + x + 1] = sum[y * (W + 1) + x + 1] + row;
-				}
-			}
-			// Меандр: шум мира, сглаженный σ = 6 клеток, приведённый к [-1; 1]
-			var ones = new float[N];
-			Array.Fill(ones, 1f);
-			var noise = new float[N];
-			for (int i = 0; i < N; i++) noise[i] = (float)_t.Noise[i];
-			low = Gauss(noise, ones, 6.0);
-			top = 1e-9;
-			for (int i = 0; i < N; i++) top = Math.Max(top, Math.Abs(low[i]));
-			var water = new byte[N];
-			for (int i = 0; i < N; i++) water[i] = (byte)(_t.Ocean[i] != 0 || _t.Lake[i] != 0 ? 1 : 0);
-			ShoreDist = _t.Router.DistanceField(W, H, water);
-		}
-		else
-		{
-			sum = session.ForestSum;
-			low = session.Low;
-			top = session.LowTop;
-			ShoreDist = session.ShoreDist;
+			Smooth = session.Smooth; Slope = session.Slope; Tpi = session.Tpi; ShoreDist = session.ShoreDist;
+			_common = session.CharacterCommon; _wave = session.CharacterWave;
 			stats.Count("fields_cached");
+			stats.Time("fields_relief", t0);
+			return;
 		}
-		if (session != null)
-		{
-			session.FieldsKey = key;
-			session.Smooth = Smooth; session.Slope = Slope; session.Tpi = Tpi;
-			session.ForestSum = sum; session.Low = low; session.LowTop = top; session.ShoreDist = ShoreDist;
-		}
-		MinCost = double.PositiveInfinity;
+
+		var land = new float[N];
+		var noise = new float[N];
+		var openWater = new byte[N];
 		for (int i = 0; i < N; i++)
-			if (float.IsFinite(_t.Cost[i])) MinCost = Math.Min(MinCost, _t.Cost[i]);
-		Raw = new float[N];
-		double minCost = MinCost;
+		{
+			land[i] = _t.Wet(i) ? 0f : 1f;
+			noise[i] = (float)_t.Noise[i];
+			openWater[i] = (byte)(_t.Ocean[i] != 0 || _t.Lake[i] != 0 ? 1 : 0);
+		}
+		Smooth = Gauss(_t.Hv, land, p.ReliefSigma);
+		var wide = Gauss(_t.Hv, land, p.ReliefWideSigma);
+		// Исправляем общий сдвиг сглаженного шума и нормируем по RMS суши.
+		var low = Gauss(noise, land, p.MeanderSigma);
+		double sum = 0.0, sumSq = 0.0;
+		int count = 0;
+		for (int i = 0; i < N; i++)
+		{
+			if (land[i] == 0f) continue;
+			sum += low[i]; sumSq += (double)low[i] * low[i]; count++;
+		}
+		double mean = sum / Math.Max(1, count);
+		double top = Math.Max(1e-9, p.MeanderRms * Math.Sqrt(Math.Max(0.0, sumSq / Math.Max(1, count) - mean * mean)));
+		ShoreDist = _t.Router.DistanceField(W, H, openWater);
+		Slope = new float[N];
+		Tpi = new float[N];
+		_common = new float[N];
+		_wave = new float[N];
+		var forest = new int[(W + 1) * (H + 1)];
+		int stride = W + 1;
+		for (int y = 0; y < H; y++)
+		{
+			int row = 0;
+			for (int x = 0; x < W; x++)
+			{
+				row += _t.Forest[_t.Biome[y * W + x]] ? 1 : 0;
+				forest[(y + 1) * stride + x + 1] = forest[y * stride + x + 1] + row;
+			}
+		}
+		double step = 2.0 * p.Tile;
 		Parallel.For(0, H, y =>
 		{
 			for (int x = 0; x < W; x++)
 			{
 				int i = y * W + x;
-				float c = _t.Cost[i];
-				if (!float.IsFinite(c) || _t.Unsafe[i] != 0)
-				{
-					Raw[i] = float.PositiveInfinity;
-					continue;
-				}
-				if (_t.Owner[i] >= 0)
-				{
-					Raw[i] = c;
-					continue;
-				}
-				double mul = 1.0;
-				int x0 = Math.Max(0, x - 2), x1 = Math.Min(W, x + 3), y0 = Math.Max(0, y - 2), y1 = Math.Min(H, y + 3);
-				int forest = sum[y1 * (W + 1) + x1] - sum[y0 * (W + 1) + x1] - sum[y1 * (W + 1) + x0] + sum[y0 * (W + 1) + x0];
-				double share = (double)forest / ((x1 - x0) * (y1 - y0));
-				if (share >= P.EcoLow && share <= P.EcoHigh) mul *= P.EcoMul;
-				double fade = SmoothStep(P.MeanderFlat, P.MeanderSlope, Slope[i]);
-				mul *= 1.0 + P.MeanderAmp * (low[i] / top) * fade;
-				if (ShoreDist[i] <= P.ShoreBand) mul *= P.ShoreMul;
-				if (ridge && Tpi[i] > P.RidgeTpi) mul *= P.RidgeMul;
-				Raw[i] = (float)Math.Max(minCost, c * mul);
+				double gx = (Smooth[y * W + Math.Min(W - 1, x + 1)] - Smooth[y * W + Math.Max(0, x - 1)]) / step;
+				double gy = (Smooth[Math.Min(H - 1, y + 1) * W + x] - Smooth[Math.Max(0, y - 1) * W + x]) / step;
+				Slope[i] = (float)Math.Sqrt(gx * gx + gy * gy);
+				Tpi[i] = Smooth[i] - wide[i];
+				int r = p.EcoRadius;
+				int x0 = Math.Max(0, x - r), x1 = Math.Min(W, x + r + 1), y0 = Math.Max(0, y - r), y1 = Math.Min(H, y + r + 1);
+				int trees = forest[y1 * stride + x1] - forest[y0 * stride + x1] - forest[y1 * stride + x0] + forest[y0 * stride + x0];
+				double cover = (double)trees / ((x1 - x0) * (y1 - y0));
+				double edge = SmoothStep(0.0, p.EcoLow, cover) * SmoothStep(1.0, p.EcoHigh, cover);
+				double ridge = SmoothStep(0.0, p.RidgeTpi, Tpi[i]);
+				double bend = SmoothStep(0.0, p.BreakTpi, -Tpi[i]);
+				double shore = SmoothStep(p.ShoreBand, 0.0, ShoreDist[i]);
+				_common[i] = (float)((1.0 + (p.EcoMul - 1.0) * edge) * (1.0 + (p.RidgeMul - 1.0) * ridge) *
+					(1.0 + (p.BreakMul - 1.0) * bend) * (1.0 + (p.ShoreMul - 1.0) * shore));
+				_wave[i] = (float)(Math.Clamp((low[i] - mean) / top, -1.0, 1.0) * SmoothStep(p.MeanderSlope, p.MeanderFlat, Slope[i]));
 			}
 		});
-		stats.Time("fields_cost", t0);
+		if (session != null)
+		{
+			session.FieldsKey = key;
+			session.Smooth = Smooth; session.Slope = Slope; session.Tpi = Tpi; session.ShoreDist = ShoreDist;
+			session.CharacterCommon = _common; session.CharacterWave = _wave;
+		}
+		stats.Time("fields_relief", t0);
+	}
+
+	public bool Wet(int cell) => _t.Wet(cell);
+
+	public float[] Weighted(float[] cost, string kind, byte[] axis, bool planner = false)
+	{
+		var output = new float[cost.Length];
+		double amplitude = _t.P.Meander(kind);
+		for (int c = 0; c < cost.Length; c++)
+			output[c] = planner && _t.Unsafe[c] != 0 ? float.PositiveInfinity :
+				WeightedCell(cost[c], c, amplitude, axis, planner && _t.Owner[c] >= 0);
+		return output;
+	}
+
+	public float WeightedCell(float cost, int cell, double amplitude, byte[] axis, bool owned = false)
+	{
+		if (!float.IsFinite(cost) || owned || Wet(cell) || axis.Length != 0 && axis[cell] != 0) return cost;
+		double mul = Math.Clamp(_common[cell] * (1.0 + amplitude * _wave[cell]), _t.P.MulMin, _t.P.MulMax);
+		return (float)(cost * mul);
+	}
+
+	public static double Minimum(float[] cost)
+	{
+		double min = double.PositiveInfinity;
+		foreach (float c in cost)
+			if (float.IsFinite(c) && c < min) min = c;
+		return min;
 	}
 
 	/// <summary>smoothstep(e0, e1, v) как в GDScript (e0 &gt; e1 даёт убывающую ступень).</summary>

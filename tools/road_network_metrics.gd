@@ -102,6 +102,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var hairpin_spots: Array = []
 	var straight := {}
 	var straight_flat := {}
+	var straight_flat_at: Array = []
 	var bends := {}
 	var switchbacks := {}
 	var dead_ends := {}
@@ -152,7 +153,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 							if not crossings.has(pair): crossings[pair] = []
 							crossings[pair].append(hit)
 		stations.append(Vector2(pts[-1].x, pts[-1].y))
-		_measure_shape(w, stations, length_m, t.kind, straight, straight_flat, bends)
+		_measure_shape(w, stations, length_m, t.kind, straight, straight_flat, bends, straight_flat_at)
 		switchbacks.get_or_add(t.kind, 0)
 		dead_ends.get_or_add(t.kind, 0)
 		if length_m < DEAD_END_M:
@@ -257,6 +258,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 					if spots.size() < 400 and n % 6 == 0: spots.append([p, "parallel"])
 	var double_cross := 0
 	var double_spots: Array = []
+	var double_at: Array = []
 	for pair: Vector2i in crossings:
 		var hits: Array = crossings[pair]
 		var found := false
@@ -266,6 +268,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		if found:
 			double_cross += 1
 			double_spots.append(hits[0])
+			double_at.append({sections = [pair.x, pair.y], x = hits[0].x, y = hits[0].y})
 	# маска и линии
 	var dist := Grid.distance_field(w.W, w.H, line_cells)
 	var orphan := 0
@@ -326,8 +329,9 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 			ride_rejections = w.generation_profile.get("rides", {}).get("rejected")},
 		length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
 		parallel_without_rides_m = roundi(parallel_plain), overlap_without_rides_m = roundi(overlap_plain),
-		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
+		double_cross = double_cross, double_cross_at = double_at, crossings = crossings.size(), kinks = kinks,
 		straight_m = straight, straight_flat_m = straight_flat, bend_spectrum = bends, switchbacks = switchbacks,
+		straight_flat_at = straight_flat_at,
 		dead_ends = dead_ends, dead_end_at = dead_end_at,
 		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
@@ -340,7 +344,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 ## должны иметь уклон ненарушенной земли < 6 %. Радиус — окружность по трём станциям.
 ## Смежные станции одного знака и диапазона радиуса считаются одним поворотом.
 static func _measure_shape(w: WorldData, st: Array[Vector2], length_m: float, kind: String,
-		straight: Dictionary, flat: Dictionary, bends: Dictionary) -> void:
+		straight: Dictionary, flat: Dictionary, bends: Dictionary, flat_at: Array) -> void:
 	var spectrum: Dictionary = bends.get_or_add(kind, {"<15": 0, "15–60": 0, "60–200": 0})
 	var step := SAMPLE * GameConfig.TILE
 	var steep := PackedInt32Array()
@@ -367,6 +371,9 @@ static func _measure_shape(w: WorldData, st: Array[Vector2], length_m: float, ki
 		covered += hi - maxf(lo, end)
 		end = hi
 		if steep[j + 1] == steep[i]:
+			if end_flat == 0.0 or lo > end_flat:
+				var midpoint := (st[i] + st[j]) * 0.5
+				flat_at.append({kind = kind, x = midpoint.x, y = midpoint.y})
 			covered_flat += hi - maxf(lo, end_flat)
 			end_flat = hi
 	straight[kind] = snappedf(straight.get(kind, 0.0) + covered, 0.1)

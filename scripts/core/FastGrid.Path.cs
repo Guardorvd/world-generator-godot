@@ -30,6 +30,8 @@ public partial class FastGrid
 	private static readonly double[] TurnShape = { 0.0, 0.03, 0.4, 1.0, 2.0 };
 	/// <summary>Штраф длинных галсов следующего FindPath/Prefetch (копия аргумента bend у Pathfinder.find_path; 0 — без него).</summary>
 	public double BendCost { get; set; }
+	/// <summary>Единица оставляет V1. Для взвешенного поля передаётся безопасная нижняя граница относительно HCost.</summary>
+	public double HeuristicScale { get; set; } = 1.0;
 	private static readonly double[] BendShape = { 0.0, 0.0, 0.4, 1.0, 2.0 };
 	private const int BendSteps = 3;
 	private static readonly int[] Octant = { 0, 4, 2, 6, 1, 7, 3, 5 };
@@ -97,7 +99,7 @@ public partial class FastGrid
 		public byte[] Links;
 		public int S, T, Version;
 		public long CostVersion, HeightsVersion, LinksVersion;
-		public double Climb, MaxGrade, MaxCross, Turn, Bend;
+		public double Climb, MaxGrade, MaxCross, Turn, Bend, Heuristic;
 		public bool UseCorridor;
 		public int X0, Y0, X1, Y1; // окно поиска: клетки x0 <= x < x1, y0 <= y < y1
 
@@ -106,7 +108,8 @@ public partial class FastGrid
 			HeightsVersion == o.HeightsVersion && LinksVersion == o.LinksVersion &&
 			S == o.S && T == o.T && Version == o.Version && UseCorridor == o.UseCorridor &&
 			X0 == o.X0 && Y0 == o.Y0 && X1 == o.X1 && Y1 == o.Y1 &&
-			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross) && Turn.Equals(o.Turn) && Bend.Equals(o.Bend);
+			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross) && Turn.Equals(o.Turn) && Bend.Equals(o.Bend) &&
+			Heuristic.Equals(o.Heuristic);
 	}
 
 	/// <summary>Итог поиска с запасом Budget (-1 — без предела): путь, число раскрытий, остановлен ли запасом.</summary>
@@ -275,6 +278,7 @@ public partial class FastGrid
 		{
 			Cost = cost, S = s, T = t, Heights = heights, Climb = climb, MaxGrade = maxGrade, Links = links,
 			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Turn = TurnCost, Bend = BendCost, Version = _corridorVersion,
+			Heuristic = HCost * HeuristicScale,
 			CostVersion = CostVersion, HeightsVersion = HeightsVersion, LinksVersion = LinksVersion,
 			X0 = _winX0, Y0 = _winY0, X1 = Math.Min(_winX1, _w), Y1 = Math.Min(_winY1, _h)
 		};
@@ -613,6 +617,7 @@ public partial class FastGrid
 			float[] cost = q.Cost, heights = q.Heights;
 			int s = q.S, t = q.T;
 			double climb = q.Climb, maxGrade = q.MaxGrade, maxCrossGrade = q.MaxCross;
+			double heuristic = q.Heuristic;
 			bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
 			bool corridor = q.UseCorridor && grid._hasCorridor;
 			bool hasLinks = q.Links.Length > 0;
@@ -751,7 +756,7 @@ public partial class FastGrid
 							from[n] = c;
 							arrive[n] = (byte)k;
 							int ax = Math.Abs(nx - tx), ay = Math.Abs(ny - ty);
-							double key = ng + (Math.Max(ax, ay) + 0.414 * Math.Min(ax, ay)) * HCost;
+							double key = ng + (Math.Max(ax, ay) + 0.414 * Math.Min(ax, ay)) * heuristic;
 							if (hn >= heap.Length)
 							{
 								Array.Resize(ref heap, heap.Length * 2);

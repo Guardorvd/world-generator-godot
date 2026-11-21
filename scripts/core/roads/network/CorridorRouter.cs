@@ -12,7 +12,7 @@ public sealed class CorridorRouter
 	public int Searches, Retries;
 	public CorridorRouter(TerrainSnapshot t) { _t = t; }
 
-	public int[] Route(float[] cost, int s, int t, CellRect area, bool mountain, NetStats stats)
+	public int[] Route(float[] cost, int s, int t, CellRect area, bool mountain, NetStats stats, double minCost)
 	{
 		var P = _t.P;
 		var r = _t.Router;
@@ -24,6 +24,7 @@ public sealed class CorridorRouter
 			r.BendCost = mountain ? P.BendMountain : P.BendTrail;
 			r.SearchBudget = -1;
 			r.CostVersion = -1;
+			r.HeuristicScale = FastGrid.CharacterHeuristic(P.MulMin, minCost);
 			double climb = mountain ? P.ClimbMountain : P.ClimbTrail;
 			double grade = mountain ? P.MountainGrade : P.TrailGrade;
 			foreach (double m in new[] { P.WindowMargin, P.WindowRetry })

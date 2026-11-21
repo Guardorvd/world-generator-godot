@@ -104,7 +104,8 @@ func set_world_corridor(ground_meters: PackedFloat32Array, water_meters: PackedF
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет.
 ## turn — штраф смены направления (15.11.2026, 0 — прежний поиск), bend — длинные галсы (поворот на 90° и круче в
 ## пределах трёх шагов). Без C# — пустой путь и сообщение об ошибке из _init.
-func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0, bend: float = 0.0) -> PackedInt32Array:
+func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF,
+		cost_version: int = -1, turn: float = 0.0, bend: float = 0.0, heuristic_scale := 1.0) -> PackedInt32Array:
 	if search_budget == 0:
 		_skipped += 1
 		return PackedInt32Array()
@@ -113,6 +114,7 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	_search_versions(cost_version)
 	_fast.TurnCost = turn
 	_fast.BendCost = bend
+	_fast.HeuristicScale = heuristic_scale
 	_fast.SearchBudget = search_budget
 	var started := Time.get_ticks_usec()
 	var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
@@ -139,6 +141,7 @@ func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_
 		_search_versions(cost_version)
 		_fast.TurnCost = turn
 		_fast.BendCost = bend
+		_fast.HeuristicScale = 1.0
 		_fast.Prefetch(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade, search_budget)
 
 

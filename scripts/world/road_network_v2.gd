@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 2
+const VERSION := 3
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
 const NODE_SEP := 25.0      # клеток (100 м) между узлами необязательных путей
@@ -19,14 +19,6 @@ const FAR_R := 15.0         # клеток (60 м): петля отходит о
 const FAR_SHARE := 0.4      # хотя бы такой долей
 const WINDOW_MARGIN := 14   # окно поиска вокруг грубого пути, клеток
 const WINDOW_RETRY := 24
-const RIDGE_TPI := 4.0      # м: Hσ − H3σ — хребет или отрог
-const RIDGE_MUL := 0.82
-const ECO_LOW := 0.25
-const ECO_HIGH := 0.75
-const ECO_MUL := 0.9
-const MEANDER_AMP := 0.15
-const SHORE_BAND := 3.0     # клеток у моря и озера
-const SHORE_MUL := 1.5
 const SHORE_SHARE := 0.25   # береговое ответвление: доля клеток у воды (без последних 4) не больше
 const EXIT_ANGLE := 45.0    # петля: новый выезд своего поселения отличается от прежних выездов не меньше (градусы)
 const EXIT_CHORD := 10.0    # клеток: хорда направления выезда (8–12)
@@ -49,7 +41,12 @@ static var _unsafe_axis := PackedByteArray()
 
 ## Суффикс ключа слоя places: пусто при выключенном флаге (ключ побайтно прежний).
 static func cache_suffix(enabled: bool) -> String:
-	return "|net=v2.%d" % VERSION if enabled else ""
+	if not enabled: return ""
+	var values := RoadTuning.current().routing.character_field
+	var keys := values.keys()
+	keys.sort()
+	var digest := RoadTuning._digest_values(keys.map(func(key: String) -> Array: return [key, values[key]]))
+	return "|net=v2.%d.%s" % [VERSION, digest]
 
 
 ## Числа во вход C#: V1 — из StageTrails и RoadTuning, V2 — константы выше.
@@ -71,14 +68,13 @@ static func params(w: WorldData) -> Dictionary:
 		level_gap = StageTrails.LEVEL_GAP, node_sep = NODE_SEP, node_same = NODE_SAME, max_degree = MAX_DEGREE,
 		loop_ratio = LOOP_RATIO, loop_accept = LOOP_ACCEPT, loop_share = LOOP_SHARE, loop_len_old = LOOP_LEN_OLD,
 		far_r = FAR_R, far_share = FAR_SHARE, window_margin = WINDOW_MARGIN, window_retry = WINDOW_RETRY,
-		ridge_tpi = RIDGE_TPI, ridge_mul = RIDGE_MUL, eco_low = ECO_LOW, eco_high = ECO_HIGH, eco_mul = ECO_MUL,
-		meander_amp = MEANDER_AMP, meander_flat = 0.06, meander_slope = 0.01, shore_band = SHORE_BAND, shore_mul = SHORE_MUL,
 		branch_len = StageTrails.BRANCH_LEN, shore_gap = StageTrails.SHORE_GAP, view_gap = StageTrails.VIEW_GAP,
 		view_rise = StageTrails.VIEW_RISE,
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX, shore_share = SHORE_SHARE,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR, mountain_reach = MOUNTAIN_REACH,
 		exit_angle = EXIT_ANGLE, exit_chord = EXIT_CHORD, spur_net_floor = SPUR_NET_FLOOR, ride_node_sep = RIDE_NODE_SEP,
-		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH}.merged(overrides, true)
+		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH
+	}.merged(routing.character_field).merged(overrides, true)
 
 
 ## Вход C#: поля мира (ссылки на массивы), оси путей людей, поселения. unsafe — клетки небезопасных бродов
@@ -123,6 +119,33 @@ static func call_core(finder: Pathfinder, surface: Heightfield, data: Dictionary
 	return out
 
 
+static func prepare_character(w: WorldData, finder: Pathfinder, surface: Heightfield) -> void:
+	var empty := PackedByteArray()
+	empty.resize(w.N)
+	var data := input(w, finder, surface, empty, empty)
+	_session = Time.get_ticks_usec()
+	data.mode = "character"
+	data.session = _session
+	call_core(finder, surface, data)
+
+
+## Сначала V1 подтверждает связь и переправу, затем поиск по цене суши меняет форму её перегонов.
+static func shape_land(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, path: PackedInt32Array,
+		axis: PackedByteArray, kind: String, grade: float) -> PackedInt32Array:
+	var routing := RoadTuning.current().routing
+	var turns: Dictionary = StageTrails.routing_overrides.get("turn_costs", routing.turn_costs)
+	var bends: Dictionary = StageTrails.routing_overrides.get("bend_costs", routing.bend_costs)
+	var t0 := Time.get_ticks_usec()
+	var result: PackedInt32Array = finder.fast().ShapeDryRoute(path, cost, axis, finder.heights, finder.links,
+		kind, routing.climb_costs[kind], grade, turns[kind], bends[kind], finder.max_cross_grade)
+	var stats: Dictionary = w.generation_profile.get_or_add("network_v2", {}).get_or_add("character_land", {})
+	var entry: Dictionary = stats.get_or_add(kind, {calls = 0, changed = 0, ms = 0.0})
+	entry.calls += 1
+	entry.changed += int(result != path)
+	entry.ms += (Time.get_ticks_usec() - t0) / 1000.0
+	return result
+
+
 ## Клетки небезопасных бродов (правило V1 StageTrails._unsafe_ford) одним массивом W·H.
 static func unsafe_mask(w: WorldData, surface: Heightfield, on_axis: PackedByteArray) -> PackedByteArray:
 	var mask := PackedByteArray()
@@ -152,7 +175,6 @@ static func plan_loops(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 	state.v2_unsafe = unsafe # те же оси и поверхность у ответвлений этого этапа
 	_unsafe_cache = unsafe
 	_unsafe_axis = state.on_axis.duplicate()
-	_session = Time.get_ticks_usec()
 	var prep := {unsafe = (Time.get_ticks_usec() - started) / 1000.0}
 	var t0 := Time.get_ticks_usec()
 	var data := input(w, finder, surface, state.on_axis, unsafe)

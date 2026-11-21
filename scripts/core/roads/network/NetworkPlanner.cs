@@ -670,7 +670,7 @@ public sealed class NetworkPlanner
 			var chain = CoarseGraph.Chain(prev, cb);
 			Stats.Time("coarse_path", t0);
 			SoftAvoid(Coarse.Bounds(chain).Grow((int)_p.WindowRetry, W, H), sa, sb, _mark, touched);
-			path = Router.Route(_scratch, sa, sb, Coarse.Bounds(chain), false, Stats);
+			path = Router.Route(_scratch, sa, sb, Coarse.Bounds(chain), false, Stats, Math.Min(0.3, Fields.MinCost));
 			if (path.Length == 0 && chain.Count >= 2)
 			{
 				// одна перепланировка: середина грубого пути закрыта
@@ -683,7 +683,7 @@ public sealed class NetworkPlanner
 					Stats.Count("loop_replans");
 					var bounds2 = Coarse.Bounds(CoarseGraph.Chain(prev2, cb));
 					SoftAvoid(bounds2.Grow((int)_p.WindowRetry, W, H), sa, sb, _mark, touched);
-					path = Router.Route(_scratch, sa, sb, bounds2, false, Stats);
+					path = Router.Route(_scratch, sa, sb, bounds2, false, Stats, Math.Min(0.3, Fields.MinCost));
 				}
 			}
 		}
@@ -999,7 +999,7 @@ public sealed class NetworkPlanner
 			foreach (int c in touched) _mark[c] = 1;
 			SoftAvoid(win, source, source, 1.5, _mark, touched);
 		}
-		try { path = Router.Route(_scratch, source, target, area, kind == 2, Stats); }
+		try { path = Router.Route(_scratch, source, target, area, kind == 2, Stats, Math.Min(0.3, Fields.MinCost)); }
 		finally { foreach (int c in touched) { _scratch[c] = Base[c]; if (_mark.Length == _t.N) _mark[c] = 0; } }
 		if (path.Length == 0) return what + "_no_path";
 		long c0 = NetStats.Now();

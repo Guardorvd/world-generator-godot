@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 using Roads.Network;
 
@@ -11,13 +12,15 @@ public partial class FastGrid
 	internal readonly struct SearchState
 	{
 		public readonly int X0, Y0, X1, Y1, Budget;
-		public readonly double Turn, Bend;
+		public readonly double Turn, Bend, HeuristicScale;
 		public readonly long CostVersion;
-		public SearchState(int x0, int y0, int x1, int y1, int budget, double turn, double bend, long costVersion)
-		{ X0 = x0; Y0 = y0; X1 = x1; Y1 = y1; Budget = budget; Turn = turn; Bend = bend; CostVersion = costVersion; }
+		public SearchState(int x0, int y0, int x1, int y1, int budget, double turn, double bend, long costVersion, double heuristicScale)
+		{ X0 = x0; Y0 = y0; X1 = x1; Y1 = y1; Budget = budget; Turn = turn; Bend = bend; CostVersion = costVersion; HeuristicScale = heuristicScale; }
 	}
 
 	private NetworkSession _v2Session;
+	private GeomorphologyFields _routeCharacter;
+	private Params _characterOptions;
 	internal int CorridorVersion => _corridorVersion;
 
 	/// <summary>Двухпроходная фаска 1 / √2 (копия PropagateDistances, FastGrid.cs) только в окне x0..x1, y0..y1 поверх
@@ -58,12 +61,113 @@ public partial class FastGrid
 			}
 	}
 
-	internal SearchState SaveSearchState() => new(_winX0, _winY0, _winX1, _winY1, SearchBudget, TurnCost, BendCost, CostVersion);
+	internal SearchState SaveSearchState() => new(_winX0, _winY0, _winX1, _winY1, SearchBudget, TurnCost, BendCost, CostVersion, HeuristicScale);
 
 	internal void RestoreSearchState(SearchState s)
 	{
 		_winX0 = s.X0; _winY0 = s.Y0; _winX1 = s.X1; _winY1 = s.Y1;
 		SearchBudget = s.Budget; TurnCost = s.Turn; BendCost = s.Bend; CostVersion = s.CostVersion;
+		HeuristicScale = s.HeuristicScale;
+	}
+
+	internal static double CharacterHeuristic(double minMultiplier, double minCost) => Math.Min(minMultiplier, minCost / HCost);
+
+	/// <summary>Снимок цен для природных маршрутов. Версия поиска относится к возвращённому массиву.</summary>
+	public Godot.Collections.Dictionary CharacterCosts(float[] costs, byte[] axis, string kind)
+	{
+		if (_routeCharacter == null) throw new InvalidOperationException("V2: поле характера не подготовлено");
+		var weighted = _routeCharacter.Weighted(costs, kind, axis);
+		return new Godot.Collections.Dictionary { ["cost"] = weighted,
+			["heuristic_scale"] = CharacterHeuristic(_characterOptions.MulMin, GeomorphologyFields.Minimum(weighted)) };
+	}
+
+	/// <summary>Поиск в коридоре сухих отрезков подтверждённой связи. Оставляет все пересечения воды,
+	/// оси сооружений и подходы к ним на первоначальных клетках.</summary>
+	public int[] ShapeDryRoute(int[] path, float[] cost, byte[] axis, float[] heights, byte[] links, string kind,
+		double climb, double grade, double turn, double bend, double crossGrade)
+	{
+		if (_routeCharacter == null) throw new InvalidOperationException("V2: поле характера не подготовлено");
+		var p = _characterOptions;
+		if (path.Length < p.ShapeMin) return path;
+		var pinned = new bool[path.Length];
+		int wetAt = -p.ShapePortal - 1;
+		for (int k = 0; k < path.Length; k++)
+		{
+			if (axis[path[k]] != 0 || _routeCharacter.Wet(path[k])) wetAt = k;
+			pinned[k] = k - wetAt <= p.ShapePortal;
+		}
+		wetAt = path.Length + p.ShapePortal;
+		for (int k = path.Length - 1; k >= 0; k--)
+		{
+			if (axis[path[k]] != 0 || _routeCharacter.Wet(path[k])) wetAt = k;
+			if (wetAt - k <= p.ShapePortal) pinned[k] = true;
+		}
+		var saved = SaveSearchState();
+		try
+		{
+			TurnCost = turn;
+			BendCost = bend;
+			CostVersion = -1;
+			SearchBudget = -1;
+			float[] scratch = null;
+			var result = new List<int>(path.Length) { path[0] };
+			int start = 0;
+			while (start < path.Length - 1)
+			{
+				int end = start + 1;
+				if (!pinned[start])
+					while (end + 1 < path.Length && !pinned[end + 1]) end++;
+				int[] shaped = Array.Empty<int>();
+				if (!pinned[start] && !pinned[end] && end - start + 1 >= p.ShapeMin)
+				{
+					scratch ??= new float[cost.Length];
+					shaped = FindDryShape(path, start, end, cost, scratch, axis, heights, links, kind, climb, grade, crossGrade);
+				}
+				if (shaped.Length > 1)
+					for (int k = 1; k < shaped.Length; k++) result.Add(shaped[k]);
+				else
+					for (int k = start + 1; k <= end; k++) result.Add(path[k]);
+				start = end;
+			}
+			return result.ToArray();
+		}
+		finally { RestoreSearchState(saved); }
+	}
+
+	private int[] FindDryShape(int[] path, int start, int end, float[] cost, float[] scratch, byte[] axis,
+		float[] heights, byte[] links, string kind, double climb, double grade, double crossGrade)
+	{
+		var p = _characterOptions;
+		Array.Fill(scratch, float.PositiveInfinity);
+		var left = new int[p.H];
+		var right = new int[p.H];
+		Array.Fill(left, p.W);
+		int x0 = p.W, y0 = p.H, x1 = 0, y1 = 0;
+		for (int k = start; k <= end; k++)
+		{
+			int x = path[k] % p.W, y = path[k] / p.W;
+			int a = Math.Max(0, x - p.ShapeRadius), b = Math.Min(p.W, x + p.ShapeRadius + 1);
+			int first = Math.Max(0, y - p.ShapeRadius), last = Math.Min(p.H, y + p.ShapeRadius + 1);
+			x0 = Math.Min(x0, a); y0 = Math.Min(y0, first); x1 = Math.Max(x1, b); y1 = Math.Max(y1, last);
+			for (int row = first; row < last; row++)
+			{
+				left[row] = Math.Min(left[row], a);
+				right[row] = Math.Max(right[row], b);
+			}
+		}
+		double min = double.PositiveInfinity, amplitude = p.Meander(kind);
+		for (int y = y0; y < y1; y++)
+			for (int x = left[y]; x < right[y]; x++)
+			{
+				int c = y * p.W + x;
+				if (axis[c] != 0 || _routeCharacter.Wet(c)) continue;
+				float weighted = _routeCharacter.WeightedCell(cost[c], c, amplitude, axis);
+				scratch[c] = weighted;
+				min = Math.Min(min, weighted);
+			}
+		HeuristicScale = CharacterHeuristic(p.MulMin, min);
+		SetWindow(x0, y0, x1, y1);
+		return FindPath(scratch, path[start], path[end], heights, climb, grade, links, true, crossGrade);
 	}
 
 	/// <summary>Шаг c → c + шаг k проходим для FindPath с этими входами (окно не в счёт): копия условий шага из
@@ -241,6 +345,14 @@ public partial class FastGrid
 			// Сессия этапа: новая при session_new (первый вызов этапа) или другом номере сессии
 			long id = input.ContainsKey("session") ? input["session"].AsInt64() : -1;
 			if (_v2Session == null || id < 0 || _v2Session.Id != id) _v2Session = new NetworkSession { Id = id };
+			if (mode == "character")
+			{
+				var stats = new NetStats();
+				_routeCharacter = new GeomorphologyFields(snapshot);
+				_characterOptions = snapshot.P;
+				_routeCharacter.Prepare(stats, _v2Session);
+				return new Godot.Collections.Dictionary();
+			}
 			var planner = new NetworkPlanner(snapshot, input, id >= 0 ? _v2Session : null);
 			return mode switch
 			{

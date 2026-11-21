@@ -33,6 +33,7 @@ func _initialize() -> void:
 	_repeat()
 	_line_port()
 	_smooth_foreign_axis()
+	_character_on_flat()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
@@ -801,6 +802,59 @@ func _smooth_foreign_axis() -> void:
 	for p: Dictionary in smoothed: after = minf(after, p.y - 20.5)
 	check(after >= before - 0.05 and original[0] == smoothed[0] and original[-1] == smoothed[-1],
 		"сглаживание сохраняет зазор и концы рядом с чужой осью (%.2f → %.2f м)" % [before * GameConfig.TILE, after * GameConfig.TILE])
+
+
+func _character_on_flat() -> void:
+	var w := _world("none")
+	w.h.fill(0.1)
+	w.filled.fill(0.1)
+	w.biome.fill(Biomes.GRASS)
+	w.cost.fill(1.0)
+	var noise := PackedFloat64Array()
+	var axis := PackedByteArray()
+	noise.resize(w.N)
+	axis.resize(w.N)
+	var bridge := 8 * S + 8
+	axis[bridge] = 1
+	w.cost[bridge] = 0.3
+	const ROW := 26
+	for i in w.N:
+		var center := 49.0 + 5.0 * sin(PI * (i % S - 8) / 80.0)
+		var distance := (i / S - center) / 13.0
+		noise[i] = -exp(-0.5 * distance * distance)
+	var surface := _surface(w)
+	var finder := _finder(w, surface)
+	_core(w, surface, finder, {mode = "character", noise = noise})
+	var routing := RoadTuning.current().routing
+	var start := ROW * S + 8
+	var finish := ROW * S + 88
+	var plain := finder.find_path(w.cost, start, finish, routing.climb_costs.road, StageTrails.ROAD_GRADE,
+		-1, routing.turn_costs.road, routing.bend_costs.road)
+	var revised: PackedInt32Array = finder.fast().ShapeDryRoute(plain, w.cost, axis, finder.heights, finder.links, "road",
+		routing.climb_costs.road, StageTrails.ROAD_GRADE, routing.turn_costs.road, routing.bend_costs.road, finder.max_cross_grade)
+	if plain.size() < 2 or revised.size() < 2:
+		check(false, "равнина: оба пути построены")
+		return
+	var before := 0.0
+	var after := 0.0
+	for i: int in plain: before = maxf(before, absf(i / S - ROW) * GameConfig.TILE)
+	var points := StageTrails._cell_points(w, revised, axis, RoadTuning.current().section.widths.road)
+	for p: Dictionary in V2.line(w, points, axis, surface, "road"):
+		after = maxf(after, absf(p.y - (ROW + 0.5)) * GameConfig.TILE)
+	check(before == 0.0 and after >= 8.0 and revised[0] == start and revised[-1] == finish,
+		"равнина: путь с полем не прямой (отклонение %.1f → %.1f м)" % [before, after])
+	var fields: Dictionary = finder.fast().CharacterCosts(w.cost, axis, "road")
+	var cost: PackedFloat32Array = fields.cost
+	var minimum := 1.0
+	var maximum := 1.0
+	for i in w.N:
+		if i == bridge: continue
+		minimum = minf(minimum, cost[i])
+		maximum = maxf(maximum, cost[i])
+	check(minimum >= float(routing.character_field.mul_min) - 1e-6 and minimum < 1.0
+		and maximum <= float(routing.character_field.mul_max) + 1e-6 and cost[bridge] == w.cost[bridge]
+		and fields.heuristic_scale * 0.6 <= w.cost[bridge],
+		"скидка ниже исходной цены (%.3f), пределы множителя и цена моста сохранены" % minimum)
 
 
 class V2Flags:
