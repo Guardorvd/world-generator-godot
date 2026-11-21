@@ -319,6 +319,13 @@ public partial class FastGrid
 			if (input.ContainsKey("smooth_line") && input["smooth_line"].AsBool())
 			{
 				builder.Biharmonic = input.ContainsKey("biharmonic") && input["biharmonic"].AsBool();
+				if (input.ContainsKey("wide_bend"))
+				{
+					var bend = input["wide_bend"].AsGodotDictionary();
+					builder.WideBend = new LineBuilder.WideBendTuning(Params.Num(bend, "wide_bend_radius_m"),
+						Params.Num(bend, "wide_bend_shift_m"), Params.Num(bend, "wide_bend_min_turn_deg"),
+						Params.Num(bend, "wide_bend_max_turn_deg"));
+				}
 				RoadGraph axes = null;
 				if (input.ContainsKey("near_axis_start"))
 				{
@@ -333,6 +340,7 @@ public partial class FastGrid
 				smoothStats["rejected"] = builder.SmoothRejected;
 				smoothStats["hairpins"] = builder.Hairpins;
 				smoothStats["hairpins_moved"] = builder.HairpinsMoved;
+				smoothStats["wide_bends"] = builder.WideBends;
 			}
 			var ox = new double[line.Count];
 			var oy = new double[line.Count];

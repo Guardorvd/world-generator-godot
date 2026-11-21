@@ -34,7 +34,7 @@ public sealed class Params
 	public readonly double NodeSep, NodeSame, MaxDegree;
 	public readonly double LoopRatio, LoopAccept, LoopShare, LoopLenOld, FarR, FarShare;
 	public readonly double WindowMargin, WindowRetry;
-	public readonly double RidgeTpi, RidgeMul, BreakTpi, BreakMul, EcoLow, EcoHigh, EcoMul, ShoreBand, ShoreMul;
+	public readonly double RidgeTpi, RidgeMul, BreakTpi, BreakMul, EcoLow, EcoHigh, EcoMul, ShoreBand, ShoreCostBand, ShoreMul, ShoreCostMul;
 	public readonly double ReliefSigma, ReliefWideSigma, MeanderSigma, MeanderRms, MeanderFlat, MeanderSlope;
 	public readonly double MeanderRoad, MeanderAmp, MeanderMountain, MeanderRide, MulMin, MulMax;
 	public readonly int EcoRadius, ShapeRadius, ShapePortal, ShapeMin;
@@ -69,6 +69,7 @@ public sealed class Params
 		ReliefSigma = Num(d, "relief_sigma"); ReliefWideSigma = Num(d, "relief_wide_sigma");
 		MeanderSigma = Num(d, "meander_sigma"); MeanderRms = Num(d, "meander_rms");
 		ShoreBand = Num(d, "shore_band"); ShoreMul = Num(d, "shore_mul");
+		ShoreCostBand = Num(d, "shore_cost_band"); ShoreCostMul = Num(d, "shore_cost_mul");
 		MulMin = Num(d, "mul_min"); MulMax = Num(d, "mul_max");
 		ShapeRadius = (int)Num(d, "shape_radius"); ShapePortal = (int)Num(d, "shape_portal"); ShapeMin = (int)Num(d, "shape_min");
 		BranchLen = Num(d, "branch_len"); ShoreGap = Num(d, "shore_gap"); ViewGap = Num(d, "view_gap");
@@ -81,7 +82,7 @@ public sealed class Params
 		if (W <= 0 || H <= 0 || !(Tile > 0)) throw new ArgumentException("V2: неверный размер карты или клетки");
 		if (!(MulMin > 0.0 && MulMin <= 1.0 && MulMax >= 1.0 && MeanderSlope > MeanderFlat &&
 			ReliefSigma > 0.0 && ReliefWideSigma > ReliefSigma && MeanderSigma > 0.0 && MeanderRms > 0.0 &&
-			RidgeTpi > 0.0 && BreakTpi > 0.0 && ShoreBand > 0.0 && EcoRadius > 0 &&
+			RidgeTpi > 0.0 && BreakTpi > 0.0 && ShoreBand > 0.0 && ShoreCostBand >= ShoreBand && EcoRadius > 0 &&
 			ShapeRadius > 0 && ShapePortal >= 0 && ShapeMin > 0))
 			throw new ArgumentException("V2: неверные параметры поля характера");
 	}

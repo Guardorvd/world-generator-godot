@@ -506,6 +506,8 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	if smooth_lines:
 		_add_near_axes(w, pts, data)
+		if w.generation_profile.get("wide_bend_enabled", false):
+			data.wide_bend = routing.character_field.merged(overrides, true)
 	for end in 2:
 		var join: Dictionary = joins.get(end, {})
 		if not join.is_empty(): data["join%d" % end] = PackedFloat64Array([join.tangent.x, join.tangent.y])
@@ -517,9 +519,9 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		return StageTrails.RoadLine.build(w, pts, on_axis, surface, kind, joins, Callable(), smooth_kind)
 	if not (out.smooth as Dictionary).is_empty():
 		var block: Dictionary = w.generation_profile.get_or_add("network_v2", {})
-		var smooth: Dictionary = block.get_or_add("smooth", {lines = 0, moved = 0, rejected = 0, hairpins = 0, hairpins_moved = 0})
+		var smooth: Dictionary = block.get_or_add("smooth", {lines = 0, moved = 0, rejected = 0, hairpins = 0, hairpins_moved = 0, wide_bends = 0})
 		smooth.lines += 1
-		for key: String in ["moved", "rejected", "hairpins", "hairpins_moved"]: smooth[key] += int(out.smooth[key])
+		for key: String in ["moved", "rejected", "hairpins", "hairpins_moved", "wide_bends"]: smooth[key] += int(out.smooth[key])
 	if out.fallback:
 		StageTrails.RoadLine.fallbacks += 1
 		var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})

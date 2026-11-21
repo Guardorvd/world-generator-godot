@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_line_port()
 	_smooth_foreign_axis()
 	_character_on_flat()
+	_wide_bend_on_flat()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
@@ -855,6 +856,27 @@ func _character_on_flat() -> void:
 		and maximum <= float(routing.character_field.mul_max) + 1e-6 and cost[bridge] == w.cost[bridge]
 		and fields.heuristic_scale * 0.6 <= w.cost[bridge],
 		"скидка ниже исходной цены (%.3f), пределы множителя и цена моста сохранены" % minimum)
+
+
+func _wide_bend_on_flat() -> void:
+	var w := _world("none")
+	w.h.fill(0.1)
+	w.filled.fill(0.1)
+	var surface := _surface(w)
+	var axis := PackedByteArray()
+	axis.resize(w.N)
+	var pts: Array = []
+	for k in range(10, 32):
+		pts.append({x = k + 0.5, y = 23.5, w = 0.55})
+	for k in range(32, 57):
+		pts.append({x = k + 0.5, y = 23.5 + k - 31, w = 0.55})
+	var before := V2.line(w, pts, axis, surface, "trail")
+	w.generation_profile.wide_bend_enabled = true
+	var after := V2.line(w, pts, axis, surface, "trail")
+	var bends: int = w.generation_profile.network_v2.smooth.wide_bends
+	check(bends == 1 and before != after and before[0] == after[0] and before[-1] == after[-1]
+		and _bad(surface, after, StageTrails.TRAIL_GRADE, 1.0) == 0,
+		"длинная дуга заменяет угол свободной тропы, концы и профиль сохранены (дуг %d)" % bends)
 
 
 class V2Flags:
