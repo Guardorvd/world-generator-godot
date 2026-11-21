@@ -699,6 +699,7 @@ public sealed class NetworkPlanner
 			if (length > _p.LoopLenOld * dNet) return "loop_long";
 			if (Math.Min(dNet, length) / Math.Max(dGeo, 1.0) > _p.LoopAccept) return "loop_ratio";
 			if (!Validator.Ford(path)) return "loop_ford";
+			if (FollowsShore(path)) return "loop_along_shore";
 			var core = Core(path);
 			if (!NewGround(core)) return "loop_not_new";
 			if (ExitLoop(path, false) || ExitLoop(path, true)) return "loop_exit_loop";
@@ -1010,6 +1011,7 @@ public sealed class NetworkPlanner
 			double straight = _t.Dist(source, target);
 			if (kind != 2 && _t.Length(path) > straight * _p.BranchLen) return what + "_long";
 			if (!Validator.Ford(path)) return what + "_ford";
+			if (kind != 0 && FollowsShore(path)) return what + "_along_shore";
 			if (kind != 2 && !NewGround(path)) return what + "_not_new";
 			if (kind != 2 && !AddsNetwork(path)) return what + "_parallel";
 			var spurCore = Core(path);
@@ -1049,6 +1051,22 @@ public sealed class NetworkPlanner
 		{
 			Stats.Time("checks", c0);
 		}
+	}
+
+	/// <summary>Новый перегон вдоль моря или озера. Уже существующий путь и настил прерывают береговую серию.</summary>
+	private bool FollowsShore(int[] path)
+	{
+		double run = 0.0;
+		bool previous = false;
+		for (int k = 0; k < path.Length; k++)
+		{
+			int cell = path[k];
+			bool current = _t.Owner[cell] < 0 && _t.OnAxis[cell] == 0 && Fields.ShoreDist[cell] <= _p.ShoreRunBand;
+			run = current && previous ? run + _t.Dist(path[k - 1], cell) * _p.Tile : 0.0;
+			if (run >= _p.ShoreRunM) return true;
+			previous = current;
+		}
+		return false;
 	}
 
 	/// <summary>Конец на кромке озера или моря у площадки воды хотя бы 3×3 клетки.</summary>
@@ -1108,6 +1126,7 @@ public sealed class NetworkPlanner
 			for (int k = 0; k < att.Count; k++) cells[k] = att[k].Cell;
 			// шаг 7: у природных маршрутов без ExitR (мера тесных узлов узлы у поселений не считает), развилки — RideNodeSep
 			string why = NodeRules(att, null, p, true, _p.RideNodeSep);
+			if (why.Length == 0 && FollowsShore(p)) why = "along_shore";
 			verdicts.Add(why.Length > 0 ? why + LastNode : "");
 			nodes.Add(cells);
 			Stats.Count(why.Length > 0 ? "rides_rejected" : "rides_ok");
@@ -1124,6 +1143,7 @@ public sealed class NetworkPlanner
 				var cells = new int[att.Count];
 				for (int k = 0; k < att.Count; k++) cells[k] = att[k].Cell;
 				string why = NodeRules(att, null, p, true, _p.RideNodeSep);
+				if (why.Length == 0 && FollowsShore(p)) why = "along_shore";
 				if (why.Length > 0) why += LastNode;
 				else
 				{

@@ -39,6 +39,7 @@ public sealed class Params
 	public readonly double MeanderRoad, MeanderAmp, MeanderMountain, MeanderRide, MulMin, MulMax;
 	public readonly int EcoRadius, ShapeRadius, ShapePortal, ShapeMin;
 	public readonly double BranchLen, ShoreGap, ViewGap, ViewRise, ShoreReach, ViewReach, ShoreShare, MountainDetour, MountainReach;
+	public readonly double ShoreRunBand, ShoreRunM;
 	public readonly double ProfileBase, LineRelax, Reach;
 	public readonly double ExitAngle, ExitChord, SpurNetFloor, RideNodeSep;
 
@@ -74,6 +75,7 @@ public sealed class Params
 		BranchLen = Num(d, "branch_len"); ShoreGap = Num(d, "shore_gap"); ViewGap = Num(d, "view_gap");
 		ViewRise = Num(d, "view_rise");
 		ShoreReach = Num(d, "shore_reach"); ViewReach = Num(d, "view_reach"); ShoreShare = Num(d, "shore_share");
+		ShoreRunBand = Num(d, "shore_run_band"); ShoreRunM = Num(d, "shore_run_m");
 		MountainDetour = Num(d, "mountain_detour"); MountainReach = Num(d, "mountain_reach");
 		ProfileBase = Num(d, "profile_base"); LineRelax = Num(d, "line_relax"); Reach = Num(d, "reach");
 		ExitAngle = Num(d, "exit_angle"); ExitChord = Num(d, "exit_chord"); SpurNetFloor = Num(d, "spur_net_floor");

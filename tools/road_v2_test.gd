@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_line_port()
 	_smooth_foreign_axis()
 	_character_on_flat()
+	_short_ride_turnback()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
@@ -855,6 +856,16 @@ func _character_on_flat() -> void:
 		and maximum <= float(routing.character_field.mul_max) + 1e-6 and cost[bridge] == w.cost[bridge]
 		and fields.heuristic_scale * 0.6 <= w.cost[bridge],
 		"скидка ниже исходной цены (%.3f), пределы множителя и цена моста сохранены" % minimum)
+
+
+func _short_ride_turnback() -> void:
+	var w := _world("none")
+	var ascent := PackedInt32Array([S + 10, S + 11, S + 12, S + 13])
+	var descent := PackedInt32Array([S + 13, S + 12, S + 11, 2 * S + 11, 3 * S + 12])
+	var cut := RideRoutes._short_turnback(w, ascent, descent)
+	check(cut == 2 and descent[cut] == ascent[ascent.size() - 1 - cut]
+		and RideRoutes._short_turnback(w, ascent, PackedInt32Array([S + 13, 2 * S + 13])) == 0,
+		"короткий возврат убирается до развилки, отдельный спуск остаётся")
 
 
 class V2Flags:

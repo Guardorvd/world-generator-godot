@@ -166,6 +166,14 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if path.is_empty(): continue
 			stats.found += 1
 			tally[1] += 1
+			var top := s
+			if StageTrails.network_v2 and s.virtual:
+				var turnback := _short_turnback(w, s.approach, path)
+				if turnback > 0:
+					var trimmed: Dictionary = s.get_or_add("trimmed_ride_tops", {})
+					top = trimmed.get_or_add(turnback, {i = s.i, virtual = true, mountain = s.mountain,
+						approach = s.approach.slice(0, s.approach.size() - turnback), turnback = turnback})
+					path = path.slice(turnback)
 			var c := _score(w, hv, dist, path, style == "traverse")
 			# 11.11.2026: и не идёт подряд вдоль готовой сети на той же высоте (параллельное полотно)
 			if c.reason.is_empty() and StageTrails._parallel_stats(w, path, dist, net).y > StageTrails.PARALLEL_RUN:
@@ -177,12 +185,13 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 					finder.search_budget = SEARCH_BUDGET
 					echo = finder.find_path(network, s.i, t.i, 0.0, INF, network_version)
 				# траверс: копия пути сети — только ближе NEAR_R (40 м); дальше — другой уровень склона (это и проверяет доля новой земли)
-				if _echo_share(w, path, echo, NEAR_R if style == "traverse" else ECHO_R) > ECHO_SHARE: c.reason = "повторяет путь сети"
+				if _echo_share(w, path, top.approach if s.virtual else echo, NEAR_R if style == "traverse" else ECHO_R) > ECHO_SHARE:
+					c.reason = "повторяет путь сети"
 			if not c.reason.is_empty():
 				stats.rejected[c.reason] = int(stats.rejected.get(c.reason, 0)) + 1
 				continue
 			tally[2] += 1
-			c.top = s
+			c.top = top
 			c.search = style
 			candidates.append(c)
 	finder.window = Rect2i()
@@ -200,6 +209,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var number := 0
 	for c: Dictionary in chosen:
 		var top: Dictionary = c.top
+		if top.has("turnback"): stats.trimmed_turnbacks = int(stats.get("trimmed_turnbacks", 0)) + 1
 		if top.virtual and not top.has("published"):
 			# Подъём к вершине — часть маршрута: публикуется как горная тропа перед первым спуском с неё
 			top.published = "climb_%d" % number
@@ -449,6 +459,24 @@ static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, 
 	finder.window = Rect2i(maxi(0, x0), maxi(0, y0), mini(w.W, x1) - maxi(0, x0), mini(w.H, y1) - maxi(0, y0))
 	finder.search_budget = SEARCH_BUDGET
 	return finder.find_path(cost, a, b, spec.climb, spec.grade, version, 0.0, 0.0, heuristic_scale)
+
+
+## В виртуальной вершине спуск иногда начинается точным возвратом по подъёму.
+## Убираем оба прохода до развилки до публикации полотна, если эта ветка короче 120 м.
+static func _short_turnback(w: WorldData, climb: PackedInt32Array, descent: PackedInt32Array) -> int:
+	if climb.size() < 2 or descent.size() < 2 or climb[-1] != descent[0]: return 0
+	var limit: float = RoadTuning.current().routing.character_field.short_turnback_m
+	var length := 0.0
+	var common := 0
+	for k in range(1, mini(climb.size(), descent.size())):
+		if climb[climb.size() - 1 - k] != descent[k]: break
+		var a := descent[k - 1]
+		var b := descent[k]
+		length += Grid.hypot((a % w.W) - (b % w.W), (a / w.W) - (b / w.W)) * GameConfig.TILE
+		if length >= limit: return 0
+		common = k
+	# Когда одна из половин целиком повторяется, её оценка и отбраковка остаются обычными.
+	return common if common + 1 < mini(climb.size(), descent.size()) else 0
 
 
 ## Две части через ориентир без «шипа»: срезаем возврат в общей клетке частей.

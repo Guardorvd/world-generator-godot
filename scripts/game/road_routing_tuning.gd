@@ -27,6 +27,7 @@ const KINDS := ["road", "trail", "mountain"]
 	eco_radius = 4, eco_low = 0.16, eco_high = 0.84, eco_mul = 0.86,
 	shore_band = 4.0, shore_mul = 1.65, mul_min = 0.7, mul_max = 1.8,
 	shape_radius = 18, shape_portal = 24, shape_min = 16,
+	shore_run_band = 3.75, shore_run_m = 48.0, short_turnback_m = 120.0,
 }
 
 @export_group("Линия по видам пути")
