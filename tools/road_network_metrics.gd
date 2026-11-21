@@ -32,6 +32,11 @@ const SHARP := 60.0
 const STEEP := 0.12
 const CORNER := 20.0
 const CORNER_SEG := 0.3
+const STRAIGHT_MIN_M := 150.0
+const STRAIGHT_DEV_M := 1.5
+const FLAT_GRADE := 0.06
+const BEND_CHORD := 2 # станций (8 м) по обе стороны
+const DEAD_END_M := 120.0
 const Samples := preload("res://tools/road_surface_samples.gd")
 const Topology := preload("res://scripts/world/road_topology.gd")
 const RoadRides := preload("res://scripts/world/road_rides.gd")
@@ -94,6 +99,12 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var hairpins := {road = 0, trail = 0, mountain = 0, trail_smoothed = 0, trail_skeleton = 0}
 	var sharp := {road = 0, trail = 0, mountain = 0}
 	var hairpin_spots: Array = []
+	var straight := {}
+	var straight_flat := {}
+	var bends := {}
+	var switchbacks := {}
+	var dead_ends := {}
+	var dead_end_at: Array = []
 	var non_skeleton := {}
 	for note: Array in w.generation_profile.get("second_ways", []):
 		for k: int in note[1]:
@@ -111,6 +122,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		if t.kind == "trail":
 			trail_sub = "trail_smoothed" if (non_skeleton.has(r) or t.has("ride")) else "trail_skeleton"
 		var pts: Array = t.pts
+		var length_m := Topology.length_m(pts)
 		# равномерная выборка
 		var stations: Array[Vector2] = []
 		var carry := 0.0
@@ -139,6 +151,19 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 							if not crossings.has(pair): crossings[pair] = []
 							crossings[pair].append(hit)
 		stations.append(Vector2(pts[-1].x, pts[-1].y))
+		_measure_shape(w, stations, length_m, t.kind, straight, straight_flat, bends)
+		switchbacks.get_or_add(t.kind, 0)
+		dead_ends.get_or_add(t.kind, 0)
+		if length_m < DEAD_END_M:
+			var start := stations[0]
+			var finish := stations[-1]
+			var start_joins := _joins_axis(bins, r, start)
+			var finish_joins := _joins_axis(bins, r, finish)
+			if start_joins != finish_joins:
+				var tip := finish if start_joins else start
+				if not _has_destination(w, structures, tip):
+					dead_ends[t.kind] += 1
+					dead_end_at.append({section = r, x = tip.x, y = tip.y, length_m = snappedf(length_m, 0.1)})
 		samples += stations.size()
 		var last_corner := Vector2(INF, INF)
 		for j in range(1, pts.size() - 1):
@@ -179,6 +204,8 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 						if not trail_sub.is_empty(): hairpins[trail_sub] += 1
 						hairpin_skip = n + 4
 						if t.kind != "mountain": hairpin_spots.append(p)
+						if _terrain_grade(w.base_heights, p) >= FLAT_GRADE:
+							switchbacks[t.kind] += 1
 					elif turn > SHARP and turn <= HAIRPIN and n >= sharp_skip:
 						sharp[t.kind] = int(sharp.get(t.kind, 0)) + 1
 						sharp_skip = n + 4
@@ -299,11 +326,93 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
 		parallel_without_rides_m = roundi(parallel_plain), overlap_without_rides_m = roundi(overlap_plain),
 		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
+		straight_m = straight, straight_flat_m = straight_flat, bend_spectrum = bends, switchbacks = switchbacks,
+		dead_ends = dead_ends, dead_end_at = dead_end_at,
 		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
 		crowded_nodes = crowded.pairs, crowded_without_rides = crowded.without_rides, nodes = crowded.nodes, shore_m = shore, wiggle = wiggle,
 		second_ways = _second_way_counts(w), rides = _ride_counts(w),
 		spots = spots, kink_spots = kink_spots, double_spots = double_spots, crowded_spots = crowded.spots, pairs = _top(pairs, 8)}
+
+
+## Покрытие окнами длиннее 150 м. Перекрытия суммируются один раз; на равнине все станции окна
+## должны иметь уклон ненарушенной земли < 6 %. Радиус — окружность по трём станциям.
+## Смежные станции одного знака и диапазона радиуса считаются одним поворотом.
+static func _measure_shape(w: WorldData, st: Array[Vector2], length_m: float, kind: String,
+		straight: Dictionary, flat: Dictionary, bends: Dictionary) -> void:
+	var spectrum: Dictionary = bends.get_or_add(kind, {"<15": 0, "15–60": 0, "60–200": 0})
+	var step := SAMPLE * GameConfig.TILE
+	var steep := PackedInt32Array()
+	steep.resize(st.size() + 1)
+	var ground := w.base_heights
+	for i in st.size():
+		steep[i + 1] = steep[i] + int(_terrain_grade(ground, st[i]) >= FLAT_GRADE)
+	var covered := 0.0
+	var covered_flat := 0.0
+	var end := 0.0
+	var end_flat := 0.0
+	for i in range(st.size() - 1):
+		var j := i + floori(STRAIGHT_MIN_M / step) + 1
+		if j >= st.size(): break
+		var lo := i * step
+		var hi := minf(j * step, length_m)
+		if hi - lo <= STRAIGHT_MIN_M: break
+		var valid := true
+		for k in range(i + 1, j):
+			if Grid.segment_dist(st[k].x, st[k].y, st[i].x, st[i].y, st[j].x, st[j].y) * GameConfig.TILE >= STRAIGHT_DEV_M:
+				valid = false
+				break
+		if not valid: continue
+		covered += hi - maxf(lo, end)
+		end = hi
+		if steep[j + 1] == steep[i]:
+			covered_flat += hi - maxf(lo, end_flat)
+			end_flat = hi
+	straight[kind] = snappedf(straight.get(kind, 0.0) + covered, 0.1)
+	flat[kind] = snappedf(flat.get(kind, 0.0) + covered_flat, 0.1)
+	var last_key := ""
+	var last_sign := 0.0
+	for i in range(BEND_CHORD, st.size() - BEND_CHORD):
+		var a := st[i] - st[i - BEND_CHORD]
+		var b := st[i + BEND_CHORD] - st[i]
+		var cross := a.cross(b)
+		var radius := INF
+		if absf(cross) > 0.00001:
+			radius = a.length() * b.length() * (a + b).length() * GameConfig.TILE / (2.0 * absf(cross))
+		var key := "<15" if radius < 15.0 else ("15–60" if radius < 60.0 else ("60–200" if radius <= 200.0 else ""))
+		if not key.is_empty() and (key != last_key or signf(cross) != last_sign):
+			spectrum[key] += 1
+		last_key = key
+		last_sign = signf(cross)
+
+
+static func _terrain_grade(ground: Heightfield, p: Vector2) -> float:
+	if ground == null: return INF
+	var tile := GameConfig.TILE
+	var x := p.x * tile
+	var y := p.y * tile
+	var dx := ground.ground_at(x + tile, y) - ground.ground_at(x - tile, y)
+	var dy := ground.ground_at(x, y + tile) - ground.ground_at(x, y - tile)
+	return Vector2(dx, dy).length() / (2.0 * tile)
+
+
+static func _joins_axis(bins: Dictionary, section: int, p: Vector2) -> bool:
+	const R := 0.6
+	for by in range(floori((p.y - R) / BIN), floori((p.y + R) / BIN) + 1):
+		for bx in range(floori((p.x - R) / BIN), floori((p.x + R) / BIN) + 1):
+			for segment: Array in bins.get(Vector2i(bx, by), []):
+				if segment[0] != section and Grid.segment_dist(p.x, p.y, segment[1].x, segment[1].y, segment[2].x, segment[2].y) < R:
+					return true
+	return false
+
+
+static func _has_destination(w: WorldData, structures: Array, p: Vector2) -> bool:
+	if _near_structure(structures, p, 2.0): return true
+	for settlement: SettlementData in w.settlements:
+		if p.distance_to(Vector2(settlement.x, settlement.y)) < 3.0: return true
+	for site: SiteData in w.sites:
+		if p.distance_to(Vector2(site.x, site.y)) <= maxf(site.clear, 1.0): return true
+	return false
 
 
 ## 21.11.2026, план V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md, фаза 0; определения плана 19.11, шаг 0.2).
@@ -577,8 +686,8 @@ static func _near_structure(structures: Array, p: Vector2, r: float) -> bool:
 ## красные точки — совпадающие оси, жёлтые — параллельные полотна, малиновые — углы (corners, с 15.11; раньше изломы
 ## kinks), голубые — двойные пересечения,
 ## зелёные — развороты > 110° на 16 м, оранжевые квадраты — тесные пары узлов (crowded_nodes, с 21.11).
-static func draw(w: WorldData, m: Dictionary, file: String) -> void:
-	var S := 2
+static func draw(w: WorldData, m: Dictionary, file: String, shape_map := false) -> void:
+	var S := 3 if shape_map else 2
 	var img := Image.create(w.W * S, w.H * S, false, Image.FORMAT_RGB8)
 	var river := w.river_cells()
 	for y in w.H:
@@ -586,6 +695,11 @@ static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 			var i := y * w.W + x
 			var v := clampf(0.2 + w.h[i] * 0.8, 0.0, 1.0) * (1.0 - clampf(w.slope[i] * 1.5, 0.0, 0.5)) * 0.7
 			var c := Color(v, v, v * 0.95)
+			if shape_map:
+				var forest := w.biome[i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE]
+				var earth := Color("#354a40") if forest else Color("#62644d")
+				var flanks := (w.h[i] - w.h[y * w.W + maxi(0, x - 1)]) * 32.0
+				c = earth * clampf(0.72 + w.h[i] * 0.75 + flanks, 0.45, 1.45)
 			if w.ocean[i] != 0 or w.lake[i] != 0 or river[i] != 0: c = Color(0.2, 0.35, 0.6)
 			img.fill_rect(Rect2i(x * S, y * S, S, S), c)
 	var colors := {road = Color(1, 1, 0.92), trail = Color(0.7, 0.7, 0.66), mountain = Color(0.65, 0.42, 0.25)}
@@ -599,12 +713,13 @@ static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 			for j in n + 1:
 				var p := a.lerp(b, float(j) / n)
 				img.set_pixel(clampi(int(p.x), 0, w.W * S - 1), clampi(int(p.y), 0, w.H * S - 1), color)
-	for s: Array in m.spots:
-		_dot(img, s[0] * S, Color(1, 0.1, 0.1) if s[1] == "overlap" else Color(1, 0.9, 0.1), 1)
-	for p: Vector2 in m.get("corner_spots", m.kink_spots): _dot(img, p * S, Color(1, 0.2, 0.9), 1)
-	for p: Vector2 in m.get("hairpin_spots", []): _dot(img, p * S, Color(0.1, 1.0, 0.3), 2)
-	for p: Vector2 in m.double_spots: _dot(img, p * S, Color(0.2, 0.9, 1), 2)
-	for p: Vector2 in m.get("crowded_spots", []): _dot(img, p * S, Color(1.0, 0.5, 0.0), 3)
+	if not shape_map:
+		for s: Array in m.spots:
+			_dot(img, s[0] * S, Color(1, 0.1, 0.1) if s[1] == "overlap" else Color(1, 0.9, 0.1), 1)
+		for p: Vector2 in m.get("corner_spots", m.kink_spots): _dot(img, p * S, Color(1, 0.2, 0.9), 1)
+		for p: Vector2 in m.get("hairpin_spots", []): _dot(img, p * S, Color(0.1, 1.0, 0.3), 2)
+		for p: Vector2 in m.double_spots: _dot(img, p * S, Color(0.2, 0.9, 1), 2)
+		for p: Vector2 in m.get("crowded_spots", []): _dot(img, p * S, Color(1.0, 0.5, 0.0), 3)
 	DirAccess.make_dir_recursive_absolute(file.get_base_dir())
 	img.save_png(file)
 

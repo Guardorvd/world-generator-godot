@@ -181,6 +181,7 @@ func _initialize() -> void:
 		w.cost = trodden
 		var m: Dictionary = Metrics.measure(w, base, final, Floor.surface_image(w))
 		var report := Metrics.summary(m)
+		print("ROUTE AXES SHA256 ", _digest(w.trails))
 		print("NETWORK ", JSON.stringify(report))
 		if report.route_usage.status != "recorded" or report.route_usage.routes.size() != w.generation_profile.rides.accepted:
 			printerr("Отчёт не содержит полного набора принятых веломаршрутов")
@@ -196,7 +197,7 @@ func _initialize() -> void:
 		if "--metrics" in args:
 			var tag := _arg(args, "--tag", "")
 			var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
-			Metrics.draw(w, m, file)
+			Metrics.draw(w, m, file, "--shape-map" in args)
 			print("картинка сети: %s (%d мс)" % [file, Time.get_ticks_msec() - started])
 	# --bed: полотно RoadBed на этой сети (только C#): время, число клеток и хеш рельефа; --refine — и метровая сетка.
 	# Хеши сравнивать между версиями кода (было — запуск на прежнем коммите): изменение значит, что результат другой
