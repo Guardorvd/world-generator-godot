@@ -21,8 +21,8 @@ const KINDS := ["road", "trail", "mountain"]
 ## Числа поля характера только для --roads-v2. Радиусы указаны в клетках.
 @export var character_field := {
 	relief_sigma = 3.0, relief_wide_sigma = 9.0,
-	meander_sigma = 20.0, meander_rms = 1.0, meander_flat = 0.035, meander_slope = 0.12,
-	meander_amp_road = 0.28, meander_amp = 0.35, meander_amp_mountain = 0.32, meander_amp_ride = 0.35,
+	meander_sigma = 16.0, meander_rms = 0.90, meander_flat = 0.045, meander_slope = 0.14,
+	meander_amp_road = 0.31, meander_amp = 0.35, meander_amp_mountain = 0.32, meander_amp_ride = 0.35,
 	ridge_tpi = 4.0, ridge_mul = 1.36, break_tpi = 2.5, break_mul = 0.88,
 	eco_radius = 4, eco_low = 0.16, eco_high = 0.84, eco_mul = 0.86,
 	shore_band = 4.0, shore_mul = 1.65, mul_min = 0.7, mul_max = 1.8,
