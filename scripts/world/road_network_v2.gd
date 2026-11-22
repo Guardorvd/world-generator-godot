@@ -1,11 +1,9 @@
 extends RefCounted
 ## Дорожная сеть V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md): петли и ответвления после остова V1.
-## Включается флагом StageTrails.network_v2 (по умолчанию выключен). Ядро — C# (Roads.Network, вход
+## Основной генератор сети. Ядро — C# (Roads.Network, вход
 ## FastGrid.PlanNetworkV2 на экземпляре поиска этапа), публикация — общим конвейером StageTrails._add_trail + _note_way.
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
-## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 10
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
@@ -39,23 +37,6 @@ static var _session := -1
 ## Клетки небезопасных бродов этапа и оси, по которым они посчитаны: горные тропы берут их, если оси те же
 static var _unsafe_cache := PackedByteArray()
 static var _unsafe_axis := PackedByteArray()
-
-
-## Суффикс ключа слоя places: пусто при выключенном флаге (ключ побайтно прежний).
-static func cache_suffix(enabled: bool) -> String:
-	if not enabled: return ""
-	var routing := RoadTuning.current().routing
-	var values: Dictionary = routing.character_field.duplicate()
-	values.switchbacks_enabled = routing.switchbacks_enabled
-	var keys := values.keys()
-	keys.sort()
-	var digest := RoadTuning._digest_values([keys.map(func(key: String) -> Array: return [key, values[key]]),
-		RoadTuning.Routing.KINDS.map(func(kind: String) -> Array: return [routing.broad_spacing_m[kind], routing.broad_radius_m[kind],
-			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled, routing.ride_search_reserve,
-		[routing.inland_connector.min_m, routing.inland_connector.max_m, routing.inland_connector.search_count, routing.inland_connector.accept_count],
-		[routing.arc_bends_enabled, arc_settings(routing), routing.axis_protection_m, routing.axis_min_radius_m],
-		[routing.axis_meander_enabled, meander_settings(routing, "road"), meander_settings(routing, "trail")]])
-	return "|net=v2.%d.%s" % [VERSION, digest]
 
 
 static func arc_settings(routing: RoadTuning.Routing) -> Dictionary:

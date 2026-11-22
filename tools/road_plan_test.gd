@@ -9,7 +9,7 @@ extends SceneTree
 ## --metrics-json <файл> сохраняет сравнимый отчёт о готовой сети; --metrics также пишет картинку.
 ## --climb-data <файл> сохраняет оси и профиль земли горных троп для сравнения подъёмов.
 ## --forks — где отходят необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты): у поселения или на перегоне.
-## --v2 — дорожная сеть V2 (StageTrails.network_v2, docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md); --nav — навигация игры
+## Дорожная сеть V2 включена по умолчанию; прежний --v2 ничего не меняет. --nav — навигация игры
 ## (RoadNavigation на готовой поверхности) между каждой парой поселений: сколько пар, неполных маршрутов и рёбер
 ## с разрывом высоты > 0,5 м.
 ## Первый запуск на этом ПК ~1,5 мин (география), следующие ~1 мин.
@@ -78,9 +78,6 @@ func _initialize() -> void:
 	if not line_arg.is_empty():
 		StageTrails.routing_overrides.line_relax = {road = float(line_arg.get_slice(",", 0)), trail = float(line_arg.get_slice(",", 1)), mountain = float(line_arg.get_slice(",", 2))}
 		print("линия: срезаемый бугор ", StageTrails.routing_overrides.line_relax)
-	if "--v2" in args:
-		StageTrails.network_v2 = true
-		print("дорожная сеть V2")
 	var character_audit := "--character-audit" in args
 	StageTrails.RoadNetworkV2.audit_character = character_audit
 	# --v2-param k=v,k=v: числа V2 на время запуска (RoadNetworkV2.overrides) — подбор без правки кода

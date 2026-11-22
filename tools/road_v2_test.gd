@@ -1047,31 +1047,22 @@ func _line_world(bumpy: bool) -> Array:
 
 func _flag_check() -> void:
 	var tuning := RoadTuning.current()
-	var def_flag := StageTrails.network_v2
-	var s_off: String = WorldCache._road_layer_suffixes(tuning, false).places
-	var saves_off := QuickTrails.saves_dir()
-	var cache_off := QuickTrails.cache_dir()
-	StageTrails.network_v2 = true
-	var s_on: String = WorldCache._road_layer_suffixes(tuning, false).places
-	var saves_on := QuickTrails.saves_dir()
-	var cache_on := QuickTrails.cache_dir()
-	StageTrails.network_v2 = def_flag
-	var expected := V2.cache_suffix(true)
+	var baseline := WorldCache._road_layer_suffixes(tuning, false)
 	var arc_enabled := tuning.routing.arc_bends_enabled
 	tuning.routing.arc_bends_enabled = not arc_enabled
-	var arc_key := V2.cache_suffix(true)
+	var arc_key: String = WorldCache._road_layer_suffixes(tuning, false).places
 	tuning.routing.arc_bends_enabled = arc_enabled
 	var meander_enabled := tuning.routing.axis_meander_enabled
 	tuning.routing.axis_meander_enabled = not meander_enabled
-	var meander_key := V2.cache_suffix(true)
+	var meander_key: String = WorldCache._road_layer_suffixes(tuning, false).places
 	tuning.routing.axis_meander_enabled = meander_enabled
-	check(expected != arc_key and expected != meander_key and arc_key != meander_key and V2.cache_suffix(false).is_empty(),
-		"дуги и меандр переключаются отдельно, ключ V1 не зависит от настроек оси")
-	check(not def_flag and s_off != s_on and s_on.contains(expected)
-		and saves_off == "user://saves" and cache_off == "user://world_cache"
-		and saves_on == "user://saves_roads_v2" and cache_on == "user://world_cache_roads_v2",
-		"флаг --roads-v2: по умолчанию выключен (%s), папки %s / %s -> %s / %s, ключ кэша (%s -> %s)" % [
-			def_flag, saves_off, cache_off, saves_on, cache_on, s_off, s_on])
+	check(tuning.routing_cache_suffix().is_empty() and not baseline.places.contains("|net=v2"),
+		"базовые настройки V2 включены в схему путей без экспериментального суффикса (%s → %s)" % [
+			baseline.places, WorldCache._road_layer_suffixes(tuning, false).places])
+	check(baseline.places != arc_key and baseline.places != meander_key and arc_key != meander_key,
+		"дуги и меандр переключаются отдельно и входят в ключ слоя путей")
+	check(StageTrails.network_v2 and QuickTrails.saves_dir() == "user://saves" and QuickTrails.cache_dir() == "user://world_cache",
+		"сеть V2 включена без флага и использует общие папки")
 
 
 func _smooth_foreign_axis() -> void:

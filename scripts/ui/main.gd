@@ -162,26 +162,6 @@ func _mark_quick_trails() -> void:
 	add_child(layer)
 
 
-func _mark_roads_v2() -> void:
-	var base := str(ProjectSettings.get_setting("application/config/name", ""))
-	if QuickTrails.active():
-		base = "%s — %s" % [base, QuickTrails.LABEL]
-	DisplayServer.window_set_title("%s — %s" % [base, StageTrails.ROADS_V2_LABEL])
-	var layer := CanvasLayer.new()
-	layer.layer = 128
-	var label := Label.new()
-	label.text = StageTrails.ROADS_V2_LABEL.to_upper()
-	label.add_theme_color_override("font_color", Color(0.35, 0.88, 1.0))
-	label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
-	label.add_theme_constant_override("outline_size", 6)
-	label.add_theme_font_size_override("font_size", 18)
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP, Control.PRESET_MODE_MINSIZE, 34 if QuickTrails.active() else 6)
-	label.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	layer.add_child(label)
-	add_child(layer)
-
-
 func _cmdline_seed() -> String:
 	if OS.has_feature("template"):
 		return ""
@@ -229,8 +209,6 @@ func _ready() -> void:
 	display_options.setup(self)
 	if QuickTrails.active():
 		_mark_quick_trails()
-	if StageTrails.network_v2:
-		_mark_roads_v2()
 	var tabs := ButtonGroup.new()
 	for tab: String in ["all", "favorites", "saved"]:
 		var b: Button = _tab_button(tab)

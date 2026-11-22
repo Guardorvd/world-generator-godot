@@ -18,7 +18,7 @@ const KINDS := ["road", "trail", "mountain"]
 @export var animal_reuse := 0.0
 @export var human_reuse := 0.0
 
-## Числа поля характера только для --roads-v2. Радиусы указаны в клетках.
+## Числа поля характера дорожной сети. Радиусы указаны в клетках.
 @export var character_field := {
 	relief_sigma = 3.0, relief_wide_sigma = 9.0,
 	meander_sigma = 20.0, meander_rms = 1.0, meander_flat = 0.035, meander_slope = 0.12,
@@ -83,7 +83,21 @@ func cache_values() -> Array:
 	for kind: String in KINDS:
 		values.append_array([float(climb_costs[kind]), float(turn_costs[kind]), float(bend_costs[kind]),
 			float(straighten[kind]), float(line_relax[kind])])
+	values.append_array([_ordered_values(character_field), switchbacks_enabled, broad_curves_enabled,
+		_ordered_values(broad_spacing_m), _ordered_values(broad_radius_m), _ordered_values(broad_offset_m), broad_straight_m,
+		ride_search_reserve, _ordered_values(inland_connector), arc_bends_enabled, arc_radii_m, arc_angle_deg,
+		arc_shoulder_m, arc_fit_m, arc_transitions_m, axis_protection_m, axis_min_radius_m, axis_meander_enabled,
+		axis_meander_min_m, axis_meander_fit_m, axis_meander_search_m, axis_meander_min_shift_m,
+		axis_meander_slope, axis_meander_slope_fade, axis_meander_water_m,
+		_ordered_values(axis_meander_road), _ordered_values(axis_meander_trail)])
 	return values
+
+
+static func _ordered_values(table: Dictionary) -> Array:
+	# Dictionary literals use StringName keys. Sort strings to order them by text.
+	var keys := table.keys().map(func(key: Variant) -> String: return str(key))
+	keys.sort()
+	return keys.map(func(key: String) -> Array: return [key, table[key]])
 
 
 static func valid_kind_values(table: Dictionary, kinds: Array) -> bool:

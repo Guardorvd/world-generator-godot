@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 23 # меньше прибрежных миров, больше умеренных лесов
-const SCHEMA_TRAILS_VERSION := 44 # 44: spacing along road sections; 43: fishing huts on lake shores and benches below summits (StageSites); 42: 17.11: no loops in settlement exits, spurs share forks; 41: traverse ride style around mountains; 40: overlook spurs from road legs; 39: optional ways fork away from settlements (EXIT_R), shore trails from road legs; 38 16.11: site homes/barns by biome and slope (StageSites); 37: 21 settlement models & distinct layouts by settlement kind; 36: settlement sets & string model variants (SettlementSets); 35: road class by link flow (_upgrade_roles); 34: walk mask for places, remote reason, tunnel vs detour by length; 33: remote single access, towns among ordinary; 32: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
+const SCHEMA_TRAILS_VERSION := 45 # 45: Roads V2 is the default; 44: spacing along road sections; 43: fishing huts on lake shores and benches below summits (StageSites); 42: 17.11: no loops in settlement exits, spurs share forks; 41: traverse ride style around mountains; 40: overlook spurs from road legs; 39: optional ways fork away from settlements (EXIT_R), shore trails from road legs; 38 16.11: site homes/barns by biome and slope (StageSites); 37: 21 settlement models & distinct layouts by settlement kind; 36: settlement sets & string model variants (SettlementSets); 35: road class by link flow (_upgrade_roles); 34: walk mask for places, remote reason, tunnel vs detour by length; 33: remote single access, towns among ordinary; 32: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
 const SCHEMA_NATURE_VERSION := 24 # 24: небольшие выходы породы на низких открытых холмах; 23: луговые рощи следуют рельефу; 22: рощи в пятнах древостоя; 21: clearance for local trail gap bypasses; 16: hill outcrops; 17: species and stone density follow local terrain; 18: 17.11 лещина, горная сосна (Pinus mugo) и рябина (Sorbus aucuparia); 19: стланик дополняет древостой; 20: крона рябины шире
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
@@ -89,7 +89,7 @@ func layer_keys() -> PackedStringArray:
 ## Зависимости начинаются со слоя, который впервые читает эти настройки.
 static func _road_layer_suffixes(tuning: RoadTuning, prepared_paths: bool) -> Dictionary:
 	var bed := tuning.bed_cache_suffix()
-	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix() + StageTrails.RoadNetworkV2.cache_suffix(StageTrails.network_v2)
+	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix()
 	if prepared_paths:
 		places += bed + tuning.tread_cache_suffix()
 	return {"places": places, "nature": bed + tuning.clearance_cache_suffix()}

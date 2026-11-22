@@ -13,8 +13,6 @@ const SAVES_DIR := "user://saves_quick"
 const NETWORK_FLAG := "--trail-network"
 const NETWORK_CACHE_DIR := "user://world_cache_network"
 const NETWORK_SAVES_DIR := "user://saves_network"
-const ROADS_V2_CACHE_DIR := "user://world_cache_roads_v2"
-const ROADS_V2_SAVES_DIR := "user://saves_roads_v2"
 ## Длина сети: цель и предел собранных метров вместо обычных 12000 и 18000 м (trail_world_network.gd)
 const LENGTH_TARGET := 2000.0
 const WORK_LIMIT := 3000.0
@@ -42,8 +40,8 @@ static func options() -> Dictionary:
 
 
 static func cache_dir() -> String:
-	return CACHE_DIR if active() else (NETWORK_CACHE_DIR if network() else (ROADS_V2_CACHE_DIR if StageTrails.network_v2 else "user://world_cache"))
+	return CACHE_DIR if active() else (NETWORK_CACHE_DIR if network() else "user://world_cache")
 
 
 static func saves_dir() -> String:
-	return SAVES_DIR if active() else (NETWORK_SAVES_DIR if network() else (ROADS_V2_SAVES_DIR if StageTrails.network_v2 else "user://saves"))
+	return SAVES_DIR if active() else (NETWORK_SAVES_DIR if network() else "user://saves")
