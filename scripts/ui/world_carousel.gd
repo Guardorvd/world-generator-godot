@@ -281,7 +281,7 @@ func _apply_entry() -> void:
 	$Card/Slide/Frame/WorldInfo/Caption.text = "ВЫБРАННЫЙ МИР" if available else "СТАТУС"
 	$Card/Slide/Frame/WorldInfo/Name.text = str(entry.get("seed", "Пока нет мира")) if available else "В разработке"
 	var detail := ("Сохранение" if entry.get("saved", false) else ("Ещё не начат" if _index >= 0 else "Создайте первый мир")) if available else "Этот тип появится позже"
-	if available and _index >= 0 and WorldTemplate.is_expedition(selected_type_id()):
+	if available and _index >= 0 and WorldTemplate.show_valley_length(selected_type_id()):
 		var sz := WorldTemplate.plan_size(selected_type_id(), WGRandom.hash_string(str(entry.get("seed", ""))))
 		var km := roundi(float(sz.y) * GameConfig.TILE / 1000.0)
 		detail = ("Сохранение · долина ~%d км" % km) if entry.get("saved", false) else ("Долина ~%d км" % km)

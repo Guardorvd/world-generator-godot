@@ -87,7 +87,8 @@ static func _run_expedition(w: WorldData) -> void:
 	var H := w.H
 	var river := w.river_cells()
 	var axis := ValleyAxis.for_world(w)
-	var counts := WorldTemplate.expedition_site_counts(w.template_id, H)
+	var cfg := axis.cfg
+	var counts := cfg.site_counts(H)
 	var human := PackedByteArray()
 	human.resize(w.N)
 	for i in w.N:
@@ -141,10 +142,11 @@ static func _place_expedition_fishing(w: WorldData, river: PackedByteArray, axis
 		finish: SettlementData, sites: Array, names: Dictionary) -> void:
 	var W := w.W
 	var H := w.H
+	var cfg := axis.cfg
 	var surface := Heightfield.base_of(w)
 	var fy := roundi(finish.y)
-	var y0 := clampi(fy - 84, 16, H - 24)
-	var y1 := clampi(fy + 56, y0, H - 16)
+	var y0 := clampi(fy - cfg.fishing_search_back, 16, H - 24)
+	var y1 := clampi(fy + cfg.fishing_search_fwd, y0, H - 16)
 	var best := {}
 	for y in range(y0, y1 + 1):
 		var ax := axis.axis_x_at(float(y))
@@ -165,7 +167,7 @@ static func _place_expedition_fishing(w: WorldData, river: PackedByteArray, axis
 			var cx := float(x) + 0.5
 			var cy := float(y) + 0.5
 			var d_fin := Grid.hypot(cx - finish.x, cy - finish.y)
-			if d_fin < 7.0 or d_fin > 86.0:
+			if d_fin < cfg.fishing_min_dist or d_fin > cfg.fishing_max_dist:
 				continue
 			if not _fits(w, river, "house_timber", cx, cy):
 				continue

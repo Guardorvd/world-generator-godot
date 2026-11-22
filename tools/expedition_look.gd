@@ -62,7 +62,12 @@ func _run() -> void:
 	if args.has("--roads"):
 		ok = _verify_phase3_roads(seeds, tag, short_dev, explicit_h) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--verify-phase4")):
+	var fp_out := _arg("--fingerprint", "")
+	var fp_cmp := _arg("--compare-fp", "")
+	if not fp_out.is_empty() or not fp_cmp.is_empty():
+		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
+
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--verify-phase4") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -86,10 +91,10 @@ func _run() -> void:
 		print("Expedition geo sheet: ", png_path)
 
 	if args.has("--shots"):
-		ok = await _capture_3d_shots(seeds[0], tag, short_dev, explicit_h) and ok
+		ok = await _capture_3d_shots(seeds[0], tag) and ok
 
 	if args.has("--shots-p3"):
-		ok = await _capture_phase3_shots(seeds[0], tag, short_dev, explicit_h) and ok
+		ok = await _capture_phase3_shots(seeds[0], tag) and ok
 
 	if args.has("--verify-phase4"):
 		ok = await _verify_phase4(seeds[0], tag) and ok
@@ -230,7 +235,7 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	return false
 
 
-func _capture_3d_shots(seed_text: String, tag: String, _short_dev: bool, _explicit_h: int) -> bool:
+func _capture_3d_shots(seed_text: String, tag: String) -> bool:
 	if DisplayServer.get_name() == "headless":
 		push_error("PHASE2_SHOTS: window required (do not pass --headless)")
 		return false
@@ -506,7 +511,7 @@ func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
 	return img
 
 
-func _capture_phase3_shots(seed_text: String, tag: String, _short_dev: bool, _explicit_h: int) -> bool:
+func _capture_phase3_shots(seed_text: String, tag: String) -> bool:
 	if DisplayServer.get_name() == "headless":
 		push_error("PHASE3_SHOTS: window required (do not pass --headless)")
 		return false
@@ -757,6 +762,75 @@ func _verify_phase4(seed_text: String, tag: String) -> bool:
 	return false
 
 
+func _run_fingerprint(seed_text: String, short_dev: bool, explicit_h: int, out_path: String, cmp_path: String) -> bool:
+	var w := WorldGenerator._generate_plan(seed_text, WorldGenerator.PLAN_SIZE, Callable(), Callable(),
+		null, 0, Callable(), WorldGenerator.PlanMode.WORLD, Callable(),
+		WorldTemplate.EXPEDITION_ID, short_dev, explicit_h)
+	if w == null:
+		push_error("FINGERPRINT FAIL: null world")
+		return false
+	w.territory_center = WorldGenerator.start_center(w)
+	w.expand_territory(maxi(w.W, w.H))
+	var settle_str := PackedStringArray()
+	for s: SettlementData in w.settlements:
+		settle_str.append("%s:%.3f,%.3f:%d:%s" % [s.name, s.x, s.y, s.huts.size(), s.role])
+	var site_str := PackedStringArray()
+	for s: SiteData in w.sites:
+		site_str.append("%s:%s:%.3f,%.3f:%d" % [s.type, s.name, s.x, s.y, s.huts.size()])
+	var road_pts := PackedFloat64Array()
+	for t: Dictionary in w.trails:
+		for p: Dictionary in t.pts:
+			road_pts.append_array([float(p.x), float(p.y), float(p.w)])
+	var fp := {
+		seed = seed_text,
+		size = "%dx%d" % [w.W, w.H],
+		h_sha = Util.sha256(w.h.to_byte_array()).hex_encode(),
+		elev_sha = Util.sha256(w.elev.to_byte_array()).hex_encode(),
+		biome_sha = Util.sha256(w.biome).hex_encode(),
+		river_sha = Util.sha256(w.river_cells()).hex_encode(),
+		path_sha = Util.sha256(w.path_mask).hex_encode(),
+		road_sha = Util.sha256(road_pts.to_byte_array()).hex_encode(),
+		road_pts_n = road_pts.size() / 3,
+		settlements = "|".join(settle_str),
+		sites = "|".join(site_str),
+		objects = w.obj_count,
+		obj_sha = Util.sha256(w.obj_x.to_byte_array()).hex_encode(),
+	}
+	w.clear_noise_fields()
+	w.base_heights = null
+	if not out_path.is_empty():
+		var abs_out := ProjectSettings.globalize_path(out_path)
+		var f := FileAccess.open(abs_out, FileAccess.WRITE)
+		f.store_string(JSON.stringify(fp, "\t"))
+		f.close()
+		print("FINGERPRINT SAVED: ", abs_out)
+	if not cmp_path.is_empty():
+		var abs_cmp := ProjectSettings.globalize_path(cmp_path)
+		var raw := FileAccess.get_file_as_string(abs_cmp)
+		var prev: Variant = JSON.parse_string(raw)
+		if not prev is Dictionary:
+			push_error("FINGERPRINT CMP FAIL: unreadable " + abs_cmp)
+			return false
+		var diffs: Array[String] = []
+		for k: String in fp:
+			var cur: Variant = fp[k]
+			var old: Variant = prev.get(k, null)
+			var same: bool = false
+			if (cur is int or cur is float) and (old is int or old is float):
+				same = is_equal_approx(float(cur), float(old))
+			else:
+				same = str(cur) == str(old)
+			if not same:
+				diffs.append("%s: before=%s after=%s" % [k, str(old), str(cur)])
+		if diffs.is_empty():
+			print("FINGERPRINT COMPARE: BIT-EXACT MATCH (%d/%d fields)" % [fp.size(), fp.size()])
+			return true
+		for d: String in diffs:
+			push_error("FINGERPRINT DIFF: " + d)
+		return false
+	return true
+
+
 func _verify_phase1(short_dev: bool) -> bool:
 	var failures: Array[String] = []
 	var tmp := ProjectSettings.globalize_path("res://.godot/expedition_phase1_test")
@@ -832,6 +906,24 @@ func _verify_phase1(short_dev: bool) -> bool:
 			failures.append("expand_territory(W) shrank Type 2 available_rect to %s" % w.available_rect)
 		if WorldTemplate.allow_infinite_regions(w.template_id):
 			failures.append("RegionStream should be disabled for Type 2")
+		# Проверка: правка .tres-настройки меняет ключ кэша Типа 2 и не трогает ключ Типа 1.
+		var cfg2 := WorldTemplate.config(WorldTemplate.EXPEDITION_ID)
+		var g_before := WorldTemplate.geo_cache_suffix(WorldTemplate.EXPEDITION_ID)
+		var p_before := WorldTemplate.places_cache_suffix(WorldTemplate.EXPEDITION_ID)
+		var t1_g := WorldTemplate.geo_cache_suffix(WorldTemplate.DEFAULT_ID)
+		var t1_p := WorldTemplate.places_cache_suffix(WorldTemplate.DEFAULT_ID)
+		var old_hw := cfg2.river_hw_end
+		cfg2.river_hw_end = old_hw + 0.5
+		if WorldTemplate.geo_cache_suffix(WorldTemplate.EXPEDITION_ID) == g_before:
+			failures.append("geo cache suffix did not change after editing river_hw_end")
+		cfg2.river_hw_end = old_hw
+		var old_anch := cfg2.anchor_min_dy
+		cfg2.anchor_min_dy = old_anch + 10
+		if WorldTemplate.places_cache_suffix(WorldTemplate.EXPEDITION_ID) == p_before:
+			failures.append("places cache suffix did not change after editing anchor_min_dy")
+		cfg2.anchor_min_dy = old_anch
+		if not t1_g.is_empty() or not t1_p.is_empty():
+			failures.append("Type 1 cache suffixes must remain empty")
 		var scope := ServiceScope.new()
 		scope.cache.enabled = true
 		scope.cache.set_template(WorldTemplate.EXPEDITION_ID)

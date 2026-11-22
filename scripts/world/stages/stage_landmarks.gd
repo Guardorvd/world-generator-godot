@@ -195,20 +195,29 @@ static func _place_expedition_settlements(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
 	var axis := ValleyAxis.for_world(w)
+	var cfg := axis.cfg
+	var start_y_pref := roundi(0.5 * float(cfg.start_y_min + mini(cfg.start_y_max, H / 4)))
+	var finish_y_min := maxi(H - cfg.finish_from_end_max, H * 3 / 4)
+	var finish_y_max := H - cfg.finish_from_end_min
+	var finish_y_pref := roundi(0.5 * float(finish_y_min + finish_y_max))
+	var start_rhw := axis.river_hw_at(54)
+	var finish_rhw := axis.river_hw_at(H - 94)
 	var settlements: Array = []
 	var specs := [
 		{
-			y_min = 42, y_max = mini(72, H / 4),
-			sd_min = axis.river_hw_at(54) + 5.5, sd_max = axis.river_hw_at(54) + 16.0,
-			prefer_y = 54.0, prefer_sd = axis.river_hw_at(54) + 9.0,
-			role = "forest", importance = 0.90, homes_min = 3, homes_max = 4,
+			y_min = cfg.start_y_min, y_max = mini(cfg.start_y_max, H / 4),
+			sd_min = start_rhw + cfg.start_sd_min, sd_max = start_rhw + cfg.start_sd_max,
+			prefer_y = float(start_y_pref if cfg.start_y_min != 42 or cfg.start_y_max != 72 else 54),
+			prefer_sd = start_rhw + 0.5 * (cfg.start_sd_min + minf(cfg.start_sd_max, 12.5)),
+			role = "forest", importance = 0.90, homes_min = cfg.start_homes_min, homes_max = cfg.start_homes_max,
 			character = "лагерь в верховье",
 		},
 		{
-			y_min = maxi(H - 114, H * 3 / 4), y_max = H - 72,
-			sd_min = axis.river_hw_at(H - 94) + 5.5, sd_max = axis.river_hw_at(H - 94) + 15.0,
-			prefer_y = float(H - 94), prefer_sd = axis.river_hw_at(H - 94) + 8.5,
-			role = "coastal", importance = 0.85, homes_min = 4, homes_max = 6,
+			y_min = finish_y_min, y_max = finish_y_max,
+			sd_min = finish_rhw + cfg.finish_sd_min, sd_max = finish_rhw + cfg.finish_sd_max,
+			prefer_y = float(finish_y_pref if cfg.finish_from_end_max != 114 or cfg.finish_from_end_min != 72 else H - 94),
+			prefer_sd = finish_rhw + 0.5 * (cfg.finish_sd_min + minf(cfg.finish_sd_max, 11.5)),
+			role = "coastal", importance = 0.85, homes_min = cfg.finish_homes_min, homes_max = cfg.finish_homes_max,
 			character = "речная база",
 		},
 	]

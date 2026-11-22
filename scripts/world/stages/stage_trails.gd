@@ -234,15 +234,16 @@ static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: Pac
 		h_scale: float, is_first: bool, must_connect: bool) -> PackedInt32Array:
 	var W := w.W
 	var H := w.H
+	var cfg := WorldTemplate.config(w.template_id)
 	var ax := a % W
 	var ay := a / W
 	var bx := b % W
 	var by := b / W
-	var x0 := maxi(0, mini(ax, bx) - 56)
-	var x1 := mini(W, maxi(ax, bx) + 57)
+	var x0 := maxi(0, mini(ax, bx) - cfg.segment_win_x)
+	var x1 := mini(W, maxi(ax, bx) + cfg.segment_win_x + 1)
 	# На выходе со старта не петляем вверх за лагерь, на заходе к финишу не уходим за базу в поворот.
-	var y0 := maxi(0, mini(ay, by) - (6 if is_first else 42))
-	var y1 := mini(H, maxi(ay, by) + (7 if must_connect else 43))
+	var y0 := maxi(0, mini(ay, by) - (cfg.segment_end_y_cap if is_first else cfg.segment_win_y))
+	var y1 := mini(H, maxi(ay, by) + (cfg.segment_end_y_cap + 1 if must_connect else cfg.segment_win_y + 1))
 	finder.window = Rect2i(x0, y0, x1 - x0, y1 - y0)
 	# Сначала держим дорожные уклоны; TRAIL_GRADE спасает цепочку на редких коротких перепадах рельефа.
 	for g: float in [ROAD_GRADE, ROAD_LIMIT, TRAIL_GRADE]:

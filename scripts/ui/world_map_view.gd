@@ -343,12 +343,13 @@ func _reframe() -> void:
 		var inset := Vector2(24, 24) if field_sheet else (Vector2(92, 96) if park else Vector2(42, 80))
 		var area := (size - inset).max(Vector2.ONE)
 		var fit_scale := minf(area.x / _fit.size.x, area.y / _fit.size.y)
-		var elongated := not park and _bounds.has_area() and _bounds.size.y > _bounds.size.x * 1.8
+		var cfg := WorldTemplate.config(_data.world.template_id if _data != null and _data.world != null else WorldTemplate.DEFAULT_ID)
+		var elongated := not park and _bounds.has_area() and _bounds.size.y > _bounds.size.x * cfg.map_elongated_ratio
 		if elongated:
-			# Для длинной долины (Тип 2) стартовый масштаб показывает ближайший участок маршрута вокруг игрока,
+			# Для длинной долины стартовый масштаб показывает ближайший участок маршрута вокруг игрока,
 			# а не тонкую нитку целиком; отдалить до всей долины при этом можно колесом.
 			_min_scale = clampf(fit_scale, 0.001, MIN_SCALE)
-			var corridor_span := maxf(1800.0, minf(_bounds.size.x * 2.3, _bounds.size.y * 0.45))
+			var corridor_span := maxf(cfg.map_corridor_min_m, minf(_bounds.size.x * cfg.map_corridor_width_mul, _bounds.size.y * 0.45))
 			_scale = clampf(minf(area.x / (_bounds.size.x * 1.35), area.y / corridor_span), _min_scale, MAX_SCALE)
 			var focus := player if player.is_finite() else Vector2(_bounds.get_center().x, _bounds.position.y + corridor_span * 0.45)
 			_center = _bounded_center(focus)

@@ -97,10 +97,8 @@ func layer_keys() -> PackedStringArray:
 	if _layer_keys.is_empty():
 		var suffixes := _road_layer_suffixes(RoadTuning.current(), QuickTrails.network() and WorldTemplate.is_default(template_id))
 		if not WorldTemplate.is_default(template_id):
-			suffixes["geo"] = "|tpl=" + template_id
-			var route_ov := WorldTemplate.routing_overrides_suffix(template_id)
-			if not route_ov.is_empty():
-				suffixes["places"] = str(suffixes.get("places", "")) + route_ov
+			suffixes["geo"] = WorldTemplate.geo_cache_suffix(template_id)
+			suffixes["places"] = str(suffixes.get("places", "")) + WorldTemplate.places_cache_suffix(template_id)
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
 			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]),
 			suffixes)

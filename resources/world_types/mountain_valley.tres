@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
+
+[resource]
+script = ExtResource("1_cfg")
+id = "mountain_valley"
+title = "Горная долина"
+available = true
+plan_width = 768
+plan_heights = PackedInt32Array(768)
+dev_height = 768
+full_plan_territory = false
+allow_infinite_regions = true
+pick_start = true
+home_is_first_settlement = false
+show_valley_length = false
+valley_relief = false
+valley_river = false
+single_road = false
+lat_mode = "fixed"
+lat_base = 0.5
+lat_center = 383.5
+lat_cells = 3072.0
+outer_temp_lapse = 0.6
+routing_overrides = {}

@@ -331,6 +331,7 @@ static var allow_fast_valley := true
 
 static func _valley_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool, surface: bool) -> PackedFloat32Array:
 	var axis := ValleyAxis.for_world(w)
+	var rp := axis.cfg.relief_params()
 	var micro_pad := MICRO_PAD if surface else 0
 	var detail_pad := Detail.DETAIL_PAD if include_detail else 0
 	var total_pad := micro_pad + detail_pad
@@ -341,12 +342,12 @@ static func _valley_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, paral
 		var micro: PackedInt32Array = n.micro.perm if surface else PackedInt32Array()
 		return fast.ValleyReliefField(n.warpX.perm, n.warpY.perm, n.ridge.perm, n.hill.perm,
 			x0, y0, cw, ch, axis.road_side, tbl.axis_x, tbl.floor_h, tbl.river_hw, tbl.bed_depth,
-			tbl.spur_h, tbl.spur_reach, tbl.channel_fade, tbl.end_wall,
+			tbl.spur_h, tbl.spur_reach, tbl.channel_fade, tbl.end_wall, rp,
 			w.mountain_scale, w.mountain_height, parallel, include_detail, GameConfig.HS, GameConfig.TILE, micro, micro_pad)
-	return _valley_rect_gd(w, axis, tbl, x0, y0, cw, ch, parallel, include_detail, surface)
+	return _valley_rect_gd(w, axis, tbl, rp, x0, y0, cw, ch, parallel, include_detail, surface)
 
 
-static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0: int, y0: int, cw: int, ch: int,
+static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, rp: PackedFloat64Array, x0: int, y0: int, cw: int, ch: int,
 		parallel: bool, include_detail: bool, surface: bool) -> PackedFloat32Array:
 	var micro_pad := MICRO_PAD if surface else 0
 	var detail_pad := Detail.DETAIL_PAD if include_detail else 0
@@ -356,6 +357,10 @@ static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0:
 	var bx0 := x0 - total_pad
 	var by0 := y0 - total_pad
 	var wide := w.mountain_scale * maxf(1.0, w.mountain_height / (w.mountain_scale * HEIGHT_PER_WIDTH))
+	var damp_start := rp[WorldTypeConfig.RP_DAMP_START]
+	var damp_end := rp[WorldTypeConfig.RP_DAMP_END]
+	var knee := rp[WorldTypeConfig.RP_HEIGHT_KNEE]
+	var soft := rp[WorldTypeConfig.RP_HEIGHT_SOFT]
 	var base_raw := PackedFloat32Array()
 	var base_job := func(j0: int, j1: int) -> PackedFloat32Array:
 		var wx_n: Simplex = w.noise.warpX.clone()
@@ -376,7 +381,7 @@ static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0:
 			var wy := by0 + j
 			for i in bw:
 				var hv := _valley_base_at(wx_n, wy_n, ridge_n, hill_n, bx0 + i, wy, axis.road_side,
-					ax, fh, rhw, bd, sh, sr, cf, ew, w.mountain_height, wide)
+					ax, fh, rhw, bd, sh, sr, cf, ew, rp, w.mountain_height, wide)
 				part[(j - j0) * bw + i] = SEA_RAW + pow(maxf(1e-6, hv), 0.8) * (TOP_RAW - SEA_RAW)
 		return part
 	if parallel:
@@ -405,12 +410,12 @@ static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0:
 				var raw_v := base_raw[bk]
 				if include_detail:
 					var det_v := Detail.apply(ridge_n, hill_n, base_raw, bw, bk, wx, wy, SEA_RAW, TOP_RAW, GameConfig.HS, GameConfig.TILE)
-					var damp := 1.0 - (1.0 - smoothstep(rhw + 0.6, rhw + 6.5, absf(float(wx) - ax))) * cf
+					var damp := 1.0 - (1.0 - smoothstep(rhw + damp_start, rhw + damp_end, absf(float(wx) - ax))) * cf
 					raw_v += (det_v - raw_v) * damp
 				var q := maxf(0.0, (raw_v - SEA_RAW) / (TOP_RAW - SEA_RAW))
 				var hv := pow(q, 1.25)
-				if hv > 1.26:
-					hv = 1.26 + (hv - 1.26) / (1.0 + (hv - 1.26) / 0.16)
+				if hv > knee:
+					hv = knee + (hv - knee) / (1.0 + (hv - knee) / soft)
 				part[(j - j0) * stride + i] = hv
 		return part
 	if parallel:
@@ -433,7 +438,7 @@ static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0:
 		var rhw: float = tbl.river_hw[rj]
 		var cf: float = tbl.channel_fade[rj]
 		for i in cw:
-			var damp := 1.0 - (1.0 - smoothstep(rhw + 0.6, rhw + 6.5, absf(float(x0 + i) - ax))) * cf
+			var damp := 1.0 - (1.0 - smoothstep(rhw + damp_start, rhw + damp_end, absf(float(x0 + i) - ax))) * cf
 			if damp < 1.0:
 				var nk := (j + micro_pad) * stride + i + micro_pad
 				var ok := j * cw + i
@@ -443,9 +448,9 @@ static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0:
 
 static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hill: Simplex,
 		x: float, y: float, road_side: int, ax: float, fh: float, rhw: float, bd: float,
-		sh: float, sr: float, cf: float, ew: float, mountain_height: float, wide: float) -> float:
-	var wx := warp_x.fbm(x / 220.0, y / 220.0, 3) * 18.0
-	var wy := warp_y.fbm(x / 220.0 + 13.1, y / 220.0 - 7.7, 3) * 18.0
+		sh: float, sr: float, cf: float, ew: float, rp: PackedFloat64Array, mountain_height: float, wide: float) -> float:
+	var wx := warp_x.fbm(x / rp[WorldTypeConfig.RP_WARP_SCALE], y / rp[WorldTypeConfig.RP_WARP_SCALE], 3) * rp[WorldTypeConfig.RP_WARP_AMP]
+	var wy := warp_y.fbm(x / rp[WorldTypeConfig.RP_WARP_SCALE] + 13.1, y / rp[WorldTypeConfig.RP_WARP_SCALE] - 7.7, 3) * rp[WorldTypeConfig.RP_WARP_AMP]
 	var X := x + wx
 	var Y := y + wy
 	var sd := (x - ax) * float(road_side)
@@ -455,32 +460,32 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 		var u := ad / maxf(0.5, rhw)
 		d_chan = -bd * (1.0 - u * u)
 	else:
-		d_chan = 0.013 * (1.0 - exp(-(ad - rhw) / 1.1))
-	var land_damp := 1.0 - (1.0 - smoothstep(rhw + 0.6, rhw + 6.5, ad)) * cf
-	var hills_fine := hill.fbm(X / 44.0, Y / 44.0, 4)
-	var hills_broad := hill.fbm(X / 105.0 + 32.4, Y / 105.0 - 18.6, 2)
-	var folds := 0.048 * hills_broad + 0.032 * hills_fine
-	var road_d := maxf(0.0, sd - (rhw + 3.0))
-	var bench_rise := 0.00045 * road_d + 0.0000045 * road_d * road_d
+		d_chan = rp[WorldTypeConfig.RP_BANK_HEIGHT] * (1.0 - exp(-(ad - rhw) / rp[WorldTypeConfig.RP_BANK_DECAY]))
+	var land_damp := 1.0 - (1.0 - smoothstep(rhw + rp[WorldTypeConfig.RP_DAMP_START], rhw + rp[WorldTypeConfig.RP_DAMP_END], ad)) * cf
+	var hills_fine := hill.fbm(X / rp[WorldTypeConfig.RP_FOLDS_FINE_SCALE], Y / rp[WorldTypeConfig.RP_FOLDS_FINE_SCALE], 4)
+	var hills_broad := hill.fbm(X / rp[WorldTypeConfig.RP_FOLDS_BROAD_SCALE] + 32.4, Y / rp[WorldTypeConfig.RP_FOLDS_BROAD_SCALE] - 18.6, 2)
+	var folds := rp[WorldTypeConfig.RP_FOLDS_BROAD_AMP] * hills_broad + rp[WorldTypeConfig.RP_FOLDS_FINE_AMP] * hills_fine
+	var road_d := maxf(0.0, sd - (rhw + rp[WorldTypeConfig.RP_BENCH_START_PAD]))
+	var bench_rise := rp[WorldTypeConfig.RP_BENCH_RISE_LIN] * road_d + rp[WorldTypeConfig.RP_BENCH_RISE_QUAD] * road_d * road_d
 	var spur_lift := 0.0
-	if sh > 0.0 and sd > rhw + 2.0:
-		var sm := smoothstep(rhw + 2.0, sr, sd)
-		var saddle := (sd - (sr + 16.0)) / 14.0
-		spur_lift = sh * sm * (1.0 - 0.25 * exp(-saddle * saddle))
-	var wall_r := smoothstep(88.0, 185.0, sd)
-	var wall_base_r := smoothstep(85.0, 240.0, sd) * 0.34
-	var wall_l := smoothstep(18.0, 95.0, -sd)
-	var wall_base_l := smoothstep(16.0, 160.0, -sd) * 0.38
+	if sh > 0.0 and sd > rhw + rp[WorldTypeConfig.RP_SPUR_START_PAD]:
+		var sm := smoothstep(rhw + rp[WorldTypeConfig.RP_SPUR_START_PAD], sr, sd)
+		var saddle := (sd - (sr + rp[WorldTypeConfig.RP_SPUR_SADDLE_OFFSET])) / rp[WorldTypeConfig.RP_SPUR_SADDLE_WIDTH]
+		spur_lift = sh * sm * (1.0 - rp[WorldTypeConfig.RP_SPUR_SADDLE_DIP] * exp(-saddle * saddle))
+	var wall_r := smoothstep(rp[WorldTypeConfig.RP_WALL_ROAD_START], rp[WorldTypeConfig.RP_WALL_ROAD_END], sd)
+	var wall_base_r := smoothstep(rp[WorldTypeConfig.RP_WALL_ROAD_BASE_START], rp[WorldTypeConfig.RP_WALL_ROAD_BASE_END], sd) * rp[WorldTypeConfig.RP_WALL_ROAD_BASE_H]
+	var wall_l := smoothstep(rp[WorldTypeConfig.RP_WALL_OPP_START], rp[WorldTypeConfig.RP_WALL_OPP_END], -sd)
+	var wall_base_l := smoothstep(rp[WorldTypeConfig.RP_WALL_OPP_BASE_START], rp[WorldTypeConfig.RP_WALL_OPP_BASE_END], -sd) * rp[WorldTypeConfig.RP_WALL_OPP_BASE_H]
 	var wall := maxf(wall_r, wall_l)
 	var wall_base := maxf(wall_base_r, wall_base_l) + ew
 	var wall_term := wall_base
-	var m_strength := maxf(wall, ew * 1.4)
+	var m_strength := maxf(wall, ew * rp[WorldTypeConfig.RP_END_WALL_MTN_MUL])
 	if m_strength > 0.0:
 		var m_relief := mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, 1.0)
-		wall_term += m_relief * m_strength * 0.72 * mountain_height
-	var h := fh + d_chan * cf + 0.012 * (1.0 - cf) + land_damp * (bench_rise + folds * (1.0 - 0.65 * wall) + spur_lift + wall_term)
-	if h < 0.008: h = 0.008
-	if h > 1.26: h = 1.26 + (h - 1.26) / (1.0 + (h - 1.26) / 0.16)
+		wall_term += m_relief * m_strength * rp[WorldTypeConfig.RP_WALL_MTN_AMP] * mountain_height
+	var h := fh + d_chan * cf + rp[WorldTypeConfig.RP_CLOSED_LIFT] * (1.0 - cf) + land_damp * (bench_rise + folds * (1.0 - rp[WorldTypeConfig.RP_WALL_FOLDS_SUPPRESS] * wall) + spur_lift + wall_term)
+	if h < rp[WorldTypeConfig.RP_HEIGHT_FLOOR]: h = rp[WorldTypeConfig.RP_HEIGHT_FLOOR]
+	if h > rp[WorldTypeConfig.RP_HEIGHT_KNEE]: h = rp[WorldTypeConfig.RP_HEIGHT_KNEE] + (h - rp[WorldTypeConfig.RP_HEIGHT_KNEE]) / (1.0 + (h - rp[WorldTypeConfig.RP_HEIGHT_KNEE]) / rp[WorldTypeConfig.RP_HEIGHT_SOFT])
 	return h
 
 

@@ -36,7 +36,7 @@ var _jump_buf := 0.0  # сколько ещё ждать земли, чтобы 
 static func home(w: WorldData) -> Variant:
 	if w.settlements.is_empty():
 		return {}
-	if not WorldTemplate.is_default(w.template_id):
+	if WorldTemplate.home_is_first_settlement(w.template_id):
 		return w.settlements[0]
 	var best: SettlementData = w.settlements[0]
 	var best_d := INF

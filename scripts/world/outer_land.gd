@@ -102,8 +102,9 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 	for key in out:
 		out[key].resize(n)
 	# Rainfall uses the actual ocean field; climate never invents freshwater.
-	var valley_axis: ValleyAxis = ValleyAxis.for_world(w) if WorldTemplate.has_valley_relief(w.template_id) else null
-	var temp_lapse := 0.48 if valley_axis != null else 0.6
+	var cfg := WorldTemplate.config(w.template_id)
+	var valley_axis: ValleyAxis = ValleyAxis.for_world(w) if cfg.valley_relief else null
+	var temp_lapse := cfg.outer_temp_lapse
 	for j in ch:
 		var wy := y0 + j
 		var lat := StageClimate.latitude(w, wy)

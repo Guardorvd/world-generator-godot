@@ -166,32 +166,8 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 	w.dist_ocean = Grid.distance_field(w.W, w.H, w.ocean)
 	w.rain = _rain_field(w)
 	if WorldTemplate.has_valley_river(w.template_id):
-		_mark_valley_river(w)
+		ValleyAxis.for_world(w).mark_river(w)
 	w.generation_profile.freshwater_lakes = _place_lakes(w, lake_budget)
-
-
-static func _mark_valley_river(w: WorldData) -> void:
-	var axis := ValleyAxis.for_world(w)
-	var W := w.W
-	var H := w.H
-	var river := w.river
-	var filled := w.filled
-	var h := w.h
-	for y in range(1, H - 4):
-		var ax := axis.axis_x_at(float(y))
-		var rhw := axis.river_hw_at(y)
-		var fh := axis.floor_h_at(y)
-		var x0 := maxi(0, floori(ax - rhw - 0.5))
-		var x1 := mini(W - 1, ceili(ax + rhw + 0.5))
-		var row := y * W
-		for x in range(x0, x1 + 1):
-			if absf(float(x) - ax) <= rhw + 0.25:
-				var i := row + x
-				river[i] = 1
-				filled[i] = maxf(h[i], fh)
-	w.river = river
-	w.filled = filled
-	w.river_area = river.duplicate()
 
 
 static func _place_lakes(w: WorldData, lake_budget: int) -> int:
@@ -229,10 +205,7 @@ static func _place_lakes(w: WorldData, lake_budget: int) -> int:
 			c = best
 		if ocean[c] != 0 or lake[c] != 0 or w.river[c] != 0 or dist_ocean[c] < 12.0: continue
 		if WorldTemplate.has_valley_river(w.template_id):
-			var axis := ValleyAxis.for_world(w)
-			var cx_l := c % W
-			var cy_l := c / W
-			if absf(float(cx_l) - axis.axis_x_at(float(cy_l))) < axis.river_hw_at(cy_l) + 22.0:
+			if ValleyAxis.for_world(w).excludes_lake(c % W, c / W):
 				continue
 		var level := heights[c] + float(candidate.depth)
 		# Зеркало пресного озера должно быть выше глобальной плоскости океана.

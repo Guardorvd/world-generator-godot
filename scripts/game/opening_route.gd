@@ -53,14 +53,15 @@ static func _expedition_start(w: WorldData, h: Heightfield) -> Dictionary:
 		line.append(Vector2(p.x, p.y) * GameConfig.TILE)
 	if line[0].y > line[-1].y:
 		line.reverse()
-	# Ищем точку выезда в 14..110 м от лагеря, где дорога уже уверенно смотрит вниз по долине (+y).
+	# Ищем точку выезда в [opening_min_m, opening_max_m] от лагеря, где дорога уверенно смотрит вниз по долине (+y).
+	var cfg := WorldTemplate.config(w.template_id)
 	var along := 0.0
 	var start_idx := 0
 	var start_pt := line[0]
 	var picked := false
 	for i in range(1, line.size() - 1):
 		along += line[i - 1].distance_to(line[i])
-		if along < 14.0:
+		if along < cfg.opening_min_m:
 			continue
 		if not picked:
 			start_idx = i
@@ -73,7 +74,7 @@ static func _expedition_start(w: WorldData, h: Heightfield) -> Dictionary:
 			start_pt = line[i]
 			picked = true
 			break
-		if along > 110.0:
+		if along > cfg.opening_max_m:
 			break
 	var points: Array[Vector2] = [start_pt]
 	var length := 0.0
