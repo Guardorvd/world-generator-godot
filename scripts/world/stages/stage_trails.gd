@@ -116,7 +116,7 @@ static func run(w: WorldData, step: Callable) -> void:
 		_part("road_character_fields", detail_us)
 	_route_surface(finder, surface, widths.road, "corridor_road_ms")
 	step.call(0.66, "Прокладка троп между поселениями")
-	_settlement_trails(w, finder, surface, step)
+	var primary_end := _settlement_trails(w, finder, surface, step)
 	_route_surface(finder, surface, widths.mountain, "corridor_mountain_ms")
 	step.call(0.74, "Прокладка горных троп")
 	detail_us = Time.get_ticks_usec()
@@ -127,6 +127,8 @@ static func run(w: WorldData, step: Callable) -> void:
 	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
 	step.call(0.76, "Природные велосипедные маршруты")
 	RideRoutes.run(w, finder, surface, on_axis)
+	if network_v2:
+		RoadNetworkV2.reshape_axes(w, surface, on_axis, primary_end)
 	_fit_sections(w, surface, PackedByteArray(), Callable(), on_axis if network_v2 else PackedByteArray())
 	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
@@ -769,7 +771,7 @@ static func _nearest_water(cost: PackedFloat32Array, dist_water: PackedFloat32Ar
 const SETTLEMENT_NEIGHBORS := 3
 const BRIDGE_RETRIES := 2
 
-static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable = Callable()) -> void:
+static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable = Callable()) -> int:
 	var bridge_cost := RoadTuning.current().routing.bridge_cost
 	var started := Time.get_ticks_msec()
 	var st := w.settlements
@@ -894,6 +896,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	# Нарастающий итог после основных связей: с ним сравнивается политика запасного поиска (prefetch).
 	w.generation_profile.main_roads_search = finder.search_stats()
 	w.generation_profile.upgraded_m = _upgrade_roles(w, paths)
+	var primary_end := w.trails.size()
 	finder.use_corridor = true
 	_route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_trail_ms")
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
@@ -918,6 +921,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.checkpoints = state.get("checkpoints", 0)
 	w.generation_profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	w.generation_profile.restores = state.get("restores", 0)
+	return primary_end
 
 
 ## Publish the largest confirmed component, not the component of candidate zero.

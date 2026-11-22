@@ -52,8 +52,14 @@ static func cache_suffix(enabled: bool) -> String:
 	var digest := RoadTuning._digest_values([keys.map(func(key: String) -> Array: return [key, values[key]]),
 		RoadTuning.Routing.KINDS.map(func(kind: String) -> Array: return [routing.broad_spacing_m[kind], routing.broad_radius_m[kind],
 			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled, routing.ride_search_reserve,
-		[routing.inland_connector.min_m, routing.inland_connector.max_m, routing.inland_connector.search_count, routing.inland_connector.accept_count]])
+		[routing.inland_connector.min_m, routing.inland_connector.max_m, routing.inland_connector.search_count, routing.inland_connector.accept_count],
+		[routing.arc_bends_enabled, arc_settings(routing), routing.axis_protection_m]])
 	return "|net=v2.%d.%s" % [VERSION, digest]
+
+
+static func arc_settings(routing: RoadTuning.Routing) -> Dictionary:
+	return {radii_m = routing.arc_radii_m, angle_deg = routing.arc_angle_deg, shoulder_m = routing.arc_shoulder_m,
+		fit_m = routing.arc_fit_m, transition_m = routing.arc_transition_m}
 
 
 ## Числа во вход C#: V1 — из StageTrails и RoadTuning, V2 — константы выше.
@@ -617,6 +623,67 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 	data.near_axis_x = xs
 	data.near_axis_y = ys
 	data.reach = RoadRefinement.REACH
+
+
+## Форма оси после публикации развилок, до профилирования ширины и штампа полотна.
+static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByteArray, primary_end: int) -> void:
+	var routing := RoadTuning.current().routing
+	if not routing.arc_bends_enabled: return
+	var water: Object = surface.fast_water()
+	if water == null:
+		push_error("Сеть V2: дугам нужна поверхность C#")
+		return
+	if _line_core == null: _line_core = Grid.native_grid()
+	var anchors := {}
+	for t: Dictionary in w.trails:
+		if t.kind == "animal" or t.pts.is_empty(): continue
+		for i: int in [0, t.pts.size() - 1]:
+			var p: Dictionary = t.pts[i]
+			anchors[Topology.anchor_key(Vector2(p.x, p.y), w.world_origin)] = true
+	var legs := {}
+	for ride: Dictionary in w.road_rides.routes.values():
+		for leg: Dictionary in ride.legs:
+			(legs.get_or_add(leg.section, []) as Array).append(leg)
+	var input := arc_settings(routing).merged({on_axis = on_axis, W = w.W, H = w.H, protection_m = routing.axis_protection_m,
+		profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = StageTrails.ROAD_LIMIT, bench_cross = StageTrails.BENCH_CROSS,
+		reach = RoadRefinement.REACH, foreign = _published_axes(w)})
+	var stats := {accepted = 0, refused = {}, radii_m = {}}
+	w.generation_profile.road_arc_bends = stats
+	for r in w.trails.size():
+		var t: Dictionary = w.trails[r]
+		if t.kind != "road" and (t.kind != "trail" or r >= primary_end): continue
+		if t.has("trail_id") or t.pts.size() < 3: continue
+		var packed := PackedFloat64Array()
+		var pins := PackedByteArray()
+		for p: Dictionary in t.pts:
+			packed.append_array([p.x, p.y, p.w])
+			pins.append(int(anchors.has(Topology.anchor_key(Vector2(p.x, p.y), w.world_origin))))
+		input.axis = packed
+		input.pins = pins
+		input.route_index = r
+		var result: Dictionary = _line_core.ShapeRoadAxis(input, water)
+		for reason: String in result.refused:
+			stats.refused[reason] = int(stats.refused.get(reason, 0)) + int(result.refused[reason])
+		if result.accepted == 0: continue
+		stats.accepted += result.accepted
+		for radius: float in result.radii_m:
+			var key := str(int(radius))
+			stats.radii_m[key] = int(stats.radii_m.get(key, 0)) + 1
+		var points: PackedFloat64Array = result.points
+		var shaped := []
+		for i in range(0, points.size(), 3): shaped.append({x = points[i], y = points[i + 1], w = points[i + 2]})
+		for leg: Dictionary in legs.get(t.road_id, []):
+			leg.from_m = _aligned_station(leg.from_m, result.from_m, result.to_m)
+			leg.to_m = _aligned_station(leg.to_m, result.from_m, result.to_m)
+		t.pts = shaped
+		input.foreign = _published_axes(w)
+
+
+static func _aligned_station(station: float, before: PackedFloat64Array, after: PackedFloat64Array) -> float:
+	var i := before.bsearch(station)
+	if i <= 0: return after[0]
+	if i >= before.size(): return after[-1]
+	return lerpf(after[i - 1], after[i], inverse_lerp(before[i - 1], before[i], station))
 
 
 ## Перестраивает только конечную геометрию. Поиск, связи и записанные интервалы веломаршрутов уже готовы.

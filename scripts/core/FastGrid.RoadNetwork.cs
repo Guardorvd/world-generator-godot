@@ -362,6 +362,41 @@ public partial class FastGrid
 		}
 	}
 
+	/// <summary>Форма опубликованной оси и перевод прежних станций в новые для интервалов веломаршрутов.</summary>
+	public Godot.Collections.Dictionary ShapeRoadAxis(Godot.Collections.Dictionary input, FastGrid water)
+	{
+		var values = input["axis"].AsFloat64Array();
+		var source = new List<LineBuilder.P>(values.Length / 3);
+		for (int i = 0; i < values.Length; i += 3) source.Add(new LineBuilder.P(values[i], values[i + 1], values[i + 2]));
+		var foreign = input["foreign"].AsGodotDictionary();
+		var graph = new RoadGraph(RoadGraph.OnAxis);
+		graph.IndexAxes(foreign["x"].AsFloat64Array(), foreign["y"].AsFloat64Array(), foreign["starts"].AsInt32Array(),
+			input["route_index"].AsInt32());
+		var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), graph, input["reach"].AsDouble());
+		var bounds = new LineBuilder(water, input["on_axis"].AsByteArray(), input["W"].AsInt32(), input["H"].AsInt32());
+		var fit = new AxisAlignment(source, input["pins"].AsByteArray(), validator, bounds.AxisBlocked,
+			input["grade"].AsDouble(), input["bench_cross"].AsDouble(), input["protection_m"].AsDouble());
+		fit.FitArcs(input["radii_m"].AsFloat64Array(), input["angle_deg"].AsDouble(), input["shoulder_m"].AsDouble(),
+			input["fit_m"].AsDouble(), input["transition_m"].AsDouble());
+		var refused = new Godot.Collections.Dictionary();
+		foreach (var (reason, count) in fit.Refused) refused[reason] = count;
+		var result = new Godot.Collections.Dictionary { ["accepted"] = fit.Accepted, ["refused"] = refused,
+			["radii_m"] = fit.AcceptedRadii.ToArray() };
+		if (fit.Accepted == 0) return result;
+		var (points, from, to) = fit.Finish();
+		var packed = new double[points.Count * 3];
+		for (int i = 0; i < points.Count; i++)
+		{
+			packed[3 * i] = points[i].X;
+			packed[3 * i + 1] = points[i].Y;
+			packed[3 * i + 2] = points[i].W;
+		}
+		result["points"] = packed;
+		result["from_m"] = from;
+		result["to_m"] = to;
+		return result;
+	}
+
 	/// <summary>Локальная перестройка подъёма на готовой оси. Чужие оси нужны только после прохождения проверок рельефа.</summary>
 	public Godot.Collections.Dictionary BuildRoadSwitchbacks(Godot.Collections.Dictionary input, FastGrid water)
 	{

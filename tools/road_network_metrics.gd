@@ -333,6 +333,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		decisions = {width = w.generation_profile.get("road_width_decisions"),
 			line_grade_fallbacks = w.generation_profile.get("road_line_grade_fallbacks"),
 			broad_curves = w.generation_profile.get("road_broad_curves", {}),
+			arc_bends = w.generation_profile.get("road_arc_bends", {}),
 			ride_density = w.generation_profile.get("rides", {}).get("density", {}),
 			switchbacks = w.generation_profile.get("road_switchbacks", {}),
 			ride_rejections = w.generation_profile.get("rides", {}).get("rejected")},

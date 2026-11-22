@@ -74,6 +74,7 @@ public sealed class GeometryValidator
 	}
 
 	internal double Ground(double x, double y) => _water.GroundAt(x * _tile, y * _tile);
+	internal double ProfileWindowMetres => _profileBase * _tile;
 
 	internal bool NearAxis(LineBuilder.P p, double distance) =>
 		_axes != null && _axes.Clearance(p.X, p.Y, distance, null) < distance;

@@ -39,6 +39,14 @@ const KINDS := ["road", "trail", "mountain"]
 @export var broad_radius_m := {road = 60.0, trail = 30.0, mountain = 15.0}
 @export var broad_offset_m := {road = 15.0, trail = 10.0, mountain = 6.0}
 @export var broad_straight_m := 0.35
+## Круговые дуги и короткие переходы к существующим плечам оси V2.
+@export var arc_bends_enabled := true
+@export var arc_radii_m := PackedFloat64Array([150.0, 100.0, 60.0])
+@export var arc_angle_deg := 8.0
+@export var arc_shoulder_m := 24.0
+@export var arc_fit_m := 1.5
+@export var arc_transition_m := 10.0
+@export var axis_protection_m := 12.0
 ## Дополнительные поиски V2, чтобы проверить запасные финиши после основных.
 @export var ride_search_reserve := 0.40
 ## Перегоны для сухих связей между уже опубликованными осями, в метрах.

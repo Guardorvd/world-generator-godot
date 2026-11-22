@@ -37,9 +37,63 @@ func _initialize() -> void:
 	_short_ride_turnback()
 	_switchback_climbs()
 	_broad_curves()
+	_arc_bends()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
+
+
+func _arc_bends() -> void:
+	var w := _world("none")
+	w.h.fill(0.15)
+	w.filled.fill(0.15)
+	var routing := RoadTuning.current().routing
+	var width: float = RoadTuning.current().section.widths.road
+	var axis := PackedFloat64Array()
+	var pins := PackedByteArray()
+	for x in range(6, 89):
+		axis.append_array([x + 0.5, 22.5 + maxf(0, x - 52), width])
+		pins.append(0)
+	var input := V2.arc_settings(routing).merged({axis = axis, pins = pins, W = S, H = S, on_axis = PackedByteArray(),
+		foreign = {x = PackedFloat64Array(), y = PackedFloat64Array(), starts = PackedInt32Array([0])}, route_index = 0,
+		profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = StageTrails.ROAD_LIMIT, bench_cross = StageTrails.BENCH_CROSS,
+		reach = RoadRefinement.REACH, protection_m = routing.axis_protection_m})
+	var core: Object = Grid.native_grid()
+	var flat := Heightfield.new(w, false)
+	var arc: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
+	var radius := 0.0
+	var fixed_ends := false
+	var shift := 0.0
+	if arc.accepted > 0:
+		var points: PackedFloat64Array = arc.points
+		fixed_ends = points.slice(0, 3) == axis.slice(0, 3) and points.slice(-3) == axis.slice(-3)
+		var middle := 0
+		var nearest := INF
+		var corner := Vector2(52.5, 22.5)
+		for i in range(0, points.size(), 3):
+			var p := Vector2(points[i], points[i + 1])
+			if p.distance_squared_to(corner) < nearest:
+				nearest = p.distance_squared_to(corner)
+				middle = i
+		var a := Vector2(points[middle - 12], points[middle - 11])
+		var b := Vector2(points[middle], points[middle + 1])
+		var c := Vector2(points[middle + 12], points[middle + 13])
+		radius = 2.0 * a.distance_to(b) * b.distance_to(c) * c.distance_to(a) / absf((b - a).cross(c - a))
+		shift = sqrt(nearest) * GameConfig.TILE
+	check(arc.radii_m == PackedFloat64Array([150.0]) and absf(radius - 150.0) < 1.0 and fixed_ends
+		and absf(shift - 150.0 * (1.0 / cos(PI / 8.0) - 1.0)) < 0.1,
+		"круговая дуга: 45°, радиус %.2f м, отступ %.2f м, отказы %s" % [radius, shift, arc.refused])
+	var cell := 25 * S + 49
+	w.lake[cell] = 1
+	w.filled[cell] += 0.025
+	var lake := Heightfield.new(w, false)
+	var by_lake: Dictionary = core.ShapeRoadAxis(input, lake.fast_water())
+	var wet_points: PackedFloat64Array = by_lake.get("points", axis)
+	var dry := true
+	for i in range(0, wet_points.size(), 3):
+		dry = dry and lake.depth_at(wet_points[i] * 4.0, wet_points[i + 1] * 4.0) <= 0.3
+	check(by_lake.radii_m != PackedFloat64Array([150.0]) and by_lake.refused.has("water") and dry,
+		"круговая дуга у озера: радиусы %s, отказы %s, сухая ось %s" % [by_lake.radii_m, by_lake.refused, dry])
 
 
 func _broad_curves() -> void:
