@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace Roads.Network;
 
@@ -724,24 +725,15 @@ public sealed class LineBuilder
 			int steps = Math.Max(1, (int)Math.Ceiling(length / 2.0));
 			for (int s = 0; s < steps && pos < sn; s++) segOf[pos++] = k - 1;
 		}
-		var heights = new double[sn];
-		var along = new double[sn];
-		V prevV = V.Of(st[0].X, st[0].Y);
-		heights[0] = _probe.GroundAt((double)prevV.X * Tile, (double)prevV.Y * Tile);
-		int j = 0;
-		double run = 0.0;
-		for (int k = 1; k < sn; k++)
+		var points = new V[sn];
+		var skip = _axis.Length > 0 ? new byte[sn] : null;
+		for (int k = 0; k < sn; k++)
 		{
-			V curV = V.Of(st[k].X, st[k].Y);
-			run += curV.DistanceTo(prevV);
-			prevV = curV;
-			along[k] = run;
-			heights[k] = _probe.GroundAt((double)curV.X * Tile, (double)curV.Y * Tile);
-			if (_axis.Length > 0 && AxisBlocked(curV)) { j = k; continue; }
-			while (j + 1 < k && along[k] - along[j + 1] >= ProfileBase) j++;
-			if (Math.Abs(heights[k] - heights[j]) > grade * (along[k] - along[j]) * Tile + 0.00001) return segOf[k];
+			points[k] = V.Of(st[k].X, st[k].Y);
+			if (skip != null && AxisBlocked(points[k])) skip[k] = 1;
 		}
-		return -1;
+		int failure = GeometryValidator.FirstProfileFailure(_probe, points, skip, Tile, ProfileBase, grade);
+		return failure < 0 ? -1 : segOf[failure];
 	}
 
 	private void UpdateSeg(IReadOnlyList<P> pts, double[] midHeights, byte[] midBlocked, byte[] segBadArr, int k, GeometryValidator validator, double local)
@@ -1090,16 +1082,7 @@ public sealed class LineBuilder
 			skip[cnt] = blocked[k + 1];
 			cnt++;
 		}
-		int jIdx = 0;
-		bool shortOk = from == 0;
-		for (int k = 1; k < cnt; k++)
-		{
-			if (skip[k] != 0) { jIdx = k; shortOk = true; continue; }
-			while (jIdx + 1 < k && along[k] - along[jIdx + 1] >= ProfileBase) jIdx++;
-			if (!shortOk && along[k] - along[jIdx] < ProfileBase) continue;
-			if (Math.Abs(h[k] - h[jIdx]) > grade * (along[k] - along[jIdx]) * Tile + 0.00001) return false;
-		}
-		return true;
+		return GeometryValidator.FirstProfileFailure(along[..cnt], h[..cnt], skip[..cnt], Tile, ProfileBase, grade, from == 0) < 0;
 	}
 
 	private static P Midpoint(P a, P b) => new((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, a.W);
@@ -1323,16 +1306,8 @@ public sealed class LineBuilder
 			heights.Add(_probe.GroundAt(pb.X * Tile, pb.Y * Tile));
 			stSkip.Add(skip[k]);
 		}
-		int j = 0;
-		bool shortOk = atStart;
-		for (int k = 1; k < along.Count; k++)
-		{
-			if (stSkip[k] != 0) { j = k; shortOk = true; continue; }
-			while (j + 1 < k && along[k] - along[j + 1] >= ProfileBase) j++;
-			if (!shortOk && along[k] - along[j] < ProfileBase) continue;
-			if (Math.Abs(heights[k] - heights[j]) > grade * (along[k] - along[j]) * Tile + 0.00001) return false;
-		}
-		return true;
+		return GeometryValidator.FirstProfileFailure(CollectionsMarshal.AsSpan(along), CollectionsMarshal.AsSpan(heights),
+			CollectionsMarshal.AsSpan(stSkip), Tile, ProfileBase, grade, atStart) < 0;
 	}
 
 	private bool WholeProfileOk(List<P> pts, double grade)
@@ -1350,27 +1325,8 @@ public sealed class LineBuilder
 	}
 
 	/// <summary>RoadLine.profile_ok: точки — float32 (Vector2), высоты и пробег — double.</summary>
-	public bool ProfileOk(V[] points, double grade, byte[] skip)
-	{
-		int n = points.Length;
-		var heights = new double[n];
-		var along = new double[n];
-		double run = 0.0;
-		for (int k = 0; k < n; k++)
-		{
-			if (k > 0) run += points[k].DistanceTo(points[k - 1]);
-			along[k] = run;
-			heights[k] = _probe.GroundAt((double)points[k].X * Tile, (double)points[k].Y * Tile);
-		}
-		int j = 0;
-		for (int k = 1; k < n; k++)
-		{
-			if (skip != null && skip.Length > 0 && skip[k] != 0) { j = k; continue; }
-			while (j + 1 < k && along[k] - along[j + 1] >= ProfileBase) j++;
-			if (Math.Abs(heights[k] - heights[j]) > grade * (along[k] - along[j]) * Tile + 0.00001) return false;
-		}
-		return true;
-	}
+	private bool ProfileOk(V[] points, double grade, byte[] skip) =>
+		GeometryValidator.FirstProfileFailure(_probe, points, skip, Tile, ProfileBase, grade) < 0;
 
 	/// <summary>RoadLine.segment_ok с probe: FastGrid.RoadSegment по точкам-словарям (double).</summary>
 	private bool SegmentOk(P a, P b, double maxGrade, double maxCross)

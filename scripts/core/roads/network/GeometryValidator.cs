@@ -119,14 +119,45 @@ public sealed class GeometryValidator
 			along[k] = run;
 			heights[k] = _water.GroundAt(pts[2 * k] * T, pts[2 * k + 1] * T);
 		}
-		int j = 0;
-		for (int k = 1; k < n; k++)
+		return FirstProfileFailure(along, heights, skip, T, baseLen, grade) < 0;
+	}
+
+	/// <summary>RoadLine uses float32 positions and distances. Preserve that sampling before checking the same windows.</summary>
+	internal static int FirstProfileFailure(FastGrid water, LineBuilder.V[] points, ReadOnlySpan<byte> skip,
+		double tile, double window, double grade)
+	{
+		var heights = new double[points.Length];
+		var along = new double[points.Length];
+		double run = 0.0;
+		for (int k = 0; k < points.Length; k++)
 		{
-			if (skip != null && skip.Length > 0 && skip[k] != 0) { j = k; continue; }
-			while (j + 1 < k && along[k] - along[j + 1] >= baseLen) j++;
-			if (Math.Abs(heights[k] - heights[j]) > grade * (along[k] - along[j]) * T + 0.00001) return false;
+			if (k > 0) run += points[k].DistanceTo(points[k - 1]);
+			along[k] = run;
+			heights[k] = water.GroundAt((double)points[k].X * tile, (double)points[k].Y * tile);
 		}
-		return true;
+		return FirstProfileFailure(along, heights, skip, tile, window, grade);
+	}
+
+	/// <summary>Check grade in the trailing window. A clipped range starts only after a full window or a deck.</summary>
+	internal static int FirstProfileFailure(ReadOnlySpan<double> along, ReadOnlySpan<double> heights, ReadOnlySpan<byte> skip,
+		double tile, double window, double grade, bool atStart = true)
+	{
+		int first = 0;
+		bool allowShortWindow = atStart;
+		for (int k = 1; k < along.Length; k++)
+		{
+			if (!skip.IsEmpty && skip[k] != 0)
+			{
+				first = k;
+				allowShortWindow = true;
+				continue;
+			}
+			while (first + 1 < k && along[k] - along[first + 1] >= window) first++;
+			double length = along[k] - along[first];
+			if (!allowShortWindow && length < window) continue;
+			if (Math.Abs(heights[k] - heights[first]) > grade * length * tile + 0.00001) return k;
+		}
+		return -1;
 	}
 
 	/// <summary>Брод по клеткам пути: подряд не больше FORD_LEN клеток реки вне осей сооружений, ни одной клетки
