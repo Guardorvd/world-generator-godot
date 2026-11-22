@@ -179,7 +179,6 @@ func _ready() -> void:
 	big_map.journal = map_journal
 	big_map.controls = controls
 	big_map.input_blocked = func() -> bool: return _travel_dialog != null
-	big_map.place_selected.connect(_select_map_goal)
 	big_map.visibility_changed.connect(_sync_tablet_map)
 	big_map.marker_requested.connect(func(at: Vector2) -> void: _select_map_goal(marker_goal(at)))
 	journal_panel.closed.connect(func() -> void: map_close_requested.emit())
@@ -398,7 +397,8 @@ func _tablet_quest() -> Dictionary:
 	var steps := PackedStringArray()
 	for step: Dictionary in q.steps:
 		steps.append(quests.step_text(step))
-	return {title = q.title, steps = steps, index = q.step}
+	return {title = q.title, steps = steps, index = q.step, color = quest_color(),
+		kind_title = Quests.KINDS[q.kind].title, reward = quests.reward_points(q.id)}
 
 
 ## Открытые места мира: поселения, вершины и озёра из индекса WorldData (с 8.9 extra).

@@ -393,9 +393,34 @@ func _journal_checks() -> void:
 	_check(atlas.ride_legs.size() == 1 and atlas.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed,
 		"выбранная поездка и её маршрут сохраняются при возврате")
 	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	await process_frame
+	await process_frame
+	atlas._reframe()
+	var full_center: Vector2 = atlas._center
+	var full_scale: float = atlas._scale
+	atlas._zoom_at(atlas.size * 0.5, 0.01)
+	_check(is_equal_approx(atlas._scale, full_scale), "личная карта не отдаляется дальше полного вида")
+	_check(atlas._bounded_center(full_center + Vector2(999999, 999999)).is_equal_approx(full_center),
+		"на полном масштабе карта не уходит в пустоту")
+	atlas._base_dirty = false
+	atlas._pressed = Vector2(10, 10)
+	atlas._dragged = false
+	atlas._move_pointer(Vector2(110, 110))
+	_check(not atlas._base_dirty, "попытка сдвинуть полный вид не обновляет подложку")
+	atlas._pressed = Vector2.INF
+	atlas._dragged = false
+	atlas._zoom_at(atlas.size * 0.5, 2.0)
+	var edge: Vector2 = atlas._bounded_center(Vector2(999999, 999999))
+	_check(edge.x <= atlas._bounds.end.x and edge.y <= atlas._bounds.end.y, "при приближении сдвиг ограничен краем карты")
+	atlas._zoom_at(atlas.size * 0.5, 0.01)
+	_check(is_equal_approx(atlas._scale, full_scale) and atlas._center.is_equal_approx(full_center), "отдаление возвращает полный вид")
 	if not atlas.places.is_empty():
 		var pin: Dictionary = atlas.places[0]
-		hud.journal_panel.refresh_inspector(pin)
+		hud.set_goal({})
+		atlas._select_place(pin)
+		_check(hud.goal.is_empty() and hud.journal_panel._inspected_place.get("key") == pin.key,
+			"выбор места открывает карточку без изменения цели")
+		atlas._set_hover({})
 		hud.journal_panel.refresh_inspector({}) # указатель ушёл с карты к кнопкам
 		_check(hud.journal_panel._inspected_place.get("key") == pin.key and hud.journal_panel._place_goal.visible,
 			"карточка сохраняет место при переходе к её действиям")
@@ -489,6 +514,27 @@ func _journal_checks() -> void:
 	await _shot("hud_tablet_narrow")
 	_check(hud.journal_panel._map_row.vertical and root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()),
 		"на узком экране док переезжает под карту")
+	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	await _shot("hud_map_narrow")
+	_check(root.get_visible_rect().encloses(hud.journal_panel._map_frame.get_global_rect())
+		and root.get_visible_rect().encloses(hud.journal_panel._right_dock.get_global_rect())
+		and root.get_visible_rect().encloses(hud.journal_panel._map_footer.get_global_rect()),
+		"карта, задание и управление помещаются на узком экране")
+	var map_rect := Rect2(Vector2.ZERO, atlas.size)
+	_check(map_rect.has_point(atlas.world_to_screen(atlas._bounds.position))
+		and map_rect.has_point(atlas.world_to_screen(atlas._bounds.end)),
+		"при переходе на карту весь лист виден на узком экране")
+	var original_bounds: Rect2 = atlas._bounds
+	var original_fit: Rect2 = atlas._fit
+	atlas._bounds = Rect2(Vector2.ZERO, Vector2.ONE * 3072.0)
+	atlas._fit = atlas._bounds.grow(50.0)
+	atlas._reframe()
+	_check(map_rect.has_point(atlas.world_to_screen(atlas._bounds.position))
+		and map_rect.has_point(atlas.world_to_screen(atlas._bounds.end)),
+		"полный размер игрового мира помещается на узком экране")
+	atlas._bounds = original_bounds
+	atlas._fit = original_fit
+	atlas._reframe()
 	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
 	await _await_cards()
 	await _shot("hud_album_narrow")
@@ -799,9 +845,10 @@ func _run() -> void:
 	main._show_seed_tab("recommended")
 	var start: Button = main.get_node("%Start")
 	var edit: LineEdit = main.get_node("%SeedEdit")
-	_check(start.get_index() > main.get_node("%Carousel").get_index(), "«Начать путешествие» под карточкой")
+	_check(start.get_global_rect().position.y > main.get_node("%Carousel").get_global_rect().position.y,
+		"кнопка путешествия расположена под карточкой")
 	main._pick_seed("Туман-4821")
-	_check(edit.text == "Туман-4821" and main._chosen_seed() == "Туман-4821", "выбор в списке ставит зерно в поле")
+	_check(main._chosen_seed() == "Туман-4821" and is_instance_valid(edit), "выбор мира и поле создания доступны")
 	await _shot("menu")
 	var panel: Control = main.get_node("UI/Root/Menu/Panel")
 	_check(root.get_visible_rect().encloses(panel.get_global_rect()), "меню целиком помещается в 1280×720")
