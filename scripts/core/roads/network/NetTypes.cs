@@ -4,21 +4,6 @@ using Godot;
 
 namespace Roads.Network;
 
-/// <summary>Нарушения геометрии пути (GeometryValidator). Флаги: одно ребро может нарушать несколько правил.</summary>
-[Flags]
-public enum Violation
-{
-	None = 0,
-	Water = 1,      // вода глубже 0,3 м на полосе (FastGrid.RoadSegment)
-	Grade = 2,      // продольный уклон отрезка (RoadSegment)
-	Cross = 4,      // крен поперёк полосы (RoadSegment, BENCH_CROSS)
-	Profile = 8,    // уклон на окне PROFILE_BASE (RoadLine.profile_ok)
-	Ford = 16,      // брод длиннее FORD_LEN или небезопасный (StageTrails._unsafe_ford)
-	Radius = 32,    // радиус поворота меньше полуширины + 0,5 м
-	Gap = 64,       // ближе зазора к чужому ребру вне узлов
-	Bounds = 128,   // точка вне карты
-}
-
 /// <summary>Числа V2: значения V1 приходят из GDScript (StageTrails, RoadTuning) — здесь только чтение словаря.
 /// Нет ключа — исключение с понятным текстом (ошибка громко, без молчаливых значений по умолчанию).</summary>
 public sealed class Params

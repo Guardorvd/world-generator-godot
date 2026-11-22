@@ -35,7 +35,7 @@ public static class NetworkProbe
 					var pts = c["pts"].AsFloat64Array();
 					var cells = c.ContainsKey("cells") ? c["cells"].AsInt32Array() : null;
 					bool gap = c.ContainsKey("gap") && c["gap"].AsBool();
-					var r = planner.Validator.Validate(pts, cells, c["width"].AsDouble(), c["grade"].AsDouble(), 1.0, gap ? planner.Graph : null, null, 1.0);
+					var r = ValidateCase(t, planner.Validator, pts, cells, c["width"].AsDouble(), c["grade"].AsDouble(), gap ? planner.Graph : null);
 					flags.Add((int)r.Flags);
 					maxes.Add(r.Max);
 				}
@@ -155,5 +155,60 @@ public static class NetworkProbe
 		}
 		outd["network_v2"] = planner.Stats.ToDictionary();
 		return outd;
+	}
+
+	/// <summary>Нарушения геометрии пути (GeometryValidator). Флаги: одно ребро может нарушать несколько правил.</summary>
+	[Flags]
+	private enum Violation
+	{
+		None = 0,
+		Water = 1,      // вода глубже 0,3 м на полосе (FastGrid.RoadSegment)
+		Grade = 2,      // продольный уклон отрезка (RoadSegment)
+		Cross = 4,      // крен поперёк полосы (RoadSegment, BENCH_CROSS)
+		Profile = 8,    // уклон на окне PROFILE_BASE (RoadLine.profile_ok)
+		Ford = 16,      // брод длиннее FORD_LEN или небезопасный (StageTrails._unsafe_ford)
+		Radius = 32,    // радиус поворота меньше полуширины + 0,5 м
+		Gap = 64,       // ближе зазора к чужому ребру вне узлов
+		Bounds = 128,   // точка вне карты
+	}
+
+	// Report all the fixture violations using the same primitive checks as the generator.
+	private static (Violation Flags, double Max) ValidateCase(TerrainSnapshot t, GeometryValidator validator,
+		double[] pts, int[] cells, double width, double maxGrade, RoadGraph graph)
+	{
+		var flags = Violation.None;
+		double worst = 0.0, T = t.P.Tile;
+		int n = pts.Length / 2;
+		for (int k = 0; k < n; k++)
+			if (pts[2 * k] < 0 || pts[2 * k + 1] < 0 || pts[2 * k] > t.W || pts[2 * k + 1] > t.H) flags |= Violation.Bounds;
+		if (flags != Violation.None) return (flags, 1.0);
+		for (int k = 1; k < n; k++)
+		{
+			double ax = pts[2 * k - 2], ay = pts[2 * k - 1], bx = pts[2 * k], by = pts[2 * k + 1];
+			if (validator.Segment(ax, ay, bx, by, width, maxGrade, t.P.BenchCross)) continue;
+			// какое правило: вода, уклон или крен
+			if (!validator.Segment(ax, ay, bx, by, 0.0, 1e9, 1e9)) flags |= Violation.Water;
+			else if (!validator.Segment(ax, ay, bx, by, width, 1e9, t.P.BenchCross)) flags |= Violation.Cross;
+			else flags |= Violation.Grade;
+			worst = Math.Max(worst, 1.0);
+		}
+		if (!validator.Profile(pts, maxGrade)) { flags |= Violation.Profile; worst = Math.Max(worst, 1.0); }
+		double needR = width * 0.5 * T + 0.5;
+		double r = validator.MinRadius(pts);
+		if (r < needR) { flags |= Violation.Radius; worst = Math.Max(worst, needR / Math.Max(r, 1e-6)); }
+		if (graph != null)
+		{
+			double gap = (2.0 * width * 0.5 * T + 2.0 * t.P.Reach + 2.0) / T;
+			double ex0 = pts[0], ey0 = pts[1], ex1 = pts[^2], ey1 = pts[^1];
+			for (int k = 0; k < n; k++)
+			{
+				double x = pts[2 * k], y = pts[2 * k + 1];
+				if (RoadGraph.Hypot(x - ex0, y - ey0) < 1.0 || RoadGraph.Hypot(x - ex1, y - ey1) < 1.0) continue;
+				double d = graph.Clearance(x, y, gap, null);
+				if (d < gap) { flags |= Violation.Gap; worst = Math.Max(worst, gap / Math.Max(d, 1e-6)); }
+			}
+		}
+		if (cells != null && !validator.Ford(cells)) { flags |= Violation.Ford; worst = Math.Max(worst, 1.0); }
+		return (flags, worst);
 	}
 }

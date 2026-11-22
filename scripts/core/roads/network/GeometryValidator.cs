@@ -11,14 +11,6 @@ namespace Roads.Network;
 /// ≥ 2·half + 2·REACH + 2 м. Результат — (Ok, нарушения, наибольшее отношение нарушения к пределу).</summary>
 public sealed class GeometryValidator
 {
-	public readonly struct Result
-	{
-		public readonly bool Ok;
-		public readonly Violation Flags;
-		public readonly double Max;
-		public Result(Violation flags, double max) { Flags = flags; Ok = flags == Violation.None; Max = max; }
-	}
-
 	private readonly TerrainSnapshot _t;
 	private readonly FastGrid _water;
 	private readonly double _tile, _profileBase;
@@ -235,45 +227,5 @@ public sealed class GeometryValidator
 			rem -= seg;
 			cur = next;
 		}
-	}
-
-	/// <summary>Полная проверка ломаной pts (клетки) полосы width (клетки): отрезки с пределом maxGrade × relax и креном,
-	/// профиль, радиус, зазор до графа (без рёбер skipEdges у узлов; graph = null — без зазора), клетки брода.</summary>
-	public Result Validate(double[] pts, int[] cells, double width, double maxGrade, double relax, RoadGraph graph, HashSet<int> skipEdges, double nodeR)
-	{
-		var flags = Violation.None;
-		double worst = 0.0, T = _t.P.Tile;
-		int n = pts.Length / 2;
-		for (int k = 0; k < n; k++)
-			if (pts[2 * k] < 0 || pts[2 * k + 1] < 0 || pts[2 * k] > _t.W || pts[2 * k + 1] > _t.H) flags |= Violation.Bounds;
-		if (flags != Violation.None) return new Result(flags, 1.0);
-		for (int k = 1; k < n; k++)
-		{
-			double ax = pts[2 * k - 2], ay = pts[2 * k - 1], bx = pts[2 * k], by = pts[2 * k + 1];
-			if (Segment(ax, ay, bx, by, width, maxGrade * relax, _t.P.BenchCross)) continue;
-			// какое правило: вода, уклон или крен
-			if (!Segment(ax, ay, bx, by, 0.0, 1e9, 1e9)) flags |= Violation.Water;
-			else if (!Segment(ax, ay, bx, by, width, 1e9, _t.P.BenchCross)) flags |= Violation.Cross;
-			else flags |= Violation.Grade;
-			worst = Math.Max(worst, 1.0);
-		}
-		if (!Profile(pts, maxGrade)) { flags |= Violation.Profile; worst = Math.Max(worst, 1.0); }
-		double needR = width * 0.5 * T + 0.5;
-		double r = MinRadius(pts);
-		if (r < needR) { flags |= Violation.Radius; worst = Math.Max(worst, needR / Math.Max(r, 1e-6)); }
-		if (graph != null)
-		{
-			double gap = (2.0 * width * 0.5 * T + 2.0 * _t.P.Reach + 2.0) / T;
-			double ex0 = pts[0], ey0 = pts[1], ex1 = pts[^2], ey1 = pts[^1];
-			for (int k = 0; k < n; k++)
-			{
-				double x = pts[2 * k], y = pts[2 * k + 1];
-				if (RoadGraph.Hypot(x - ex0, y - ey0) < nodeR || RoadGraph.Hypot(x - ex1, y - ey1) < nodeR) continue;
-				double d = graph.Clearance(x, y, gap, skipEdges);
-				if (d < gap) { flags |= Violation.Gap; worst = Math.Max(worst, gap / Math.Max(d, 1e-6)); }
-			}
-		}
-		if (cells != null && !Ford(cells)) { flags |= Violation.Ford; worst = Math.Max(worst, 1.0); }
-		return new Result(flags, worst);
 	}
 }
