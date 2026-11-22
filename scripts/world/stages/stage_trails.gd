@@ -580,10 +580,10 @@ static func _join_point(w: WorldData, owner: PackedInt32Array, cell: int, anchor
 static var v2_junctions := {}
 
 
-## Развилка ближе RoadNetworkV2.JOIN_SAME к центру клетки c на оси одного из hosts: {host, point, tangent} или пусто.
+## Развилка ближе join_same из RoadRoutingTuning к центру клетки c на оси одного из hosts: {host, point, tangent} или пусто.
 static func _v2_junction(w: WorldData, c: Vector2, hosts: Dictionary) -> Dictionary:
 	var best := {}
-	var best_d: float = RoadNetworkV2.JOIN_SAME
+	var best_d: float = RoadTuning.current().routing.network_rules.join_same
 	var keys := hosts.keys()
 	keys.sort()
 	for dy in range(-1, 2):

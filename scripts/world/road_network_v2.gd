@@ -6,28 +6,6 @@ extends RefCounted
 
 const Topology := preload("res://scripts/world/road_topology.gd")
 
-## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.
-const NODE_SEP := 25.0      # клеток (100 м) между узлами необязательных путей
-const NODE_SAME := 0.6      # точки ближе — один узел
-const MAX_DEGREE := 4
-const LOOP_RATIO := 1.65    # кандидат петли: D_net / D_geo больше
-const LOOP_ACCEPT := 1.25   # после петли отношение пары не больше
-const LOOP_SHARE := 0.35    # петель не больше ceil(0,35 · N)
-const LOOP_LEN_OLD := 2.0   # петля не длиннее двух старых путей
-const FAR_R := 15.0         # клеток (60 м): петля отходит от старой связи дальше
-const FAR_SHARE := 0.4      # хотя бы такой долей
-const WINDOW_MARGIN := 14   # окно поиска вокруг грубого пути, клеток
-const WINDOW_RETRY := 24
-const SHORE_SHARE := 0.25   # береговое ответвление: доля клеток у воды (без последних 4) не больше
-const EXIT_ANGLE := 45.0    # петля: новый выезд своего поселения отличается от прежних выездов не меньше (градусы)
-const EXIT_CHORD := 10.0    # клеток: хорда направления выезда (8–12)
-const SPUR_NET_FLOOR := 2.0 # ответвление: клетка сети в окне не дешевле этого до множителя EXIT_MUL (как пол 2,0 в ride_routes.gd)
-const MOUNTAIN_REACH := 1.5
-const JOIN_SAME := 1.5
-## Шаг 7: развилки природных маршрутов не ближе CROWD_R измерителя (10 клеток, 40 м) + 2 к другим развилкам
-const RIDE_NODE_SEP := 12.0      # примыкание ближе этого (клеток) к развилке — в саму развилку (общий узел) # точка съезда горной тропы не дальше ближайшей точки сети × это + 8 клеток
-
-
 ## Подмена чисел V2 на время запуска стенда (road_plan_test -- --v2-param ключ=значение,…); в кэш игры не попадает.
 static var overrides := {}
 static var audit_character := false
@@ -52,7 +30,7 @@ static func meander_settings(routing: RoadTuning.Routing, kind: String) -> Dicti
 		water_m = routing.axis_meander_water_m}.merged(tuning)
 
 
-## Числа во вход C#: V1 — из StageTrails и RoadTuning, V2 — константы выше.
+## Вход C# объединяет правила прохода StageTrails и параметры RoadRoutingTuning.
 static func params(w: WorldData) -> Dictionary:
 	var tuning := RoadTuning.current()
 	var routing := tuning.routing
@@ -68,16 +46,13 @@ static func params(w: WorldData) -> Dictionary:
 		human_reuse = routing.human_reuse, parallel_run = StageTrails.PARALLEL_RUN, node_cells = StageTrails.NODE_CELLS,
 		ford_len = StageTrails.FORD_LEN, cross_run = StageTrails.CROSS_RUN, jitter_run = StageTrails.JITTER_RUN,
 		rejoin_gap = StageTrails.REJOIN_GAP, parallel_share = StageTrails.PARALLEL_SHARE, near_net = StageTrails.NEAR_NET,
-		level_gap = StageTrails.LEVEL_GAP, node_sep = NODE_SEP, node_same = NODE_SAME, max_degree = MAX_DEGREE,
-		loop_ratio = LOOP_RATIO, loop_accept = LOOP_ACCEPT, loop_share = LOOP_SHARE, loop_len_old = LOOP_LEN_OLD,
-		far_r = FAR_R, far_share = FAR_SHARE, window_margin = WINDOW_MARGIN, window_retry = WINDOW_RETRY,
+		level_gap = StageTrails.LEVEL_GAP,
 		branch_len = StageTrails.BRANCH_LEN, shore_gap = StageTrails.SHORE_GAP, view_gap = StageTrails.VIEW_GAP,
 		view_rise = StageTrails.VIEW_RISE,
-		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX, shore_share = SHORE_SHARE,
-		mountain_detour = StageTrails.MOUNTAIN_DETOUR, mountain_reach = MOUNTAIN_REACH,
-		exit_angle = EXIT_ANGLE, exit_chord = EXIT_CHORD, spur_net_floor = SPUR_NET_FLOOR, ride_node_sep = RIDE_NODE_SEP,
+		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX,
+		mountain_detour = StageTrails.MOUNTAIN_DETOUR,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH
-	}.merged(routing.character_field).merged(overrides, true)
+	}.merged(routing.network_rules).merged(routing.character_field).merged(overrides, true)
 
 
 ## Вход C#: поля мира (ссылки на массивы), оси путей людей, поселения. unsafe — клетки небезопасных бродов
@@ -331,8 +306,9 @@ static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountai
 	var shore_anchors := StageTrails._shore_anchors(w, paths, settle_d, water_d)
 	var shore_found: PackedInt32Array = finder.fast().ShoreTargets(w.W, w.H, shore_anchors, corr, w.cost, water_d,
 		StageTrails.SHORE_MIN, StageTrails.SHORE_MAX)
+	var target_limit: int = RoadTuning.current().routing.network_rules.shore_target_factor * max_shores
 	for k in shore_anchors.size():
-		if spaced.size() >= 3 * max_shores: break
+		if spaced.size() >= target_limit: break
 		var t := shore_found[k]
 		if t < 0: continue
 		var tv := Vector2i(t % w.W, t / w.W)
@@ -372,7 +348,8 @@ static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 	var data := input(w, finder, surface, on_axis, unsafe)
 	prep.input = (Time.get_ticks_usec() - t0) / 1000.0
 	t0 = Time.get_ticks_usec()
-	var max_shores := maxi(2, w.settlements.size() / 4)
+	var rules := RoadTuning.current().routing.network_rules
+	var max_shores := maxi(int(rules.shore_min_count), w.settlements.size() / int(rules.shore_settlement_divisor))
 	var goals := spur_targets(w, finder, paths, mountain, max_shores, prep)
 	prep.targets = (Time.get_ticks_usec() - t0) / 1000.0
 	data.mode = "spurs"
@@ -451,13 +428,14 @@ static func _touches_approach(w: WorldData, path: PackedInt32Array, approach: Pa
 	return false
 
 
-## Точки примыкания маршрута nodes не ближе RIDE_NODE_SEP к точкам уже принятых маршрутов (совпадающие — общий узел).
+## Точки примыкания маршрута nodes не ближе ride_node_sep к точкам уже принятых маршрутов (совпадающие — общий узел).
 static func ride_nodes_spaced(w: WorldData, nodes: PackedInt32Array, chosen: Array) -> bool:
+	var rules := RoadTuning.current().routing.network_rules
 	for other: PackedInt32Array in chosen:
 		for a: int in nodes:
 			for b: int in other:
 				var d := Vector2(a % w.W - b % w.W, a / w.W - b / w.W).length()
-				if d > 1.5 and d < RIDE_NODE_SEP: return false
+				if d > float(rules.ride_shared_node) and d < float(rules.ride_node_sep): return false
 	return true
 
 
@@ -542,6 +520,7 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	if smooth_lines:
+		data.line_shape = routing.line_shape
 		_add_near_axes(w, pts, data)
 	for end in 2:
 		var join: Dictionary = joins.get(end, {})
@@ -577,7 +556,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 	for p: Dictionary in pts:
 		width = maxf(width, p.w)
 	# Запас на сглаживание оси хозяина и новой линии, плюс диагональ клетки.
-	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + 3.0)
+	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + float(RoadTuning.current().routing.network_rules.near_axis_search_pad))
 	var hosts := {}
 	for p: Dictionary in pts:
 		var px := floori(p.x)

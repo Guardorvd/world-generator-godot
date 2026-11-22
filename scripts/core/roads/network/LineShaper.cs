@@ -15,24 +15,74 @@ internal sealed class LineShaper
 	private readonly bool _hasAxis, _mountain;
 	private readonly double _grade, _cross, _relax;
 
-	// ---- фаза 3.4: сглаживание по прорежённой линии (~4 м) с Якоби-проходами, монотонной защитой угла и 2-м профилем
-	public const double SmoothSpacing = 0.98;       // шаг прореживания до Stations(), клеток (~3,92 м)
-	public const double AxisPinCells = 2.0;         // закрепление вокруг осей сооружений, клеток (8 м)
-	public const int BiharmonicPasses = 10;
-	public const double BiharmonicStep = 0.375;
-	public const int KinkLaplacianPasses = 4;
-	public const double KinkLaplacianAngle = 34.0;  // град.: прицельный Лаплас на изломах > 34°
-	public const double SmoothStep = 0.45;
-	public const double MoveEpsSq = 1e-4;           // порог «нечего двигать», кл²
-	public const double RoundAngle = 18.0;          // град.: скругление вершин > 18° перед Stations()
-	private static readonly double[] RoundFractions = { 0.34, 0.22, 0.14, 0.08 };
-	private static readonly double[] MountainRoundFractions = { 0.14, 0.08 };
+	internal sealed class Settings
+	{
+		internal readonly double SmoothSpacing;
+		internal readonly double AxisPinCells;
+		internal readonly int BiharmonicPasses;
+		internal readonly double BiharmonicStep;
+		internal readonly int LaplacianPasses;
+		internal readonly int KinkLaplacianPasses;
+		internal readonly double KinkLaplacianAngle;
+		internal readonly int FinalKinkPasses;
+		internal readonly double SmoothStep;
+		internal readonly double BiharmonicEdgeStep;
+		internal readonly double MoveEpsSq;
+		internal readonly int MoveRetries;
+		internal readonly double MoveRetryScale;
+		internal readonly double RoundAngle;
+		internal readonly double[] RoundFractions;
+		internal readonly double[] MountainRoundFractions;
+		internal readonly double RoundCorridor;
+		internal readonly double MinSubdivision;
+		internal readonly int ProfileRestoreLimit;
+		internal readonly double RestoreBack;
+		internal readonly double RestoreForward;
+		internal readonly double TurnChord;
+		internal readonly double MinTurnChord;
+		internal readonly double RoundSampling;
+		internal readonly double RoundMinArm;
+		internal readonly double RoundTrimLimit;
+
+		internal Settings(Godot.Collections.Dictionary input)
+		{
+			SmoothSpacing = Params.Num(input, "smooth_spacing");
+			AxisPinCells = Params.Num(input, "axis_pin_cells");
+			BiharmonicPasses = (int)Params.Num(input, "biharmonic_passes");
+			BiharmonicStep = Params.Num(input, "biharmonic_step");
+			LaplacianPasses = (int)Params.Num(input, "laplacian_passes");
+			KinkLaplacianPasses = (int)Params.Num(input, "kink_laplacian_passes");
+			KinkLaplacianAngle = Params.Num(input, "kink_laplacian_angle");
+			FinalKinkPasses = (int)Params.Num(input, "final_kink_passes");
+			SmoothStep = Params.Num(input, "smooth_step");
+			BiharmonicEdgeStep = Params.Num(input, "biharmonic_edge_step");
+			MoveEpsSq = Params.Num(input, "move_eps_sq");
+			MoveRetries = (int)Params.Num(input, "move_retries");
+			MoveRetryScale = Params.Num(input, "move_retry_scale");
+			RoundAngle = Params.Num(input, "round_angle");
+			RoundFractions = input["round_fractions"].AsFloat64Array();
+			MountainRoundFractions = input["mountain_round_fractions"].AsFloat64Array();
+			RoundCorridor = Params.Num(input, "round_corridor");
+			MinSubdivision = Params.Num(input, "min_subdivision");
+			ProfileRestoreLimit = (int)Params.Num(input, "profile_restore_limit");
+			RestoreBack = Params.Num(input, "restore_back");
+			RestoreForward = Params.Num(input, "restore_forward");
+			TurnChord = Params.Num(input, "turn_chord");
+			MinTurnChord = Params.Num(input, "min_turn_chord");
+			RoundSampling = Params.Num(input, "round_sampling");
+			RoundMinArm = Params.Num(input, "round_min_arm");
+			RoundTrimLimit = Params.Num(input, "round_trim_limit");
+		}
+	}
+
+	private readonly Settings _settings;
+
 	internal int SmoothMoved, SmoothRejected, Hairpins, HairpinsMoved;
 	/// <summary>Фаза 3.3+: сглаживание с бигармоническим членом Δ⁴.</summary>
 	private readonly bool _biharmonic;
 
 	internal LineShaper(LineBuilder builder, FastGrid probe, List<P> raw, List<byte> rawPinned,
-		bool hasAxis, double grade, double cross, double relax, bool mountain, bool biharmonic)
+		bool hasAxis, double grade, double cross, double relax, bool mountain, bool biharmonic, Settings settings)
 	{
 		_builder = builder;
 		_probe = probe;
@@ -44,6 +94,7 @@ internal sealed class LineShaper
 		_relax = relax;
 		_mountain = mountain;
 		_biharmonic = biharmonic;
+		_settings = settings;
 	}
 
 	/// <summary>Сглаживание по прорежённой линии (~4 м) до Stations(): ресэмпл свободных участков с локальным возвратом _raw
@@ -89,7 +140,7 @@ internal sealed class LineShaper
 			}
 			else
 			{
-				int segs = Math.Max(1, (int)Math.Ceiling(spanLen / SmoothSpacing));
+				int segs = Math.Max(1, (int)Math.Ceiling(spanLen / _settings.SmoothSpacing));
 				var ts = new List<double>(segs + 4);
 				for (int k = 0; k <= segs; k++) ts.Add(spanLen * k / segs);
 				int idx = 0;
@@ -100,7 +151,7 @@ internal sealed class LineShaper
 					P p1 = SampleSpan(_raw, rawS, a, b, s1);
 					P mid = new((p0.X + p1.X) * 0.5, (p0.Y + p1.Y) * 0.5, p0.W);
 					bool ok = validator.Segment(p0.X, p0.Y, p1.X, p1.Y, p0.W, local, _cross);
-					if (s1 - s0 > 0.35 && (!ok || _builder.AxisBlocked(V.Of(mid.X, mid.Y)) ||
+					if (s1 - s0 > _settings.MinSubdivision && (!ok || _builder.AxisBlocked(V.Of(mid.X, mid.Y)) ||
 						!validator.KeepsClearance(SampleSpan(_raw, rawS, a, b, (s0 + s1) * 0.5), mid, _raw[0], _raw[^1])))
 					{
 						ts.Insert(idx + 1, 0.5 * (s0 + s1));
@@ -148,8 +199,8 @@ internal sealed class LineShaper
 			if (_builder.AxisBlocked(V.Of(pts[k].X, pts[k].Y)))
 			{
 				blocked[k] = 1;
-				for (int j = k; j >= 0 && ptsS[k] - ptsS[j] <= AxisPinCells + 1e-6; j--) { pinned[j] = true; hardPinned[j] = true; }
-				for (int j = k; j < n && ptsS[j] - ptsS[k] <= AxisPinCells + 1e-6; j++) { pinned[j] = true; hardPinned[j] = true; }
+				for (int j = k; j >= 0 && ptsS[k] - ptsS[j] <= _settings.AxisPinCells + 1e-6; j--) { pinned[j] = true; hardPinned[j] = true; }
+				for (int j = k; j < n && ptsS[j] - ptsS[k] <= _settings.AxisPinCells + 1e-6; j++) { pinned[j] = true; hardPinned[j] = true; }
 			}
 		}
 		var midHeights = new double[n - 1];
@@ -176,26 +227,26 @@ internal sealed class LineShaper
 
 		if (_biharmonic)
 		{
-			for (int pass = 0; pass < BiharmonicPasses; pass++)
+			for (int pass = 0; pass < _settings.BiharmonicPasses; pass++)
 			{
 				int movedPass = RunJacobiPass(pts, orig, pinned, null, heights, midHeights, blocked, midBlocked, segBad,
 					prev, prevH, prevMidH, prevMidB, newSegBad, prevAng, prevWinMax, curAng, moved, prevProfOk, prevRadOk, inQueue, qBuf,
-					true, BiharmonicStep, validator, local);
+					true, _settings.BiharmonicStep, validator, local);
 				if (movedPass == 0) break;
 			}
 		}
 		else
 		{
-			for (int pass = 0; pass < 4; pass++)
+			for (int pass = 0; pass < _settings.LaplacianPasses; pass++)
 			{
 				int movedPass = RunJacobiPass(pts, orig, pinned, null, heights, midHeights, blocked, midBlocked, segBad,
 					prev, prevH, prevMidH, prevMidB, newSegBad, prevAng, prevWinMax, curAng, moved, prevProfOk, prevRadOk, inQueue, qBuf,
-					false, SmoothStep, validator, local);
+					false, _settings.SmoothStep, validator, local);
 				if (movedPass == 0) break;
 			}
 		}
-		double kinkRad = Deg(KinkLaplacianAngle);
-		for (int pass = 0; pass < KinkLaplacianPasses; pass++)
+		double kinkRad = Deg(_settings.KinkLaplacianAngle);
+		for (int pass = 0; pass < _settings.KinkLaplacianPasses; pass++)
 		{
 			bool anyActive = false;
 			Array.Clear(active, 0, n);
@@ -210,10 +261,10 @@ internal sealed class LineShaper
 			if (!anyActive) break;
 			int movedPass = RunJacobiPass(pts, orig, pinned, active, heights, midHeights, blocked, midBlocked, segBad,
 				prev, prevH, prevMidH, prevMidB, newSegBad, prevAng, prevWinMax, curAng, moved, prevProfOk, prevRadOk, inQueue, qBuf,
-				false, SmoothStep, validator, local);
+				false, _settings.SmoothStep, validator, local);
 			if (movedPass == 0) break;
 		}
-		for (int pass = 0; pass < 2; pass++)
+		for (int pass = 0; pass < _settings.FinalKinkPasses; pass++)
 		{
 			int movedPass = 0;
 			for (int i = 1; i < n - 1; i++)
@@ -221,8 +272,8 @@ internal sealed class LineShaper
 				if (pinned[i]) continue;
 				if (TurnAngle4m(pts, i) <= kinkRad) continue;
 				double mx = (pts[i - 1].X + pts[i + 1].X) * 0.5, my = (pts[i - 1].Y + pts[i + 1].Y) * 0.5;
-				double dx = (mx - pts[i].X) * SmoothStep, dy = (my - pts[i].Y) * SmoothStep;
-				if (dx * dx + dy * dy < MoveEpsSq) continue;
+				double dx = (mx - pts[i].X) * _settings.SmoothStep, dy = (my - pts[i].Y) * _settings.SmoothStep;
+				if (dx * dx + dy * dy < _settings.MoveEpsSq) continue;
 				if (TryMove(pts, orig, heights, midHeights, blocked, midBlocked, segBad, i, dx, dy, validator, local)) movedPass++;
 			}
 			if (movedPass == 0) break;
@@ -236,14 +287,14 @@ internal sealed class LineShaper
 
 	private void EnsureInitialProfile(List<P> raw, double[] rawS, byte[] rawPin, List<P> pts, List<byte> pinList, List<double> ptsRawS, double grade)
 	{
-		for (int rep = 0; rep < 64; rep++)
+		for (int rep = 0; rep < _settings.ProfileRestoreLimit; rep++)
 		{
 			int failIdx = FirstStationsProfileFail(pts, grade);
 			if (failIdx < 0) break;
 			int lo = failIdx;
-			while (lo > 0 && ptsRawS[failIdx] - ptsRawS[lo] < 4.0) lo--;
+			while (lo > 0 && ptsRawS[failIdx] - ptsRawS[lo] < _settings.RestoreBack) lo--;
 			int hi = Math.Min(pts.Count - 1, failIdx + 1);
-			while (hi < pts.Count - 1 && ptsRawS[hi] - ptsRawS[failIdx] < 1.5) hi++;
+			while (hi < pts.Count - 1 && ptsRawS[hi] - ptsRawS[failIdx] < _settings.RestoreForward) hi++;
 			while (true)
 			{
 				int ra = 0;
@@ -294,7 +345,7 @@ internal sealed class LineShaper
 			P a = pts[k - 1], b = pts[k];
 			double dx = b.X - a.X, dy = b.Y - a.Y;
 			double length = Math.Sqrt(dx * dx + dy * dy) * Tile;
-			int steps = Math.Max(1, (int)Math.Ceiling(length / 2.0));
+			int steps = Math.Max(1, (int)Math.Ceiling(length / StationSpacingMetres));
 			for (int s = 0; s < steps && pos < sn; s++) segOf[pos++] = k - 1;
 		}
 		var points = new V[sn];
@@ -367,20 +418,20 @@ internal sealed class LineShaper
 			{
 				tx = (prev[i - 1].X + prev[i + 1].X) * 0.5;
 				ty = (prev[i - 1].Y + prev[i + 1].Y) * 0.5;
-				lam = biharmonic ? 0.35 : step;
+				lam = biharmonic ? _settings.BiharmonicEdgeStep : step;
 			}
 			double dx = (tx - prev[i].X) * lam, dy = (ty - prev[i].Y) * lam;
-			if (dx * dx + dy * dy < MoveEpsSq) continue;
+			if (dx * dx + dy * dy < _settings.MoveEpsSq) continue;
 			bool ok = false;
-			for (int attempt = 0; attempt < 3; attempt++, dx *= 0.5, dy *= 0.5)
+			for (int attempt = 0; attempt < _settings.MoveRetries; attempt++, dx *= _settings.MoveRetryScale, dy *= _settings.MoveRetryScale)
 			{
-				if (dx * dx + dy * dy < MoveEpsSq) break;
+				if (dx * dx + dy * dy < _settings.MoveEpsSq) break;
 				double mx = prev[i].X + dx, my = prev[i].Y + dy;
 				V p = V.Of(mx, my);
 				double dev = double.PositiveInfinity;
 				for (int j = Math.Max(1, i - 3); j <= Math.Min(orig.Count - 1, i + 3); j++)
 					dev = Math.Min(dev, p.DistanceSquaredTo(ClosestOnSegment(p, V.Of(orig[j - 1].X, orig[j - 1].Y), V.Of(orig[j].X, orig[j].Y))));
-				if (dev > TurnCorridor * TurnCorridor) continue;
+				if (dev > _settings.RoundCorridor * _settings.RoundCorridor) continue;
 				if (_builder.AxisBlocked(p)) continue;
 				pts[i] = new P(mx, my, prev[i].W);
 				moved[i] = true;
@@ -493,10 +544,10 @@ internal sealed class LineShaper
 		return kept;
 	}
 
-	private static void PinAxisSpan(double[] rawS, byte[] rawPin, int k, int m)
+	private void PinAxisSpan(double[] rawS, byte[] rawPin, int k, int m)
 	{
-		for (int j = k; j >= 0 && rawS[k] - rawS[j] <= AxisPinCells + 1e-6; j--) rawPin[j] = 1;
-		for (int j = k; j < m && rawS[j] - rawS[k] <= AxisPinCells + 1e-6; j++) rawPin[j] = 1;
+		for (int j = k; j >= 0 && rawS[k] - rawS[j] <= _settings.AxisPinCells + 1e-6; j--) rawPin[j] = 1;
+		for (int j = k; j < m && rawS[j] - rawS[k] <= _settings.AxisPinCells + 1e-6; j++) rawPin[j] = 1;
 	}
 
 	private static P SampleSpan(List<P> raw, double[] rawS, int a, int b, double s)
@@ -514,7 +565,7 @@ internal sealed class LineShaper
 
 	/// <summary>Точка вдоль ломаной на расстоянии targetLen от вершины k в направлении dir (−1 / +1); у конца ≥ 0,3 кл
 	/// фиксируется на концевой точке (без скачка угла/радиуса при длине краевого отрезка 0,87..1,0 кл).</summary>
-	internal static bool ChordPoint(IReadOnlyList<P> pts, int k, int dir, double targetLen, out double px, out double py)
+	private bool ChordPoint(IReadOnlyList<P> pts, int k, int dir, double targetLen, out double px, out double py)
 	{
 		double rem = targetLen, walked = 0.0;
 		int cur = k, n = pts.Count;
@@ -523,7 +574,7 @@ internal sealed class LineShaper
 			int next = cur + dir;
 			if (next < 0 || next >= n)
 			{
-				if (walked >= 0.3) { px = pts[cur].X; py = pts[cur].Y; return true; }
+				if (walked >= _settings.MinTurnChord) { px = pts[cur].X; py = pts[cur].Y; return true; }
 				px = py = 0.0;
 				return false;
 			}
@@ -542,17 +593,17 @@ internal sealed class LineShaper
 		}
 	}
 
-	private static double TurnAngle4m(IReadOnlyList<P> pts, int k)
+	private double TurnAngle4m(IReadOnlyList<P> pts, int k)
 	{
-		if (!ChordPoint(pts, k, -1, 1.0, out double ax, out double ay)) return 0.0;
-		if (!ChordPoint(pts, k, 1, 1.0, out double cx, out double cy)) return 0.0;
+		if (!ChordPoint(pts, k, -1, _settings.TurnChord, out double ax, out double ay)) return 0.0;
+		if (!ChordPoint(pts, k, 1, _settings.TurnChord, out double cx, out double cy)) return 0.0;
 		double vx0 = pts[k].X - ax, vy0 = pts[k].Y - ay;
 		double vx1 = cx - pts[k].X, vy1 = cy - pts[k].Y;
 		if (vx0 * vx0 + vy0 * vy0 < 1e-10 || vx1 * vx1 + vy1 * vy1 < 1e-10) return 0.0;
 		return Math.Abs(Math.Atan2(vx0 * vy1 - vy0 * vx1, vx0 * vx1 + vy0 * vy1));
 	}
 
-	private static double MaxTurnAngleWindow(IReadOnlyList<P> pts, int i)
+	private double MaxTurnAngleWindow(IReadOnlyList<P> pts, int i)
 	{
 		double best = 0.0;
 		int lo = Math.Max(1, i - 3), hi = Math.Min(pts.Count - 2, i + 3);
@@ -567,13 +618,13 @@ internal sealed class LineShaper
 		int lo = Math.Max(1, i - 2), hi = Math.Min(pts.Count - 2, i + 2);
 		for (int k = lo; k <= hi; k++)
 		{
-			if (!ChordPoint(pts, k, -1, 1.0, out double ax, out double ay)) continue;
-			if (!ChordPoint(pts, k, 1, 1.0, out double cx, out double cy)) continue;
+			if (!ChordPoint(pts, k, -1, _settings.TurnChord, out double ax, out double ay)) continue;
+			if (!ChordPoint(pts, k, 1, _settings.TurnChord, out double cx, out double cy)) continue;
 			double bx = pts[k].X, by = pts[k].Y;
 			double a = Math.Sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
 			double b = Math.Sqrt((cx - bx) * (cx - bx) + (cy - by) * (cy - by));
 			double c = Math.Sqrt((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay));
-			if (a < 0.3 || b < 0.3) continue;
+			if (a < _settings.MinTurnChord || b < _settings.MinTurnChord) continue;
 			double cross = Math.Abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
 			if (cross < 1e-9) continue;
 			best = Math.Min(best, a * b * c / (2.0 * cross) * Tile);
@@ -610,7 +661,7 @@ internal sealed class LineShaper
 			P pa = pts[from + s], pb = pts[from + s + 1];
 			double dx = pb.X - pa.X, dy = pb.Y - pa.Y;
 			double sl = Math.Sqrt(dx * dx + dy * dy);
-			int steps = Math.Max(1, (int)Math.Ceiling(sl * Tile / 2.0));
+			int steps = Math.Max(1, (int)Math.Ceiling(sl * Tile / StationSpacingMetres));
 			segLens[s] = sl;
 			segSteps[s] = steps;
 			totalStations += steps;
@@ -671,15 +722,15 @@ internal sealed class LineShaper
 			+ (ProfileWindowOk(pts, heights, midHeights, blocked, midBlocked, i, _grade) ? 0 : 1)
 			+ (MinRadiusWindow4m(pts, i) < needR ? 1 : 0);
 		double maxAngleBefore = MaxTurnAngleWindow(pts, i);
-		for (int attempt = 0; attempt < 3; attempt++, dx *= 0.5, dy *= 0.5)
+		for (int attempt = 0; attempt < _settings.MoveRetries; attempt++, dx *= _settings.MoveRetryScale, dy *= _settings.MoveRetryScale)
 		{
-			if (dx * dx + dy * dy < MoveEpsSq) break;
+			if (dx * dx + dy * dy < _settings.MoveEpsSq) break;
 			var moved = new P(keep.X + dx, keep.Y + dy, keep.W);
 			V p = V.Of(moved.X, moved.Y);
 			double deviation = double.PositiveInfinity;
 			for (int j = Math.Max(1, i - 3); j <= Math.Min(orig.Count - 1, i + 3); j++)
 				deviation = Math.Min(deviation, p.DistanceSquaredTo(ClosestOnSegment(p, V.Of(orig[j - 1].X, orig[j - 1].Y), V.Of(orig[j].X, orig[j].Y))));
-			if (deviation > TurnCorridor * TurnCorridor) continue;
+			if (deviation > _settings.RoundCorridor * _settings.RoundCorridor) continue;
 			if (_builder.AxisBlocked(p)) continue;
 			if (!validator.KeepsClearance(keep, moved, pts[0], pts[^1])
 				|| !validator.KeepsClearance(Midpoint(pts[i - 1], keep), Midpoint(pts[i - 1], moved), pts[0], pts[^1])
@@ -734,8 +785,8 @@ internal sealed class LineShaper
 		int n = pts.Count;
 		var outp = new List<P>(n * 2) { pts[0] };
 		var outpBlock = new List<byte>(n * 2) { blocked[0] };
-		double roundRad = Deg(RoundAngle);
-		double[] fracs = _mountain ? MountainRoundFractions : RoundFractions;
+		double roundRad = Deg(_settings.RoundAngle);
+		double[] fracs = _mountain ? _settings.MountainRoundFractions : _settings.RoundFractions;
 		var fillet = new List<P>(16);
 		var win = new List<P>(48);
 		var winBlock = new List<byte>(48);
@@ -748,7 +799,7 @@ internal sealed class LineShaper
 			if (hardPinned[i] || a.W != b.W || c.W != b.W) { outp.Add(b); outpBlock.Add(blocked[i]); continue; }
 			double ax = b.X - a.X, ay = b.Y - a.Y, bx = c.X - b.X, by = c.Y - b.Y;
 			double la = Math.Sqrt(ax * ax + ay * ay), lb = Math.Sqrt(bx * bx + by * by);
-			if (la < 1e-6 || lb < 1e-6 || (la < 0.25 && lb < 0.25)) { outp.Add(b); outpBlock.Add(blocked[i]); continue; }
+			if (la < 1e-6 || lb < 1e-6 || (la < _settings.RoundMinArm && lb < _settings.RoundMinArm)) { outp.Add(b); outpBlock.Add(blocked[i]); continue; }
 			double ang = Math.Abs(Math.Atan2(ax * by - ay * bx, ax * bx + ay * by));
 			if (ang <= roundRad) { outp.Add(b); outpBlock.Add(blocked[i]); continue; }
 			double seg0Len = Math.Sqrt((b.X - outp[^1].X) * (b.X - outp[^1].X) + (b.Y - outp[^1].Y) * (b.Y - outp[^1].Y));
@@ -779,13 +830,13 @@ internal sealed class LineShaper
 			foreach (double f in fracs)
 			{
 				fillet.Clear();
-				double r0 = la > 1.2 ? f * 1.2 / la : f;
-				double r1 = lb > 1.2 ? f * 1.2 / lb : f;
+				double r0 = la > _settings.RoundTrimLimit ? f * _settings.RoundTrimLimit / la : f;
+				double r1 = lb > _settings.RoundTrimLimit ? f * _settings.RoundTrimLimit / lb : f;
 				double p0x = b.X - ax * r0, p0y = b.Y - ay * r0;
 				double p2x = b.X + bx * r1, p2y = b.Y + by * r1;
 				double arcLen = Math.Sqrt((p0x - b.X) * (p0x - b.X) + (p0y - b.Y) * (p0y - b.Y))
 							  + Math.Sqrt((p2x - b.X) * (p2x - b.X) + (p2y - b.Y) * (p2y - b.Y));
-				int steps = Math.Max(2, (int)Math.Ceiling(arcLen / 0.22));
+				int steps = Math.Max(2, (int)Math.Ceiling(arcLen / _settings.RoundSampling));
 				bool valid = true;
 				for (int s = 0; s <= steps; s++)
 				{
@@ -802,7 +853,7 @@ internal sealed class LineShaper
 						double d = vp.DistanceSquaredTo(q);
 						if (d < dev) { dev = d; nearest = q; }
 					}
-					if (dev > TurnCorridor * TurnCorridor) { valid = false; break; }
+					if (dev > _settings.RoundCorridor * _settings.RoundCorridor) { valid = false; break; }
 					if (!validator.KeepsClearance(new P(nearest.X, nearest.Y, b.W), new P(x, y, b.W), pts[0], pts[^1]))
 					{ valid = false; break; }
 					if (fillet.Count == 0 || Math.Sqrt((x - fillet[^1].X) * (x - fillet[^1].X) + (y - fillet[^1].Y) * (y - fillet[^1].Y)) > 1e-5)
@@ -864,7 +915,7 @@ internal sealed class LineShaper
 			P pa = pts[k - 1], pb = pts[k];
 			double dx = pb.X - pa.X, dy = pb.Y - pa.Y;
 			double sl = Math.Sqrt(dx * dx + dy * dy);
-			int steps = Math.Max(1, (int)Math.Ceiling(sl * Tile / 2.0));
+			int steps = Math.Max(1, (int)Math.Ceiling(sl * Tile / StationSpacingMetres));
 			for (int s = 1; s < steps; s++)
 			{
 				double t = (double)s / steps;

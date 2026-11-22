@@ -883,6 +883,18 @@ func _flag_check() -> void:
 			baseline.places, WorldCache._road_layer_suffixes(tuning, false).places])
 	check(baseline.places != arc_key and baseline.places != meander_key and arc_key != meander_key,
 		"дуги и меандр переключаются отдельно и входят в ключ слоя путей")
+	var original_spacing: float = tuning.routing.line_shape.smooth_spacing
+	tuning.routing.line_shape.smooth_spacing = original_spacing + 0.1
+	var shape_key: String = WorldCache._road_layer_suffixes(tuning, false).places
+	tuning.routing.line_shape.smooth_spacing = original_spacing
+	var original_ratio: float = tuning.routing.network_rules.loop_ratio
+	tuning.routing.network_rules.loop_ratio = original_ratio + 0.1
+	var rules_key: String = WorldCache._road_layer_suffixes(tuning, false).places
+	tuning.routing.network_rules.loop_ratio = original_ratio
+	check(baseline.places != shape_key and baseline.places != rules_key and shape_key != rules_key,
+		"сглаживание и правила петель входят в ключ слоя путей")
+	check(RoadTuning.Routing._ordered_values({b = 2, a = 1}) == RoadTuning.Routing._ordered_values({"a": 1, "b": 2}),
+		"отпечаток настроек не зависит от типа и порядка ключей словаря")
 	check(StageTrails.network_v2 and QuickTrails.saves_dir() == "user://saves" and QuickTrails.cache_dir() == "user://world_cache",
 		"сеть V2 включена без флага и использует общие папки")
 

@@ -319,7 +319,8 @@ public partial class FastGrid
 			bool smooth = input.ContainsKey("smooth_line") && input["smooth_line"].AsBool();
 			if (smooth)
 			{
-				var shaper = builder.CreateShaper(input.ContainsKey("biharmonic") && input["biharmonic"].AsBool());
+				var settings = new LineShaper.Settings(input["line_shape"].AsGodotDictionary());
+				var shaper = builder.CreateShaper(input.ContainsKey("biharmonic") && input["biharmonic"].AsBool(), settings);
 				RoadGraph axes = null;
 				if (input.ContainsKey("near_axis_start"))
 				{

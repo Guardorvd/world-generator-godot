@@ -64,7 +64,7 @@ public sealed class LineBuilder
 	}
 
 	// ---- числа road_line.gd и StageTrails
-	internal const double TurnCorridor = 0.65;
+	private const double TurnCorridor = 0.65;
 	internal const double Tile = 4.0, ProfileBase = 3.0;
 	private const double Gravity = 16.0;
 	private const int StraightSpan = 10;
@@ -458,8 +458,8 @@ public sealed class LineBuilder
 		return curve;
 	}
 
-	internal LineShaper CreateShaper(bool biharmonic) =>
-		new(this, _probe, _raw, _rawPinned, _axis.Length > 0, _grade, _cross, _relax, _mountain, biharmonic);
+	internal LineShaper CreateShaper(bool biharmonic, LineShaper.Settings settings) =>
+		new(this, _probe, _raw, _rawPinned, _axis.Length > 0, _grade, _cross, _relax, _mountain, biharmonic, settings);
 
 	/// <summary>RoadLine.profile_ok: точки — float32 (Vector2), высоты и пробег — double.</summary>
 	private bool ProfileOk(V[] points, double grade, byte[] skip) =>

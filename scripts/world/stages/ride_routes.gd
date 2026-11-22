@@ -419,6 +419,7 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 
 
 static func _add_reserve_ends(start: Dictionary, ends: Array, chosen: Array, reserve: Array) -> void:
+	var node_sep: float = RoadTuning.current().routing.network_rules.ride_node_sep
 	var used := {}
 	for primary: Array in chosen: used[primary[0].i] = true
 	for primary: Array in chosen:
@@ -427,7 +428,7 @@ static func _add_reserve_ends(start: Dictionary, ends: Array, chosen: Array, res
 		for entry: Array in ends:
 			var alternate: Dictionary = entry[0]
 			if used.has(alternate.i): continue
-			if Grid.hypot(alternate.x - target.x, alternate.y - target.y) < StageTrails.RoadNetworkV2.RIDE_NODE_SEP: continue
+			if Grid.hypot(alternate.x - target.x, alternate.y - target.y) < node_sep: continue
 			var offset := Vector2(alternate.x - start.x, alternate.y - start.y)
 			if offset.dot(direction) / entry[2] < END_ANGLE: continue
 			used[alternate.i] = true
