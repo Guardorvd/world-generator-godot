@@ -144,6 +144,8 @@ var last_seed := ""               # зерно последнего запуще
 var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
 var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
 var hide_recommended_worlds := false # после очистки список остаётся пустым и при следующем запуске
+var active_template := WorldTemplate.DEFAULT_ID
+var _template_worlds := {} # template_id -> {seed, recent, favorites, hide_recommended}
 ## 14.4+: бесконечная генерация — соседние области за краем стартовой готовятся и по ним можно ездить.
 ## Выключена — мир это стартовая область, дальний рельеф виден, но выехать нельзя и области не готовятся
 var infinite_world := false
@@ -199,10 +201,43 @@ func _apply_config(cfg: ConfigFile) -> void:
 	if not cfg.has_section_key("time", "start_hour_set") and day_minutes == OLD_DAY_MINUTES:
 		day_minutes = DEFAULT_DAY_MINUTES
 	start_hour_set = _flag(cfg, "time", "start_hour_set", start_hour != DEFAULT_START_HOUR)
-	last_seed = str(cfg.get_value("world", "seed", "")).strip_edges().left(MAX_SEED_LEN)
-	recent_seeds = _seeds(cfg, "recent", RECENT_MAX)
-	favorite_seeds = _seeds(cfg, "favorites", FAVORITES_MAX)
-	hide_recommended_worlds = _flag(cfg, "world", "hide_recommended", false)
+	_template_worlds.clear()
+	for tid: String in WorldTemplate.ids():
+		var sec := WorldTemplate.settings_section(tid)
+		_template_worlds[tid] = {
+			seed = str(cfg.get_value(sec, "seed", "")).strip_edges().left(MAX_SEED_LEN),
+			recent = _seeds(cfg, "recent", RECENT_MAX, sec),
+			favorites = _seeds(cfg, "favorites", FAVORITES_MAX, sec),
+			hide_recommended = _flag(cfg, sec, "hide_recommended", false),
+		}
+	_load_active_template(active_template)
+
+
+func _load_active_template(tid: String) -> void:
+	var id := WorldTemplate.normalize_id(tid)
+	active_template = id
+	var bucket: Dictionary = _template_worlds.get(id, {seed = "", recent = [] as Array[String], favorites = [] as Array[String], hide_recommended = false})
+	last_seed = str(bucket.get("seed", ""))
+	recent_seeds = (bucket.get("recent", []) as Array[String]).duplicate()
+	favorite_seeds = (bucket.get("favorites", []) as Array[String]).duplicate()
+	hide_recommended_worlds = bool(bucket.get("hide_recommended", false))
+
+
+func _sync_active_template() -> void:
+	_template_worlds[active_template] = {
+		seed = last_seed,
+		recent = recent_seeds.duplicate(),
+		favorites = favorite_seeds.duplicate(),
+		hide_recommended = hide_recommended_worlds,
+	}
+
+
+func set_active_template(id: String) -> void:
+	var tid := WorldTemplate.normalize_id(id)
+	if tid == active_template:
+		return
+	_sync_active_template()
+	_load_active_template(tid)
 
 
 func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low: float, high: float) -> float:
@@ -215,9 +250,9 @@ func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low
 
 
 ## Список зёрен из файла: только непустые строки, без повторов, не длиннее поля ввода
-func _seeds(cfg: ConfigFile, key: String, limit: int) -> Array[String]:
+func _seeds(cfg: ConfigFile, key: String, limit: int, section := "world") -> Array[String]:
 	var out: Array[String] = []
-	var value: Variant = cfg.get_value("world", key, [])
+	var value: Variant = cfg.get_value(section, key, [])
 	if not (value is Array):
 		return out
 	for v: Variant in value:
@@ -233,6 +268,7 @@ func remember_seed(seed_text: String) -> void:
 	recent_seeds.erase(seed_text)
 	recent_seeds.push_front(seed_text)
 	recent_seeds.resize(mini(recent_seeds.size(), RECENT_MAX))
+	_sync_active_template()
 
 
 ## Звёздочка: добавить в избранное или убрать; false — избранное уже полное
@@ -243,19 +279,24 @@ func toggle_favorite(seed_text: String) -> bool:
 		favorite_seeds.append(seed_text)
 	else:
 		return false
+	_sync_active_template()
 	return true
 
 
-## Зёрна, чьи миры держит кэш: последние и избранные
-func keep_seeds() -> Array[String]:
-	var out: Array[String] = recent_seeds.duplicate()
-	for s in favorite_seeds:
+## Зёрна, чьи миры держит кэш: последние и избранные (у Типа 1 также миры автора)
+func keep_seeds(template_id := "") -> Array[String]:
+	var tid := active_template if template_id.is_empty() else WorldTemplate.normalize_id(template_id)
+	_sync_active_template()
+	var bucket: Dictionary = _template_worlds.get(tid, {recent = [] as Array[String], favorites = [] as Array[String]})
+	var out: Array[String] = (bucket.get("recent", []) as Array[String]).duplicate()
+	for s: String in bucket.get("favorites", []):
 		if not s in out:
 			out.append(s)
-	# 14.5: миры автора готовы в проекте — их кэш не удаляется
-	for r: Dictionary in RecommendedSeeds.SEEDS:
-		if not r.seed in out:
-			out.append(r.seed)
+	# 14.5: миры автора готовы в проекте — их кэш не удаляется (относятся к Типу 1)
+	if WorldTemplate.is_default(tid):
+		for r: Dictionary in RecommendedSeeds.SEEDS:
+			if not r.seed in out:
+				out.append(r.seed)
 	return out
 
 
@@ -331,10 +372,14 @@ func save_settings() -> Error:
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
 	cfg.set_value("time", "start_hour_set", start_hour_set)
-	cfg.set_value("world", "seed", last_seed)
-	cfg.set_value("world", "recent", Array(recent_seeds))
-	cfg.set_value("world", "favorites", Array(favorite_seeds))
-	cfg.set_value("world", "hide_recommended", hide_recommended_worlds)
+	_sync_active_template()
+	for tid: String in WorldTemplate.ids():
+		var sec := WorldTemplate.settings_section(tid)
+		var bucket: Dictionary = _template_worlds.get(tid, {seed = "", recent = [] as Array[String], favorites = [] as Array[String], hide_recommended = false})
+		cfg.set_value(sec, "seed", str(bucket.get("seed", "")))
+		cfg.set_value(sec, "recent", Array(bucket.get("recent", [])))
+		cfg.set_value(sec, "favorites", Array(bucket.get("favorites", [])))
+		cfg.set_value(sec, "hide_recommended", bool(bucket.get("hide_recommended", false)))
 	cfg.set_value("world", "infinite", infinite_world)
 	var err := cfg.save(settings_path)
 	if err != OK:
@@ -397,7 +442,10 @@ func apply_volume() -> void:
 func reset() -> void:
 	reset_defaults()
 	settings_path = PATH
+	active_template = WorldTemplate.DEFAULT_ID
+	_template_worlds.clear()
 	last_seed = ""
 	recent_seeds.clear()
 	favorite_seeds.clear()
+	hide_recommended_worlds = false
 	infinite_world = false

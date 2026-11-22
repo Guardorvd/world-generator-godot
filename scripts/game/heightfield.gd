@@ -83,6 +83,28 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	var N := w.N
 	var W := w.W
 	var H := w.H
+	if WorldTemplate.has_valley_river(w.template_id):
+		var t_v := Time.get_ticks_usec()
+		hv.resize(N)
+		hv_raw.resize(N)
+		var wh := w.h
+		var wo := w.ocean
+		for i in N:
+			var hm := (maxf(-GameConfig.OCEAN_DEPTH, wh[i] * GameConfig.OCEAN_DEPTH) - 0.5) if wo[i] != 0 else wh[i] * HS
+			hv_raw[i] = hm
+			hv[i] = hm
+		ribbons = [ValleyAxis.for_world(w).build_river_ribbon()]
+		index_ribbons()
+		path_timings.ribbons_ms = (Time.get_ticks_usec() - t_v) / 1000.0
+		path_timings.carve_ms = 0.0
+		path_timings.bed_cut_ms = 0.0
+		path_timings.banks_ms = 0.0
+		if rivers_only:
+			return
+		complete_water()
+		if with_structures:
+			finish_paths()
+		return
 	if allow_fast_river_surface and w.outer == null:
 		var native := Grid.fast_grid()
 		if native != null:

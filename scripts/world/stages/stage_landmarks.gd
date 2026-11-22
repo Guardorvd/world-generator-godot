@@ -62,6 +62,9 @@ static func _by_score_desc(a: Array, b: Array) -> bool:
 
 
 static func _place_settlements(w: WorldData) -> void:
+	if WorldTemplate.has_single_road(w.template_id):
+		_place_expedition_settlements(w)
+		return
 	var W := w.W
 	var H := w.H
 	var candidate_seed := WGRandom.derive(w.seed_num, "settlement.candidate")
@@ -183,6 +186,57 @@ static func _place_settlements(w: WorldData) -> void:
 		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
 		s.style = floori(rng.next_float() * 4)
 		s.character = _character(w, s.i, s.town, Roles.character(s.role, w, pick.fields, s.i))
+	w.settlements = settlements
+
+
+## Тип 2 («Речная экспедиция»): два опорных поселения по дорожному берегу —
+## старт-лагерь в верховье (индекс 0) и финишная речная база перед закрытым поворотом (индекс 1).
+static func _place_expedition_settlements(w: WorldData) -> void:
+	var W := w.W
+	var H := w.H
+	var axis := ValleyAxis.for_world(w)
+	var settlements: Array = []
+	var specs := [
+		{
+			y_min = 42, y_max = mini(72, H / 4),
+			sd_min = axis.river_hw_at(54) + 5.5, sd_max = axis.river_hw_at(54) + 16.0,
+			prefer_y = 54.0, prefer_sd = axis.river_hw_at(54) + 9.0,
+			role = "forest", importance = 0.90, homes_min = 3, homes_max = 4,
+			character = "лагерь в верховье",
+		},
+		{
+			y_min = maxi(H - 114, H * 3 / 4), y_max = H - 72,
+			sd_min = axis.river_hw_at(H - 94) + 5.5, sd_max = axis.river_hw_at(H - 94) + 15.0,
+			prefer_y = float(H - 94), prefer_sd = axis.river_hw_at(H - 94) + 8.5,
+			role = "coastal", importance = 0.85, homes_min = 4, homes_max = 6,
+			character = "речная база",
+		},
+	]
+	for spec: Dictionary in specs:
+		var cell := axis.find_terrace_cell(w, int(spec.y_min), int(spec.y_max),
+			float(spec.sd_min), float(spec.sd_max), axis.road_side, 0.16, float(spec.prefer_y), float(spec.prefer_sd))
+		if cell < 0:
+			cell = axis.find_terrace_cell(w, int(spec.y_min) - 12, int(spec.y_max) + 12,
+				float(spec.sd_min), float(spec.sd_max) + 14.0, axis.road_side, 0.30, float(spec.prefer_y), float(spec.prefer_sd))
+		if cell < 0:
+			var fy := clampi(roundi(float(spec.prefer_y)), 24, H - 24)
+			var fx := clampi(roundi(axis.axis_x_at(float(fy)) + float(spec.prefer_sd) * float(axis.road_side)), 8, W - 9)
+			cell = fy * W + fx
+		var x := (cell % W) + 0.5
+		var y := (cell / W) + 0.5
+		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(x), floori(y))
+		var s := SettlementData.new(x, y, cell, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
+		s.spacing = 64.0
+		s.importance = float(spec.importance)
+		s.role = str(spec.role)
+		s.town = false
+		s.homes = int(spec.homes_min) + floori(rng.next_float() * float(int(spec.homes_max) - int(spec.homes_min) + 1))
+		s.style = floori(rng.next_float() * 4)
+		s.character = str(spec.character)
+		settlements.append(s)
+	w.generation.coverage_cells = PackedInt32Array()
+	w.generation_profile.cover_added = 0
+	w.generation_profile.cover_cells = PackedInt32Array()
 	w.settlements = settlements
 
 

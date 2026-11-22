@@ -80,7 +80,11 @@ const PICK_W_RELIEF := 0.3
 ## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
 static func run(w: WorldData, include_detail: bool = true) -> void:
 	configure(w)
-	_pick_start(w)
+	if WorldTemplate.pick_start(w.template_id):
+		_pick_start(w)
+	else:
+		w.macro_x = 0.0
+		w.macro_y = 0.0
 	w.h = height_rect(w, 0, 0, w.W, w.H, true, include_detail)
 
 
@@ -297,6 +301,8 @@ static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel:
 static func _rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool, surface: bool) -> PackedFloat32Array:
 	if cw <= 0 or ch <= 0:
 		return PackedFloat32Array()
+	if WorldTemplate.has_valley_relief(w.template_id):
+		return _valley_rect(w, x0, y0, cw, ch, parallel, include_detail, surface)
 	var fast := Grid.fast_grid()
 	if fast != null:
 		var n := w.noise
@@ -318,6 +324,164 @@ static func _rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bo
 		return _micro_rows(w.noise.micro, base, x0, y0, cw, j0, j1)):
 		out.append_array(b)
 	return out
+
+
+static var allow_fast_valley := true
+
+
+static func _valley_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool, surface: bool) -> PackedFloat32Array:
+	var axis := ValleyAxis.for_world(w)
+	var micro_pad := MICRO_PAD if surface else 0
+	var detail_pad := Detail.DETAIL_PAD if include_detail else 0
+	var total_pad := micro_pad + detail_pad
+	var tbl := axis.sample_rows(y0 - total_pad, ch + 2 * total_pad)
+	var fast := Grid.fast_grid() if allow_fast_valley else null
+	if fast != null:
+		var n := w.noise
+		var micro: PackedInt32Array = n.micro.perm if surface else PackedInt32Array()
+		return fast.ValleyReliefField(n.warpX.perm, n.warpY.perm, n.ridge.perm, n.hill.perm,
+			x0, y0, cw, ch, axis.road_side, tbl.axis_x, tbl.floor_h, tbl.river_hw, tbl.bed_depth,
+			tbl.spur_h, tbl.spur_reach, tbl.channel_fade, tbl.end_wall,
+			w.mountain_scale, w.mountain_height, parallel, include_detail, GameConfig.HS, GameConfig.TILE, micro, micro_pad)
+	return _valley_rect_gd(w, axis, tbl, x0, y0, cw, ch, parallel, include_detail, surface)
+
+
+static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, x0: int, y0: int, cw: int, ch: int,
+		parallel: bool, include_detail: bool, surface: bool) -> PackedFloat32Array:
+	var micro_pad := MICRO_PAD if surface else 0
+	var detail_pad := Detail.DETAIL_PAD if include_detail else 0
+	var total_pad := micro_pad + detail_pad
+	var bw := cw + 2 * total_pad
+	var bh := ch + 2 * total_pad
+	var bx0 := x0 - total_pad
+	var by0 := y0 - total_pad
+	var wide := w.mountain_scale * maxf(1.0, w.mountain_height / (w.mountain_scale * HEIGHT_PER_WIDTH))
+	var base_raw := PackedFloat32Array()
+	var base_job := func(j0: int, j1: int) -> PackedFloat32Array:
+		var wx_n: Simplex = w.noise.warpX.clone()
+		var wy_n: Simplex = w.noise.warpY.clone()
+		var ridge_n: Simplex = w.noise.ridge.clone()
+		var hill_n: Simplex = w.noise.hill.clone()
+		var part := PackedFloat32Array()
+		part.resize((j1 - j0) * bw)
+		for j in range(j0, j1):
+			var ax: float = tbl.axis_x[j]
+			var fh: float = tbl.floor_h[j]
+			var rhw: float = tbl.river_hw[j]
+			var bd: float = tbl.bed_depth[j]
+			var sh: float = tbl.spur_h[j]
+			var sr: float = tbl.spur_reach[j]
+			var cf: float = tbl.channel_fade[j]
+			var ew: float = tbl.end_wall[j]
+			var wy := by0 + j
+			for i in bw:
+				var hv := _valley_base_at(wx_n, wy_n, ridge_n, hill_n, bx0 + i, wy, axis.road_side,
+					ax, fh, rhw, bd, sh, sr, cf, ew, w.mountain_height, wide)
+				part[(j - j0) * bw + i] = SEA_RAW + pow(maxf(1e-6, hv), 0.8) * (TOP_RAW - SEA_RAW)
+		return part
+	if parallel:
+		for part: PackedFloat32Array in Parallel.bands(bh, base_job):
+			base_raw.append_array(part)
+	else:
+		base_raw = base_job.call(0, bh)
+
+	var stride := cw + 2 * micro_pad
+	var rows := ch + 2 * micro_pad
+	var norm := PackedFloat32Array()
+	var norm_job := func(j0: int, j1: int) -> PackedFloat32Array:
+		var ridge_n: Simplex = w.noise.ridge.clone()
+		var hill_n: Simplex = w.noise.hill.clone()
+		var part := PackedFloat32Array()
+		part.resize((j1 - j0) * stride)
+		for j in range(j0, j1):
+			var rj := j + detail_pad
+			var ax: float = tbl.axis_x[rj]
+			var rhw: float = tbl.river_hw[rj]
+			var cf: float = tbl.channel_fade[rj]
+			var wy := y0 - micro_pad + j
+			for i in stride:
+				var wx := x0 - micro_pad + i
+				var bk := rj * bw + i + detail_pad
+				var raw_v := base_raw[bk]
+				if include_detail:
+					var det_v := Detail.apply(ridge_n, hill_n, base_raw, bw, bk, wx, wy, SEA_RAW, TOP_RAW, GameConfig.HS, GameConfig.TILE)
+					var damp := 1.0 - (1.0 - smoothstep(rhw + 0.6, rhw + 6.5, absf(float(wx) - ax))) * cf
+					raw_v += (det_v - raw_v) * damp
+				var q := maxf(0.0, (raw_v - SEA_RAW) / (TOP_RAW - SEA_RAW))
+				var hv := pow(q, 1.25)
+				if hv > 1.26:
+					hv = 1.26 + (hv - 1.26) / (1.0 + (hv - 1.26) / 0.16)
+				part[(j - j0) * stride + i] = hv
+		return part
+	if parallel:
+		for part: PackedFloat32Array in Parallel.bands(rows, norm_job):
+			norm.append_array(part)
+	else:
+		norm = norm_job.call(0, rows)
+	if not surface:
+		return norm
+	var with_micro := PackedFloat32Array()
+	if not parallel:
+		with_micro = _micro_rows(w.noise.micro, norm, x0, y0, cw, 0, ch)
+	else:
+		for b: PackedFloat32Array in Parallel.bands(ch, func(j0: int, j1: int) -> PackedFloat32Array:
+			return _micro_rows(w.noise.micro, norm, x0, y0, cw, j0, j1)):
+			with_micro.append_array(b)
+	for j in ch:
+		var rj := j + total_pad
+		var ax: float = tbl.axis_x[rj]
+		var rhw: float = tbl.river_hw[rj]
+		var cf: float = tbl.channel_fade[rj]
+		for i in cw:
+			var damp := 1.0 - (1.0 - smoothstep(rhw + 0.6, rhw + 6.5, absf(float(x0 + i) - ax))) * cf
+			if damp < 1.0:
+				var nk := (j + micro_pad) * stride + i + micro_pad
+				var ok := j * cw + i
+				with_micro[ok] = norm[nk] + (with_micro[ok] - norm[nk]) * damp
+	return with_micro
+
+
+static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hill: Simplex,
+		x: float, y: float, road_side: int, ax: float, fh: float, rhw: float, bd: float,
+		sh: float, sr: float, cf: float, ew: float, mountain_height: float, wide: float) -> float:
+	var wx := warp_x.fbm(x / 220.0, y / 220.0, 3) * 18.0
+	var wy := warp_y.fbm(x / 220.0 + 13.1, y / 220.0 - 7.7, 3) * 18.0
+	var X := x + wx
+	var Y := y + wy
+	var sd := (x - ax) * float(road_side)
+	var ad := absf(sd)
+	var d_chan: float
+	if ad < rhw:
+		var u := ad / maxf(0.5, rhw)
+		d_chan = -bd * (1.0 - u * u)
+	else:
+		d_chan = 0.013 * (1.0 - exp(-(ad - rhw) / 1.1))
+	var land_damp := 1.0 - (1.0 - smoothstep(rhw + 0.6, rhw + 6.5, ad)) * cf
+	var hills_fine := hill.fbm(X / 44.0, Y / 44.0, 4)
+	var hills_broad := hill.fbm(X / 105.0 + 32.4, Y / 105.0 - 18.6, 2)
+	var folds := 0.048 * hills_broad + 0.032 * hills_fine
+	var road_d := maxf(0.0, sd - (rhw + 3.0))
+	var bench_rise := 0.00045 * road_d + 0.0000045 * road_d * road_d
+	var spur_lift := 0.0
+	if sh > 0.0 and sd > rhw + 2.0:
+		var sm := smoothstep(rhw + 2.0, sr, sd)
+		var saddle := (sd - (sr + 16.0)) / 14.0
+		spur_lift = sh * sm * (1.0 - 0.25 * exp(-saddle * saddle))
+	var wall_r := smoothstep(88.0, 185.0, sd)
+	var wall_base_r := smoothstep(85.0, 240.0, sd) * 0.34
+	var wall_l := smoothstep(18.0, 95.0, -sd)
+	var wall_base_l := smoothstep(16.0, 160.0, -sd) * 0.38
+	var wall := maxf(wall_r, wall_l)
+	var wall_base := maxf(wall_base_r, wall_base_l) + ew
+	var wall_term := wall_base
+	var m_strength := maxf(wall, ew * 1.4)
+	if m_strength > 0.0:
+		var m_relief := mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, 1.0)
+		wall_term += m_relief * m_strength * 0.72 * mountain_height
+	var h := fh + d_chan * cf + 0.012 * (1.0 - cf) + land_damp * (bench_rise + folds * (1.0 - 0.65 * wall) + spur_lift + wall_term)
+	if h < 0.008: h = 0.008
+	if h > 1.26: h = 1.26 + (h - 1.26) / (1.0 + (h - 1.26) / 0.16)
+	return h
 
 
 static func _micro_rows(noise: Simplex, base: PackedFloat32Array, x0: int, y0: int, cw: int, j0: int, j1: int) -> PackedFloat32Array:

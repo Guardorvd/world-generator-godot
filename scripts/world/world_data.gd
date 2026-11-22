@@ -27,7 +27,7 @@ var generation := Generation.new()
 var streaming := Streaming.new()
 
 ## Явный плоский контракт кэша; служебные объекты и индексы в него не входят.
-const CACHE_FIELDS := ["W", "H", "N", "seed_text", "seed_num", "territory_center", "available_rect",
+const CACHE_FIELDS := ["W", "H", "N", "seed_text", "seed_num", "template_id", "territory_center", "available_rect",
 	"territory_revision", "scale", "generation_profile"] + Geology.CACHE_FIELDS + Climate.CACHE_FIELDS + Civil.CACHE_FIELDS
 
 var W := 0:
@@ -41,6 +41,7 @@ var H := 0:
 var N := 0
 var seed_text := ""
 var seed_num := 0
+var template_id := WorldTemplate.DEFAULT_ID
 ## Мировая клетка, на которой лежит клетка (0, 0) этих данных. У мира и областей — ноль; у сохранённого участка
 ## Trail Lab (TrailSite) — его угол в плане: по ней шумы полотна, участки покрытий и кочки берутся в мировых
 ## координатах и не меняются от переноса участка. В кэш не входит.
@@ -74,11 +75,15 @@ const TRAVEL_MARGIN := 32.0 # клетки: открыть соседей до �
 
 ## Только открывает новые клетки того же мира. Меньший размер не закрывает уже открытое.
 func expand_territory(size: int) -> void:
-	var side := clampi(size, 1, mini(W, H))
-	side = maxi(side, maxi(available_rect.size.x, available_rect.size.y))
-	var corner := Vector2i(clampi(territory_center.x - side / 2, 0, W - side),
-		clampi(territory_center.y - side / 2, 0, H - side))
-	var next := Rect2i(corner, Vector2i(side, side))
+	var next: Rect2i
+	if WorldTemplate.full_plan_territory(template_id):
+		next = Rect2i(0, 0, W, H)
+	else:
+		var side := clampi(size, 1, mini(W, H))
+		side = maxi(side, maxi(available_rect.size.x, available_rect.size.y))
+		var corner := Vector2i(clampi(territory_center.x - side / 2, 0, W - side),
+			clampi(territory_center.y - side / 2, 0, H - side))
+		next = Rect2i(corner, Vector2i(side, side))
 	if next != available_rect:
 		available_rect = next
 		territory_revision += 1
@@ -88,6 +93,11 @@ func expand_territory(size: int) -> void:
 ## Вызывать перед физикой: проверка столкновений не должна встретить старую границу.
 func open_around(x: float, y: float) -> bool:
 	if not available_rect.has_area() or x < 0.0 or y < 0.0 or x >= W or y >= H:
+		return false
+	if WorldTemplate.full_plan_territory(template_id):
+		if available_rect != Rect2i(0, 0, W, H):
+			expand_territory(maxi(W, H))
+			return true
 		return false
 	var revision := territory_revision
 	var limit := mini(W, H)

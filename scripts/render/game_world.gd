@@ -316,7 +316,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	var opening_spot := (loaded.opening_spot if loaded.opening_prepared else OpeningRoute.choose(world, heights, rng)) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
 	# Restore pinned regions even when generation of new regions is disabled.
-	if world.outer != null and (services.settings.infinite_world or not world.outer.get_ledger().is_empty()):
+	if world.outer != null and WorldTemplate.allow_infinite_regions(world.template_id) and (services.settings.infinite_world or not world.outer.get_ledger().is_empty()):
 		# 13.9+: закреплённые области мира — до игрока: сохранённое место может лежать в них.
 		regions = RegionStream.new()
 		regions.generation_enabled = services.settings.infinite_world
@@ -337,7 +337,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		loaded.error = "В подготовленном мире не найдено безопасное место появления."
 		return
 	if not saved.is_empty():
-		world.expand_territory(world.W)
+		world.expand_territory(maxi(world.W, world.H) if WorldTemplate.full_plan_territory(world.template_id) else world.W)
 		player.x = saved.player.x
 		player.z = saved.player.z
 		player.feet = saved.player.feet
@@ -707,7 +707,7 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 
 
 func save_state() -> Dictionary:
-	var state := {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
+	var state := {format = 1, seed = world.seed_text, template_id = world.template_id, saved_at = Time.get_unix_time_from_system(),
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		atlas = hud.map_journal.save_state(),
 		rides = hud.ride_log.save_state(hud.map_journal, hud.explore, quests.done),

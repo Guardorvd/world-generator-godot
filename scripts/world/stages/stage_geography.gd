@@ -18,8 +18,33 @@ static func run(w: WorldData, parallel := true) -> void:
 		w.dist_water = fields.dist_water if fields.has("dist_water") else w.dist_ocean.duplicate()
 		w.elev = fields.elev
 		w.slope = fields.slope
-		return
-	_run_script(w)
+	else:
+		_run_script(w)
+	if WorldTemplate.has_valley_relief(w.template_id):
+		_apply_valley_eco_elev(w)
+
+
+## Экологическая высота w.elev для Типа 2 (раздел 3, п. 2 docs/WORLD_TEMPLATES.md):
+## физический уклон w.slope уже посчитан от истинных h; w.elev привязан ко дну долины.
+static func _apply_valley_eco_elev(w: WorldData) -> void:
+	var axis := ValleyAxis.for_world(w)
+	var W := w.W
+	var H := w.H
+	var elev := w.elev
+	var h := w.h
+	var ocean := w.ocean
+	var lake := w.lake
+	var filled := w.filled
+	for y in H:
+		var row := y * W
+		for x in W:
+			var i := row + x
+			if ocean[i] != 0:
+				elev[i] = 0.0
+			else:
+				var raw_h := filled[i] if lake[i] != 0 else h[i]
+				elev[i] = axis.eco_elev(y, raw_h)
+	w.elev = elev
 
 
 static func _run_script(w: WorldData) -> void:

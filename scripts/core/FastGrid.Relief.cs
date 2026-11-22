@@ -51,6 +51,144 @@ public partial class FastGrid
 		return ReliefMicro(heights, microNoise, x0, y0, W, H, microPad, heightScale, tile, parallel);
 	}
 
+	/// <summary>
+	/// Рельеф долины Типа 2 (docs/WORLD_TEMPLATES.md): дно, мягкое русло, предгорья с поперечными отрогами,
+	/// стены гор (Mountain) и торцы формируются ДО MountainDetail и ReliefMicro.
+	/// Таблицы по строкам (axisX..endWall) имеют длину H + 2 * totalPad (где totalPad = microPad + (detail ? DetailPad : 0)).
+	/// </summary>
+	public float[] ValleyReliefField(int[] warpX, int[] warpY, int[] ridge, int[] hill,
+		int x0, int y0, int W, int H, int roadSide,
+		double[] axisX, double[] floorH, double[] riverHw, double[] bedDepth,
+		double[] spurH, double[] spurReach, double[] channelFade, double[] endWall,
+		double mountainScale, double mountainHeight, bool parallel, bool detail,
+		double heightScale, double tile, int[] microNoise, int microPad)
+	{
+		if (W <= 0 || H <= 0) return Array.Empty<float>();
+		int dPad = detail ? DetailPad : 0;
+		int totalPad = microPad + dPad;
+		int bw = W + 2 * totalPad;
+		int bh = H + 2 * totalPad;
+		int bx0 = x0 - totalPad;
+		int by0 = y0 - totalPad;
+		double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
+		var baseRaw = new float[bw * bh];
+		void BaseRow(int j)
+		{
+			double ax = axisX[j], fh = floorH[j], rhw = riverHw[j], bd = bedDepth[j];
+			double sh = spurH[j], sr = spurReach[j], cf = channelFade[j], ew = endWall[j];
+			int wy = by0 + j;
+			for (int i = 0; i < bw; i++)
+			{
+				double hv = ValleyBaseAt(warpX, warpY, ridge, hill, bx0 + i, wy, roadSide,
+					ax, fh, rhw, bd, sh, sr, cf, ew, mountainHeight, wide);
+				baseRaw[j * bw + i] = (float)(SeaRaw + Math.Pow(Math.Max(1e-6, hv), 0.8) * (TopRaw - SeaRaw));
+			}
+		}
+		RunRows(bh, parallel, BaseRow);
+
+		int stride = W + 2 * microPad;
+		int rows = H + 2 * microPad;
+		var norm = new float[stride * rows];
+		void DetailNormRow(int j)
+		{
+			int rj = j + dPad;
+			double ax = axisX[rj], rhw = riverHw[rj], cf = channelFade[rj];
+			int wy = y0 - microPad + j;
+			for (int i = 0; i < stride; i++)
+			{
+				int wx = x0 - microPad + i;
+				int bk = rj * bw + i + dPad;
+				double rawV = baseRaw[bk];
+				if (detail)
+				{
+					double detV = Detail(ridge, hill, baseRaw, bw, bk, wx, wy, heightScale, tile);
+					double damp = 1.0 - (1.0 - ReliefSmooth(rhw + 0.6, rhw + 6.5, Math.Abs(wx - ax))) * cf;
+					rawV += (detV - rawV) * damp;
+				}
+				double q = Math.Max(0.0, (rawV - SeaRaw) / (TopRaw - SeaRaw));
+				double h = Math.Pow(q, 1.25);
+				if (h > 1.26)
+					h = 1.26 + (h - 1.26) / (1.0 + (h - 1.26) / 0.16);
+				norm[j * stride + i] = (float)h;
+			}
+		}
+		RunRows(rows, parallel, DetailNormRow);
+		if (microPad == 0)
+			return norm;
+		var withMicro = ReliefMicro(norm, microNoise, x0, y0, W, H, microPad, heightScale, tile, parallel);
+		// Гасим мелкую рябь внутри русла и на кромке берега.
+		void DampMicroRow(int j)
+		{
+			int rj = j + totalPad;
+			double ax = axisX[rj], rhw = riverHw[rj], cf = channelFade[rj];
+			for (int i = 0; i < W; i++)
+			{
+				double damp = 1.0 - (1.0 - ReliefSmooth(rhw + 0.6, rhw + 6.5, Math.Abs((x0 + i) - ax))) * cf;
+				if (damp < 1.0)
+				{
+					int nk = (j + microPad) * stride + i + microPad;
+					int ok = j * W + i;
+					withMicro[ok] = (float)(norm[nk] + (withMicro[ok] - norm[nk]) * damp);
+				}
+			}
+		}
+		RunRows(H, parallel, DampMicroRow);
+		return withMicro;
+	}
+
+	private static double ValleyBaseAt(int[] warpX, int[] warpY, int[] ridge, int[] hill,
+		double x, double y, int roadSide, double ax, double fh, double rhw, double bd,
+		double sh, double sr, double cf, double ew, double mountainHeight, double wide)
+	{
+		double wx = Fbm(warpX, x / 220.0, y / 220.0, 3) * 18.0;
+		double wy = Fbm(warpY, x / 220.0 + 13.1, y / 220.0 - 7.7, 3) * 18.0;
+		double X = x + wx;
+		double Y = y + wy;
+		double sd = (x - ax) * roadSide;
+		double ad = Math.Abs(sd);
+		double dChan;
+		if (ad < rhw)
+		{
+			double u = ad / Math.Max(0.5, rhw);
+			dChan = -bd * (1.0 - u * u);
+		}
+		else
+		{
+			dChan = 0.013 * (1.0 - Math.Exp(-(ad - rhw) / 1.1));
+		}
+		double landDamp = 1.0 - (1.0 - ReliefSmooth(rhw + 0.6, rhw + 6.5, ad)) * cf;
+		double hillsFine = Fbm(hill, X / 44.0, Y / 44.0, 4);
+		double hillsBroad = Fbm(hill, X / 105.0 + 32.4, Y / 105.0 - 18.6, 2);
+		double folds = 0.048 * hillsBroad + 0.032 * hillsFine;
+
+		double roadD = Math.Max(0.0, sd - (rhw + 3.0));
+		double benchRise = 0.00045 * roadD + 0.0000045 * roadD * roadD;
+		double spurLift = 0.0;
+		if (sh > 0.0 && sd > rhw + 2.0)
+		{
+			double sm = ReliefSmooth(rhw + 2.0, sr, sd);
+			double saddle = (sd - (sr + 16.0)) / 14.0;
+			spurLift = sh * sm * (1.0 - 0.25 * Math.Exp(-saddle * saddle));
+		}
+		double wallR = ReliefSmooth(88.0, 185.0, sd);
+		double wallBaseR = ReliefSmooth(85.0, 240.0, sd) * 0.34;
+		double wallL = ReliefSmooth(18.0, 95.0, -sd);
+		double wallBaseL = ReliefSmooth(16.0, 160.0, -sd) * 0.38;
+		double wall = Math.Max(wallR, wallL);
+		double wallBase = Math.Max(wallBaseR, wallBaseL) + ew;
+		double wallTerm = wallBase;
+		double mStrength = Math.Max(wall, ew * 1.4);
+		if (mStrength > 0.0)
+		{
+			double mRelief = Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, 1.0);
+			wallTerm += mRelief * mStrength * 0.72 * mountainHeight;
+		}
+		double h = fh + dChan * cf + 0.012 * (1.0 - cf) + landDamp * (benchRise + folds * (1.0 - 0.65 * wall) + spurLift + wallTerm);
+		if (h < 0.008) h = 0.008;
+		if (h > 1.26) h = 1.26 + (h - 1.26) / (1.0 + (h - 1.26) / 0.16);
+		return h;
+	}
+
 	private static float[] RawReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel, bool detail, double heightScale, double tile)
 	{
 		if (!detail)

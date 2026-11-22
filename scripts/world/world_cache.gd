@@ -44,6 +44,8 @@ const PER_CELL := ["h", "filled", "elev", "ocean", "lake", "river", "river_area"
 const PER_OBJECT := ["obj_x", "obj_y", "obj_k", "obj_v", "obj_s"]
 
 var enabled := false
+var template_id := WorldTemplate.DEFAULT_ID
+var short_dev := false
 var dir := QuickTrails.cache_dir() # быстрый режим трасс (--quick-trails) пишет в свою папку, обычный кэш не трогает
 ## 14.5: готовые миры автора в проекте (RecommendedSeeds): копируются в dir, если их там нет
 const BUNDLED := "res://resources/world_cache"
@@ -74,13 +76,34 @@ static var _pin_lock := Mutex.new()
 var _root_memo := {} # bounded validated manifest signatures -> referenced filenames, no physics arrays
 
 
+func set_template(id: String) -> void:
+	var tid := WorldTemplate.normalize_id(id)
+	if tid == template_id and dir == WorldTemplate.cache_dir(tid):
+		return
+	wait_writes()
+	_lock.lock()
+	template_id = tid
+	dir = WorldTemplate.cache_dir(tid)
+	_layer_keys.clear()
+	_lock.unlock()
+	_pin_lock.lock()
+	_root_memo.clear()
+	_pin_lock.unlock()
+
+
 ## Ключи схем одинаковы в редакторе, PCK, Debug/Release и на всех платформах.
 func layer_keys() -> PackedStringArray:
 	_lock.lock()
 	if _layer_keys.is_empty():
+		var suffixes := _road_layer_suffixes(RoadTuning.current(), QuickTrails.network() and WorldTemplate.is_default(template_id))
+		if not WorldTemplate.is_default(template_id):
+			suffixes["geo"] = "|tpl=" + template_id
+			var route_ov := WorldTemplate.routing_overrides_suffix(template_id)
+			if not route_ov.is_empty():
+				suffixes["places"] = str(suffixes.get("places", "")) + route_ov
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
 			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]),
-			_road_layer_suffixes(RoadTuning.current(), QuickTrails.network()))
+			suffixes)
 	var keys := _layer_keys.duplicate()
 	_lock.unlock()
 	return keys
@@ -108,7 +131,10 @@ static func schema_keys(world_version: int, versions: PackedInt32Array, suffixes
 
 
 func _base(seed_text: String, size: int) -> String:
-	return ("%s|%d|%d" % [seed_text, WorldGenerator.PLAN_SIZE, size]).md5_text()
+	if WorldTemplate.is_default(template_id):
+		return ("%s|%d|%d" % [seed_text, WorldGenerator.PLAN_SIZE, size]).md5_text()
+	var plan := WorldTemplate.plan_size(template_id, WGRandom.hash_string(seed_text), short_dev)
+	return ("%s|%s|%d|%d|%d" % [seed_text, template_id, plan.x, plan.y, size]).md5_text()
 
 
 ## Имя слоя: слои генерации, за ними картинки (VIEW)
@@ -117,7 +143,10 @@ static func _layer_name(layer: int) -> String:
 
 
 func _key(seed_text: String, size: int, layer: int) -> String:
-	return "%s|%d|%d|%s|%s" % [seed_text, WorldGenerator.PLAN_SIZE, size, _layer_name(layer), layer_keys()[layer]]
+	if WorldTemplate.is_default(template_id):
+		return "%s|%d|%d|%s|%s" % [seed_text, WorldGenerator.PLAN_SIZE, size, _layer_name(layer), layer_keys()[layer]]
+	var plan := WorldTemplate.plan_size(template_id, WGRandom.hash_string(seed_text), short_dev)
+	return "%s|%s|%dx%d|%d|%s|%s" % [seed_text, template_id, plan.x, plan.y, size, _layer_name(layer), layer_keys()[layer]]
 
 
 ## Файл слоя layer мира (WorldGenerator.LAYERS.size() — картинки)
@@ -407,6 +436,10 @@ func save_view(seed_text: String, size: int, images: Dictionary) -> void:
 	var small: Image = (images.map as Image).duplicate()
 	var preview_path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
 	_queue_write(path, key, data, func() -> void:
+		if small.get_width() != small.get_height():
+			var side := mini(small.get_width(), small.get_height())
+			var y0 := clampi((small.get_height() - side) / 4, 0, small.get_height() - side)
+			small = small.get_region(Rect2i(0, y0, side, side))
 		small.resize(PREVIEW_SIZE, PREVIEW_SIZE, Image.INTERPOLATE_BILINEAR)
 		Files.replace(preview_path, small.save_png_to_buffer()))
 
@@ -445,7 +478,7 @@ func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 	if n > 0: got.world.generation_profile = {} # report only stages actually generated on this load
 	var w := WorldGenerator.generate_layers(seed_text, size, on_progress, prepare_base, got.world, n,
 		func(cur: WorldData, k: int) -> void:
-			state.prev = _save_layer(cur, size, k, state.prev), should_cancel)
+			state.prev = _save_layer(cur, size, k, state.prev), should_cancel, template_id, short_dev)
 	if w == null:
 		return {world = null, layers = n, cancelled = true}
 	return {world = w, layers = n}
@@ -801,6 +834,8 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 		var cur: Variant = w.get(name)
 		if name == "road_rides" and not data.has(name):
 			continue # Older places layers and full-world fixtures have only the publication tags.
+		if name == "template_id" and not data.has(name):
+			continue # Существующий кэш Типа 1 без поля template_id остаётся рабочим.
 		if not data.has(name) or typeof(data[name]) != typeof(cur):
 			return null
 		if name in ["settlements", "sites", "lakes", "bridges", "tunnels"]:
@@ -809,7 +844,9 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 			(cur as Array).assign(data[name])
 		else:
 			w.set(name, data[name])
-	if w.W != WorldGenerator.PLAN_SIZE or w.H != WorldGenerator.PLAN_SIZE or w.N != w.W * w.H:
+	if not WorldTemplate.exists(w.template_id) or w.template_id != template_id:
+		return null
+	if not WorldTemplate.valid_plan_size(w.template_id, w.W, w.H) or w.N != w.W * w.H:
 		return null
 	for name: String in PER_CELL:
 		var n: int = w.get(name).size()
@@ -836,6 +873,10 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 func reset() -> void:
 	wait_writes()
 	enabled = false
+	template_id = WorldTemplate.DEFAULT_ID
 	dir = QuickTrails.cache_dir()
 	_layer_keys.clear()
+	_pin_lock.lock()
+	_root_memo.clear()
+	_pin_lock.unlock()
 	take_io_timings()

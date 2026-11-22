@@ -36,8 +36,8 @@ static func _cancelled(should_cancel: Callable) -> bool:
 ## seed — строка зерна, size — сторона доступной территории в клетках; on_progress(p 0..1, подпись этапа) — необязательно.
 ## after_climate(w) — необязательно: вызывается, когда рельеф, вода и биомы готовы. Следующие этапы их
 ## уже не меняют, поэтому то, что зависит только от них, можно считать в другом потоке параллельно с ними.
-static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
-	return generate_layers(seed_text, size, on_progress, after_climate, null, 0, Callable(), should_cancel)
+static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(), should_cancel: Callable = Callable(), template_id := WorldTemplate.DEFAULT_ID, short_dev := false) -> WorldData:
+	return generate_layers(seed_text, size, on_progress, after_climate, null, 0, Callable(), should_cancel, template_id, short_dev)
 
 
 ## Слои генерации для кэша миров (с 10.2, WorldCache): география (рельеф, вода, климат), места и пути,
@@ -49,13 +49,15 @@ enum PlanMode { STAND, WORLD }
 ## Генерация по слоям. from — мир с готовыми слоями до start (из кэша: шумы на месте, без base_heights);
 ## on_layer(w, k) — после каждого слоя k, пока следующий его не тронул.
 static func generate_layers(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
-		from: WorldData = null, start := 0, on_layer: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
-	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, PlanMode.WORLD, should_cancel)
+		from: WorldData = null, start := 0, on_layer: Callable = Callable(), should_cancel: Callable = Callable(),
+		template_id := WorldTemplate.DEFAULT_ID, short_dev := false) -> WorldData:
+	var tid := WorldTemplate.normalize_id(template_id)
+	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, PlanMode.WORLD, should_cancel, tid, short_dev)
 	if w == null:
 		return null
 	# Генерация не читает размер из меню: открываем окно только после всех этапов.
 	w.territory_center = start_center(w)
-	w.expand_territory(size)
+	w.expand_territory(maxi(w.W, w.H) if WorldTemplate.full_plan_territory(tid) else size)
 	if on_layer.is_valid():
 		on_layer.call(w, LAYERS.size() - 1)
 	return w
@@ -69,8 +71,8 @@ static func start_center(w: WorldData) -> Vector2i:
 
 ## Общая природная география без домов и дорог. Соседние области — прямоугольники этого же плана
 ## (WorldData.region_rect), а не flood в отдельном окне другого размера.
-static func geography(seed_text: String, on_progress: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
-	var w := _geography(seed_text, PLAN_SIZE, on_progress, should_cancel)
+static func geography(seed_text: String, on_progress: Callable = Callable(), should_cancel: Callable = Callable(), template_id := WorldTemplate.DEFAULT_ID, short_dev := false) -> WorldData:
+	var w := _geography(seed_text, PLAN_SIZE, on_progress, should_cancel, template_id, short_dev)
 	if w == null:
 		return null
 	w.clear_noise_fields()
@@ -78,15 +80,23 @@ static func geography(seed_text: String, on_progress: Callable = Callable(), sho
 	return w
 
 
-static func _geography(seed_text: String, side: int, on_progress: Callable = Callable(), should_cancel: Callable = Callable()) -> WorldData:
+static func _geography(seed_text: String, side: int, on_progress: Callable = Callable(), should_cancel: Callable = Callable(), template_id := WorldTemplate.DEFAULT_ID, short_dev := false, explicit_height := 0) -> WorldData:
 	if _cancelled(should_cancel):
 		return null
+	var tid := WorldTemplate.normalize_id(template_id)
+	var seed_num := WGRandom.hash_string(seed_text)
 	var w := WorldData.new()
-	w.W = side
-	w.H = side
+	w.template_id = tid
+	if WorldTemplate.is_default(tid):
+		w.W = side
+		w.H = side
+	else:
+		var plan := WorldTemplate.plan_size(tid, seed_num, short_dev, explicit_height)
+		w.W = plan.x
+		w.H = plan.y
 	w.N = w.W * w.H
 	w.seed_text = seed_text
-	w.seed_num = WGRandom.hash_string(seed_text)
+	w.seed_num = seed_num
 	for name: String in NOISE_SLOTS:
 		w.noise[name] = Simplex.new(noise_rng(w.seed_num, name))
 	w.scale = float(w.N) / (512 * 512)
@@ -148,7 +158,8 @@ static func _stage_time(w: WorldData, stage: String, since_us: int) -> int:
 
 
 static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
-		from: WorldData = null, start := 0, on_layer: Callable = Callable(), mode := PlanMode.STAND, should_cancel: Callable = Callable()) -> WorldData:
+		from: WorldData = null, start := 0, on_layer: Callable = Callable(), mode := PlanMode.STAND, should_cancel: Callable = Callable(),
+		template_id := WorldTemplate.DEFAULT_ID, short_dev := false, explicit_height := 0) -> WorldData:
 	var abort_plan := func(cur: WorldData) -> WorldData:
 		if cur != null:
 			cur.clear_noise_fields()
@@ -158,7 +169,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		return abort_plan.call(from)
 	var w := from
 	if start == 0:
-		w = _geography(seed_text, side, on_progress, should_cancel)
+		w = _geography(seed_text, side, on_progress, should_cancel, template_id, short_dev, explicit_height)
 		if w == null or _cancelled(should_cancel):
 			return abort_plan.call(w)
 		if on_layer.is_valid():

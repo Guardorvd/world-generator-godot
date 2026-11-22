@@ -25,6 +25,10 @@ static func make_rng() -> RandomNumberGenerator:
 
 
 static func choose(w: WorldData, h: Heightfield, rng: RandomNumberGenerator) -> Dictionary:
+	if WorldTemplate.has_single_road(w.template_id):
+		var exp_spot := _expedition_start(w, h)
+		if not exp_spot.is_empty():
+			return exp_spot
 	var network := _network(w)
 	var villages := _villages(w, rng)
 	for approach: float in APPROACH_M:
@@ -33,6 +37,64 @@ static func choose(w: WorldData, h: Heightfield, rng: RandomNumberGenerator) -> 
 			if not spot.is_empty():
 				return spot
 	return _near_place(w, h, rng)
+
+
+## Тип 2 («Речная экспедиция»): старт на дороге у лагеря верховья, лицом вниз по долине (+y).
+static func _expedition_start(w: WorldData, h: Heightfield) -> Dictionary:
+	var road_pts: Array = []
+	for t: Dictionary in w.trails:
+		if t.kind == "road" and t.pts.size() >= 2:
+			road_pts = t.pts
+			break
+	if road_pts.size() < 2:
+		return {}
+	var line := PackedVector2Array()
+	for p: Dictionary in road_pts:
+		line.append(Vector2(p.x, p.y) * GameConfig.TILE)
+	if line[0].y > line[-1].y:
+		line.reverse()
+	# Ищем точку выезда в 14..110 м от лагеря, где дорога уже уверенно смотрит вниз по долине (+y).
+	var along := 0.0
+	var start_idx := 0
+	var start_pt := line[0]
+	var picked := false
+	for i in range(1, line.size() - 1):
+		along += line[i - 1].distance_to(line[i])
+		if along < 14.0:
+			continue
+		if not picked:
+			start_idx = i
+			start_pt = line[i]
+		var look_i := mini(line.size() - 1, i + 4)
+		var d_short := line[i + 1] - line[i]
+		var d_far := line[look_i] - line[i]
+		if d_short.y > 0.25 * maxf(0.01, d_short.length()) and d_far.y > 0.45 * maxf(0.01, d_far.length()):
+			start_idx = i
+			start_pt = line[i]
+			picked = true
+			break
+		if along > 110.0:
+			break
+	var points: Array[Vector2] = [start_pt]
+	var length := 0.0
+	for k in range(start_idx + 1, line.size()):
+		var pt := line[k]
+		if pt.distance_squared_to(points[-1]) <= 0.01:
+			continue
+		length += points[-1].distance_to(pt)
+		points.append(pt)
+		if length >= 26.0:
+			break
+	if points.size() < 2:
+		return {}
+	var forward := points[1] - points[0]
+	var at3 := Vector3(points[0].x, h.surface_at(points[0].x, points[0].y, INF), points[0].y)
+	var place := {}
+	if not w.settlements.is_empty():
+		var s0: SettlementData = w.settlements[0]
+		place = w.place(WorldData.place_id("settlement", s0.x, s0.y))
+	return {position = at3, heading = atan2(-forward.x, -forward.y), points = points,
+		place = place, cinematic = length >= 18.0}
 
 
 ## Деревни для старта по порядку: удалённые (в случайном порядке), иначе самые обособленные

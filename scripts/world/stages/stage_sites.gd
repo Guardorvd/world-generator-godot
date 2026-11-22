@@ -46,6 +46,9 @@ const BENCH_SKIP := [Biomes.SNOW, Biomes.PEAK] # на снегу и на лед�
 
 
 static func run(w: WorldData) -> void:
+	if WorldTemplate.has_single_road(w.template_id):
+		_run_expedition(w)
+		return
 	var W := w.W
 	var river := w.river_cells()
 	var selection := _select_candidates(w, river)
@@ -75,6 +78,214 @@ static func run(w: WorldData) -> void:
 	_place_fishing(w, river, dist_path, sites, names)
 	_place_benches(w, river, dist_path, sites, names)
 	w.sites = sites
+
+
+## Тип 2 («Речная экспедиция»): редкие точки интереса (число задаётся типом, не площадью) и
+## гарантированный рыбацкий домик с причалом на берегу широкой реки у финишной базы (через FishingLayout).
+static func _run_expedition(w: WorldData) -> void:
+	var W := w.W
+	var H := w.H
+	var river := w.river_cells()
+	var axis := ValleyAxis.for_world(w)
+	var counts := WorldTemplate.expedition_site_counts(w.template_id, H)
+	var human := PackedByteArray()
+	human.resize(w.N)
+	for i in w.N:
+		human[i] = int(w.path_mask[i] >= 2)
+	var dist_path := Grid.distance_field(W, H, human)
+	var sites: Array = []
+	var names := {}
+	for s: SettlementData in w.settlements:
+		names[s.name] = true
+
+	# 1. Рыбацкий домик с причалом у финишной базы — прямо на берегу широкой реки.
+	if int(counts.get("fishing", 0)) > 0 and w.settlements.size() >= 2:
+		_place_expedition_fishing(w, river, axis, w.settlements[1], sites, names)
+
+	var y_start := int(w.settlements[0].y) if not w.settlements.is_empty() else 54
+	var y_finish := int(w.settlements[1].y) if w.settlements.size() >= 2 else H - 94
+	var span := maxi(120, y_finish - y_start)
+	var seed_hash := WGRandom.derive(w.seed_num, "site.expedition")
+
+	# 2. Дозорные вышки на заметных отрогах у дороги.
+	var want_towers := int(counts.get("tower", 0))
+	for t in want_towers:
+		var band_y0 := y_start + roundi(float(span) * (0.20 + 0.36 * float(t)))
+		var band_y1 := y_start + roundi(float(span) * (0.48 + 0.34 * float(t)))
+		_place_expedition_point(w, river, axis, dist_path, sites, names, "tower", band_y0, band_y1,
+			3.0, 18.0, 0.42, true, seed_hash + t * 97)
+
+	# 3. Горный/лесной приют у дороги в средней части маршрута.
+	if int(counts.get("shelter", 0)) > 0:
+		_place_expedition_point(w, river, axis, dist_path, sites, names, "shelter",
+			y_start + roundi(float(span) * 0.35), y_start + roundi(float(span) * 0.68),
+			2.2, 9.5, 0.30, false, seed_hash + 313)
+
+	# 4. Смотровые лавки у дороги лицом к реке.
+	var want_benches := int(counts.get("bench", 0))
+	for b in want_benches:
+		var frac0 := 0.14 + float(b) * (0.72 / float(maxi(1, want_benches)))
+		var frac1 := minf(0.90, frac0 + 0.65 / float(maxi(1, want_benches)))
+		_place_expedition_bench(w, river, axis, dist_path, sites, names,
+			y_start + roundi(float(span) * frac0), y_start + roundi(float(span) * frac1), seed_hash + 521 + b * 41)
+
+	# 5. Одинокий хутор на противоположном берегу реки (точка масштаба, без дороги).
+	if int(counts.get("opposite_farm", 0)) > 0:
+		_place_opposite_farm(w, river, axis, sites, names,
+			y_start + roundi(float(span) * 0.28), y_start + roundi(float(span) * 0.72), seed_hash + 809)
+
+	w.sites = sites
+
+
+static func _place_expedition_fishing(w: WorldData, river: PackedByteArray, axis: ValleyAxis,
+		finish: SettlementData, sites: Array, names: Dictionary) -> void:
+	var W := w.W
+	var H := w.H
+	var surface := Heightfield.base_of(w)
+	var fy := roundi(finish.y)
+	var y0 := clampi(fy - 84, 16, H - 24)
+	var y1 := clampi(fy + 56, y0, H - 16)
+	var best := {}
+	for y in range(y0, y1 + 1):
+		var ax := axis.axis_x_at(float(y))
+		var rhw := axis.river_hw_at(y)
+		# Направление к ближайшей точке русла (перпендикулярно оси реки даже на финишном повороте).
+		var tangent := Vector2(axis.axis_x_at(float(mini(H - 1, y + 2))) - axis.axis_x_at(float(maxi(0, y - 2))), 4.0).normalized()
+		var to_river := Vector2(-tangent.y, tangent.x)
+		if to_river.x * float(axis.road_side) > 0.0:
+			to_river = -to_river
+		var facing := atan2(to_river.x, to_river.y)
+		# Ставим домик у кромки берега: сухой фундамент + причал FishingLayout достаёт реку (depth > 0.3 м).
+		for off_step in range(11, 44, 2):
+			var off := float(off_step) * 0.1
+			var x := clampi(roundi(ax + (rhw + off) * float(axis.road_side)), 4, W - 5)
+			var j := y * W + x
+			if w.ocean[j] != 0 or w.lake[j] != 0 or river[j] != 0 or w.path_mask[j] != 0:
+				continue
+			var cx := float(x) + 0.5
+			var cy := float(y) + 0.5
+			var d_fin := Grid.hypot(cx - finish.x, cy - finish.y)
+			if d_fin < 7.0 or d_fin > 86.0:
+				continue
+			if not _fits(w, river, "house_timber", cx, cy):
+				continue
+			var origin := Vector3(cx * GameConfig.TILE, surface.ground_at(cx * GameConfig.TILE, cy * GameConfig.TILE), cy * GameConfig.TILE)
+			var m := FishingLayout.measure(surface, origin, facing)
+			var tip := origin + Basis(Vector3.UP, facing) * Vector3(0.0, 0.0, FishingLayout.START + m.len)
+			# Настоящий причал в реку: конец настила над водой > 0.3 м (не сухая заглушка).
+			if surface.depth_at(tip.x, tip.z) <= 0.3 or m.len < 4.5:
+				continue
+			var score := -w.slope[j] * 4.5 - absf(m.dy) * 2.2 - absf(d_fin - 18.0) * 0.06 - absf(m.len - 11.0) * 0.04
+			if best.is_empty() or score > float(best.score):
+				best = {score = score, x = cx, y = cy, i = j, facing = facing}
+	if not best.is_empty():
+		var site := _build(w, river, "fishing", float(best.x), float(best.y), int(best.i), names, float(best.facing))
+		if not site.is_empty():
+			sites.append(site)
+
+
+static func _place_expedition_point(w: WorldData, river: PackedByteArray, axis: ValleyAxis, dist_path: PackedFloat32Array,
+		sites: Array, names: Dictionary, type: String, y0: int, y1: int, dp_min: float, dp_max: float,
+		max_slope: float, prefer_prom: bool, seed_hash: int) -> void:
+	var W := w.W
+	var H := w.H
+	var best := {}
+	var ya := clampi(y0, 18, H - 18)
+	var yb := clampi(y1, ya, H - 18)
+	for y in range(ya, yb + 1, 3):
+		var ax := axis.axis_x_at(float(y))
+		var rhw := axis.river_hw_at(y)
+		var x_a := clampi(roundi(ax + (rhw + 4.0) * float(axis.road_side)), 6, W - 7)
+		var x_b := clampi(roundi(ax + 78.0 * float(axis.road_side)), 6, W - 7)
+		for x in range(mini(x_a, x_b), maxi(x_a, x_b) + 1, 3):
+			var j := y * W + x
+			if w.ocean[j] != 0 or w.lake[j] != 0 or river[j] != 0 or w.path_mask[j] != 0:
+				continue
+			var dp := dist_path[j]
+			if dp < dp_min or dp > dp_max or w.slope[j] > max_slope:
+				continue
+			if _settlement_dist(w.settlements, x, y) < 22.0:
+				continue
+			var cx := float(x) + 0.5
+			var cy := float(y) + 0.5
+			if _crowded(sites, type, cx, cy) or not _fits(w, river, type, cx, cy):
+				continue
+			var prom := _prominence(w.elev, W, H, x, y)
+			var score := (prom * 22.0 if prefer_prom else -w.slope[j] * 4.0) - dp * 0.05 + WGRandom.hash2(x, y, seed_hash) * 0.35
+			if best.is_empty() or score > float(best.score):
+				best = {score = score, x = cx, y = cy, i = j}
+	if not best.is_empty():
+		var site := _build(w, river, type, float(best.x), float(best.y), int(best.i), names)
+		if not site.is_empty():
+			sites.append(site)
+
+
+static func _place_expedition_bench(w: WorldData, river: PackedByteArray, axis: ValleyAxis, dist_path: PackedFloat32Array,
+		sites: Array, names: Dictionary, y0: int, y1: int, seed_hash: int) -> void:
+	var W := w.W
+	var H := w.H
+	var best := {}
+	var ya := clampi(y0, 18, H - 18)
+	var yb := clampi(y1, ya, H - 18)
+	for y in range(ya, yb + 1, 3):
+		var ax := axis.axis_x_at(float(y))
+		var rhw := axis.river_hw_at(y)
+		var x_a := clampi(roundi(ax + (rhw + 3.0) * float(axis.road_side)), 6, W - 7)
+		var x_b := clampi(roundi(ax + 72.0 * float(axis.road_side)), 6, W - 7)
+		for x in range(mini(x_a, x_b), maxi(x_a, x_b) + 1, 3):
+			var j := y * W + x
+			if w.ocean[j] != 0 or w.lake[j] != 0 or river[j] != 0 or w.path_mask[j] != 0:
+				continue
+			var dp := dist_path[j]
+			if dp < 1.8 or dp > 6.5 or w.slope[j] > 0.32 or w.biome[j] in BENCH_SKIP:
+				continue
+			if _settlement_dist(w.settlements, x, y) < 18.0:
+				continue
+			var cx := float(x) + 0.5
+			var cy := float(y) + 0.5
+			if _crowded(sites, "bench", cx, cy) or not _fits(w, river, "bench", cx, cy):
+				continue
+			var prom := _prominence(w.elev, W, H, x, y)
+			var sd := (cx - ax) * float(axis.road_side)
+			var view_bonus := 0.5 if sd < rhw + 14.0 else maxf(0.0, prom * 14.0)
+			var score := view_bonus - w.slope[j] * 3.0 + WGRandom.hash2(x, y, seed_hash) * 0.3
+			if best.is_empty() or score > float(best.score):
+				best = {score = score, x = cx, y = cy, i = j, facing = atan2(ax - cx, 0.0)}
+	if not best.is_empty():
+		var site := _build(w, river, "bench", float(best.x), float(best.y), int(best.i), names, float(best.facing))
+		if not site.is_empty():
+			sites.append(site)
+
+
+static func _place_opposite_farm(w: WorldData, river: PackedByteArray, axis: ValleyAxis,
+		sites: Array, names: Dictionary, y0: int, y1: int, seed_hash: int) -> void:
+	var W := w.W
+	var H := w.H
+	var opp := -axis.road_side
+	var best := {}
+	var ya := clampi(y0, 24, H - 24)
+	var yb := clampi(y1, ya, H - 24)
+	for y in range(ya, yb + 1, 3):
+		var ax := axis.axis_x_at(float(y))
+		var rhw := axis.river_hw_at(y)
+		var x_a := clampi(roundi(ax + (rhw + 3.5) * float(opp)), 6, W - 7)
+		var x_b := clampi(roundi(ax + 19.0 * float(opp)), 6, W - 7)
+		for x in range(mini(x_a, x_b), maxi(x_a, x_b) + 1, 2):
+			var j := y * W + x
+			if w.ocean[j] != 0 or w.lake[j] != 0 or river[j] != 0 or w.slope[j] > 0.24:
+				continue
+			var cx := float(x) + 0.5
+			var cy := float(y) + 0.5
+			if _crowded(sites, "farm", cx, cy) or not _fits(w, river, "house_timber", cx, cy):
+				continue
+			var sd_opp := (cx - ax) * float(opp)
+			var score := -w.slope[j] * 5.0 - absf(sd_opp - (rhw + 7.0)) * 0.08 + WGRandom.hash2(x, y, seed_hash) * 0.35
+			if best.is_empty() or score > float(best.score):
+				best = {score = score, x = cx, y = cy, i = j, facing = atan2(ax - cx, 0.0)}
+	if not best.is_empty():
+		var site := _build(w, river, "farm", float(best.x), float(best.y), int(best.i), names, float(best.facing))
+		if not site.is_empty():
+			sites.append(site)
 
 
 static func _select_candidates(w: WorldData, river: PackedByteArray) -> Dictionary:

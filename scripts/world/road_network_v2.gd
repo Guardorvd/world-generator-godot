@@ -52,7 +52,7 @@ static func params(w: WorldData) -> Dictionary:
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH
-	}.merged(routing.network_rules).merged(routing.character_field).merged(overrides, true)
+	}.merged(routing.network_rules).merged(routing.character_field).merged(WorldTemplate.routing_overrides(w.template_id), true).merged(overrides, true)
 
 
 ## Вход C#: поля мира (ссылки на массивы), оси путей людей, поселения. unsafe — клетки небезопасных бродов

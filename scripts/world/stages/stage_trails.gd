@@ -101,13 +101,18 @@ static func run(w: WorldData, step: Callable) -> void:
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	w.generation_profile.finder_setup_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	detail_us = Time.get_ticks_usec()
-	_animal_trails(w, finder)
+	var expedition := WorldTemplate.has_single_road(w.template_id)
+	if not expedition:
+		_animal_trails(w, finder)
 	w.generation_profile.animal_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	if network_v2:
 		detail_us = Time.get_ticks_usec()
 		RoadNetworkV2.prepare_character(w, finder, surface)
 		_part("road_character_fields", detail_us)
 	_route_surface(finder, surface, widths.road, "corridor_road_ms")
+	if expedition:
+		_run_expedition(w, finder, surface, step, started_us)
+		return
 	step.call(0.66, "Прокладка троп между поселениями")
 	var primary_end := _settlement_trails(w, finder, surface, step)
 	_route_surface(finder, surface, widths.mountain, "corridor_mountain_ms")
@@ -141,6 +146,154 @@ static func run(w: WorldData, step: Callable) -> void:
 		issue = RoadRides.validation_error(w)
 	if not issue.is_empty():
 		push_error(issue)
+
+
+## Тип 2 («Речная экспедиция»): одна непрерывная дорога по одному берегу без мостов и бродов.
+## Сегментный поиск A* в скользящих окнах по цепочке якорей ValleyAxis → склейка без петель →
+## единая публикация через _add_trail → reshape_axes (V2) → _fit_sections → раскладка домов.
+static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable, started_us: int) -> void:
+	step.call(0.66, "Прокладка дороги вдоль долины")
+	w.bridges = []
+	w.tunnels = []
+	var on_axis := PackedByteArray()
+	on_axis.resize(w.N)
+	finder.links.resize(w.N)
+	var routing := RoadTuning.current().routing
+	var turns: Dictionary = routing_overrides.get("turn_costs", routing.turn_costs)
+	var bends: Dictionary = routing_overrides.get("bend_costs", routing.bend_costs)
+	var climb_road: float = float(routing.climb_costs.road)
+	var turn_road: float = float(turns.road)
+	var bend_road: float = float(bends.road)
+	var search_cost := w.cost
+	var h_scale := 1.0
+	if network_v2 and finder.fast() != null:
+		var ch: Dictionary = finder.fast().CharacterCosts(w.cost, on_axis, "road")
+		search_cost = ch.cost
+		h_scale = float(ch.heuristic_scale)
+	var cost_v := finder.next_cost_version()
+	var raw_v := finder.next_cost_version()
+
+	var stitched := PackedInt32Array()
+	var anchors_used := 0
+	var anchors_total := 0
+	if w.settlements.size() >= 2:
+		var axis := ValleyAxis.for_world(w)
+		var start_i: int = w.settlements[0].i
+		var finish_i: int = w.settlements[1].i
+		var mid := axis.road_anchors(w, start_i, finish_i)
+		anchors_total = mid.size()
+		var waypoints := PackedInt32Array([start_i])
+		waypoints.append_array(mid)
+		waypoints.append(finish_i)
+		var cur := waypoints[0]
+		for k in range(1, waypoints.size()):
+			var target := waypoints[k]
+			var is_first := k == 1
+			var is_last := k == waypoints.size() - 1
+			var seg := _expedition_segment(w, finder, search_cost, cost_v, w.cost, raw_v,
+				cur, target, climb_road, turn_road, bend_road, h_scale, is_first, is_last)
+			if seg.size() < 2:
+				if not is_last:
+					continue
+				push_error("StageTrails (expedition): failed to connect %d -> %d" % [cur, target])
+				break
+			stitched = _stitch_expedition_cells(stitched, seg)
+			cur = seg[seg.size() - 1]
+			if not is_last:
+				anchors_used += 1
+	finder.window = Rect2i()
+	w.generation_profile.expedition_anchors_total = anchors_total
+	w.generation_profile.expedition_anchors_used = anchors_used
+	if stitched.size() >= 2:
+		_add_trail(w, stitched, "road", PackedFloat32Array(), on_axis, surface)
+	step.call(0.76, "Сглаживание и профиль дороги")
+	if network_v2 and not w.trails.is_empty():
+		RoadNetworkV2.reshape_axes(w, surface, on_axis, w.trails.size())
+	_fit_sections(w, surface)
+	var detail_us := Time.get_ticks_usec()
+	StageLandmarks.lay_out(w)
+	w.generation_profile.homes_laid = StageLandmarks.count_homes(w.settlements)
+	w.generation_profile.layout_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	_clear_huts(w)
+	w.generation_profile.homes_kept = StageLandmarks.count_homes(w.settlements)
+	w.generation_profile.merge(finder.search_stats())
+	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	w.generation_profile.parts_ms = parts.duplicate()
+	if network_v2:
+		w.generation_profile.character_search = RoadNetworkV2.character_report(w, finder, on_axis)
+	finder.release()
+	var issue := RoadRecords.validation_error(w.trails, "StageTrails (%s)" % w.seed_text, RoadRecords.Phase.PUBLISHED)
+	if issue.is_empty():
+		issue = RoadRides.validation_error(w)
+	if not issue.is_empty():
+		push_error(issue)
+
+
+static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: PackedFloat32Array, char_v: int,
+		raw_cost: PackedFloat32Array, raw_v: int, a: int, b: int, climb: float, turn: float, bend: float,
+		h_scale: float, is_first: bool, must_connect: bool) -> PackedInt32Array:
+	var W := w.W
+	var H := w.H
+	var ax := a % W
+	var ay := a / W
+	var bx := b % W
+	var by := b / W
+	var x0 := maxi(0, mini(ax, bx) - 56)
+	var x1 := mini(W, maxi(ax, bx) + 57)
+	# На выходе со старта не петляем вверх за лагерь, на заходе к финишу не уходим за базу в поворот.
+	var y0 := maxi(0, mini(ay, by) - (6 if is_first else 42))
+	var y1 := mini(H, maxi(ay, by) + (7 if must_connect else 43))
+	finder.window = Rect2i(x0, y0, x1 - x0, y1 - y0)
+	# Сначала держим дорожные уклоны; TRAIL_GRADE спасает цепочку на редких коротких перепадах рельефа.
+	for g: float in [ROAD_GRADE, ROAD_LIMIT, TRAIL_GRADE]:
+		var seg := finder.find_path(char_cost, a, b, climb, g, char_v, turn, bend, h_scale)
+		if seg.size() >= 2:
+			return seg
+	# Если сама клетка якоря попала на локальную складку коридора — пробуем сдвиг на 3 клетки.
+	if not must_connect:
+		for off: Vector2i in [Vector2i(-3, 0), Vector2i(3, 0), Vector2i(0, -3), Vector2i(0, 3)]:
+			var nx := clampi(bx + off.x, 4, W - 5)
+			var ny := clampi(by + off.y, 14, H - 15)
+			var nb := ny * W + nx
+			if not is_finite(char_cost[nb]):
+				continue
+			var seg := finder.find_path(char_cost, a, nb, climb, ROAD_LIMIT, char_v, turn, bend, h_scale)
+			if seg.size() >= 2:
+				return seg
+	if must_connect:
+		var wy0 := maxi(0, mini(ay, by) - 72)
+		var wy1 := mini(H, maxi(ay, by) + 73)
+		finder.window = Rect2i(0, wy0, W, wy1 - wy0)
+		for g: float in [ROAD_LIMIT, TRAIL_GRADE, MOUNTAIN_GRADE]:
+			var seg := finder.find_path(raw_cost, a, b, climb * 0.5, g, raw_v, turn * 0.5, 0.0, 1.0)
+			if seg.size() >= 2:
+				return seg
+	return PackedInt32Array()
+
+
+## Склейка двух сегментов клеток в одну непрерывную цепочку без дубля стыка и микро-петель у якоря.
+static func _stitch_expedition_cells(acc: PackedInt32Array, seg: PackedInt32Array) -> PackedInt32Array:
+	if acc.is_empty():
+		return seg.duplicate()
+	var tail_span := mini(acc.size(), 16)
+	var head_span := mini(seg.size(), 16)
+	var cut_acc := acc.size()
+	var start_seg := 1 if seg[0] == acc[acc.size() - 1] else 0
+	var tail_start := acc.size() - tail_span
+	# Если начало нового сегмента возвращается на клетку хвоста предыдущего — срезаем микро-петлю.
+	var tail_pos := {}
+	for i in range(tail_start, acc.size()):
+		tail_pos[acc[i]] = i
+	for j in range(head_span - 1, -1, -1):
+		var c := seg[j]
+		if tail_pos.has(c):
+			cut_acc = int(tail_pos[c]) + 1
+			start_seg = j + 1
+			break
+	var out := acc.slice(0, cut_acc)
+	if start_seg < seg.size():
+		out.append_array(seg.slice(start_seg))
+	return out
 
 
 ## Keep inherited plan marks and protected structure footprints when the final tread replaces the search ribbon.
@@ -222,6 +375,11 @@ static func _build_cost(w: WorldData) -> void:
 		if row_gap >= EDGE_COST_BAND:
 			for x in range(maxi(band, w.W - band), w.W):
 				cost[y * w.W + x] += edge_cost(w.W - 1 - x)
+	if WorldTemplate.has_single_road(w.template_id):
+		var river := w.river_cells()
+		for i in w.N:
+			if river[i] != 0:
+				cost[i] = INF
 	w.cost = cost
 
 

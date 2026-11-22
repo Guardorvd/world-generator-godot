@@ -228,7 +228,13 @@ func _ready() -> void:
 		button.expand_icon = true
 		button.add_theme_constant_override("icon_max_width", 22)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
-	carousel.type_changed.connect(_update_menu_selection)
+	carousel.type_changed.connect(_on_type_changed)
+	var cli_template := WorldTemplate.cmdline_template()
+	if cli_template != WorldTemplate.DEFAULT_ID:
+		carousel.select_type(cli_template)
+		GameContext.scope.settings.set_active_template(cli_template)
+		GameContext.scope.cache.set_template(cli_template)
+		_selected_seed = GameContext.scope.settings.last_seed
 	carousel.play_requested.connect(_on_start)
 	carousel.create_requested.connect(func(seed_text: String) -> void:
 		if not busy and _is_screen("menu"): _launch_seed(seed_text))
@@ -893,11 +899,31 @@ func _tab_button(tab: String) -> Button:
 	return {all = %Recent, recent = %Recent, favorites = %Favorites, recommended = %Recent, saved = %Saved}.get(tab, %Recent)
 
 
+func _active_template_id() -> String:
+	var carousel := get_node_or_null("%Carousel") as Carousel
+	if carousel != null:
+		return WorldTemplate.normalize_id(carousel.selected_type_id())
+	return WorldTemplate.DEFAULT_ID
+
+
+func _on_type_changed() -> void:
+	var carousel := %Carousel as Carousel
+	if carousel.type_available():
+		var tid := WorldTemplate.normalize_id(carousel.selected_type_id())
+		_invalidate_world_preview()
+		GameContext.scope.settings.set_active_template(tid)
+		GameContext.scope.cache.set_template(tid)
+		_selected_seed = GameContext.scope.settings.last_seed
+		_refresh_world_cards()
+	_update_menu_selection()
+
+
 ## Превью карты мира из кэша (null — мир ещё не запускали)
 func _preview_tex(seed_text: String) -> Texture2D:
 	if not _previews.has(seed_text):
 		_card_reads += 1
-		var img := GameContext.scope.cache.preview(seed_text, not QuickTrails.active()) if GameContext.scope.cache.enabled else null
+		var bundled := not QuickTrails.active() and WorldTemplate.is_default(_active_template_id())
+		var img := GameContext.scope.cache.preview(seed_text, bundled) if GameContext.scope.cache.enabled else null
 		_previews[seed_text] = ImageTexture.create_from_image(img) if img != null else null
 		if img != null:
 			var carousel := get_node_or_null("%Carousel") as Carousel
@@ -912,13 +938,15 @@ func _preview_tex(seed_text: String) -> Texture2D:
 ## На карточке храним метаданные, без состояния игрока и заданий целиком.
 func _read_world_card(seed_text: String) -> Dictionary:
 	_card_reads += 1
-	var manual := Saves.read_slot(seed_text, "manual")
-	var latest := _latest_save(seed_text, manual)
+	var tid := _active_template_id()
+	var manual := Saves.read_slot(seed_text, "manual", tid)
+	var latest := _latest_save(seed_text, manual, tid)
 	var data: Dictionary = latest.data
-	var corrupt := data.is_empty() and _has_save(seed_text)
+	var corrupt := data.is_empty() and _has_save(seed_text, tid)
 	var cache := GameContext.scope.cache
-	var ready := cache.enabled and (cache.has(seed_text) or (not QuickTrails.active() and cache.has_bundled(seed_text)))
-	var map_ready := cache.enabled and (cache.ready_layers(seed_text) >= 2 or (not QuickTrails.active() and cache.has_bundled(seed_text)))
+	var allow_bundled := not QuickTrails.active() and WorldTemplate.is_default(tid)
+	var ready := cache.enabled and (cache.has(seed_text) or (allow_bundled and cache.has_bundled(seed_text)))
+	var map_ready := cache.enabled and (cache.ready_layers(seed_text) >= 2 or (allow_bundled and cache.has_bundled(seed_text)))
 	var summary := "Откроется быстро." if ready else "Мир создастся при запуске, около минуты."
 	var saved_at := -1
 	if not data.is_empty():
@@ -932,13 +960,14 @@ func _read_world_card(seed_text: String) -> Dictionary:
 
 
 func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
+	var tid := _active_template_id()
 	_hub_needs_sync = true
 	_world_cards.clear()
-	_saved_seeds = Saves.seeds()
-	_has_active_saves = not Saves.active_files().is_empty()
+	_saved_seeds = Saves.seeds(tid)
+	_has_active_saves = not Saves.active_files(tid).is_empty()
 	var settings := GameContext.scope.settings
 	var known: Array = _saved_seeds + settings.recent_seeds + settings.favorite_seeds
-	if not settings.hide_recommended_worlds:
+	if WorldTemplate.is_default(tid) and not settings.hide_recommended_worlds:
 		for item: Dictionary in RecommendedSeeds.SEEDS:
 			known.append(item.seed)
 	for seed_text: String in known:
@@ -1266,8 +1295,10 @@ func _tick_hub_previews() -> void:
 		var seed_text: String = _hub_preview_queue.pop_front()
 		if _hub_rows.has(seed_text) and not _previews.has(seed_text):
 			var reader := WorldCache.new()
+			var tid := GameContext.scope.cache.template_id
+			reader.template_id = tid
 			reader.dir = GameContext.scope.cache.dir
-			var bundled := not QuickTrails.active()
+			var bundled := not QuickTrails.active() and WorldTemplate.is_default(tid)
 			var result := {seed = seed_text, epoch = _hub_preview_epoch, image = null}
 			_hub_preview_result = result
 			_card_reads += 1
@@ -1605,7 +1636,8 @@ func _restart_world() -> void:
 
 
 func _do_restart_world(seed_text: String) -> void:
-	var err := Saves.archive_seed(seed_text)
+	var tid := _active_template_id()
+	var err := Saves.archive_seed(seed_text, tid)
 	if err == OK and GameContext.scope.cache.enabled:
 		err = GameContext.scope.cache.remove_seed(seed_text)
 	if err != OK:
@@ -1617,7 +1649,7 @@ func _do_restart_world(seed_text: String) -> void:
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
 	_play_ui(&"confirm")
-	start_game(seed_text, WorldGenerator.START_SIZE, "", false)
+	start_game(seed_text, WorldGenerator.START_SIZE, "", false, tid)
 
 
 func _delete_world() -> void:
@@ -1628,8 +1660,9 @@ func _delete_world() -> void:
 
 
 func _do_delete_world(seed_text: String) -> void:
+	var tid := _active_template_id()
 	var previous_index := maxi(0, _carousel_seeds.find(seed_text))
-	var err := Saves.delete_seed(seed_text)
+	var err := Saves.delete_seed(seed_text, tid)
 	if err == OK and GameContext.scope.cache.enabled:
 		err = GameContext.scope.cache.remove_seed(seed_text)
 	if err != OK:
@@ -1697,7 +1730,7 @@ func _do_clear_all_saves() -> void:
 	settings.hide_recommended_worlds = true
 	var err := settings.save_settings()
 	if err == OK:
-		err = Saves.archive_all()
+		err = Saves.archive_all(_active_template_id())
 		if err != OK:
 			_message("Не удалось перенести все сохранения", error_string(err))
 	else:
@@ -1904,9 +1937,10 @@ func _launch_seed(seed_text: String) -> void:
 
 ## С 9.0 мир один: план 768 × 768 генерируется всегда целиком, size — только окно, открытое на старте.
 ## С 9.8 по умолчанию открыт весь план; меньшее окно ставят инструменты проверки (WorldData.open_around).
-func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot := "", allow_bundled := true) -> void:
+func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot := "", allow_bundled := true, template_id := "") -> void:
 	if busy:
 		return
+	var tid := _active_template_id() if template_id.is_empty() else WorldTemplate.normalize_id(template_id)
 	# каталог моделей устарел или не найден: мир не запускаем (в релизной сборке assert отключён)
 	var catalog_error: String = preload("res://scripts/render/asset_catalog.gd").check()
 	if not catalog_error.is_empty():
@@ -1918,7 +1952,7 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	var save_ended_us := Time.get_ticks_usec()
 	_pending_save = {}
 	if not slot.is_empty():
-		var result := Saves.read_slot(seed_text, slot)
+		var result := Saves.read_slot(seed_text, slot, tid)
 		if result.data.is_empty():
 			_message("Ошибка загрузки", result.error)
 			return
@@ -1950,24 +1984,27 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	_show("loading", {enter_duration = LOAD_ENTER_SECONDS})
 	gen_thread = Thread.new()
 	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
-	var err := gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec(), _load_cancel_flag))
+	var err := gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec(), _load_cancel_flag, tid))
 	if err != OK:
 		gen_thread = null
 		_finish_load("Мир не подготовлен", "Не удалось запустить поток загрузки (%s)." % error_string(err))
 
 
-func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int, cancel_flag: CancelFlag) -> WorldLoader:
+func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int, cancel_flag: CancelFlag, template_id := WorldTemplate.DEFAULT_ID) -> WorldLoader:
 	var entered_us := Time.get_ticks_usec()
+	var tid := WorldTemplate.normalize_id(template_id)
 	var cache := GameContext.scope.cache
 	if cache.enabled and not cancel_flag.is_cancelled():
-		cache.keep_only(GameContext.scope.settings.keep_seeds())
-		if allow_bundled and not QuickTrails.active() and size == WorldGenerator.START_SIZE and not cancel_flag.is_cancelled():
+		if cache.template_id != tid:
+			cache.set_template(tid)
+		cache.keep_only(GameContext.scope.settings.keep_seeds(tid))
+		if allow_bundled and WorldTemplate.is_default(tid) and not QuickTrails.active() and size == WorldGenerator.START_SIZE and not cancel_flag.is_cancelled():
 			cache.install_bundled(WorldCache.BUNDLED, seed_text)
 	if cancel_flag.is_cancelled():
 		return null
 	var before_loader_us := Time.get_ticks_usec()
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
-		_report_load_progress.call_deferred(p, label, cancel_flag), null, start_at, cancel_flag.is_cancelled)
+		_report_load_progress.call_deferred(p, label, cancel_flag), null, start_at, cancel_flag.is_cancelled, tid)
 	if loaded == null:
 		return null
 	var ready_us := Time.get_ticks_usec()
@@ -2323,6 +2360,8 @@ func _back_to_menu() -> void:
 	_cancel_hud_fade()
 	_free_game()
 	hud.visible = false
+	if GameContext.scope.cache.enabled:
+		GameContext.scope.cache.wait_writes()
 	if not played_seed.is_empty():
 		_invalidate_world_preview(played_seed)   # изменился только что завершённый мир
 	_refresh_world_cards()
@@ -2350,19 +2389,21 @@ func _notification(what: int) -> void:
 		_exit_game()
 
 
-func _latest_save(seed_text: String, manual := {}) -> Dictionary:
-	var auto := Saves.read_slot(seed_text)
+func _latest_save(seed_text: String, manual := {}, template_id := "") -> Dictionary:
+	var tid := _active_template_id() if template_id.is_empty() else WorldTemplate.normalize_id(template_id)
+	var auto := Saves.read_slot(seed_text, "auto", tid)
 	if manual.is_empty():
-		manual = Saves.read_slot(seed_text, "manual")
+		manual = Saves.read_slot(seed_text, "manual", tid)
 	var use_manual: bool = not manual.data.is_empty() and (auto.data.is_empty() or manual.data.saved_at > auto.data.saved_at)
 	var result: Dictionary = manual if use_manual else auto
 	result.slot = ("manual" if use_manual else "auto") if not result.data.is_empty() else ""
 	return result
 
 
-func _has_save(seed_text: String) -> bool:
+func _has_save(seed_text: String, template_id := "") -> bool:
+	var tid := _active_template_id() if template_id.is_empty() else WorldTemplate.normalize_id(template_id)
 	for slot: String in ["auto", "manual"]:
-		var path := Saves.path_for(seed_text, slot)
+		var path := Saves.path_for(seed_text, slot, tid)
 		if FileAccess.file_exists(path) or FileAccess.file_exists(path + ".bak"):
 			return true
 	return false
@@ -2376,7 +2417,9 @@ func _save_current(slot := "auto", session_end := "") -> bool:
 	_finish_auto_save(false)
 	if _shop_progress != null:
 		_shop_progress.retry_rewards()
-	var err := Saves.write_slot(game.save_state(), slot)
+	var state: Dictionary = game.save_state()
+	var tid := WorldTemplate.normalize_id(str(state.get("template_id", WorldTemplate.DEFAULT_ID)))
+	var err := Saves.write_slot(state, slot, tid)
 	if err == OK:
 		_saved_discoveries = hud.map_place_count()
 	if _session_performance != null:
@@ -2407,6 +2450,7 @@ func _queue_auto_save() -> void:
 	var state: Dictionary = game.save_state()
 	# 21.11.2026: в фон уходят готовые байты, а не словари игры (часть их — общие с живыми данными, например заезды)
 	var seed_text: String = state.seed
+	var tid := WorldTemplate.normalize_id(str(state.get("template_id", WorldTemplate.DEFAULT_ID)))
 	var raw := Saves.encode(state)
 	var result := {discoveries = hud.map_place_count(), error = ERR_BUSY, began_us = 0, ended_us = 0}
 	_auto_save_result = result
@@ -2416,7 +2460,7 @@ func _queue_auto_save() -> void:
 		_session_performance.work("autosave_snapshot", began_us, Time.get_ticks_usec())
 	_auto_save_task = WorkerThreadPool.add_task(func() -> void:
 		result.began_us = Time.get_ticks_usec()
-		result.error = Saves.write_bytes(seed_text, raw)
+		result.error = Saves.write_bytes(seed_text, raw, "auto", tid)
 		result.ended_us = Time.get_ticks_usec(),
 		false, "Автосохранение")
 
@@ -2458,10 +2502,11 @@ func _message(title: String, body: String) -> void:
 	dialog.canceled.connect(dialog.queue_free)
 
 
-func _confirm_load(seed_text: String, slot: String) -> void:
+func _confirm_load(seed_text: String, slot: String, template_id := "") -> void:
+	var tid := _active_template_id() if template_id.is_empty() else WorldTemplate.normalize_id(template_id)
 	var opener: Control = _load_manual if _is_screen("world_hub") else (get_node_or_null("%QuickLoad") as Control)
 	_ask("Загрузить сохранение?", "Текущий прогресс будет записан в автосохранение.\nЗатем загрузится ручное сохранение этого мира.",
-		"Загрузить", false, start_game.bind(seed_text, WorldGenerator.START_SIZE, slot), opener)
+		"Загрузить", false, start_game.bind(seed_text, WorldGenerator.START_SIZE, slot, true, tid), opener)
 
 
 ## Кнопки сохранения стоят в сцене (меню — «Загрузить ручное», пауза — быстрое сохранение и загрузка),
@@ -2480,10 +2525,11 @@ func _setup_save_controls() -> void:
 		_resume()
 		game.open_journal())
 	%QuickLoad.pressed.connect(func() -> void:
-		if Saves.read_slot(game.world.seed_text, "manual").data.is_empty():
+		var tid: String = game.world.template_id
+		if Saves.read_slot(game.world.seed_text, "manual", tid).data.is_empty():
 			_message("Загрузка", "Ручного сохранения пока нет. Нажмите «Сохранить».")
 		else:
-			_confirm_load(game.world.seed_text, "manual"))
+			_confirm_load(game.world.seed_text, "manual", tid))
 	_fill_controls()
 
 

@@ -229,7 +229,7 @@ public partial class FastGrid
 	/// <summary>StageClimate.run. Preserve Vector2's float32 rounding before using light/retention.</summary>
 	public Godot.Collections.Dictionary ClimateFields(int w, int h, float[] heights, byte[] ocean, byte[] lake,
 		float[] rain, float[] distOcean, float[] distWater, float[] elev, float[] slope,
-		double[] tempNoise, double latCells, byte[] biomeIds)
+		double[] tempNoise, double latCells, byte[] biomeIds, double latBase = 0.5, double latCenter = 383.5)
 	{
 		int n = checked(w * h);
 		var temp = new float[n];
@@ -238,7 +238,7 @@ public partial class FastGrid
 		var light = new float[n];
 		RunRows(h, true, y =>
 		{
-			double lat = 0.5 + (y - 383.5) / latCells;
+			double lat = latBase + (y - latCenter) / latCells;
 			for (int x = 0; x < w; x++)
 			{
 				int i = y * w + x;

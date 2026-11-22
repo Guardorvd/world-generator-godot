@@ -80,16 +80,20 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 const LAT_CELLS := 3072.0
 
 
-static func latitude(_w: WorldData, y: int) -> float:
-	return 0.5 + (y - 383.5) / LAT_CELLS
+static func latitude(w: WorldData, y: int) -> float:
+	if w == null or WorldTemplate.is_default(w.template_id):
+		return 0.5 + (y - 383.5) / LAT_CELLS
+	var p := WorldTemplate.latitude_params(w.template_id, w.H)
+	return p.x + (y - p.y) / p.z
 
 
 static func run(w: WorldData) -> void:
 	var temp_n := w.noise_field("temp")
 	var started := Time.get_ticks_usec()
 	var fast := Grid.fast_grid()
+	var lat_p := WorldTemplate.latitude_params(w.template_id, w.H)
 	var native: Variant = fast.ClimateFields(w.W, w.H, w.h, w.ocean, w.lake, w.rain,
-		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, LAT_CELLS, biome_ids()) if fast != null else null
+		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, lat_p.z, biome_ids(), lat_p.x, lat_p.y) if fast != null else null
 	if fast != null and not native is Dictionary:
 		push_error("StageClimate: C# вернул null, климат считается на GDScript")
 	var fields: Dictionary = native if native is Dictionary else fields_reference(w, temp_n)

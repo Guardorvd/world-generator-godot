@@ -102,13 +102,16 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 	for key in out:
 		out[key].resize(n)
 	# Rainfall uses the actual ocean field; climate never invents freshwater.
+	var valley_axis: ValleyAxis = ValleyAxis.for_world(w) if WorldTemplate.has_valley_relief(w.template_id) else null
+	var temp_lapse := 0.48 if valley_axis != null else 0.6
 	for j in ch:
-		var lat := StageClimate.latitude(w, y0 + j)
+		var wy := y0 + j
+		var lat := StageClimate.latitude(w, wy)
 		for i in cw:
 			var c := (j + PAD) * pw + i + PAD
 			var hh := hn[c]
 			var o := j * cw + i
-			var e := maxf(0.0, hh)
+			var e := valley_axis.eco_elev(wy, hh) if valley_axis != null else maxf(0.0, hh)
 			var gx := maxf(0.0, hn[c + 1]) - maxf(0.0, hn[c - 1])
 			var gy := maxf(0.0, hn[c + pw]) - maxf(0.0, hn[c - pw])
 			var slope := sqrt(gx * gx + gy * gy) * 0.5 * 60.0
@@ -117,7 +120,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 			var lgy := gy * 30.0
 			var light := clampf(0.5 - 0.5 * lgy / sqrt(1.0 + lgx * lgx + lgy * lgy), 0.0, 1.0)
 			var around := (maxf(0.0, hn[c - 2]) + maxf(0.0, hn[c + 2]) + maxf(0.0, hn[c - 2 * pw]) + maxf(0.0, hn[c + 2 * pw])) * 0.25
-			var hollow := clampf((around - e) * 18.0, -0.16, 0.16)
+			var hollow := clampf((around - maxf(0.0, hh)) * 18.0, -0.16, 0.16)
 			# Outside the coastal halo there is no known nearby water. Preserve
 			# the no-source sentinel, rather than pretending water is 32 cells away.
 			var d := dist[c] if dist[c] <= SEA_REACH else 1e9
@@ -125,7 +128,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 			# осадки — как в StageHydrology, поправка на близость моря гаснет к SEA_REACH
 			var rain := StageHydrology.rainfall(moist_n[o], dist[c], region_n[o], hh, position_n[c])
 			var temp_base := 0.43 + lat * 0.32 + temp_n[o] * 0.18
-			var t := clampf(temp_base - e * 0.6, 0.0, 1.0)
+			var t := clampf(temp_base - e * temp_lapse, 0.0, 1.0)
 			var m := clampf(rain + 0.22 * exp(-dw / 4.0), 0.0, 1.0)
 			var b: int
 			if hh < 0.0:

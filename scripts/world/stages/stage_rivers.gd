@@ -31,6 +31,24 @@ static func _pt(w: WorldData, i: int) -> Dictionary:
 
 
 static func run(w: WorldData) -> void:
+	if WorldTemplate.has_valley_river(w.template_id):
+		var t_lines := Time.get_ticks_usec()
+		var axis := ValleyAxis.for_world(w)
+		w.rivers = [axis.build_map_river()]
+		w.river_exits.clear()
+		w.generation_profile.river_valleys_ms = 0.0
+		w.generation_profile.river_lines_ms = (Time.get_ticks_usec() - t_lines) / 1000.0
+		var t_surf := Time.get_ticks_usec()
+		w.river_area = w.river.duplicate()
+		var surface := Heightfield.new(w, false, true)
+		for cell: int in surface._river_cells:
+			w.river_area[cell] = 1
+		var t_water := Time.get_ticks_usec()
+		surface.complete_water()
+		w.base_heights = surface
+		w.generation_profile.river_surface_ms = (t_water - t_surf) / 1000.0
+		w.generation_profile.river_water_ms = (Time.get_ticks_usec() - t_water) / 1000.0
+		return
 	# Normal generation has no drainage network. Keep the existing lake/ocean
 	# surface contract, without valley shaping, donor scans or mass tracing.
 	if w.river.find(1) < 0:

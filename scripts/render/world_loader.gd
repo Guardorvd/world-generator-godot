@@ -33,16 +33,17 @@ var startup_at := Vector2.INF
 
 
 ## Пикселей текстуры рельефа на клетку. В JS-версии 8 / 6 / 4, здесь меньше: в GDScript запекание
-## заметно медленнее. Начиная со среднего мира текстура и карта (2 пикселя на клетку) пекутся за один проход.
+## заметно медленнее. Для длинных планов (> 2048 клеток) берём 1 px/клетку, чтобы уложиться в потолок 4096 px GPU.
 static func px_for(size: int) -> int:
-	return 4 if size <= 256 else 2
+	return 1 if size > 2048 else (4 if size <= 256 else 2)
 
 
 ## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
-static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, start_at := Vector2.INF, should_cancel: Callable = Callable()) -> WorldLoader:
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, start_at := Vector2.INF, should_cancel: Callable = Callable(), template_id := WorldTemplate.DEFAULT_ID, short_dev := false) -> WorldLoader:
 	if services == null:
 		services = GameContext.scope
+	var tid := WorldTemplate.normalize_id(template_id)
 	var r := WorldLoader.new()
 	r.service_scope = services
 	r.cache_size = size
@@ -67,7 +68,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		return r
 	if is_cancelled.call():
 		return abort.call()
-	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
+	var plan_sz := WorldTemplate.plan_size(tid, WGRandom.hash_string(seed_text), short_dev)
+	var px := px_for(maxi(plan_sz.x, plan_sz.y)) # одинаковая детализация одного мира при любом окне; <= 4096 px
+	var map_px := mini(2, px)
 	var build_outer := func(w: WorldData) -> Dictionary:
 		var t := Time.get_ticks_usec()
 		var land := OuterLand.new(w)
@@ -75,6 +78,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var started := Time.get_ticks_usec()
 	var profile_before: Dictionary = services.resource_profile.stamp() if services.resource_profile != null else {}
 	if services.cache.enabled:
+		if services.cache.template_id != tid:
+			services.cache.set_template(tid)
+		services.cache.short_dev = short_dev or WorldTemplate.cmdline_short()
 		services.cache.wait_writes()
 		r.timings.previous_write_wait_ms = (Time.get_ticks_usec() - started) / 1000.0
 		services.cache.take_io_timings() # preceding loads/installations are not this load's I/O
@@ -85,7 +91,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var on_climate := func(w: WorldData) -> void:
 		if is_cancelled.call():
 			return
-		side.start(r._prepare.bind(w, px, w.base_heights))
+		side.start(r._prepare.bind(w, px, map_px, w.base_heights))
 		outer.start(build_outer.bind(w))
 	# Картинки мира (текстура, карта, подстилка) тоже из кэша, если мир из кэша целиком (10.2)
 	var view := {}
@@ -131,11 +137,11 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 				return abort.call()
 			if not r.surface_hit:
 				var base := Surface.restore(r.world, services.cache.load_artifact(seed_text, size, "base"), "base")
-				side.start(r._prepare.bind(r.world, px, base, view.is_empty()))
+				side.start(r._prepare.bind(r.world, px, map_px, base, view.is_empty()))
 			elif view.is_empty():
-				side.start(r._paint.bind(r.world, px))
+				side.start(r._paint.bind(r.world, px, map_px))
 	else:
-		r.world = WorldGenerator.generate(seed_text, size, on_progress, on_climate, should_cancel)
+		r.world = WorldGenerator.generate(seed_text, size, on_progress, on_climate, should_cancel, tid, short_dev)
 		if r.world == null or is_cancelled.call():
 			return abort.call()
 	var generated := Time.get_ticks_usec()
@@ -165,9 +171,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	if side.is_started():
 		painted = side.wait_to_finish()
 	elif r.surface_hit:
-		painted = r._paint(r.world, px) if view.is_empty() else []
+		painted = r._paint(r.world, px, map_px) if view.is_empty() else []
 	else:
-		painted = r._prepare(r.world, px, null, view.is_empty())
+		painted = r._prepare(r.world, px, map_px, null, view.is_empty())
 	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
 	r.timings.merge(r._prepare_times)
 	if is_cancelled.call():
@@ -189,7 +195,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
 		var map_job := func() -> void:
 			var t0 := Time.get_ticks_usec()
-			r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0]
+			r.map_image = MapBaker.finish(r.world, map_px, map_bytes)[0]
 			map_times.map_ms = (Time.get_ticks_usec() - t0) / 1000.0
 		var texture_job := func() -> void:
 			var t0 := Time.get_ticks_usec()
@@ -329,11 +335,11 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 ## Возвращает пары [без отмывки, с отмывкой]; при разных разрешениях ненужный вариант пустой.
 ## base — общий рельеф генератора (9.7), снятый в момент запуска потока: к концу генерации его уже нет в мире;
 ## paint — false, когда картинки взяты из кэша (10.2)
-func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) -> Array:
+func _prepare(w: WorldData, px: int, map_px: int, base: Heightfield = null, paint := true) -> Array:
 	var t := Time.get_ticks_usec()
 	var painted := []
 	if paint:
-		painted = _paint(w, px)
+		painted = _paint(w, px, map_px)
 		_prepare_times.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	heights = base.copy() if base != null else Heightfield.new(w, false)
@@ -343,9 +349,9 @@ func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) ->
 	return painted
 
 
-func _paint(w: WorldData, px: int) -> Array:
-	var painted := [MapBaker.paint(w, px, true, px == 2)]
-	if px != 2: painted.append(MapBaker.paint(w, 2, false, true))
+func _paint(w: WorldData, px: int, map_px: int = 2) -> Array:
+	var painted := [MapBaker.paint(w, px, true, px == map_px)]
+	if px != map_px: painted.append(MapBaker.paint(w, map_px, false, true))
 	return painted
 
 

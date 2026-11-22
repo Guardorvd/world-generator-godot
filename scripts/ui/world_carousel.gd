@@ -12,14 +12,7 @@ signal type_changed
 const MapPreview := preload("res://scripts/ui/menu_map_preview.gd")
 const Icons := preload("res://scripts/ui/ui_icons.gd")
 const MAX_DERIVED_MAPS := 8
-# Каталог только для интерфейса. При подключении нового генератора необходимо
-# заменить заглушку и отдельно реализовать изоляцию миров, сохранений и кэша.
-const WORLD_TYPES := [
-	{id = "mountain_valley", title = "Горная долина", available = true},
-	{id = "future_2", title = "Будущий тип 2", available = false},
-	{id = "future_3", title = "Будущий тип 3", available = false},
-	{id = "future_4", title = "Будущий тип 4", available = false},
-]
+var WORLD_TYPES: Array[Dictionary] = WorldTemplate.menu_types()
 
 class PreviewCancel extends RefCounted:
 	var mutex := Mutex.new()
@@ -211,9 +204,22 @@ func selected_index() -> int:
 func type_available() -> bool:
 	return bool(WORLD_TYPES[_type_index].available)
 
+func selected_type_id() -> String:
+	return str(WORLD_TYPES[_type_index].id)
+
+func select_type(id: String) -> void:
+	for i in WORLD_TYPES.size():
+		if str(WORLD_TYPES[i].id) == id:
+			if _type_index != i:
+				_type_index = i
+				invalidate_preview()
+				_apply_entry()
+			return
+
 func move_type(direction: int) -> void:
 	if direction == 0: return
 	_type_index = posmod(_type_index + signi(direction), WORLD_TYPES.size())
+	invalidate_preview()
 	_apply_entry()
 	stepped.emit(signi(direction))
 	type_changed.emit()
@@ -274,7 +280,12 @@ func _apply_entry() -> void:
 	_name.text = WORLD_TYPES[_type_index].title
 	$Card/Slide/Frame/WorldInfo/Caption.text = "ВЫБРАННЫЙ МИР" if available else "СТАТУС"
 	$Card/Slide/Frame/WorldInfo/Name.text = str(entry.get("seed", "Пока нет мира")) if available else "В разработке"
-	$Card/Slide/Frame/WorldInfo/Detail.text = ("Сохранение" if entry.get("saved", false) else ("Ещё не начат" if _index >= 0 else "Создайте первый мир")) if available else "Этот тип появится позже"
+	var detail := ("Сохранение" if entry.get("saved", false) else ("Ещё не начат" if _index >= 0 else "Создайте первый мир")) if available else "Этот тип появится позже"
+	if available and _index >= 0 and WorldTemplate.is_expedition(selected_type_id()):
+		var sz := WorldTemplate.plan_size(selected_type_id(), WGRandom.hash_string(str(entry.get("seed", ""))))
+		var km := roundi(float(sz.y) * GameConfig.TILE / 1000.0)
+		detail = ("Сохранение · долина ~%d км" % km) if entry.get("saved", false) else ("Долина ~%d км" % km)
+	$Card/Slide/Frame/WorldInfo/Detail.text = detail
 	_count.text = "%d / %d" % [_type_index + 1, WORLD_TYPES.size()]
 	_previous.disabled = WORLD_TYPES.size() < 2
 	_next.disabled = _previous.disabled
@@ -387,7 +398,8 @@ func _start_job(seed_text: String, kind: String) -> void:
 	_job_kind = kind
 	_cancel_flag = PreviewCancel.new()
 	_thread = Thread.new()
-	var job := MapPreview.generate_geography.bind(seed_text, _cancel_flag.is_cancelled) if kind == "preview" else MapPreview.build.bind(seed_text)
+	var tid := WorldTemplate.normalize_id(selected_type_id())
+	var job := MapPreview.generate_geography.bind(seed_text, _cancel_flag.is_cancelled, tid) if kind == "preview" else MapPreview.build.bind(seed_text, tid)
 	if _thread.start(job) != OK:
 		_thread = null
 		_preview_errors[seed_text] = true
