@@ -38,6 +38,7 @@ func _initialize() -> void:
 	_switchback_climbs()
 	_broad_curves()
 	_arc_bends()
+	_axis_meander()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
@@ -94,6 +95,55 @@ func _arc_bends() -> void:
 		dry = dry and lake.depth_at(wet_points[i] * 4.0, wet_points[i + 1] * 4.0) <= 0.3
 	check(by_lake.radii_m != PackedFloat64Array([150.0]) and by_lake.refused.has("water") and dry,
 		"круговая дуга у озера: радиусы %s, отказы %s, сухая ось %s" % [by_lake.radii_m, by_lake.refused, dry])
+
+
+func _axis_meander() -> void:
+	var w := _world("none", 184)
+	w.h.fill(0.15)
+	w.filled.fill(0.15)
+	var routing := RoadTuning.current().routing
+	var width: float = RoadTuning.current().section.widths.road
+	var axis := PackedFloat64Array()
+	var pins := PackedByteArray()
+	var noise := PackedFloat64Array()
+	var dry := PackedFloat64Array()
+	var baseline := 35.5
+	for x in range(10, 161):
+		axis.append_array([x + 0.5, baseline, width])
+		pins.append(0)
+		noise.append(0.1)
+		dry.append(100.0)
+	var input := V2.meander_settings(routing, "road").merged({axis = axis, pins = pins, W = w.W, H = w.H,
+		on_axis = PackedByteArray(), route_index = -1, noise = noise, water_m_at_station = dry,
+		profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = StageTrails.ROAD_LIMIT, bench_cross = StageTrails.BENCH_CROSS,
+		reach = RoadRefinement.REACH, protection_m = routing.axis_protection_m})
+	var clear := (width * 4.0 + 2.0 * RoadRefinement.REACH + 2.0) / 4.0
+	input.foreign = {x = PackedFloat64Array([6.5, 170.5]), y = PackedFloat64Array([45.5, 45.5]), starts = PackedInt32Array([0, 2])}
+	var core: Object = Grid.native_grid()
+	var flat := Heightfield.new(w, false)
+	var wave: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
+	var again: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
+	var points: PackedFloat64Array = wave.get("points", axis)
+	var offset := 0.0
+	var gap := INF
+	var grade := 0.0
+	var before := Vector2(points[0], points[1])
+	for i in range(3, points.size(), 3):
+		var at := Vector2(points[i], points[i + 1])
+		offset = maxf(offset, absf(at.y - baseline) * 4.0)
+		gap = minf(gap, absf(at.y - 45.5) * 4.0)
+		if at != before:
+			var rise := flat.ground_at(at.x * 4.0, at.y * 4.0) - flat.ground_at(before.x * 4.0, before.y * 4.0)
+			grade = maxf(grade, absf(rise) / (4.0 * at.distance_to(before)))
+		before = at
+	check(wave.accepted > 0 and points == again.get("points", axis) and offset >= 6.0 and offset <= 15.0
+		and grade < 0.06 and gap >= clear * 4.0 and points.slice(0, 3) == axis.slice(0, 3) and points.slice(-3) == axis.slice(-3),
+		"меандр: 600 м, отступ %.2f м, уклон %.2f %%, зазор %.2f м, отказы %s" % [offset, 100.0 * grade, gap, wave.refused])
+	var neighbour := baseline + clear + 0.15
+	input.foreign.y = PackedFloat64Array([neighbour, neighbour])
+	var beside: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
+	check(beside.accepted == 0 and beside.refused.has("clearance") and not beside.has("points"),
+		"меандр у чужой дороги: ось осталась прямой, отказы %s" % [beside.refused])
 
 
 func _broad_curves() -> void:
@@ -273,9 +323,9 @@ func _switchback_climbs() -> void:
 			check(not row[4] and found.candidates > 0 and found.placements.is_empty() and reason_ok, label)
 
 
-func _world(water: String) -> WorldData:
+func _world(water: String, size := S) -> WorldData:
 	var w := WorldData.new()
-	w.W = S; w.H = S; w.N = S * S
+	w.W = size; w.H = size; w.N = size * size
 	w.seed_text = "road v2 fixture"
 	for owner in [w.geology, w.climate, w.civil]:
 		for property: Dictionary in owner.get_property_list():
@@ -284,9 +334,9 @@ func _world(water: String) -> WorldData:
 	w.dist_water.fill(100)
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
-	for y in S:
-		for x in S:
-			var i := y * S + x
+	for y in size:
+		for x in size:
+			var i := y * size + x
 			var h := 0.1 + x * 0.0002
 			var d2 := float((x - 24) * (x - 24) + (y - 72) * (y - 72))
 			if d2 < 100.0: h += 0.06 * (1.0 - d2 / 100.0)  # холм

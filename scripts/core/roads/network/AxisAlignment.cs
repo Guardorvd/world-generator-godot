@@ -143,7 +143,7 @@ internal sealed partial class AxisAlignment
 		return false;
 	}
 
-	private bool TrySplice(int first, int last, List<P> points)
+	private bool TrySplice(int first, int last, List<P> points, double targetRadius = 200.0)
 	{
 		for (int i = 1; i < points.Count; i++)
 		{
@@ -165,7 +165,7 @@ internal sealed partial class AxisAlignment
 		for (int j = last + 1; j <= to; j++) context.Add(_source[j]);
 		double[] shaped = Pack(context);
 		if (!_validator.Profile(shaped, _grade)) return Reject("profile");
-		double radius = Math.Min(_validator.MinRadius(Pack(before)), 200.0);
+		double radius = Math.Min(_validator.MinRadius(Pack(before)), targetRadius);
 		if (_validator.MinRadius(shaped) + 0.1 < Math.Max(points[0].W * Tile * 0.5 + 0.5, radius))
 			return Reject("seam");
 		var splice = new Splice(first, last, points);
