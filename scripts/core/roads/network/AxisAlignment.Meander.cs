@@ -7,7 +7,7 @@ namespace Roads.Network;
 
 internal sealed partial class AxisAlignment
 {
-	internal record MeanderSettings(double MinLength, double Fit, double Slope, double SlopeFade, V WaterFade,
+	internal record MeanderSettings(double MinLength, double Fit, double MinShift, double Slope, double SlopeFade, V WaterFade,
 		V Amplitude, V Wavelength, double EndFade, double Radius);
 
 	internal void FitMeanders(double[] noise, double[] waterDistance, MeanderSettings settings)
@@ -69,7 +69,7 @@ internal sealed partial class AxisAlignment
 				points.Add(new P(x + normal.X * offset, y + normal.Y * offset, b.W));
 			}
 		}
-		if (most * Tile < settings.Fit) { Reject("fade"); return; }
+		if (most * Tile < settings.MinShift) { Reject("fade"); return; }
 		points[^1] = _source[last];
 		TrySplice(first, last, points, settings.Radius);
 	}

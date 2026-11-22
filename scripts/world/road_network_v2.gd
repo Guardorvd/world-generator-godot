@@ -65,7 +65,7 @@ static func arc_settings(routing: RoadTuning.Routing) -> Dictionary:
 
 static func meander_settings(routing: RoadTuning.Routing, kind: String) -> Dictionary:
 	var tuning := routing.axis_meander_road if kind == "road" else routing.axis_meander_trail
-	return {min_m = routing.axis_meander_min_m, fit_m = routing.axis_meander_fit_m,
+	return {min_m = routing.axis_meander_min_m, fit_m = routing.axis_meander_fit_m, min_shift_m = routing.axis_meander_min_shift_m,
 		slope = routing.axis_meander_slope, slope_fade = routing.axis_meander_slope_fade,
 		water_m = routing.axis_meander_water_m}.merged(tuning)
 

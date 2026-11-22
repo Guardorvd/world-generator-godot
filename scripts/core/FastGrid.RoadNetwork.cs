@@ -383,7 +383,7 @@ public partial class FastGrid
 				Vector2 value = input[key].AsVector2();
 				return new LineBuilder.V(value.X, value.Y);
 			}
-			var options = new AxisAlignment.MeanderSettings(input["min_m"].AsDouble(), input["fit_m"].AsDouble(),
+			var options = new AxisAlignment.MeanderSettings(input["min_m"].AsDouble(), input["fit_m"].AsDouble(), input["min_shift_m"].AsDouble(),
 				input["slope"].AsDouble(), input["slope_fade"].AsDouble(), Bounds("water_m"), Bounds("amplitude_m"),
 				Bounds("wave_m"), input["fade_m"].AsDouble(), input["radius_m"].AsDouble());
 			fit.FitMeanders(input["noise"].AsFloat64Array(), input["water_m_at_station"].AsFloat64Array(), options);
