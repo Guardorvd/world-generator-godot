@@ -21,11 +21,8 @@ const MapData = preload("res://scripts/ui/local_map_data.gd")
 const Journal = preload("res://scripts/game/map_journal.gd")
 const RideLog = preload("res://scripts/game/ride_log.gd")
 const MINI := LocalMap.DIAMETER
-const SUMMARY_FADE := 0.24
-const SUMMARY_HINT_TIME := 5.0
-const RIDE_PEEK_HOLD := 2.5
-const RIDE_PEEK_IN := 0.22
-const RIDE_PEEK_OUT := 0.65
+const SUMMARY_FADE := 0.38
+const SUMMARY_HIDE := 0.26
 const LEFT_MARGIN := 18.0  # левая колонка: отступ от края и зазор между карточками (с 19.11.2026)
 const LEFT_GAP := 10.0
 const LEFT_WIDTH := 282.0  # 19.11.2026: ширина левой колонки постоянна (как у сведений о месте), от соседей не зависит
@@ -39,15 +36,6 @@ const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const UiAudio = preload("res://scripts/ui/ui_audio.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
-## 14.2: края экрана темнеют к углам, середина не тронута; strength — от RideDial.warning
-const VIGNETTE_CODE := """shader_type canvas_item;
-uniform float strength = 0.0;
-void fragment() {
-	float d = length((UV - 0.5) * vec2(1.25, 1.0));
-	COLOR = vec4(0.12, 0.02, 0.02, strength * smoothstep(0.42, 0.85, d));
-}
-"""
-
 var world: WorldData
 var _compass_quest := {}
 var map_preview: Image
@@ -76,30 +64,16 @@ var _tracker_step: Label
 var _tracker_note: Label
 var _tracker_note_row: HBoxContainer
 var _tracker_note_icon: TextureRect
-var _tracker_compact := -1  # 19.11.2026: 1 — лёгкий вид (значок, шаг, полоска), 0 — полный, -1 — не применено
 var _tracker_progress: Control
 var _tracker_head: HBoxContainer
 var _tracker_series: Label  # вторая строка счётчика: «Летопись обелисков: 2 из 5» (серия идёт параллельно заданию)
 var _step_count := 0
 var _step_index := 0
 var _photo_mode := false
-## 18.11.2026: три вида сводки по Tab. LIGHT — основной: видна только мини-карта (LIGHT_ALPHA) и линия навигации;
-## FULL — вся сводка; HIDDEN — ничего, кроме срочного. Порядок по Tab: лёгкий → полный → скрытый → лёгкий
-enum View { HIDDEN, LIGHT, FULL }
-const LIGHT_ALPHA := 0.75
-var view_mode := View.LIGHT
-var _revealed := false      # view_mode == FULL
-var _light := 1.0           # 0..1: проявление лёгкого вида
+var _summary_held := false
 var _summary_blocked := false
 var _summary_progress := 0.0
-var _ride_activity := false
-var _ride_peek_left := 0.0
-var _ride_peek := 0.0
-var _summary_hint_left := SUMMARY_HINT_TIME
-var _summary_hint: Label
-var _toggle_learned := -1 # 20.11: -1 — ещё не читали GameSettings.hud_toggle_learned, 0/1 — кэш
 var _cargo_pulse: Tween   # 20.11: вспышка значка хрупкого груза
-var _summary_switch: PanelContainer
 var _reticle_on_target := false
 var _reticle_open := 0.0
 var _reticle_tween: Tween
@@ -109,13 +83,11 @@ var interaction_audio: UiAudio
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
-var _reveal_key := Vector4.INF  # что было при последней раскладке сводки (_process)
+var _reveal_key := Vector2.INF  # что было при последней раскладке сводки (_process)
 var _reveal_dirty := true
 var _map_hint_pad := -1  # для какого устройства написана подсказка под картой (1 — геймпад)
 var _repair: RepairArc  # 18.11.2026: кольцо удержания «взаимодействия» при ремонте
 var _ride: RideDial  # 18.11.2026: прибор движения слева внизу — скорость, дуга сил (14.2) и тормоза в одном круге
-var _vignette_strength := -1.0
-var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
 var _prompt_items: Array = []
 var _key_style: StyleBoxFlat
@@ -185,6 +157,7 @@ func _ready() -> void:
 	compass.offset_top = 18
 	compass.offset_bottom = 74
 	add_child(compass)
+	compass.hide()
 	compass.visibility_changed.connect(compass.queue_redraw)
 	move_child(compass, minimap.get_index() + 1)
 
@@ -214,16 +187,6 @@ func _ready() -> void:
 	add_child(settlement_panel)
 	plaque_panel = preload("res://scripts/ui/plaque_panel.gd").new()
 	add_child(plaque_panel)
-	_vignette = ColorRect.new()
-	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var vignette_shader := Shader.new()
-	vignette_shader.code = VIGNETTE_CODE
-	_vignette.material = ShaderMaterial.new()
-	_vignette.material.shader = vignette_shader
-	_vignette.visible = false
-	add_child(_vignette)
-	move_child(_vignette, 0)
 	_ride = RideDial.new()
 	_ride.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_ride.offset_left = 18
@@ -233,17 +196,6 @@ func _ready() -> void:
 	_ride.hide()
 	add_child(_ride)
 	move_child(_ride, journal_panel.get_index())
-	var brake_alert := RideDial.BrakeAlert.new()
-	brake_alert.dial = _ride
-	brake_alert.set_anchors_preset(Control.PRESET_CENTER)
-	brake_alert.offset_left = -RideDial.BrakeAlert.SIZE.x * 0.5
-	brake_alert.offset_right = RideDial.BrakeAlert.SIZE.x * 0.5
-	brake_alert.offset_top = 66
-	brake_alert.offset_bottom = 66 + RideDial.BrakeAlert.SIZE.y
-	brake_alert.hide()
-	add_child(brake_alert)
-	move_child(brake_alert, journal_panel.get_index())
-	_ride.alert = brake_alert
 	_repair = RepairArc.new()
 	_repair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_repair.set_anchors_preset(Control.PRESET_CENTER)
@@ -254,19 +206,7 @@ func _ready() -> void:
 	_repair.pivot_offset = Vector2.ONE * (RepairArc.DIAMETER * 0.5)
 	_repair.hide()
 	add_child(_repair)
-	_summary_switch = PanelContainer.new()
-	_summary_switch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_summary_switch.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_summary_switch.offset_left = -18
-	_summary_switch.offset_right = -18
-	_summary_switch.offset_top = -47
-	_summary_switch.offset_bottom = -16
-	_summary_switch.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_summary_switch.add_theme_stylebox_override("panel", _hint_style)
-	add_child(_summary_switch)
-	_summary_hint = Label.new()
-	HudStyle.label(_summary_hint, 12, HudStyle.MUTED)
-	_summary_switch.add_child(_summary_hint)
+	lock_hint.hide()
 	_apply_reveal()
 
 
@@ -374,20 +314,15 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	goal = {}
 	_compass_quest = {}
 	bike_shown = false
-	view_mode = View.LIGHT
-	_revealed = false
+	_summary_held = false
 	_summary_progress = 0.0
-	_ride_activity = false
-	_ride_peek_left = 0.0
-	_ride_peek = 0.0
-	_light = 1.0
-	_summary_hint_left = SUMMARY_HINT_TIME
 	_apply_reveal()
 	_toast_queue.clear()
 	_toast_kinds.clear()
 	_toast_seen.clear()
 	_toast_left = 0.0
 	_toast_hidden_for = 0.0
+	$Toast.hide()
 	$Toast.modulate.a = 0.0
 
 
@@ -413,6 +348,7 @@ func clear_world() -> void:
 	_compass_quest = {}
 	quests = null
 	_summary_blocked = false
+	dismiss_summary()
 	update_tracker()
 	bike_pos = Vector2.ZERO
 	bike_shown = false
@@ -421,6 +357,7 @@ func clear_world() -> void:
 	_toast_seen.clear()
 	_toast_left = 0.0
 	_toast_hidden_for = 0.0
+	$Toast.hide()
 	$Toast.modulate.a = 0.0
 	set_hints([], [])
 	note_interaction_target("")
@@ -451,7 +388,7 @@ func show_tablet(tab: Tablet.Tab) -> void:
 	journal_panel.open_tab(tab, world.seed_text if world != null else "")
 	_map_hint_pad = -1
 	_sync_map_hint()
-	_apply_reveal()
+	dismiss_summary()
 
 
 func _tablet_quest() -> Dictionary:
@@ -988,23 +925,12 @@ func update_tracker() -> void:
 	_tracker_kind.text = kind
 	_tracker_count.text = "%d / %d" % [_step_index + 1, _step_count] if _step_count > 0 else ""
 	_tracker_title.text = title
+	_tracker_title.visible = not title.is_empty()
 	_set_optional_text(_tracker_step, line)
 	_set_optional_text(_tracker_note, note)
 	_tracker_note_row.visible = _tracker_note.visible
 	_tracker_progress.queue_redraw()
-	_tracker_compact = -1
 	_apply_reveal()
-
-
-## 19.11.2026: в лёгком виде у трекера остаются вид задания, шаг и полоска шагов (и хрупкий груз);
-## название, серия обелисков и благодарности — в полной сводке
-func _set_tracker_compact(compact: bool) -> void:
-	if _tracker_compact == int(compact):
-		return
-	_tracker_compact = int(compact)
-	_tracker_title.visible = not compact and not _tracker_title.text.is_empty()
-	_tracker_series.visible = not compact and not _tracker_series.text.is_empty()
-	_tracker_note_row.visible = not _tracker_note.text.is_empty() 		and (not compact or _tracker_note.text.begins_with("Хрупкий"))
 
 
 ## Курс на точку (x, z в метрах) от игрока — в тех же единицах, что yaw: 0 — север, PI/2 — запад
@@ -1017,17 +943,16 @@ func set_photo_mode(on: bool) -> void:
 	if _photo_mode == on:
 		return
 	_photo_mode = on
-	_apply_reveal()
+	dismiss_summary()
 
 
-## Контекстная подсказка у прицела видна отдельно от сводки.
-func summary_visible() -> bool:
-	return _revealed and _summary_allowed()
+func summary_requested() -> bool:
+	return _summary_held and _summary_allowed()
 
 
-## Линия навигации видна в лёгком и полном виде
-func navigation_visible() -> bool:
-	return view_mode != View.HIDDEN and _summary_allowed()
+func _summary_alpha() -> float:
+	# Панели проявляются после того, как рука начала подниматься к экрану часов.
+	return smoothstep(0.42, 1.0, _summary_progress) if _summary_allowed() else 0.0
 
 
 func _summary_allowed() -> bool:
@@ -1042,60 +967,47 @@ func _overlay_open() -> bool:
 
 
 func set_summary_blocked(blocked: bool) -> void:
-	if _summary_blocked != blocked:
-		_summary_blocked = blocked
+	if _summary_blocked == blocked:
+		return
+	_summary_blocked = blocked
+	if blocked:
+		dismiss_summary()
+	else:
 		_apply_reveal()
 
 
+func dismiss_summary() -> void:
+	_summary_held = false
+	_summary_progress = 0.0
+	_apply_reveal()
+
+
 func _apply_reveal() -> void:
-	var allowed := _summary_allowed()
-	var alpha := smoothstep(0.0, 1.0, _summary_progress) if allowed else 0.0
-	compass.visible = alpha > 0.0
-	compass.modulate.a = alpha
-	var map_alpha := maxf(alpha, LIGHT_ALPHA * smoothstep(0.0, 1.0, _light)) if allowed else 0.0
-	minimap.visible = map_alpha > 0.0
-	minimap.modulate.a = map_alpha
+	var alpha := _summary_alpha()
+	minimap.visible = alpha > 0.0
+	minimap.modulate.a = alpha
 	_info_panel.visible = alpha > 0.0 and not info.text.is_empty()
 	_info_panel.modulate.a = alpha
-	var quest_on := not _tracker_title.text.is_empty()
-	var tracker_alpha := maxf(alpha, map_alpha if quest_on else 0.0)
-	tracker.visible = tracker_alpha > 0.0 and (quest_on or (alpha > 0.0 and not _tracker_series.text.is_empty()))
+	tracker.visible = alpha > 0.0 and (not _tracker_title.text.is_empty() or not _tracker_series.text.is_empty())
 	if tracker.visible:
-		_set_tracker_compact(alpha < 0.5)
 		# карточка сама не сжимается, когда строки прячутся или короче переносятся; ширина задана отступами
 		var tracker_height := tracker.get_combined_minimum_size().y
 		if tracker.size.y > tracker_height + 0.5:
 			tracker.size = Vector2(tracker.size.x, tracker_height)
 	# modulate оставлен вспышке задания. Для затухания используем родительский цвет панели и её строк.
-	tracker.self_modulate.a = tracker_alpha
-	_tracker_content.modulate.a = tracker_alpha
+	tracker.self_modulate.a = alpha
+	_tracker_content.modulate.a = alpha
 	_layout_left_column()
 	var overlay := _overlay_open()
-	var urgent: bool = _hint_urgent and not _photo_mode and not overlay
-	hint.visible = (alpha > 0.0 or urgent) and hint.get_child_count() > 0
-	hint.modulate.a = 1.0 if urgent else alpha
-	prompt.visible = is_visible_in_tree() and not _photo_mode and not overlay \
-		and (not _summary_blocked or _hint_urgent) and prompt.get_child_count() > 0
-	_reticle.visible = alpha > 0.0 or prompt.visible
-	_reticle.modulate.a = 1.0 if prompt.visible else alpha
+	hint.hide()
+	prompt.visible = _hint_urgent and not _photo_mode and not overlay and prompt.get_child_count() > 0
+	_reticle.visible = prompt.visible and _prompt_aimed
 	var aimed := prompt.visible and _prompt_aimed
 	if _reticle_on_target != aimed:
 		_reticle_on_target = aimed
 		_animate_reticle()
 	_repair.self_modulate.a = 0.0 if _photo_mode or overlay else 1.0
-	var show_switch := false
-	if allowed and (view_mode == View.HIDDEN or _summary_hint_left > 0.0):
-		var key := controls.label(&"show_hud")
-		show_switch = not key.is_empty()
-		if show_switch:
-			var action: String = {View.LIGHT: "вся сводка", View.FULL: "скрыть сводку", View.HIDDEN: "показать сводку"}[view_mode]
-			var caption := "%s · %s" % [key, action]
-			if _summary_hint.text != caption:
-				_summary_hint.text = caption
-				_summary_switch.reset_size()
-			_summary_switch.modulate.a = 1.0 if view_mode == View.HIDDEN else smoothstep(0.0, 0.5, _summary_hint_left)
-	_summary_hint.visible = show_switch
-	_summary_switch.visible = show_switch
+	_show_ride()
 
 
 func note_interaction_target(id: String) -> void:
@@ -1148,7 +1060,7 @@ func _draw_reticle() -> void:
 
 
 ## Подсказки внизу и у прицела — чипы [клавиша] действие (пустой список — скрыты).
-## urgent — нижние видно и без Tab (падение: как восстановиться)
+## urgent — подтверждение в режиме ручной установки велосипеда.
 func set_hints(bottom: Array, near: Array, urgent := false, aimed := true) -> void:
 	if _hint_items == bottom and _prompt_items == near and _hint_urgent == urgent and _prompt_aimed == aimed:
 		return
@@ -1165,69 +1077,29 @@ func set_hints(bottom: Array, near: Array, urgent := false, aimed := true) -> vo
 
 
 ## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED.
-## 14.2: state — Stamina.State: трата ниже LOW пульсирует и затемняет края, накат подсвечен
+## 14.2: state — Stamina.State: трата ниже LOW пульсирует, накат подсвечен.
 func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
-	_ride.set_stamina(value, exhausted, state, _gauges_allowed())
-	# затемнение краёв: параметр шейдера — только когда меняется (обычно он 0 и узел скрыт)
-	var strength := _ride.warning * 0.4
-	if strength != _vignette_strength:
-		_vignette_strength = strength
-		var mat: ShaderMaterial = _vignette.material
-		mat.set_shader_parameter("strength", strength)
-	# 19.11.2026: под окном поверх игры гаснет сразу, а не догорает ~0,2 с поверх карты
-	var vignette_on := _ride.warning > 0.01 and _gauges_allowed()
-	if _vignette.visible != vignette_on:
-		_vignette.visible = vignette_on
+	_ride.set_stamina(value, exhausted, state, _summary_allowed(), summary_requested() or _summary_progress > 0.0)
 	_show_ride()
 
 
 ## Скорость и тормоз велосипеда для прибора движения
 func set_brakes(bike: BikeRide) -> void:
-	_ride.set_ride(bike, _gauges_allowed())
+	_ride.set_ride(bike, summary_requested() or _summary_alpha() > 0.0)
 	_show_ride()
 
 
-func _gauges_allowed() -> bool:
-	return not _photo_mode and not _overlay_open() and not _summary_blocked
-
-
-## Активное управление удерживает прибор, после отпускания отсчитывается задержка.
-func set_ride_activity(active: bool) -> void:
-	_ride_activity = active
-
-
 func pulse_pump() -> void:
-	if view_mode == View.HIDDEN or not _summary_allowed():
-		return
-	_ride.pulse_pump()
-	_ride_peek_left = maxf(_ride_peek_left, 0.5)
+	if _summary_alpha() > 0.0:
+		_ride.pulse_pump()
 
 
-func _tick_ride_peek(delta: float) -> void:
-	if view_mode != View.LIGHT or not _summary_allowed():
-		_ride_activity = false
-		_ride_peek_left = 0.0
-		_ride_peek = 0.0
-		return
-	if _ride_activity:
-		_ride_peek_left = RIDE_PEEK_HOLD
-	else:
-		var held_for := minf(_ride_peek_left, delta)
-		_ride_peek_left = maxf(0.0, _ride_peek_left - delta)
-		if _ride_peek_left <= 0.0:
-			# Затухание начинается только после истечения задержки, даже при длинном кадре.
-			_ride_peek = move_toward(_ride_peek, 0.0, (delta - held_for) / RIDE_PEEK_OUT)
-			return
-	var target := 1.0 if _ride_peek_left > 0.0 else 0.0
-	_ride_peek = move_toward(_ride_peek, target, delta / (RIDE_PEEK_IN if target > _ride_peek else RIDE_PEEK_OUT))
-
-
-## Срочные предупреждения и полная сводка имеют приоритет над временным показом.
 func _show_ride() -> void:
-	var urgent := _ride.stamina_urgent() or _ride.brake_urgent()
-	var alpha := maxf(smoothstep(0.0, 1.0, _summary_progress), smoothstep(0.0, 1.0, _ride_peek))
-	_ride.visible = _gauges_allowed() and (alpha > 0.0 or urgent)
-	_ride.modulate.a = 1.0 if urgent else alpha
+	var alpha := _summary_alpha()
+	_ride.details_alpha = alpha
+	var exhausted := _ride.exhausted and _summary_allowed()
+	_ride.visible = alpha > 0.0 or exhausted
+	_ride.modulate.a = 1.0 if exhausted else alpha
 
 
 func _fill_chips(row: Container, items: Array, style: StyleBoxFlat) -> void:
@@ -1273,7 +1145,7 @@ func set_bike(x: float, z: float, shown: bool) -> void:
 ## Пока одно уведомление на экране, следующие ждут в очереди,
 ## чтобы не затирать друг друга (например, сразу два открытия поселений)
 func toast(text: String, kind: StringName = &"info") -> void:
-	if text.is_empty() or _repeated(text, kind):
+	if text.is_empty() or not _toast_allowed(kind) or _repeated(text, kind):
 		return
 	if _toast_left > 0.0:
 		# Одинаковое событие может прийти повторно, пока другое сообщение стоит между ним и очередью.
@@ -1289,7 +1161,7 @@ func toast(text: String, kind: StringName = &"info") -> void:
 
 ## Контекстное предупреждение идёт следующим, сохраняя текущий кадр и остальные события.
 func toast_now(text: String, kind: StringName = &"info") -> void:
-	if _repeated(text, kind):
+	if not _toast_allowed(kind) or _repeated(text, kind):
 		return
 	if _toast_left <= 0.0:
 		toast(text, kind)
@@ -1302,6 +1174,10 @@ func toast_now(text: String, kind: StringName = &"info") -> void:
 		_toast_queue.insert(0, text)
 		_toast_kinds.insert(0, kind)
 		_trim_toast_queue()
+
+
+func _toast_allowed(kind: StringName) -> bool:
+	return kind == &"discovery" or _photo_mode or summary_requested()
 
 
 ## 19.11.2026: переполненная очередь теряет самое неважное (из равных — самое старое), а не последнее пришедшее:
@@ -1466,21 +1342,6 @@ func _fit_toast() -> void:
 
 
 ## Освоен ли переключатель сводки: читается из настроек один раз, дальше — кэш (проверка идёт каждый кадр)
-func _summary_toggle_learned() -> bool:
-	if _toggle_learned < 0:
-		var settings: GameSettings = GameContext.scope.settings
-		_toggle_learned = 1 if settings == null or settings.hud_toggle_learned else 0
-	return _toggle_learned == 1
-
-
-func _learn_summary_toggle() -> void:
-	if _summary_toggle_learned():
-		return
-	_toggle_learned = 1
-	GameContext.scope.settings.hud_toggle_learned = true
-	GameContext.scope.settings.save_settings()
-
-
 ## 20.11: хрупкий груз пострадал — значок груза в трекере вздрагивает и вспыхивает (видно и в лёгком виде)
 func pulse_cargo() -> void:
 	if _tracker_note_icon == null or not _tracker_note_icon.is_visible_in_tree():
@@ -1495,35 +1356,37 @@ func pulse_cargo() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if event.is_action_pressed(&"show_hud") and _summary_allowed():
-		view_mode = {View.LIGHT: View.FULL, View.FULL: View.HIDDEN, View.HIDDEN: View.LIGHT}[view_mode]
-		_revealed = view_mode == View.FULL
-		_summary_hint_left = SUMMARY_HINT_TIME
-		_learn_summary_toggle()
+	if event.is_action_released(&"show_hud"):
+		_summary_held = false
+	elif event.is_action_pressed(&"show_hud") and _summary_allowed():
+		_summary_held = true
+		get_viewport().set_input_as_handled()
+
+
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_APPLICATION_FOCUS_OUT] and is_node_ready():
+		dismiss_summary()
 
 
 func _process(delta: float) -> void:
-	_summary_progress = move_toward(_summary_progress, 1.0 if _revealed else 0.0, delta / SUMMARY_FADE)
-	_light = move_toward(_light, 1.0 if view_mode == View.LIGHT else 0.0, delta / SUMMARY_FADE)
-	_tick_ride_peek(delta)
-	_show_ride()
-	if _summary_allowed() and view_mode != View.HIDDEN:
-		# 20.11: пока игрок ни разу не нажал переключатель сводки, подсказка о нём не гаснет (GameSettings.hud_toggle_learned)
-		if _summary_toggle_learned():
-			_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
+	if not _summary_allowed():
+		_summary_held = false
+		_summary_progress = 0.0
+	else:
+		_summary_progress = move_toward(_summary_progress, float(_summary_held), delta / (SUMMARY_FADE if _summary_held else SUMMARY_HIDE))
 	if journal_panel.visible:
 		_sync_map_hint()
 	# 19.11.2026: сводка раскладывается только когда что-то сдвинулось (проявление, вид, экраны поверх игры);
 	# остальные изменения отмечают _reveal_dirty
 	var overlay := _overlay_open()
-	var flags := int(overlay) | int(is_visible_in_tree()) << 2 | int(view_mode) << 3 | int(controls.joypad) << 5
-	var key := Vector4(_summary_progress, _light, _summary_hint_left, flags)
+	var flags := int(overlay) | int(is_visible_in_tree()) << 1
+	var key := Vector2(_summary_progress, flags)
 	if _reveal_dirty or key != _reveal_key:
 		_reveal_key = key
 		_reveal_dirty = false
 		_apply_reveal()
 	var obscured: bool = not is_visible_in_tree() or overlay
-	$Toast.visible = not obscured and _toast_left > 0.0
+	$Toast.visible = not obscured and _toast_left > 0.0 and _toast_allowed(_toast_kind)
 	if obscured:
 		if _toast_left > 0.0 or not _toast_queue.is_empty():
 			_toast_hidden_for += delta
@@ -1535,22 +1398,23 @@ func _process(delta: float) -> void:
 	if _toast_left <= 0.0:
 		return
 	var previous_age := TOAST_TIME - _toast_left
-	_toast_left -= delta
+	_toast_left = _toast_left - delta if _toast_allowed(_toast_kind) else 0.0
 	if previous_age < 0.32:
 		_animate_toast(TOAST_TIME - _toast_left)
 	_toast_time.value = clampf(_toast_left / TOAST_TIME, 0.0, 1.0)
 	$Toast.modulate.a = smoothstep(0.0, 0.18, TOAST_TIME - _toast_left) * smoothstep(0.0, TOAST_FADE, _toast_left)
 	if _toast_left > 0.0:
 		return
-	if not _toast_queue.is_empty():
+	while not _toast_queue.is_empty():
 		var next := _toast_queue[0]
 		var next_kind: StringName = _toast_kinds[0] if not _toast_kinds.is_empty() else &"info"
 		_toast_queue.remove_at(0)
 		if not _toast_kinds.is_empty():
 			_toast_kinds.remove_at(0)
-		_show_toast(next, next_kind)
-	else:
-		$Toast.hide()
+		if _toast_allowed(next_kind):
+			_show_toast(next, next_kind)
+			return
+	$Toast.hide()
 
 
 ## Положение игрока для мини-карты и большой карты

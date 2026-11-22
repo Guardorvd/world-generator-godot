@@ -895,8 +895,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	finder.search_budget = -1
 	# DSU describes only the primary skeleton. Secondary ways may join its
 	# components: decide publication on the final confirmed connections,
-	# after all those opportunities, without deleting any safe road or structure.
-	_retain_connected_settlements(w, paths)
+	# after all those opportunities, and prune any orphaned roads from dropped components.
+	primary_end = _retain_connected_settlements(w, paths, state, primary_end)
 	w.generation_profile.settlement_rejected = n - w.settlements.size()
 	w.generation_profile.journeys = _journeys(w, paths)
 	for s: SettlementData in w.settlements:
@@ -916,9 +916,12 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 ## Candidate order ranks sites, not connectivity; PlayerState.home chooses the
 ## actual start after publication. Ties prefer the earliest ranked component.
 ## A 2D mask contact alone cannot prove access at an overpass.
-static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
-	if w.settlements.is_empty(): return
-	var groups: Array = range(w.settlements.size())
+## If a smaller component had internal roads/spurs but never connected to root,
+## prune its orphaned trail sections and structures so no disconnected road island remains.
+static func _retain_connected_settlements(w: WorldData, paths: Array, state := {}, primary_end := -1) -> int:
+	if w.settlements.is_empty(): return primary_end
+	var total_n := w.settlements.size()
+	var groups: Array = range(total_n)
 	for edge: Array in paths:
 		var a := _group(groups, edge[0])
 		var b := _group(groups, edge[1])
@@ -926,7 +929,7 @@ static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
 	var sizes := {}
 	var root := 0
 	var largest := 0
-	for index in w.settlements.size():
+	for index in total_n:
 		var r := _group(groups, index)
 		sizes[r] = int(sizes.get(r, 0)) + 1
 		if sizes[r] > largest or sizes[r] == largest and r < root:
@@ -934,7 +937,7 @@ static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
 			largest = sizes[r]
 	var keep: Array[SettlementData] = []
 	var remap := {}
-	for index in w.settlements.size():
+	for index in total_n:
 		if _group(groups, index) == root:
 			remap[index] = keep.size()
 			keep.append(w.settlements[index])
@@ -946,6 +949,115 @@ static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
 			kept_paths.append(edge)
 	paths.assign(kept_paths)
 	w.settlements = keep
+	if keep.size() < total_n and not keep.is_empty() and not w.trails.is_empty():
+		primary_end = _prune_orphaned_trails(w, keep, kept_paths, state, primary_end)
+	return primary_end
+
+
+## Удаляет из w.trails, w.bridges, w.tunnels, w.path_mask и road_owner все пути людей, не связанные с оставшимися поселениями keep.
+static func _prune_orphaned_trails(w: WorldData, keep: Array[SettlementData], kept_paths: Array, state: Dictionary, primary_end: int) -> int:
+	var connected_mask := PackedByteArray()
+	connected_mask.resize(w.N)
+	var queue := PackedInt32Array()
+	for s: SettlementData in keep:
+		if s.i >= 0 and s.i < w.N and connected_mask[s.i] == 0:
+			connected_mask[s.i] = 1
+			queue.append(s.i)
+	for edge: Array in kept_paths:
+		var q: PackedInt32Array = edge[2]
+		for c: int in q:
+			if c >= 0 and c < w.N and connected_mask[c] == 0:
+				connected_mask[c] = 1
+				queue.append(c)
+	var head := 0
+	while head < queue.size():
+		var c := queue[head]
+		head += 1
+		var cx := c % w.W
+		var cy := c / w.W
+		for k in 8:
+			var nx: int = cx + Grid.DX[k]
+			var ny: int = cy + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= w.W or ny >= w.H:
+				continue
+			var next := ny * w.W + nx
+			if connected_mask[next] == 0 and w.path_mask[next] >= 2:
+				connected_mask[next] = 1
+				queue.append(next)
+	var new_trails: Array = []
+	var new_road_cells: Array = []
+	var old_cells: Array = w.generation.road_cells
+	var new_primary_end := 0
+	var dropped := 0
+	for idx in w.trails.size():
+		var tr: Dictionary = w.trails[idx]
+		var cells: PackedInt32Array = old_cells[idx] if idx < old_cells.size() else PackedInt32Array()
+		var keep_sec: bool = str(tr.get("kind", "")) == "animal"
+		if not keep_sec:
+			for c: int in cells:
+				if c >= 0 and c < w.N and connected_mask[c] != 0:
+					keep_sec = true
+					break
+		if not keep_sec:
+			for p: Dictionary in tr.get("pts", []):
+				var pc := clampi(floori(float(p.y)), 0, w.H - 1) * w.W + clampi(floori(float(p.x)), 0, w.W - 1)
+				if connected_mask[pc] != 0:
+					keep_sec = true
+					break
+		if keep_sec:
+			if idx < primary_end:
+				new_primary_end += 1
+			new_trails.append(tr)
+			new_road_cells.append(cells)
+		else:
+			dropped += 1
+	if dropped == 0:
+		return primary_end
+	w.trails = new_trails
+	w.generation.road_cells = new_road_cells
+	var new_bridges: Array = []
+	for span: BridgeData in w.bridges:
+		if (span.a >= 0 and span.a < w.N and connected_mask[span.a] != 0) or (span.b >= 0 and span.b < w.N and connected_mask[span.b] != 0):
+			new_bridges.append(span)
+	w.bridges = new_bridges
+	var new_tunnels: Array = []
+	for span: TunnelData in w.tunnels:
+		if (span.a >= 0 and span.a < w.N and connected_mask[span.a] != 0) or (span.b >= 0 and span.b < w.N and connected_mask[span.b] != 0):
+			new_tunnels.append(span)
+	w.tunnels = new_tunnels
+	var owner := PackedInt32Array()
+	owner.resize(w.N)
+	owner.fill(-1)
+	for idx in w.trails.size():
+		if w.trails[idx].get("kind", "") == "animal":
+			continue
+		for c: int in new_road_cells[idx]:
+			if c >= 0 and c < w.N and owner[c] < 0:
+				owner[c] = idx
+	w.generation.road_owner = owner
+	var mask := w.path_mask
+	for i in mask.size():
+		if mask[i] >= 2:
+			mask[i] = 0
+	var widths := RoadTuning.current().section.widths
+	for tr: Dictionary in w.trails:
+		var kind: String = tr.get("kind", "")
+		if kind == "animal":
+			continue
+		var mark := 3 if kind == "road" else 2
+		var width: float = float(widths.get(kind, widths.trail))
+		Grid.stamp_path(mask, w.W, w.H, tr.pts, mark, width * 0.5 - Grid.PATH_IN)
+	w.path_mask = mask
+	for span: BridgeData in w.bridges:
+		_mark_cut(w, span.a, span.b, BRIDGE_R)
+	for span: TunnelData in w.tunnels:
+		_mark_cut(w, span.a, span.b, TUNNEL_R)
+	if state.has("on_axis"):
+		var axis: PackedByteArray = state.on_axis
+		for i in axis.size():
+			if connected_mask[i] == 0:
+				axis[i] = 0
+	return new_primary_end if primary_end >= 0 else primary_end
 
 
 ## Ревью дорожной сети 29.10, шаг 1 (поиск не одобряет то, что построитель не сделает): мост охватывает не больше
@@ -1370,9 +1482,85 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		_note_way(w, "bridge_gap", _add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface")))
 		paths.append([e[0], e[1], joint, false, e[2]])
 		network = _network_cost(w)
+	# Если после соседских пар Габриэля остались отдельные компоненты поселений (через реку или за перевалом > ROAD_LIMIT),
+	# пробуем соединить их с основной сетью тропой (TRAIL_GRADE) с правом переправы по road_cost.
+	_rescue_disconnected_components(w, finder, paths, road_cost, state)
+	var coverage_cells := w.generation.coverage_cells
+	if not coverage_cells.is_empty():
+		# Отдельный ограниченный запас, если поиск обычных троп исчерпал свой.
+		finder.search_budget = w.N * coverage_cells.size()
+		_rescue_disconnected_components(w, finder, paths, road_cost, state, coverage_cells)
 	finder.search_budget = -1
 	RoadNetworkV2.plan_loops(w, finder, paths, road_cost, state)
 	RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false, state.get("v2_unsafe", PackedByteArray()))
+
+
+static func _rescue_disconnected_components(w: WorldData, finder: Pathfinder, paths: Array,
+		road_cost: PackedFloat32Array, state: Dictionary, coverage_cells := PackedInt32Array()) -> void:
+	var st := w.settlements
+	var n := st.size()
+	var mountain := not coverage_cells.is_empty()
+	if n <= 1:
+		return
+	var groups: Array = range(n)
+	for edge: Array in paths:
+		var ga := _group(groups, edge[0])
+		var gb := _group(groups, edge[1])
+		groups[maxi(ga, gb)] = mini(ga, gb)
+	var comp_count := 0
+	for i in n:
+		if _group(groups, i) == i:
+			comp_count += 1
+	if comp_count <= 1:
+		return
+	var rescue_pairs: Array = []
+	for a in n:
+		for b in range(a + 1, n):
+			if _group(groups, a) == _group(groups, b):
+				continue
+			if mountain and not (coverage_cells.has(st[a].i) or coverage_cells.has(st[b].i)):
+				continue
+			var d := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
+			rescue_pairs.append([a, b, d, minf(_direction_cost(w, st[a], st[b]), _direction_cost(w, st[b], st[a]))])
+	if rescue_pairs.is_empty():
+		return
+	rescue_pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[3] < q[3] if p[3] != q[3] else p[2] < q[2])
+	var kind := "mountain" if mountain else "trail"
+	var limit := MOUNTAIN_GRADE if mountain else TRAIL_GRADE
+	var way := "bridge_gap_mountain" if mountain else "bridge_gap"
+	var widths := RoadTuning.current().section.widths
+	if mountain:
+		_route_surface(finder, state.surface, widths.mountain)
+	var pair_tries := {}
+	for cand: Array in rescue_pairs:
+		if comp_count <= 1 or finder.search_budget == 0:
+			break
+		var a: int = cand[0]
+		var b: int = cand[1]
+		var ra := _group(groups, a)
+		var rb := _group(groups, b)
+		if ra == rb:
+			continue
+		var key := mini(ra, rb) * n + maxi(ra, rb)
+		if int(pair_tries.get(key, 0)) >= SETTLEMENT_NEIGHBORS:
+			continue
+		var use_cost := w.cost
+		var link := _land_path(finder, use_cost, st[a].i, st[b].i, kind, limit)
+		var joint := _structures(w, link, false, finder, use_cost, state, 0, limit) if not link.is_empty() else link
+		if joint.is_empty():
+			use_cost = _known_crossings(road_cost, state)
+			link = _land_path(finder, use_cost, st[a].i, st[b].i, kind, limit)
+			joint = _structures(w, link, false, finder, use_cost, state, 0, limit) if not link.is_empty() else link
+		if joint.is_empty():
+			pair_tries[key] = int(pair_tries.get(key, 0)) + 1
+			continue
+		joint = RoadNetworkV2.shape_land(w, finder, use_cost, joint, state.on_axis, kind, limit)
+		_note_way(w, way, _add_trail(w, joint, kind, road_cost, state.on_axis, state.get("surface")))
+		paths.append([a, b, joint, false, cand[2]])
+		groups[maxi(ra, rb)] = mini(ra, rb)
+		comp_count -= 1
+	if mountain:
+		_route_surface(finder, state.surface, widths.trail)
 
 
 static func _fork_length_limit(w: WorldData, path: PackedInt32Array) -> float:

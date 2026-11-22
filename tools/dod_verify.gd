@@ -90,6 +90,7 @@ func verify_fields() -> void:
 		w.N = w.W * w.H
 		w.seed_num = 2718
 		w.noise.moist = Simplex.new(WorldGenerator.noise_rng(w.seed_num, "moist"))
+		w.noise.temp = Simplex.new(WorldGenerator.noise_rng(w.seed_num, "temp"))
 		w.h.resize(w.N)
 		w.ocean.resize(w.N)
 		var proposal := StageHydrology.lake_candidate(w.seed_num, w.W, w.H, 0)
@@ -106,6 +107,7 @@ func verify_fields() -> void:
 		if w.W == 1:
 			w.h[0] = -0.0
 		w.noise_field("moist")
+		w.noise_field("temp")
 		Grid.allow_fast = false
 		var position := StageHydrology.position_field(w.h, w.W, w.H).to_byte_array()
 		Grid.allow_fast = true
@@ -115,11 +117,13 @@ func verify_fields() -> void:
 			Grid.allow_fast = false
 			StageHydrology.run(w, 2)
 			StageGeography.run(w)
+			StageClimate.run(w)
 			var reference := field_bytes(w)
 			Grid.allow_fast = true
 			StageHydrology.run(w, 2)
 			StageGeography.run(w)
-			check(reference == field_bytes(w), "%s: осадки, вода, высоты и уклоны побайтно (regional=%s)" % [size, regional])
+			StageClimate.run(w)
+			check(reference == field_bytes(w), "%s: осадки, вода, высоты, уклоны и климат побайтно (regional=%s)" % [size, regional])
 			if w.W > 48:
 				check(w.lake.count(1) >= StageHydrology.LAKE_MIN, "%s: синтетическая замкнутая котловина заполнилась" % size)
 	StageHydrology.regional = true
@@ -127,7 +131,8 @@ func verify_fields() -> void:
 
 func field_bytes(w: WorldData) -> Array:
 	return [w.filled.to_byte_array(), w.lake, w.rain.to_byte_array(), w.dist_ocean.to_byte_array(),
-		w.dist_water.to_byte_array(), w.elev.to_byte_array(), w.slope.to_byte_array()]
+		w.dist_water.to_byte_array(), w.elev.to_byte_array(), w.slope.to_byte_array(),
+		w.temp.to_byte_array(), w.moist.to_byte_array(), w.biome, w.generation.light.to_byte_array()]
 
 
 ## Рельеф с полотном путей (RoadBed) и сооружениями, как перед RoadRefinement.build в finish_paths

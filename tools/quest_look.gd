@@ -829,9 +829,7 @@ func _run() -> void:
 	hud.pz = 100 * GameConfig.TILE
 	for i in 2:
 		await process_frame
-	# 18.11.2026: игра начинается в лёгком виде (только мини-карта) — счётчик задания виден в полном
-	hud.view_mode = Hud.View.FULL
-	hud._revealed = true
+	hud._summary_held = true
 	hud._summary_progress = 1.0
 	hud.update_tracker()
 	_check(hud.tracker.visible and hud._tracker_note.text.contains("сумка за спиной"), "счётчик: шаг и сумка за спиной")

@@ -15,9 +15,16 @@ const LAYOUT_R := 6.8 # клеток: дома и сараи не дальше �
 ## а выбиралось туда 85 % поселений. Теперь он вдвое слабее.
 const WATER_WEIGHT := 0.5
 ## Поправка на удалённость в отборе плана: следующее место получает до SPREAD к оценке, если до ближайшего
-## уже выбранного не меньше SPREAD_R клеток (800 м). Группы в пятнах плотности остаются, у дальней суши появляется шанс.
-const SPREAD := 0.3 # 0,5 до ролей (этап 1); с ролями дальние места даёт роль remote, а обычные чаще держатся групп
-const SPREAD_R := 200.0
+## уже выбранного не меньше SPREAD_R клеток. Группы в пятнах плотности остаются, но вся карта заселяется равномернее.
+const SPREAD := 0.5
+const SPREAD_R := 250.0
+const BORDER_MIN := 24.0
+const COVER_BORDER_MIN := 42.0
+const COVER_GRID := 3
+const COVER_MAX := 3
+const COVER_WALK_GRADE := 0.34 # запас для поиска площадки, фактический подъезд проверяет StageTrails
+const COVER_GAP := 150.0 # клеток (600 м): минимальный радиус просвета для добавки покрытия
+const COVER_EDGE_GAP := 125.0 # клеток: минимальный эффективный радиус с учётом зеркала границы (2.2 * border)
 ## Прежний отбор (стенд settlement_look.gd -- --legacy): водный член целиком, без поправки на удалённость.
 static var legacy := false
 
@@ -71,6 +78,12 @@ static func _place_settlements(w: WorldData) -> void:
 	wet.resize(w.N)
 	for i in w.N:
 		wet[i] = 1 if ocean[i] != 0 or lake[i] != 0 or river[i] != 0 else 0
+	var corridor_wet := wet.duplicate()
+	var surface := w.base_heights
+	if surface != null and surface.water_level.size() == w.N and surface.hv.size() == w.N:
+		for i in w.N:
+			if surface.water_level[i] > 0.0 and surface.water_level[i] - 0.15 > surface.hv[i]:
+				corridor_wet[i] = 1
 	var reachable := Grid.bridge_region(W, H, wet, StageTrails.SPAN)
 	var cand := _settlement_candidates(w, river, wet, reachable, candidate_seed, density_seed)
 	# Плотность мира зависит от сида. С 9.3 деревень почти вдвое меньше и они дальше друг от друга:
@@ -81,7 +94,7 @@ static func _place_settlements(w: WorldData) -> void:
 	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
 	var min_d := maxf(32.0, W / 8.0)
 	var pick := {cand = cand, dead = PackedByteArray(), min_d = min_d, spread = 0.0 if legacy else SPREAD,
-		fields = {}, centers = []}
+		fields = {}, centers = [], corridor_wet = corridor_wet}
 	pick.dead.resize(cand.size() / 4) # кандидат выбран или слишком близко к выбранному (выбранных только прибавляется)
 	# Роли слотов (с 16.11, SettlementRoles): центры, спутники, лес, предгорья, обычные, удалённые. Legacy — все обычные.
 	var slots: Array[String] = []
@@ -94,13 +107,36 @@ static func _place_settlements(w: WorldData) -> void:
 		lists[""] = Roles.thin(w, pick.fields, cand, "")
 		for role: String in ["forest", "foothill"]:
 			lists[role] = Roles.thin(w, pick.fields, cand, role)
+	var thin_all: PackedInt32Array = lists.get("", PackedInt32Array())
 	for slot: String in slots:
 		var role := slot
-		var best := _best(w, settlements, pick, role, lists.get(role, lists.get("", PackedInt32Array())))
+		var best := _best(w, settlements, pick, role, lists.get(role, thin_all))
+		if not legacy and settlements.is_empty() and best >= 0:
+			# Первый центр не должен оказаться в изолированном кармане: проверяем, что его область walk
+			# охватывает основную связную часть пригодной суши.
+			var best_fallback := best
+			var best_walk := Roles.walk(w, corridor_wet, int(cand[best * 4 + 1]))
+			var best_reach := _count_walk_candidates(cand, thin_all, best_walk)
+			var tries := 0
+			while best >= 0 and best_reach * 2 < thin_all.size() and tries < 8:
+				pick.dead[best] = 1
+				tries += 1
+				var next_best := _best(w, settlements, pick, role, lists.get(role, thin_all))
+				if next_best < 0:
+					break
+				var next_walk := Roles.walk(w, corridor_wet, int(cand[next_best * 4 + 1]))
+				var next_reach := _count_walk_candidates(cand, thin_all, next_walk)
+				if next_reach > best_reach:
+					best_fallback = next_best
+					best_walk = next_walk
+					best_reach = next_reach
+				best = next_best
+			best = best_fallback
+			pick.walk = best_walk
 		if best < 0 and role != "ordinary":
 			# Карта не даёт места этой роли (нет гор, леса, свободного кольца у центра) — обычное место.
 			role = "ordinary"
-			best = _best(w, settlements, pick, role, lists.get("", PackedInt32Array()))
+			best = _best(w, settlements, pick, role, thin_all)
 		if best < 0:
 			break
 		pick.dead[best] = 1
@@ -112,27 +148,34 @@ static func _place_settlements(w: WorldData) -> void:
 		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
 		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + cand[at + 2] * 0.5 + cand[at + 3] * 0.3 + shore, 0.0, 1.0)
 		var settlement := SettlementData.new(x, y, i, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
-		settlement.spacing = min_d * lerpf(1.35, 0.7, cand[at + 3])
+		settlement.spacing = min_d * lerpf(1.35, 0.90, cand[at + 3])
 		settlement.importance = Roles.ROLES[role].importance if Roles.ROLES.has(role) else importance
 		settlement.role = "" if legacy else role
 		if role == "center": pick.centers.append(Vector2(x, y))
-		if not legacy and settlements.is_empty():
-			# Следующие места — только там, куда от первого центра можно дойти хотя бы тропой (SettlementRoles.walk):
-			# иначе место удалилось бы после дорог (StageTrails._retain_connected_settlements).
-			pick.walk = Roles.walk(w, wet, i)
+		if not legacy and settlements.is_empty() and not pick.has("walk"):
+			pick.walk = Roles.walk(w, corridor_wet, i)
 		settlements.append(settlement)
+	var main_count := settlements.size()
 	# Роль задаёт размер сама. Среди мест без роли (обычные; legacy — все) посёлков примерно треть, самые важные места:
-	# их доля не зависит от того, сколько мест заняли роли.
+	# их доля не зависит от того, сколько мест заняли роли и проход покрытия.
 	var ranks: Array = settlements.filter(func(s: SettlementData) -> bool: return not Roles.ROLES.has(s.role)) \
 		.map(func(s: SettlementData) -> float: return s.importance)
 	ranks.sort()
 	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
-	for s: SettlementData in settlements:
+	var cover_cells := PackedInt32Array()
+	if not legacy and not settlements.is_empty():
+		cover_cells = _cover_sectors(w, settlements, pick, lists.get("", PackedInt32Array()))
+	w.generation.coverage_cells = cover_cells
+	w.generation_profile.cover_added = cover_cells.size()
+	w.generation_profile.cover_cells = cover_cells
+	for idx in settlements.size():
+		var s: SettlementData = settlements[idx]
 		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
 		var role: Dictionary = Roles.ROLES.get(s.role, {})
 		# Посёлок — узел округи: вдвое больше домов, чем у деревни. Сами дома ставит lay_out,
 		# когда известны дороги (с 9.5): улицы — это дороги и тропы, пришедшие в поселение.
-		s.town = role.town if role.has("town") else s.importance >= town_from
+		# Проход покрытия добавляет только деревни/хутора (idx >= main_count).
+		s.town = false if idx >= main_count else (role.town if role.has("town") else s.importance >= town_from)
 		if role.has("homes"):
 			s.homes = int(role.homes[0]) + floori(rng.next_float() * (int(role.homes[1]) - int(role.homes[0]) + 1))
 		else:
@@ -141,6 +184,183 @@ static func _place_settlements(w: WorldData) -> void:
 		s.style = floori(rng.next_float() * 4)
 		s.character = _character(w, s.i, s.town, Roles.character(s.role, w, pick.fields, s.i))
 	w.settlements = settlements
+
+
+## Сколько прореженных кандидатов попадает в область пешей досягаемости walk
+static func _count_walk_candidates(cand: PackedFloat64Array, thin_all: PackedInt32Array, walk: PackedByteArray) -> int:
+	if walk.is_empty():
+		return thin_all.size()
+	var reached := 0
+	for k: int in thin_all:
+		if walk[int(cand[k * 4 + 1])] != 0:
+			reached += 1
+	return reached
+
+
+## Проверка выхода дорожного коридора (ширина 4 м, полуширина 0.5 клетки) из клетки поселения i:
+## все 8 соседних клеток должны быть сухими с учётом прорезанного русла (corridor_wet == 0),
+## уклон самой клетки <= 0.34, и хотя бы в 4 направлениях шаг не круче ROAD_LIMIT.
+static func _site_exit_ok(w: WorldData, corridor_wet: PackedByteArray, i: int) -> bool:
+	if w.slope[i] > 0.34:
+		return false
+	var W := w.W
+	var H := w.H
+	var x := i % W
+	var y := i / W
+	if x < 2 or y < 2 or x >= W - 2 or y >= H - 2:
+		return false
+	var h0 := w.h[i]
+	var exits := 0
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var nb := (y + dy) * W + (x + dx)
+			if not corridor_wet.is_empty() and corridor_wet[nb] != 0:
+				return false
+			if dx == 0 and dy == 0:
+				continue
+			var step := 1.41421356 if dx != 0 and dy != 0 else 1.0
+			if w.slope[nb] <= 0.34 and absf(w.h[nb] - h0) * StageTrails.HEIGHT_SCALE / step <= StageTrails.ROAD_LIMIT:
+				exits += 1
+	return exits >= 4
+
+
+## Номер области 0..8 в сетке COVER_GRID × COVER_GRID плана W × H
+static func sector_of(i: int, W: int, H: int) -> int:
+	return mini(COVER_GRID - 1, (i / W) * COVER_GRID / H) * COVER_GRID + mini(COVER_GRID - 1, (i % W) * COVER_GRID / W)
+
+
+## Проход покрытия после основного отбора: ищет крупнейшие незаселённые просветы пригодной суши
+## (gap_r = min(nearest_settlement, 2.2 * border) >= COVER_EDGE_GAP и nearest >= COVER_GAP),
+## предварительно доступные от первого центра с запасом для горного подъезда и с сухим выездом (_site_exit_ok).
+## Не привязан жёстко к границам секторов 3×3 (закрывает и центральные долины, и свободные углы вдали от края карты).
+## Добавляет роль ordinary (деревня), ≤ COVER_MAX на мир.
+static func _cover_sectors(w: WorldData, settlements: Array, pick: Dictionary, thin_all: PackedInt32Array) -> PackedInt32Array:
+	var W := w.W
+	var H := w.H
+	var cand: PackedFloat64Array = pick.cand
+	var corridor_wet: PackedByteArray = pick.get("corridor_wet", PackedByteArray())
+	var walk := Roles.walk(w, corridor_wet, settlements[0].i, COVER_WALK_GRADE)
+	var dist_water := w.dist_water
+	var biome := w.biome
+	var min_d: float = pick.min_d
+	var sectors := COVER_GRID * COVER_GRID
+	var covered := PackedByteArray()
+	covered.resize(sectors)
+	var sec_main := [0, 0, 0, 0, 0, 0, 0, 0, 0]
+	var sec_cand := [0, 0, 0, 0, 0, 0, 0, 0, 0]
+	var sec_walk := [0, 0, 0, 0, 0, 0, 0, 0, 0]
+	for s: SettlementData in settlements:
+		var sec := sector_of(s.i, W, H)
+		covered[sec] = 1
+		sec_main[sec] += 1
+	for c in cand.size() / 4:
+		var ci := int(cand[c * 4 + 1])
+		var sec := sector_of(ci, W, H)
+		sec_cand[sec] += 1
+		if walk.is_empty() or walk[ci] != 0:
+			sec_walk[sec] += 1
+	w.generation_profile.sector_cand = sec_cand
+	w.generation_profile.sector_walk = sec_walk
+	w.generation_profile.sector_main = sec_main.duplicate()
+	var valid_k := PackedInt32Array()
+	for k: int in thin_all:
+		var ci := int(cand[k * 4 + 1])
+		if (walk.is_empty() or walk[ci] != 0) and _site_exit_ok(w, corridor_wet, ci):
+			var cx := (ci % W) + 0.5
+			var cy := (ci / W) + 0.5
+			if minf(minf(cx, cy), minf(W - cx, H - cy)) >= COVER_BORDER_MIN:
+				valid_k.append(k)
+	var added := PackedInt32Array()
+	while added.size() < COVER_MAX:
+		# 1. Найти наибольший геометрический радиус пустого круга gap_r = min(nearest, 2.2 * border)
+		var max_gap := 0.0
+		var max_empty_sec_gap := 0.0
+		for k: int in valid_k:
+			if pick.dead[k] != 0:
+				continue
+			var at := k * 4
+			var ci := int(cand[at + 1])
+			var cx := (ci % W) + 0.5
+			var cy := (ci / W) + 0.5
+			var spacing: float = min_d * lerpf(1.35, 0.90, cand[at + 3])
+			var close := false
+			var nearest := INF
+			for s: SettlementData in settlements:
+				var d := Grid.hypot(s.x - cx, s.y - cy)
+				if d < (spacing + s.spacing) * 0.5:
+					close = true
+					break
+				nearest = minf(nearest, d)
+			if close:
+				pick.dead[k] = 1
+				continue
+			if nearest < COVER_GAP:
+				continue
+			var border := minf(minf(cx, cy), minf(W - cx, H - cy))
+			var gap_r := minf(nearest, 2.2 * border)
+			if gap_r < COVER_EDGE_GAP:
+				continue
+			max_gap = maxf(max_gap, gap_r)
+			if covered[sector_of(ci, W, H)] == 0:
+				max_empty_sec_gap = maxf(max_empty_sec_gap, gap_r)
+		if max_gap < COVER_EDGE_GAP:
+			break
+		# Если есть пустой сектор 3×3 с достойным просветом вдали от края, сначала закрываем его или конкурирующий
+		# центральный просвет; иначе закрываем крупнейший просвет карты (например, центральную долину).
+		var prefer_empty_sec := max_empty_sec_gap >= COVER_EDGE_GAP and max_empty_sec_gap >= max_gap - 55.0
+		var target_gap := maxf(COVER_EDGE_GAP, (max_empty_sec_gap if prefer_empty_sec else max_gap) - 38.0)
+		var best_k := -1
+		var best_val := -INF
+		for k: int in valid_k:
+			if pick.dead[k] != 0:
+				continue
+			var at := k * 4
+			var ci := int(cand[at + 1])
+			var sec := sector_of(ci, W, H)
+			if prefer_empty_sec and covered[sec] != 0 and max_gap - max_empty_sec_gap < 28.0:
+				continue
+			var cx := (ci % W) + 0.5
+			var cy := (ci / W) + 0.5
+			var nearest := INF
+			for s: SettlementData in settlements:
+				nearest = minf(nearest, Grid.hypot(s.x - cx, s.y - cy))
+			if nearest < COVER_GAP:
+				continue
+			var border := minf(minf(cx, cy), minf(W - cx, H - cy))
+			var gap_r := minf(nearest, 2.2 * border)
+			if gap_r < target_gap:
+				continue
+			var sec_bonus := 0.20 if covered[sec] == 0 else (0.08 if sec_main[sec] == 1 else 0.0)
+			var val: float = cand[at] + 0.85 * minf(gap_r, SPREAD_R) / SPREAD_R + sec_bonus
+			if val > best_val or (val == best_val and k < best_k):
+				best_val = val
+				best_k = k
+		if best_k < 0:
+			break
+		var chosen_sec := sector_of(int(cand[best_k * 4 + 1]), W, H)
+		covered[chosen_sec] = 1
+		sec_main[chosen_sec] += 1
+		_append_cover_settlement(w, settlements, pick, best_k, min_d, dist_water, biome, added)
+	return added
+
+
+static func _append_cover_settlement(w: WorldData, settlements: Array, pick: Dictionary, best_k: int,
+		min_d: float, dist_water: PackedFloat32Array, biome: PackedByteArray, added: PackedInt32Array) -> void:
+	var W := w.W
+	var cand: PackedFloat64Array = pick.cand
+	pick.dead[best_k] = 1
+	var at := best_k * 4
+	var i := int(cand[at + 1])
+	var x := (i % W) + 0.5
+	var y := (i / W) + 0.5
+	var shore := 0.12 if dist_water[i] < 6.0 else 0.0
+	var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + cand[at + 2] * 0.5 + cand[at + 3] * 0.3 + shore, 0.0, 1.0)
+	var settlement := SettlementData.new(x, y, i, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
+	settlement.spacing = min_d * lerpf(1.35, 0.90, cand[at + 3])
+	settlement.importance = importance
+	settlement.role = "ordinary"
+	settlements.append(settlement)
+	added.append(i)
 
 
 ## Номер лучшего кандидата для слота роли или -1. Оценка + поправка на удалённость + прибавка роли;
@@ -153,6 +373,7 @@ static func _best(w: WorldData, settlements: Array, pick: Dictionary, role: Stri
 	var spread: float = pick.spread
 	var min_d: float = pick.min_d
 	var walk: PackedByteArray = pick.get("walk", PackedByteArray())
+	var corridor_wet: PackedByteArray = pick.get("corridor_wet", PackedByteArray())
 	var top := spread + Roles.max_bonus(role)
 	var listed := not legacy # с ролями — прореженные списки (Roles.thin), legacy — все кандидаты, как раньше
 	var count := order.size() if listed else cand.size() / 4
@@ -168,16 +389,21 @@ static func _best(w: WorldData, settlements: Array, pick: Dictionary, role: Stri
 		var i := int(cand[at + 1])
 		if not walk.is_empty() and walk[i] == 0:
 			continue
+		if listed and not _site_exit_ok(w, corridor_wet, i):
+			continue
 		var x := (i % w.W) + 0.5
 		var y := (i / w.W) + 0.5
+		var border := minf(minf(x, y), minf(w.W - x, w.H - y))
+		if listed and border < BORDER_MIN:
+			continue
 		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
 		# Радиусы обоих соседей действуют и через границу любой области.
-		var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
+		var spacing: float = min_d * lerpf(1.35, 0.90, cand[at + 3])
 		var close := false
-		# За краем плана — соседние области со своими поселениями, а не пустота: край считается зеркалом
-		# (как будто там поселение на том же расстоянии), иначе углы плана выглядят самыми удалёнными местами.
-		var edge := 2.0 * minf(minf(x, y), minf(w.W - x, w.H - y))
-		var nearest := edge
+		# Зеркало границы 2.2 * border не штрафует внутреннюю часть карты (при border >= 114 клеток 2.2 * border >= SPREAD_R),
+		# но плавно удерживает поселения от прилипания к самому краю плана.
+		var edge := 2.2 * border
+		var nearest := edge if top > 0.0 else 0.0
 		for s: SettlementData in settlements:
 			var dx: float = s.x - x
 			var dy: float = s.y - y
@@ -185,7 +411,8 @@ static func _best(w: WorldData, settlements: Array, pick: Dictionary, role: Stri
 			if dx * dx + dy * dy < separation * separation:
 				close = true
 				break
-			nearest = minf(nearest, sqrt(dx * dx + dy * dy))
+			if top > 0.0:
+				nearest = minf(nearest, sqrt(dx * dx + dy * dy))
 		if close:
 			dead[k] = 1
 			continue

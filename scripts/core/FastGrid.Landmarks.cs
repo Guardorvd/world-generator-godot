@@ -67,7 +67,7 @@ public partial class FastGrid
 		for (int i = 0; i < n; i++)
 		{
 			passable[i] = wet[i] == 0 || reach[i] <= reachMax ? (byte)1 : (byte)0;
-			height[i] = heightRaw[i] * heightScale;
+			height[i] = Math.Max(0.0, (double)heightRaw[i]) * heightScale;
 		}
 		if (start < 0 || start >= n || passable[start] == 0) return result;
 		var queue = new int[n];
@@ -88,10 +88,33 @@ public partial class FastGrid
 					if ((dx == 0 && dy == 0) || nx < 0 || nx >= w) continue;
 					int next = ny * w + nx;
 					if (result[next] != 0 || passable[next] == 0) continue;
-					if (wet[c] == 0 && wet[next] == 0)
+					double step = dx != 0 && dy != 0 ? 1.4142135623730951 : 1.0;
+					double stepLimit = (wet[c] == 0 && wet[next] == 0) ? maxGrade : Math.Max(maxGrade, 0.40);
+					if (Math.Abs(height[next] - height[c]) / step > stepLimit) continue;
+					if (dx != 0 && dy != 0)
 					{
-						double step = dx != 0 && dy != 0 ? 1.4142135623730951 : 1.0;
-						if (Math.Abs(height[next] - height[c]) / step > maxGrade) continue;
+						int c1 = y * w + nx, c2 = ny * w + x;
+						if (passable[c1] == 0 || passable[c2] == 0) continue;
+						if (wet[c] == 0 && wet[next] == 0)
+						{
+							if (wet[c1] != 0 || wet[c2] != 0) continue;
+							double mid = (height[c1] + height[c2]) * 0.5;
+							if (Math.Max(Math.Abs(mid - height[c]), Math.Abs(height[next] - mid)) * 2.0 / step > maxGrade) continue;
+							if (Math.Abs(height[c1] - height[c2]) / step > 0.65) continue;
+						}
+					}
+					else if (wet[c] == 0 && wet[next] == 0)
+					{
+						if (dx != 0 && ny > 0 && ny < h - 1)
+						{
+							int s1 = (ny - 1) * w + nx, s2 = (ny + 1) * w + nx;
+							if (Math.Abs(height[s2] - height[s1]) * 0.5 > 0.65) continue;
+						}
+						else if (dy != 0 && nx > 0 && nx < w - 1)
+						{
+							int s1 = ny * w + (nx - 1), s2 = ny * w + (nx + 1);
+							if (Math.Abs(height[s2] - height[s1]) * 0.5 > 0.65) continue;
+						}
 					}
 					result[next] = 1;
 					queue[tail++] = next;

@@ -129,9 +129,9 @@ func look() -> void:
 	advance(500)
 	anim.append(await shot(Vector3(1.9, 1.3, -1.9), Vector3(0, 0.95, 0.0)))
 	anim.append(await shot(Vector3(-1.2, 1.7, 2.2), Vector3(0, 1.1, -0.1)))
-	reset(2.0)
+	reset(7.5)
 	bike.watch_requested = true
-	advance(24)
+	advance(26, 0.65, 4.0)
 	save([await shot(Vector3(-2.0, 1.65, -1.65), Vector3(0.0, 1.05, -0.12))], "rider_watch", 1)
 	bike.watch_requested = false
 	# 20.11: пассивное поглощение гребня без зажатого пампа — слева обычная езда накатом, справа гребень

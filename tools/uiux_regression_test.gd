@@ -1,5 +1,5 @@
 extends SceneTree
-## Регрессия контекстных подсказок, закрепления сводки и защиты цели на карте.
+## Регрессия HUD при удержании и защиты цели на большой карте.
 
 var failures := 0
 
@@ -30,13 +30,21 @@ func _run() -> void:
 	var map := Image.create(8, 8, false, Image.FORMAT_RGB8)
 	hud.set_world(world, map)
 	await process_frame
-	check(not hud.summary_visible() and hud.view_mode == Hud.View.LIGHT, "при старте включён лёгкий вид HUD")
-	await _toggle_hud()
-	check(hud.summary_visible(), "переключение открывает полную сводку")
-	await _toggle_hud()
-	await create_timer(Hud.SUMMARY_FADE + 0.04).timeout
+	check(not hud.summary_requested() and not hud.minimap.visible and not hud._ride.visible, "игровой HUD скрыт при старте")
 	hud.set_hints([], [["F", "Сесть"]])
-	check(hud.prompt.visible and hud.get_node("Crosshair").visible and not hud.summary_visible(), "контекстная подсказка видна без сводки")
+	check(not hud.prompt.visible and not hud.get_node("Crosshair").visible, "подсказка при наведении скрыта")
+	await _hold_hud(true)
+	await create_timer(Hud.SUMMARY_FADE + 0.04).timeout
+	check(hud.summary_requested() and hud.minimap.visible and hud._ride.visible and not hud.compass.visible and not hud.hint.visible,
+		"удержание открывает компактную сводку без компаса и подсказок")
+	await _hold_hud(false)
+	check(not hud.summary_requested(), "отпускание завершает режим просмотра")
+	await create_timer(Hud.SUMMARY_HIDE + 0.04).timeout
+	check(not hud.minimap.visible and not hud._ride.visible, "после отпускания сводка погасла")
+	hud.toast("Тестовая подсказка")
+	check(hud._toast_left == 0.0, "в обычном режиме подсказка не появляется как уведомление")
+	hud.toast("Открыта деревня", &"discovery")
+	check(hud._toast_left > 0.0, "уведомление об открытии места остаётся")
 	hud.set_hints([], [])
 	check(not hud.prompt.visible and not hud.get_node("Crosshair").visible, "пустая подсказка скрыта")
 	hud.set_summary_blocked(true)
@@ -46,15 +54,16 @@ func _run() -> void:
 	check(not hud.prompt.visible, "подсказка скрывается в режиме фото")
 	hud.set_photo_mode(false)
 	hud.set_summary_blocked(false)
-	await _toggle_hud()
-	check(not hud.summary_visible() and hud.view_mode == Hud.View.LIGHT, "после скрытого вида возвращается лёгкий HUD")
-	await _toggle_hud()
-	check(hud.summary_visible(), "полная сводка остаётся после отпускания")
-	await _toggle_hud()
-	check(not hud.summary_visible(), "повторное нажатие скрывает сводку")
+	await _hold_hud(true)
+	hud.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	check(not hud.summary_requested() and not hud.minimap.visible, "потеря фокуса сбрасывает удержание")
+	await _hold_hud(false)
 	hud.set_goal(Hud.marker_goal(Vector2(3, 4)))
 	hud.set_map_visible(true)
 	await process_frame
+	await _hold_hud(true)
+	check(not hud.summary_requested() and hud.big_map.visible, "удержание Tab не перехватывает открытую большую карту")
+	await _hold_hud(false)
 	var at := hud.big_map.size * 0.5
 	_map_click(hud.big_map, at, false)
 	check(hud.goal.x == 3 and hud.goal.y == 4, "обычный клик по пустой карте сохраняет цель")
@@ -79,14 +88,10 @@ func _run() -> void:
 	print("UIUX failures: ", failures)
 	quit(1 if failures else 0)
 
-func _toggle_hud() -> void:
+func _hold_hud(pressed: bool) -> void:
 	var event := InputEventAction.new()
 	event.action = &"show_hud"
-	event.pressed = true
-	Input.parse_input_event(event)
-	await process_frame
-	event = InputEventAction.new()
-	event.action = &"show_hud"
+	event.pressed = pressed
 	Input.parse_input_event(event)
 	await process_frame
 

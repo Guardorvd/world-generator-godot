@@ -1,5 +1,5 @@
 extends SceneTree
-## Временный показ прибора в лёгком режиме и прерывание затухания.
+## Сводка при удержании и появление шкалы сил на пороге рывка.
 
 var failures := 0
 
@@ -22,52 +22,37 @@ func _run() -> void:
 	main.get_node("%Menu").hide()
 	hud.show()
 	hud.set_process(false)
-	hud.view_mode = Hud.View.LIGHT
-	hud._summary_progress = 0.0
-	hud._ride.state = Stamina.State.IDLE
-	hud._ride.risk = 0.0
-	hud._ride.skid = 0.0
-	hud._tick_ride_peek(0.1)
-	hud._show_ride()
-	check(not hud._ride.visible, "без действия прибор скрыт")
+	var bike := BikeRide.new()
+	bike.riding = true
+	bike.speed = 7.5
+	bike.brakes.pressure = 0.8
+	bike.brakes.risk = 0.95
+	hud.set_brakes(bike)
+	hud.set_stamina(Stamina.DASH_COST, false, Stamina.State.DRAIN)
+	hud.pulse_pump()
+	check(not hud._ride.visible, "торможение, памп и трата сил выше порога не раскрывают HUD")
+	hud.set_stamina(Stamina.DASH_COST - 0.01, true, Stamina.State.COAST)
+	check(hud._ride.visible and hud._ride.details_alpha == 0.0, "ниже порога рывка видна только шкала сил, включая восстановление")
+	hud.set_stamina(Stamina.RECOVERED, false, Stamina.State.COAST)
+	check(not hud._ride.visible, "шкала скрывается, когда рывок снова доступен")
 
-	hud.set_ride_activity(true)
-	hud._tick_ride_peek(Hud.RIDE_PEEK_IN * 0.5)
-	hud._show_ride()
-	check(hud._ride.visible and hud._ride.modulate.a > 0.0 and hud._ride.modulate.a < 1.0, "прибор плавно появляется")
-	hud._tick_ride_peek(Hud.RIDE_PEEK_HOLD * 2.0)
-	check(is_equal_approx(hud._ride_peek, 1.0) and is_equal_approx(hud._ride_peek_left, Hud.RIDE_PEEK_HOLD), "удержание не даёт прибору погаснуть")
-	hud.set_ride_activity(false)
-	hud._tick_ride_peek(Hud.RIDE_PEEK_HOLD * 0.5)
-	check(is_equal_approx(hud._ride_peek, 1.0), "после отпускания прибор остаётся видимым")
-	hud._tick_ride_peek(Hud.RIDE_PEEK_HOLD * 0.5 + Hud.RIDE_PEEK_OUT * 0.4)
-	var fading: float = hud._ride_peek
-	check(fading > 0.0 and fading < 1.0, "после задержки прибор плавно гаснет")
-	hud.set_ride_activity(true)
-	hud._tick_ride_peek(Hud.RIDE_PEEK_IN * 0.2)
-	check(hud._ride_peek > fading and hud._ride_peek <= 1.0 and is_equal_approx(hud._ride_peek_left, Hud.RIDE_PEEK_HOLD), "повторное нажатие разворачивает затухание без скачка")
-	hud.set_ride_activity(false)
-	hud._tick_ride_peek(Hud.RIDE_PEEK_HOLD + Hud.RIDE_PEEK_OUT)
-	hud._show_ride()
-	check(not hud._ride.visible, "после задержки и затухания прибор скрыт")
-
-	hud.set_ride_activity(true)
-	hud._tick_ride_peek(Hud.RIDE_PEEK_IN)
+	hud._summary_held = true
+	hud._process(Hud.SUMMARY_FADE * 0.25)
+	check(not hud._ride.visible, "короткое нажатие оставляет интерфейс скрытым")
+	hud._process(Hud.SUMMARY_FADE * 0.5)
+	check(hud._ride.visible and hud._ride.modulate.a < 1.0, "прибор плавно проявляется")
+	hud._process(Hud.SUMMARY_FADE)
+	check(is_equal_approx(hud._ride.modulate.a, 1.0), "при удержании сводка остаётся видимой")
+	hud._summary_held = false
+	hud._process(Hud.SUMMARY_HIDE * 0.2)
+	var fading := hud._ride.modulate.a
+	check(fading > 0.0 and fading < 1.0, "отпускание сразу запускает затухание")
+	hud._summary_held = true
+	hud._process(Hud.SUMMARY_FADE * 0.1)
+	check(hud._ride.modulate.a > fading, "повторное удержание разворачивает затухание")
 	hud.set_summary_blocked(true)
-	hud._tick_ride_peek(0.1)
-	hud._show_ride()
-	check(not hud._ride.visible and hud._ride_peek == 0.0 and hud._ride_peek_left == 0.0, "блокировка сразу скрывает и сбрасывает временный показ")
-	hud.set_summary_blocked(false)
-	hud.view_mode = Hud.View.HIDDEN
-	hud.set_ride_activity(true)
-	hud._tick_ride_peek(1.0)
-	hud._show_ride()
-	check(not hud._ride.visible and hud._ride_peek == 0.0, "скрытый режим не включает временный показ")
-	hud.view_mode = Hud.View.FULL
-	hud._summary_progress = 1.0
-	hud._tick_ride_peek(1.0)
-	hud._show_ride()
-	check(hud._ride.visible and is_equal_approx(hud._ride.modulate.a, 1.0), "в полной сводке прибор виден постоянно")
+	check(not hud._ride.visible and not hud._summary_held, "блокировка скрывает сводку и сбрасывает удержание")
+
 	main.queue_free()
 	await process_frame
 	print("Ride peek failures: ", failures)

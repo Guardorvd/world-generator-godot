@@ -14,9 +14,9 @@ public partial class FastGrid
 	private const double SeaRaw = 0.067;
 	private const double BottomRaw = -0.7; // StageRelief.BOTTOM_RAW
 	private const double Character = 520.0;
-	private const double PlainLift = 0.3;
-	private const double PlainHills = 0.15;
-	private const double HillAmp = 0.07;
+	private const double PlainLift = 0.50;
+	private const double PlainHills = 0.34;
+	private const double HillAmp = 0.09;
 	private const double InlandDetail = 0.35;
 	private const double HeightPerWidth = 0.7;
 	private const double Foothills = 0.35;
@@ -71,8 +71,8 @@ public partial class FastGrid
 
 	/// <summary>Копия mountain_detail.gd; единицы мира передаются из GameConfig.</summary>
 	private const int DetailPad = 2;
-	private const double DetailLow = 5.0;
-	private const double DetailLowFull = 28.0;
+	private const double DetailLow = 3.0;
+	private const double DetailLowFull = 20.0;
 	private const double DetailMountain = 30.0;
 	private const double DetailTransition = 42.0;
 	private const double DetailHigh = 60.0;
@@ -161,7 +161,7 @@ public partial class FastGrid
 		double gy = (((double)b[k - 2 + r] + 2.0 * b[k + r] + b[k + 2 + r]) - ((double)b[k - 2 - r] + 2.0 * b[k - r] + b[k + 2 - r])) * perRaw / (16.0 * tile);
 		double g2 = gx * gx + gy * gy;
 		double lowland = 1.0 - mountain;
-		double gentleStart = 0.04 - 0.015 * lowland;
+		double gentleStart = 0.04 - 0.025 * lowland;
 		if (g2 <= gentleStart * gentleStart)
 			return v;
 		double s = Math.Sqrt(g2);
@@ -345,10 +345,10 @@ public partial class FastGrid
 			h += relief * m * MountainAmp * mountainHeight;
 		}
 		double aboveSea = h - SeaRaw;
-		if (shapePlains && calm > 0.0 && core < 0.35 && aboveSea > 0.035 && aboveSea < 0.30)
+		if (shapePlains && calm > 0.0 && core < 0.35 && aboveSea > 0.015 && aboveSea < 0.30)
 		{
 			double plain = calm * (1.0 - ReliefSmooth(0.1, 0.35, core));
-			double lowland = ReliefSmooth(0.035, 0.11, aboveSea) * (1.0 - ReliefSmooth(0.18, 0.30, aboveSea));
+			double lowland = ReliefSmooth(0.015, 0.07, aboveSea) * (1.0 - ReliefSmooth(0.18, 0.30, aboveSea));
 			double rolling = Noise(hill, X / 90.0 - 24.7, Y / 90.0 + 53.1);
 			double fold = 0.055 * rolling - 0.025 * hills * shoreFade - 0.010 * valley;
 			h += fold * plain * lowland;
@@ -371,10 +371,10 @@ public partial class FastGrid
 	/// <summary>Острые массивы, возвышенности и мягкий предел вершин (с 3.0): копия StageRelief.SHARP_SHIFT, UPLAND_SHIFT, UPLAND_AMP, UPLAND_SMOOTH, PEAK_KNEE, PEAK_SOFT.</summary>
 	private const double SharpShift = 0.28;
 	private const double UplandShift = 0.24;
-	private const double UplandAmp = 0.3;
-	private const double UplandSmooth = 0.8;
-	private const double PeakKnee = 0.50;
-	private const double PeakSoft = 0.40;
+	private const double UplandAmp = 0.42;
+	private const double UplandSmooth = 0.50;
+	private const double PeakKnee = 0.45;
+	private const double PeakSoft = 0.30;
 
 	/// <summary>Копия StageRelief.mountain.</summary>
 	private static double Mountain(int[] ridge, int[] hill, double X, double Y, double inland)

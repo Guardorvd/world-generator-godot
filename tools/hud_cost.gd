@@ -53,11 +53,9 @@ func _cost() -> void:
 	player.feet = 1240
 	var stamina := Stamina.new()
 	var bike := BikeRide.new()
-	for scene in ["стоя, лёгкий вид", "езда, лёгкий вид", "езда, полная сводка", "езда с торможением, полная сводка"]:
-		var riding: bool = scene != "стоя, лёгкий вид"
-		if scene == "езда, полная сводка":
-			hud.view_mode = Hud.View.FULL
-			hud._revealed = true
+	for scene in ["стоя, HUD скрыт", "езда, HUD скрыт", "езда, Tab", "езда с торможением, Tab"]:
+		var riding: bool = scene != "стоя, HUD скрыт"
+		hud._summary_held = scene.ends_with("Tab")
 		bike.riding = riding
 		bike.speed = 9.0 if riding else 0.0
 		bike.brakes.pressure = 0.8 if scene.begins_with("езда с торможением") else 0.0
@@ -134,7 +132,7 @@ func _calls(riding: bool, bike: BikeRide, stamina: Stamina, player: PlayerState,
 			hud.set_hints([[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]], [])
 		else:
 			hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], ["ПКМ", "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], [])
-	if hud.summary_visible() and info_timer <= 0.0:
+	if hud.summary_requested() and info_timer <= 0.0:
 		info_timer = 0.15
 		player.x = x
 		player.z = z

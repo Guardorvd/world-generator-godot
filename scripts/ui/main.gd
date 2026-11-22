@@ -2469,14 +2469,14 @@ func _control_rows() -> Array:
 	rows.append([c.label(&"photo") if pad else "ПКМ", "фотоаппарат"])
 	if not pad:
 		rows.append([c.label(&"time_skip"), "время суток (+Shift — назад)"])
-	rows.append([c.label(&"show_hud"), "сводка (показать / скрыть)"])
+	rows.append([c.label(&"show_hud"), "посмотреть сводку (держать)"])
 	rows.append([c.label(&"pause"), "пауза"])
 	return rows
 
 
 func _update_control_hint() -> void:
 	var controls := GameContext.scope.controls
-	var caption := "%s — взаимодействовать · %s — показать или скрыть сводку" % [
+	var caption := "%s — взаимодействовать · %s — сводка (держать)" % [
 		controls.label(&"interact"), controls.label(&"show_hud"),
 	]
 	if %ActionBindings.text != caption:

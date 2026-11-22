@@ -154,29 +154,45 @@ func run(finish := true) -> void:
 	root.add_child(bike)
 	_check_model()
 	reset()
-	state.speed = 2.0
-	advance()
+	state.speed = 7.5
+	advance(0.65)
 	var grip := bone("HandL")
 	var right := bone("HandR")
 	bike.watch_requested = true
-	for i in 20:
-		advance()
+	for i in 26:
+		state.crank += 4.0 * DT
+		advance(0.65)
 	check(bone("HandL").y > grip.y + 0.07 and bone("HandR").is_equal_approx(right), "Watch raises only the left hand")
+	var watch_skeleton := bike.rider.skeleton
+	var head := watch_skeleton.get_bone_global_pose(watch_skeleton.find_bone("Head"))
+	var hand := watch_skeleton.get_bone_global_pose(watch_skeleton.find_bone("HandL"))
+	var eye := head * Vector3(0.0, 0.045, -0.07)
+	var screen := hand * Vector3(0.0, 0.033, 0.036)
+	var glance := eye.direction_to(screen)
+	check((-head.basis.z).dot(glance) > 0.75 and hand.basis.y.dot(-glance) > 0.35, "Rider looks down at the wrist screen")
+	bike.watch_requested = false
+	advance(0.65)
+	check(bike._cur[BikeView.S_WATCH] > 0.0 and bike._cur[BikeView.S_WATCH] < 1.0, "Release lowers the hand without snapping")
+	for i in 20:
+		advance(0.65)
+	check(bike._cur[BikeView.S_WATCH] == 0.0, "Release returns the left hand to the grip")
+	bike.watch_requested = true
 	for unsafe in ["speed", "air", "turn", "brake"]:
 		state.speed = 2.0
 		state.airborne = false
 		state.steer = 0.0
 		state.brakes.pressure = 0.0
 		bike.snap(state)
-		for i in 20:
+		for i in 25:
 			advance()
 		check(bike._cur[BikeView.S_WATCH] > 0.5, "Watch pose is active before " + unsafe)
 		state.speed = 12.0 if unsafe == "speed" else 2.0
 		state.airborne = unsafe == "air"
 		state.steer = 0.6 if unsafe == "turn" else 0.0
 		state.brakes.pressure = 0.8 if unsafe == "brake" else 0.0
-		advance()
-		check(bike._cur[BikeView.S_WATCH] == 0.0, "Watch yields immediately to " + unsafe)
+		for i in ceili(BikeView.WATCH_BRACE / DT) + 1:
+			advance()
+		check(bike._cur[BikeView.S_WATCH] == 0.0, "Watch yields promptly to " + unsafe)
 	bike.watch_requested = false
 	reset()
 	# draw до первого tick безопасен, а интерполяция не выходит за границы тактов.

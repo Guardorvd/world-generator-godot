@@ -246,7 +246,7 @@ public partial class FastGrid
 				double gx = ((double)elev[y * w + Math.Min(w - 1, x + 1)] - elev[y * w + Math.Max(0, x - 1)]) * 30.0;
 				double gy = ((double)elev[Math.Min(h - 1, y + 1) * w + x] - elev[Math.Max(0, y - 1) * w + x]) * 30.0;
 				light[i] = (float)Math.Clamp(0.5 - 0.5 * gy / Math.Sqrt(1.0 + gx * gx + gy * gy), 0.0, 1.0);
-				double t = Math.Clamp(0.43 + lat * 0.32 + tempNoise[i] * 0.18 - e * 0.6, 0.0, 1.0);
+				double t = Math.Clamp(0.43 + lat * 0.32 + tempNoise[i] * 0.18 - e * 0.48, 0.0, 1.0);
 				double waterMoisture = 0.22 * Math.Exp(-distWater[i] / 4.0);
 				double m;
 				if (ocean[i] == 0 && lake[i] == 0)
@@ -277,18 +277,18 @@ public partial class FastGrid
 
 	private static ClimateKind LandBiome(double e, double t, double m, double slope, double distOcean)
 	{
-		if (e > 0.62 || e > 0.42 && t < 0.2)
+		if (e > 0.65 || e > 0.46 && t < 0.2)
 			return slope < 0.30 && m > 0.50 && t > 0.12 ? ClimateKind.Tundra : ClimateKind.Peak;
-		if (slope > 1.3 || e > 0.4 && (slope > 0.48 || m < 0.40)) return ClimateKind.Rock;
-		if (e > 0.4) return ClimateKind.Tundra;
+		if (slope > 1.3 || e > 0.45 && (slope > 0.48 || m < 0.40)) return ClimateKind.Rock;
+		if (e > 0.45) return ClimateKind.Tundra;
 		if (distOcean <= 2.5 && e < 0.03) return t < 0.3 ? ClimateKind.StoneShore : ClimateKind.Beach;
 		if (t < 0.12) return ClimateKind.Snow;
 		if (t < 0.24) return m > 0.6 ? ClimateKind.Taiga : ClimateKind.Tundra;
 		if (t < 0.42) return m < 0.3 ? ClimateKind.Steppe : ClimateKind.Taiga;
 		if (t < 0.7)
 		{
-			if (m < 0.25) return ClimateKind.Steppe;
-			if (m < 0.40) return ClimateKind.Grass;
+			if (m < 0.20) return ClimateKind.Steppe;
+			if (m < 0.31) return ClimateKind.Grass;
 			if (m > 0.86 && e < 0.12 && slope < 0.25) return ClimateKind.Swamp; // 0.82 до 14.11.2026, StageClimate.land_biome
 			return ClimateKind.Forest;
 		}

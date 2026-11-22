@@ -120,7 +120,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		return
 	if not is_finite(foot_down) or not is_finite(ground) or not is_finite(ground_lean) or not gaze.is_finite():
 		return
-	if not is_finite(hand_rest) or not hand_shake.is_finite():
+	if not is_finite(hand_rest) or not hand_shake.is_finite() or not is_finite(watch):
 		return
 	_poses.clear()
 	# 12.11: свободная рука. hand_rest — отдых на долгой стоянке: рука (знак — сторона) лежит на бедре, спина прямее;
@@ -129,6 +129,8 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	var rest_side := -1.0 if hand_rest < 0.0 else 1.0
 	var shake := smoothstep(0.0, 1.0, clampf(absf(hand_shake.x), 0.0, 1.0))
 	var shake_side := -1.0 if hand_shake.x < 0.0 else 1.0
+	var wrist_view := smoothstep(0.0, 0.90, watch)
+	var watch_gaze := smoothstep(0.28, 0.95, watch)
 	# 11.11: стоянка — нога fd_side стоит на земле (ground — высота земли в осях велосипеда, ground_lean — его наклон к ноге)
 	var fd := smoothstep(0.0, 1.0, clampf(absf(foot_down), 0.0, 1.0))
 	var fd_side := -1.0 if foot_down < 0.0 else 1.0
@@ -222,8 +224,9 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	)
 	chest += Vector3(fd_side * 0.02, 0.035, 0.07) * fd
 	chest += Vector3(rest_side * 0.012, 0.02, 0.06) * rest
+	chest += Vector3(0.009, 0.018, 0.016) * wrist_view
 	# плечо свободной руки уходит назад: корпус чуть разворачивается в её сторону
-	var free_yaw := -rest_side * 0.16 * rest - shake_side * 0.07 * shake
+	var free_yaw := -rest_side * 0.16 * rest - shake_side * 0.07 * shake + 0.11 * wrist_view
 	var spine_len := SPINE_LENGTH + breath * 0.65
 	if (chest - hip).length_squared() > 0.000001:
 		chest = hip + (chest - hip).normalized() * spine_len
@@ -236,7 +239,8 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			var grip := left_grip if side < 0.0 else right_grip
 			var reach := shoulder - grip
 			if reach.length() > max_arm_reach:
-				var held := 1.0 - maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0)
+				var free := maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0)
+				var held := 1.0 - maxf(free, wrist_view if side < 0.0 else 0.0)
 				chest -= reach.normalized() * (reach.length() - max_arm_reach) * held
 		if (chest - hip).length_squared() > 0.000001:
 			chest = hip + (chest - hip).normalized() * spine_len
@@ -245,11 +249,14 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		var grip := left_grip if side < 0.0 else right_grip
 		var reach := shoulder - grip
 		if reach.length() > max_arm_reach:
-			var pull := reach.normalized() * (reach.length() - max_arm_reach) * (1.0 - maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0))
+			var free := maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0)
+			var held := 1.0 - maxf(free, wrist_view if side < 0.0 else 0.0)
+			var pull := reach.normalized() * (reach.length() - max_arm_reach) * held
 			chest -= pull
 			hip -= pull
 	# Взгляд компенсирует склон и крен в пределах движения шеи, опережая поворот корпуса.
-	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75 + head_nod + gaze.y, -0.36, 0.36), clampf(look + gaze.x, -0.6, 0.6), -roll * 0.65 + sway * 0.12 - gaze.x * 0.16))
+	var head_angles := Vector3(clampf(-pitch * 0.75 + head_nod + gaze.y, -0.36, 0.36),
+		clampf(look + gaze.x, -0.6, 0.6), -roll * 0.65 + sway * 0.12 - gaze.x * 0.16)
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip, pelvis_basis)
 	var spine_dir := (chest - hip).normalized() if (chest - hip).length_squared() > 0.000001 else Vector3.UP
@@ -267,9 +274,17 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	var rest_chest := Vector3(0, 1.37, -0.08)
 	var rest_upper := Transform3D(Basis(Quaternion(Vector3.UP, (rest_chest - rest_hip).normalized())), rest_hip.lerp(rest_chest, 0.55))
 	var neck := chest_pose * (rest_upper.affine_inverse() * Vector3(0, 1.44, -0.1))
+	var wrist_target := chest + upper_basis * Vector3(-0.108, -0.065 + maxf(0.0, breath) * 0.45, -0.39)
+	if watch_gaze > 0.0:
+		var to_screen := wrist_target + Vector3(0.0, 0.035, 0.025) - (neck + Vector3(0.0, 0.16, -0.11))
+		var down := atan2(to_screen.y, Vector2(to_screen.x, to_screen.z).length())
+		var toward := atan2(-to_screen.x, -to_screen.z)
+		head_angles = head_angles.lerp(Vector3(clampf(down, -0.74, -0.12), clampf(toward, -0.54, 0.54), -0.07), watch_gaze)
+	var head_basis := Basis.from_euler(head_angles)
 	var neck_basis := chest_pose.basis.slerp(head_basis, 0.55).orthonormalized()
+	var head_at := neck + neck_basis * Vector3(0, 0.15, -0.07)
 	_set_bone("Neck", neck, neck_basis)
-	_set_bone("Head", neck + neck_basis * Vector3(0, 0.15, -0.07), head_basis)
+	_set_bone("Head", head_at, head_basis)
 	# 4. Решение конечностей от найденного положения таза и грудной клетки.
 	var base_elbow: Vector2 = base.elbow
 	var base_wrist: float = base.wrist
@@ -315,10 +330,11 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			grip = grip.lerp(target, free) + Vector3(side * 0.05, 0.05, 0.03) * sin(free * PI)
 		# Передний удар (front_load) и сжатие вилки сразу принимают руки (сгиб и вынос локтей),
 		# в повороте внутренняя рука сгибает локоть шире, направляя руль, а наружная тянется через корпус.
-		var wrist_view := smoothstep(0.0, 1.0, watch) if side < 0.0 else 0.0
-		if wrist_view > 0.0:
-			var wrist_target := shoulder + Vector3(0.045, -0.17, -0.28)
-			grip = grip.lerp(wrist_target, wrist_view)
+		var checking_watch := side < 0.0 and wrist_view > 0.0
+		if checking_watch:
+			# Сначала отрывается от грипсы, затем кисть по дуге приходит к центру.
+			grip = grip.lerp(wrist_target, wrist_view) + upper_basis * Vector3(-0.054, 0.058, -0.014) * sin(PI * wrist_view)
+			grip = shoulder + (grip - shoulder).limit_length(max_arm_reach)
 		var arm_pull := power_phase * (0.22 * heavy + 0.30 * up) * (1.0 - brake * 0.85)
 		var arm_compress := clampf(motion.z * 2.0 + front_load * 0.65 + tuck * 0.32, -0.15, 0.95)
 		var corner_elbow := 0.10 * inner_leg - 0.06 * outer_leg
@@ -327,6 +343,8 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			base_elbow.y + arm_compress * 0.22 - arm_pull * 0.10 + 0.06 * inner_leg,
 			0.92
 		)
+		if checking_watch:
+			elbow_pole = elbow_pole.lerp(upper_basis * Vector3(-0.48, -0.86, 0.24), wrist_view)
 		var elbow := _joint(shoulder, grip, ARM_LENGTH, elbow_pole)
 		var arm_x := (elbow - shoulder).cross(grip - shoulder)
 		var arm_basis := _limb_basis(shoulder, elbow, arm_x)
@@ -343,6 +361,13 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			if side == shake_side:
 				loose = loose * Basis(Vector3.FORWARD, hand_shake.y * 0.45 * shake)
 			hand_basis = hand_basis.slerp(loose.orthonormalized(), free).orthonormalized()
+		if checking_watch:
+			var wrist_back := (elbow - grip).normalized()
+			var screen_right := (head_at + head_basis * Vector3(0, 0.045, -0.07) - grip).cross(wrist_back).normalized()
+			if not screen_right.is_zero_approx():
+				var screen_up := wrist_back.cross(screen_right)
+				var screen_basis := Basis(screen_right, screen_up, wrist_back)
+				hand_basis = hand_basis.slerp(screen_basis, wrist_view).orthonormalized()
 		_set_bone("Hand" + suffix, grip, hand_basis)
 
 

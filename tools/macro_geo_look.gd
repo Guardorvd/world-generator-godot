@@ -129,6 +129,7 @@ static func stats(w: WorldData) -> Dictionary:
 	var N := w.N
 	var ocean := 0
 	var land := 0
+	var forest_40_115 := 0
 	var bands := [0, 0, 0, 0, 0]
 	var groups := {}
 	for g: String in GROUPS:
@@ -152,9 +153,12 @@ static func stats(w: WorldData) -> Dictionary:
 		var g: String = group_of.get(int(w.biome[i]), "")
 		if g != "":
 			groups[g] += 1
+		if g == "forest" and m >= 40.0 and m <= 115.0:
+			forest_40_115 += 1
 	var row := {seed = w.seed_text, macro = [w.macro_x, w.macro_y],
 		mountain = [snappedf(w.mountain_scale, 0.01), snappedf(w.mountain_bias, 0.01), snappedf(w.mountain_height, 0.01), snappedf(w.foothill_spread, 0.01)],
 		ocean = snappedf(100.0 * ocean / N, 0.1), ocean_closed = snappedf(100.0 * _closed_ocean(w) / N, 0.1),
+		forest_40_115 = snappedf(100.0 * forest_40_115 / maxf(1, land), 0.1),
 		lakes = int(w.generation_profile.get("freshwater_lakes", 0)), stages_ms = w.generation_profile.get("stages_ms", {})}
 	var bl := {}
 	for k in BANDS.size():
@@ -285,7 +289,7 @@ static func _sheet(maps: Array[Image]) -> Image:
 func _print_row(r: Dictionary) -> void:
 	var sm: Dictionary = r.stages_ms
 	print("%-12s океан %5.1f %% (замкнутый %.1f)  озёр %d  сдвиг (%d, %d)  горы m=%s" % [r.seed, r.ocean, r.ocean_closed, r.lakes, r.macro[0], r.macro[1], r.mountain])
-	print("    высоты суши %s" % r.heights)
+	print("    высоты суши %s  лес 40–115 м: %.1f %%" % [r.heights, r.forest_40_115])
 	print("    биомы суши  %s" % r.biomes)
 	print("    характеры   %s" % r.characters)
 	print("    этапы мс: рельеф %.0f, океан %.0f, озёра %.0f, климат %.0f; всего %.0f" % [sm.get("relief", 0.0), sm.get("ocean", 0.0), sm.get("hydrology", 0.0), sm.get("climate", 0.0), r.total_ms])
@@ -294,6 +298,7 @@ func _print_row(r: Dictionary) -> void:
 func _print_mean(rows: Array) -> void:
 	var ocean := 0.0
 	var high := 0.0
+	var f40_115 := 0.0
 	var relief := 0.0
 	var hydro := 0.0
 	var g := {}
@@ -301,6 +306,7 @@ func _print_mean(rows: Array) -> void:
 	for r: Dictionary in rows:
 		ocean += r.ocean
 		high += r.heights["150"] + r.heights["260"]
+		f40_115 += r.get("forest_40_115", 0.0)
 		relief += r.stages_ms.get("relief", 0.0)
 		hydro += r.stages_ms.get("hydrology", 0.0)
 		for k: String in r.biomes:
@@ -313,6 +319,6 @@ func _print_mean(rows: Array) -> void:
 		g[k] = snappedf(g[k] / n, 0.1)
 	for k: String in c:
 		c[k] = snappedf(c[k] / n, 0.1)
-	print("Среднее по %d сидам: океан %.1f %%, суша выше 150 м %.1f %%, рельеф %.0f мс, озёра/осадки %.0f мс" % [n, ocean / n, high / n, relief / n, hydro / n])
+	print("Среднее по %d сидам: океан %.1f %%, суша выше 150 м %.1f %%, лес 40–115 м %.1f %%, рельеф %.0f мс, озёра/осадки %.0f мс" % [n, ocean / n, high / n, f40_115 / n, relief / n, hydro / n])
 	print("    биомы %s" % g)
 	print("    характеры %s" % c)

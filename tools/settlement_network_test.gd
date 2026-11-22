@@ -88,6 +88,22 @@ func component_checks() -> void:
 	StageTrails._retain_connected_settlements(empty,no_paths)
 	check(empty.settlements==[first],"если подтверждённых дорог нет, остаётся один запасной кандидат")
 
+func coverage_check() -> void:
+	var w := WorldGenerator.generate("Омут-9514", WorldGenerator.START_SIZE)
+	var coverage: PackedInt32Array = w.generation_profile.get("cover_cells", PackedInt32Array())
+	var southeast := StageLandmarks.COVER_GRID * StageLandmarks.COVER_GRID - 1
+	var village := w.settlements.any(func(s: SettlementData) -> bool:
+		return coverage.has(s.i) and StageLandmarks.sector_of(s.i, w.W, w.H) == southeast
+	)
+	var ways: Array = w.generation_profile.get("second_ways", [])
+	var used_mountain := ways.any(func(way: Array) -> bool:
+		return way[0] == "bridge_gap_mountain" and not way[1].is_empty()
+	)
+	check(village and used_mountain, "Омут-9514: юго-восточная деревня сохранилась после поиска горного подъезда")
+	check(Check.settlement_network_valid(w),
+		"Омут-9514: дороги и тропы физически связывают все опубликованные поселения")
+
+
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)
 	budget_check(true)
@@ -101,6 +117,9 @@ func _init() -> void:
 	var heights := surface.hv.duplicate()
 	for i in w.N: heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
+	w.noise["cost"] = Simplex.new(WorldGenerator.noise_rng(w.seed_num, "cost"))
+	StageTrails._net_reset(w)
+	StageTrails.RoadNetworkV2.prepare_character(w, finder, surface)
 	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.road)
 	var wet := w.ocean.duplicate()
 	check(Grid.bridge_region(w.W, w.H, wet, StageTrails.SPAN)[45 * w.W + 92] == 1,
@@ -159,4 +178,5 @@ func _init() -> void:
 		Grid.allow_fast = true
 		check(native == EntityCodec.encode(sample.settlements), "C# и GDScript выбирают те же поселения, сид %d" % seed_num)
 	check(counts.size() > 1, "число поселений действительно меняется между сидами")
+	coverage_check()
 	quit(1 if fails else 0)

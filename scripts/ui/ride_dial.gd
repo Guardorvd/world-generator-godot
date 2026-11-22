@@ -2,9 +2,8 @@ extends Control
 ## 18.11.2026: единый прибор движения в левом нижнем углу вместо двух отдельных кругов (дуга сил 14.2 и тормоз).
 ## В середине — скорость на велосипеде (км/ч) или запас сил пешком; слева — дуга сил, растёт снизу вверх;
 ## справа — дуга нажатия тормоза, появляется только при торможении. Поведение дуг перенесено без изменений:
-## засечка Stamina.RECOVERED, белый шлейф траты, пульс ниже LOW, warning для затемнения краёв, ореол наката;
-## тормоз: опасность (risk) и потеря сцепления (skid); подпись о них — BrakeAlert под прицелом (19.11.2026).
-## Видимость задаёт Hud (сводка, срочность); прибор только считает свои альфы и рисует.
+## засечка Stamina.RECOVERED, белый шлейф траты, пульс ниже LOW и ореол наката.
+## Скорость и тормоз видны при удержании сводки. При истощении остаётся шкала сил.
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
@@ -39,7 +38,7 @@ var skid := 0.0
 var brake_alpha := 0.0
 var _ride_alpha := 0.0
 var _pump_flash := 0.0
-var alert: BrakeAlert  # подпись об опасном торможении под прицелом (ставит Hud)
+var details_alpha := 0.0
 var _t := 0.0
 var _drawn := false
 
@@ -48,19 +47,10 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
-## Силы ниже LOW при трате — срочно: видно и без сводки
-func stamina_urgent() -> bool:
-	return state == Stamina.State.DRAIN and value < LOW
-
-
-func brake_urgent() -> bool:
-	return brake_alpha > 0.01 and (risk > 0.65 or skid > 0.2)
-
-
-func set_stamina(v: float, tired: bool, st: Stamina.State, allowed: bool) -> void:
+func set_stamina(v: float, tired: bool, st: Stamina.State, allowed: bool, summary := false) -> void:
 	var dt := get_process_delta_time()
 	_t += dt
-	var active := st == Stamina.State.DRAIN or st == Stamina.State.COAST or st == Stamina.State.REST or v < 0.999
+	var active := summary or st != Stamina.State.IDLE or v < 0.999
 	_stamina_alpha = move_toward(_stamina_alpha, 1.0 if allowed and active else 0.0, dt * (4.0 if allowed and active else 1.5))
 	_ghost = v if v >= _ghost else lerpf(_ghost, v, Util.damp(GHOST_LAG, dt))
 	var low := 1.0 - smoothstep(0.05, LOW, v) if v < LOW or tired else 0.0
@@ -111,8 +101,6 @@ func _redraw() -> void:
 	if shown or _drawn:
 		queue_redraw()
 	_drawn = shown
-	if alert != null:
-		alert.sync()
 
 
 func _arc(from: float, span: float, a: float, b: float, width: float, color: Color) -> void:
@@ -127,19 +115,20 @@ func _draw() -> void:
 		return
 	var c := Vector2.ONE * DIAMETER * 0.5
 	HudStyle.dial_face(self, c, DIAMETER * 0.5 - 2.0, a)
-	if _pump_flash > 0.0:
+	if _pump_flash > 0.0 and details_alpha > 0.0:
 		var progress := 1.0 - _pump_flash / PUMP_FLASH_TIME
 		var angle := lerpf(-2.35, -0.79, progress)
 		var glow := smoothstep(0.0, 0.36, progress) * (1.0 - smoothstep(0.36, 1.0, progress)) * a
 		draw_arc(c, R + 5.0, angle - 0.37, angle + 0.37, 20, Color(HudStyle.MINT, glow * 0.5), 4.0, true)
 		draw_arc(c, R + 5.0, angle - 0.25, angle + 0.25, 16, Color(HudStyle.CREAM, glow), 1.6, true)
 	_draw_stamina(c, a)
-	if brake_alpha > 0.01:
-		_draw_brake(c, a * brake_alpha)
-	if riding and _ride_alpha > 0.01:
-		draw_texture_rect(UiIcons.SPEED, Rect2(c + Vector2(-7.0, -33.0), Vector2(14.0, 14.0)), false, Color(HudStyle.MUTED, 0.72 * a))
-		HudStyle.centered(self, c + Vector2(0, 8), str(roundi(absf(speed) * 3.6)), 28, Color(HudStyle.CREAM, a))
-		HudStyle.centered(self, c + Vector2(0, 24), "км/ч", 10, Color(HudStyle.MUTED, a))
+	if brake_alpha * details_alpha > 0.01:
+		_draw_brake(c, a * brake_alpha * details_alpha)
+	var speed_alpha := a * details_alpha * _ride_alpha
+	if riding and speed_alpha > a * 0.5:
+		draw_texture_rect(UiIcons.SPEED, Rect2(c + Vector2(-7.0, -33.0), Vector2(14.0, 14.0)), false, Color(HudStyle.MUTED, 0.72 * speed_alpha))
+		HudStyle.centered(self, c + Vector2(0, 8), str(roundi(absf(speed) * 3.6)), 28, Color(HudStyle.CREAM, speed_alpha))
+		HudStyle.centered(self, c + Vector2(0, 24), "км/ч", 10, Color(HudStyle.MUTED, speed_alpha))
 	else:
 		HudStyle.dial_text(self, c, value, "СИЛЫ", _stamina_color(a), a)
 
@@ -190,30 +179,3 @@ func _draw_brake(c: Vector2, a: float) -> void:
 
 ## 19.11.2026: предупреждение о торможении у центра экрана — короткая плашка под прицелом.
 ## Состояние берёт из прибора: перерисовывается только когда видна или только что погасла.
-class BrakeAlert extends Control:
-	const SIZE := Vector2(184.0, 26.0)
-	var dial  # прибор движения (ride_dial.gd)
-	var _box := HudStyle.panel(Color(HudStyle.SURFACE, 0.86), HudStyle.AMBER, 8, Vector2.ZERO)
-	var _shown := false
-
-	func _init() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	func sync() -> void:
-		var on: bool = dial.brake_urgent()
-		if on or _shown:
-			queue_redraw()
-		_shown = on
-		visible = on
-
-	func _draw() -> void:
-		if not dial.brake_urgent():
-			return
-		var danger: bool = dial.risk > 0.65
-		var color := HudStyle.RED if danger else HudStyle.AMBER
-		var a: float = dial.brake_alpha * (0.75 + 0.25 * sin(dial._t * 8.0) if danger else 1.0)
-		var box := Rect2((size - SIZE) * 0.5, SIZE)
-		_box.border_color = Color(color, 0.9)
-		draw_style_box(_box, box)
-		draw_texture_rect(UiIcons.ALERT, Rect2(Vector2(box.position.x + 9.0, box.get_center().y - 7.0), Vector2(14.0, 14.0)), false, Color(color, a))
-		HudStyle.centered(self, box.get_center() + Vector2(9, 5), "Отпустите тормоз" if danger else "Потеря сцепления", 13, Color(color, a))

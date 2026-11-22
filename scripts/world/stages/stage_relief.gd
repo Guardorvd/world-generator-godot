@@ -29,9 +29,9 @@ const BOTTOM_RAW := -0.7
 ## равнина (0) или холмистый край (1). На равнине высота над морем — PLAIN_LIFT от прежней, а холмов
 ## PLAIN_HILLS. Предгорья — где сила гор (mask) от FOOTHILLS до 2 × FOOTHILLS: там холмы растут до полных
 const CHARACTER := 520.0
-const PLAIN_LIFT := 0.3
-const PLAIN_HILLS := 0.15
-const HILL_AMP := 0.07
+const PLAIN_LIFT := 0.50
+const PLAIN_HILLS := 0.34
+const HILL_AMP := 0.09
 const FOOTHILLS := 0.35
 ## Широкое основание предгорий (с 3.6), до нормировки высоты. Прорезается общими долинами.
 const FOOTHILL_LIFT := 0.18
@@ -87,9 +87,9 @@ static func run(w: WorldData, include_detail: bool = true) -> void:
 ## Параметры всего мира, без расхода общего RNG. Не меняет окно старта и готовые высоты.
 static func configure(w: WorldData) -> void:
 	w.mountain_scale = 0.8 + 0.8 * WGRandom.hash2(31, 7, w.seed_num)
-	w.mountain_bias = 0.05 + 0.4 * WGRandom.hash2(17, 19, w.seed_num)
-	w.mountain_height = 0.75 + 0.6 * WGRandom.hash2(47, 3, w.seed_num)
-	w.foothill_spread = 0.15 + 0.85 * WGRandom.hash2(73, 11, w.seed_num)
+	w.mountain_bias = 0.14 + 0.20 * WGRandom.hash2(17, 19, w.seed_num)
+	w.mountain_height = 0.80 + 0.28 * WGRandom.hash2(47, 3, w.seed_num)
+	w.foothill_spread = 0.55 + 0.50 * WGRandom.hash2(73, 11, w.seed_num)
 
 
 ## Стартовая область — окно в бесконечный мир. Мир один на сид, а окно выбирается сдвигом шума
@@ -505,9 +505,9 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	# На спокойной суше замещаем короткую волну блока calm увалами масштаба 360 м.
 	# Вес считаем по итоговой высоте после долин и горного подъёма: от уреза воды до высоких плато.
 	var above_sea := h - SEA_RAW
-	if shape_plains and calm > 0.0 and core < 0.35 and above_sea > 0.035 and above_sea < 0.30:
+	if shape_plains and calm > 0.0 and core < 0.35 and above_sea > 0.015 and above_sea < 0.30:
 		var plain := calm * (1.0 - smoothstep(0.1, 0.35, core))
-		var lowland := smoothstep(0.035, 0.11, above_sea) * (1.0 - smoothstep(0.18, 0.30, above_sea))
+		var lowland := smoothstep(0.015, 0.07, above_sea) * (1.0 - smoothstep(0.18, 0.30, above_sea))
 		var rolling := hill.noise(X / 90.0 - 24.7, Y / 90.0 + 53.1)
 		var fold := 0.055 * rolling - 0.025 * hills * shore_fade - 0.010 * valley
 		h += fold * plain * lowland
@@ -540,12 +540,12 @@ const SHARP_SHIFT := 0.28
 ## мелких гребней меньше (UPLAND_SMOOTH)
 ## С 3.2 возвышенностей больше, их высота ниже: прежние гребни становятся широкими холмами
 const UPLAND_SHIFT := 0.24
-const UPLAND_AMP := 0.3
+const UPLAND_AMP := 0.42
 ## Какую долю мелких гребней и отрогов возвышенность теряет
-const UPLAND_SMOOTH := 0.8
+const UPLAND_SMOOTH := 0.50
 ## Горы выше PEAK_KNEE растут всё медленнее (PEAK_SOFT — насколько плавно): высоких пиков меньше, но они есть
-const PEAK_KNEE := 0.50
-const PEAK_SOFT := 0.40
+const PEAK_KNEE := 0.45
+const PEAK_SOFT := 0.30
 
 
 static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: float = 1.0) -> float:
