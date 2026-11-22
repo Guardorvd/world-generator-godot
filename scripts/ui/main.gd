@@ -1073,7 +1073,7 @@ func _show_seed_tab(tab: String) -> void:
 	var list: VBoxContainer = %SeedList
 	var scroll := list.get_parent() as ScrollContainer
 	var scroll_position := scroll.scroll_vertical
-	%Recommended.visible = settings.hide_recommended_worlds
+	%Recommended.visible = settings.hide_recommended_worlds and WorldTemplate.is_default(_active_template_id())
 	_hub_build_queue.clear()
 	# Удаляются только миры, исчезнувшие из модели; фильтры лишь скрывают строки.
 	for seed_text: String in _hub_rows.keys():
@@ -1160,7 +1160,7 @@ func _update_hub_row(seed_text: String) -> void:
 		badges.append("Ошибка сохранения" if _world_cards[seed_text].get("corrupt", false) else "Сохранение")
 	if fav: badges.append("Избранное")
 	if seed_text in settings.recent_seeds: badges.append("Недавний")
-	if not settings.hide_recommended_worlds:
+	if WorldTemplate.is_default(_active_template_id()) and not settings.hide_recommended_worlds:
 		for item: Dictionary in RecommendedSeeds.SEEDS:
 			if item.seed == seed_text:
 				badges.append("От автора")
