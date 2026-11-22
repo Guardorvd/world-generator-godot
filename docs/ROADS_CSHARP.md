@@ -48,6 +48,7 @@ godot --headless --path . --script res://tools/path_golden.gd -- [--save]
   grade) и доля выравнивания спокойных участков (level);
 - по покрытию (порядок `RoadSurface.LIST`) — выраженность форм, характер (roll, bump, wobble) и выравнивание;
 - общие — радиус выравнивания, размах ритма участков, включение форм, зазоры, доля форм у подготовленных трасс.
+- для сети V2 (`RoadRoutingTuning`) — поле стоимости, правила узлов и петель, сглаживание, дуги и меандр.
 
 В коде остались пределы и зазоры, на которые опираются трассы и другие системы: `RoadRefinement.REACH`,
 `FIT_FADE`, `FIT_LIMIT`, `BENCH_LIMIT`, `TRAIL_BENCH_LIMIT`, `RoadBed.PIN`, `SHORE`, `WATER_GAP`, `STEEP`.
@@ -72,11 +73,19 @@ godot --headless --path . --script res://tools/path_golden.gd -- [--save]
 ## Как проверять
 
 - **Результат** — `tools/road_golden.gd` (~10 с, без окна и генерации мира): 219 хешей полотна, профиля, форм и патчей,
-  полная и частичная сборка. Сверка с `tools/control/golden/roads.txt`. Это единственная сверка результата дорог.
+  полная и частичная сборка. Сверка полотна и метровой сетки с `tools/control/golden/roads.txt`.
 - **Поведение и повтор** — `road_relief_test.gd -- --synthetic-only`, `road_native_test.gd`.
 - **Эталон переснимается** (`-- --save`) только когда результат дорог менять и хотели, и в том же коммите с
   объяснением. При правке алгоритма в C# ещё поднять `Roads.RoadCode.Version`; при правке только чисел
   `road_tuning.tres` версия не нужна, ключи меняют отпечатки затронутых групп параметров.
+
+## Сеть V2
+
+`scripts/world/road_network_v2.gd` передаёт поля мира, готовые оси и параметры в `FastGrid.PlanNetworkV2` (`scripts/core/FastGrid.RoadNetwork.cs`). Поиск дополнительных связей находится в `scripts/core/roads/network/NetworkPlanner.cs`. Пути публикует `StageTrails`.
+
+`FastGrid.BuildRoadLine` строит линию через `LineBuilder.cs`, порт `RoadLine.build`, и сглаживает её через `LineShaper.cs`. `FastGrid.ShapeRoadAxis` вызывает `AxisAlignment.cs` и `AxisAlignment.Meander.cs` после фиксации развилок и переводит интервалы веломаршрутов на новую ось. `GeometryValidator.cs` проверяет общий 12-метровый профиль и геометрию. Сводная проверка синтетических случаев находится в `NetworkProbe.cs`.
+
+Ядро проверяет `tools/road_v2_test.gd`. `tools/road_plan_test.gd -- --compare <отпечаток>` сверяет дорожный мир с сохранённым эталоном. Дорожная сеть V2 включена без флага.
 
 ## Старая сборка
 
