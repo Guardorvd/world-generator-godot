@@ -871,6 +871,7 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 func reset() -> void:
 	wait_writes()
 	enabled = false
+	short_dev = false
 	template_id = WorldTemplate.DEFAULT_ID
 	dir = QuickTrails.cache_dir()
 	_layer_keys.clear()
