@@ -218,7 +218,7 @@ func _ready() -> void:
 	%Recommended.tooltip_text = "Вернуть миры от автора в общий список"
 	%Recommended.pressed.connect(_restore_author_worlds)
 	var carousel: Carousel = %Carousel
-	carousel.setup(%Start, [%OpenWorlds, %OpenShop, %MenuSettings, %MenuExit], %TrailLab)
+	carousel.setup(%Start, [%NewWorld, %OpenWorlds, %OpenShop, %MenuSettings, %MenuExit], %TrailLab)
 	carousel.favorite_requested.connect(_on_star)
 	%OpenWorlds.icon = UiIcons.ALBUM
 	%OpenShop.icon = UiIcons.BAG
@@ -228,6 +228,7 @@ func _ready() -> void:
 		button.expand_icon = true
 		button.add_theme_constant_override("icon_max_width", 22)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
+	carousel.type_changed.connect(_update_menu_selection)
 	carousel.play_requested.connect(_on_start)
 	carousel.create_requested.connect(func(seed_text: String) -> void:
 		if not busy and _is_screen("menu"): _launch_seed(seed_text))
@@ -346,7 +347,8 @@ func _focus_screen_default(screen: String) -> void:
 	match screen:
 		"menu":
 			_fit_menu()
-			_grab_focus_quiet(%Start)
+			(%Carousel as Carousel)._set_mode(0)
+			_grab_focus_quiet(%Start if (%Carousel as Carousel).type_available() else (%Carousel as Carousel)._next)
 		"world_hub":
 			_update_selection()
 			_grab_focus_quiet(seed_edit)
@@ -437,12 +439,20 @@ static func _is_back_press(event: InputEvent) -> bool:
 
 
 func _open_new_world() -> void:
-	_open_all_worlds()
+	if _is_screen("menu") and not (%Carousel as Carousel).type_available():
+		return
+	if _is_screen("menu"):
+		seed_edit.text = random_seed()
+		while _has_save(seed_edit.text):
+			seed_edit.text = random_seed()
+	_open_all_worlds(%NewWorld)
 	if _is_screen("world_hub"):
 		_grab_focus_quiet(seed_edit)
 
 
-func _open_all_worlds() -> void:
+func _open_all_worlds(return_to: Control = null) -> void:
+	if _is_screen("menu") and not (%Carousel as Carousel).type_available():
+		return
 	if _is_screen("world_hub"):
 		if _hub_needs_sync:
 			_show_seed_tab(_seed_tab)
@@ -455,7 +465,7 @@ func _open_all_worlds() -> void:
 		_ui_stack.push("world_hub", {
 			dimmer = 0.45, enter_duration = 0.20, enter_scale = 0.96,
 			offset_y = 0.0, exit_duration = 0.14, dimmer_duration = 0.18,
-			return_focus = %OpenWorlds, sound = &"panel_open",
+			return_focus = return_to if return_to != null else %OpenWorlds, sound = &"panel_open",
 		})
 		_sync_backdrop_visibility("world_hub")
 		_focus_screen_default("world_hub")
@@ -482,6 +492,7 @@ func _return_to_menu_screen() -> void:
 		_sync_backdrop_visibility(_active_screen)
 		if _active_screen == "menu":
 			_fit_menu()
+			(%Carousel as Carousel)._set_mode(0)
 		var target: Control = popped.return_focus if is_instance_valid(popped.return_focus) and (popped.return_focus as Control).is_visible_in_tree() else %Start
 		_grab_focus_quiet(target)
 		return
@@ -980,7 +991,8 @@ func _update_hub_map() -> void:
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
 	var working := carousel._thread != null and carousel._loading_seed == _selected_seed and not carousel._cancel_flag.is_cancelled()
-	%HubBuildPreview.visible = tex == null and carousel._build_preview.visible
+	var entry: Dictionary = _world_cards.get(_selected_seed, {})
+	%HubBuildPreview.visible = not _selected_seed.is_empty() and tex == null and not working and not entry.get("map_ready", false) and not carousel._derived.has(_selected_seed)
 	%HubBuildPreview.disabled = carousel._thread != null
 	if _selected_seed.is_empty():
 		%PreviewHint.text = "\nВыберите мир"
@@ -1450,7 +1462,7 @@ func _chosen_seed() -> String:
 	return _selected_seed
 
 
-func _update_selection() -> void:
+func _update_menu_selection() -> void:
 	var seed_text := _selected_seed
 	var state: Dictionary = _world_cards.get(seed_text, {})
 	var corrupt: bool = state.get("corrupt", false)
@@ -1466,6 +1478,24 @@ func _update_selection() -> void:
 	%OpenShop.text = "Экипировка  ·  %d" % _shop_progress.balance if _shop_progress.load_error == OK else "Экипировка"
 	if seed_text.is_empty():
 		%Start.text = "Создать мир"
+	var type_ready := (%Carousel as Carousel).type_available()
+	%Start.disabled = not type_ready
+	%NewWorld.disabled = not type_ready
+	%OpenWorlds.disabled = not type_ready
+	var type_next: Control = (%Carousel as Carousel)._next
+	type_next.focus_neighbor_bottom = type_next.get_path_to(%Start if type_ready else %OpenShop)
+	%OpenShop.focus_neighbor_top = %OpenShop.get_path_to(%OpenWorlds if type_ready else type_next)
+	if not type_ready:
+		%Start.text = "Скоро появится"
+		%MenuStatus.text = "Этот тип мира пока недоступен"
+
+
+func _update_selection() -> void:
+	var seed_text := _selected_seed
+	var state: Dictionary = _world_cards.get(seed_text, {})
+	var corrupt: bool = state.get("corrupt", false)
+	var label := "Продолжить путешествие" if state.get("saved", false) else "Начать путешествие"
+	_update_menu_selection()
 	%PlaySelected.text = label
 	%PlaySelected.disabled = corrupt or seed_text.is_empty()
 	for row in %SeedList.get_children():
@@ -1711,7 +1741,7 @@ func _fit_menu() -> void:
 	# Вся колонка помещается между равными верхним и нижним отступами.
 	var column_width := maxf(388.0, panel.get_combined_minimum_size().x)
 	var panel_height := panel.get_combined_minimum_size().y
-	var card_height := 260.0
+	var card_height := 200.0
 	var total_height := card_height + 12.0 + panel_height + 12.0 + 44.0
 	var column_scale := minf(1.0, minf(maxf(0.3, (vs.y - 56.0) / total_height), maxf(0.3, (vs.x - 96.0) / column_width)))
 	showcase.visible = true
@@ -1825,20 +1855,28 @@ func _close_trail_lab() -> void:
 
 func _on_start() -> void:
 	# второй запуск во время загрузки не нужен: мир уже строится
-	if busy:
+	if busy or (_is_screen("menu") and not (%Carousel as Carousel).type_available()):
 		return
 	if _selected_seed.is_empty():
-		if %Carousel.visible:
-			(%Carousel as Carousel).focus_quick_seed()
-		else:
-			_open_new_world()
+		_open_new_world()
 		return
 	_launch_seed(_selected_seed)
 
 
 func _on_create_world() -> void:
-	if not busy:
-		_launch_seed(seed_edit.text.strip_edges())
+	if busy:
+		return
+	var seed_text := seed_edit.text.strip_edges()
+	if seed_text.is_empty():
+		seed_text = random_seed()
+		while _has_save(seed_text):
+			seed_text = random_seed()
+		seed_edit.text = seed_text
+	if _has_save(seed_text):
+		_ask("Мир уже существует", "У мира «%s» уже есть сохранение. Открыть его? Чтобы создать новый мир, выберите другое зерно." % seed_text,
+			"Открыть мир", false, _launch_seed.bind(seed_text), seed_edit)
+		return
+	_launch_seed(seed_text)
 
 
 func _launch_seed(seed_text: String) -> void:

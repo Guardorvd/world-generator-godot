@@ -174,36 +174,58 @@ func _navigation() -> void:
 	var start: Button = _main.get_node("%Start")
 	start.grab_focus()
 	var carousel = _main.get_node("%Carousel")
-	var selected: String = _main._chosen_seed()
-	carousel.move(1)
-	_check(_main._chosen_seed() != selected, "стрелка витрины переключает выбранный мир")
-	var previous: Button = carousel._previous
-	previous.grab_focus()
-	_check(previous.has_focus(), "стрелки витрины доступны для геймпада")
-	# Первое обращение может загрузить превью; повторное использует кэш.
-	for seed_text: String in _main._carousel_seeds:
-		_main._preview_tex(seed_text)
-	var before: int = _main._card_reads
-	var wheel := InputEventMouseButton.new()
-	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
-	wheel.pressed = true
-	carousel._card_input(wheel)
-	_check(_main._card_reads == before, "переключение карточек без чтения диска")
+	_check(carousel._previous.visible and carousel._next.visible and not carousel._mode_panel.visible,
+		"на главной доступны переключатели типа, а режимы карты скрыты")
+	_check(carousel._name.text == "Горная долина", "показан доступный тип мира")
+	var saved_seed: String = _main._chosen_seed()
+	carousel._next.pressed.emit()
+	_check(carousel._name.text == "Будущий тип 2" and not carousel.type_available(), "переключение показывает будущий тип")
+	_check(_main.get_node("%Start").disabled and _main.get_node("%NewWorld").disabled and _main.get_node("%OpenWorlds").disabled,
+		"будущий тип не запускает текущую генерацию и сохранения")
+	_check(carousel._next.get_node(carousel._next.focus_neighbor_bottom) == _main.get_node("%OpenShop"),
+		"фокус обходит недоступные действия")
+	_check(carousel._map.texture == null and saved_seed not in carousel.get_node("Card/Slide/Frame/WorldInfo/Name").text,
+		"карта и имя текущего мира не выдаются за будущий тип")
+	await _capture_state("future_type")
+	_main._on_start()
+	_main._open_new_world()
+	_check(not _main.busy and _main._chosen_seed() == saved_seed and _main.get_node("%Menu").visible,
+		"заглушка не меняет и не запускает выбранный мир")
+	carousel._previous.pressed.emit()
+	_check(carousel.type_available() and not _main.get_node("%Start").disabled and _main._chosen_seed() == saved_seed,
+		"возврат восстанавливает текущий мир и действия")
+	carousel._previous.pressed.emit()
+	_check(carousel._type_index == carousel.WORLD_TYPES.size() - 1, "переключатель циклически возвращается к последней заглушке")
+	carousel._next.pressed.emit()
+	_check(carousel._type_index == 0, "переключатель циклически возвращается к горной долине")
+	carousel._next.grab_focus()
+	var right := InputEventAction.new()
+	right.action = "ui_right"
+	right.pressed = true
+	root.push_input(right)
+	_check(carousel._type_index == 1, "тип переключается стрелкой клавиатуры")
+	carousel._previous.pressed.emit()
 	start.grab_focus()
 	var pad := InputEventJoypadButton.new()
 	pad.button_index = JOY_BUTTON_DPAD_DOWN
 	pad.pressed = true
-	_check(start.has_focus(), "фокус возвращается к запуску")
 	root.push_input(pad)
-	_check(_main.get_node("%OpenWorlds").has_focus(), "из запуска можно перейти к пунктам меню")
-	_main._open_new_world()
+	_check(_main.get_node("%NewWorld").has_focus(), "из запуска можно перейти к созданию")
+	_main.get_node("%NewWorld").pressed.emit()
 	_check(_main.get_node("%SeedEdit").has_focus(), "поле нового мира доступно")
+	_main.get_node("%SeedEdit").text = "Долина-27"
+	_main._on_create_world()
+	_check(_main._confirm != null and not _main.busy, "существующее зерно требует явного выбора")
+	_main._confirm.canceled.emit()
+	await process_frame
+	await process_frame
+	_check(not Saves.read_slot("Долина-27").data.is_empty(), "отмена сохраняет прогресс")
 	var cancel := InputEventJoypadButton.new()
 	cancel.button_index = JOY_BUTTON_B
 	cancel.pressed = true
 	root.push_input(cancel)
 	await process_frame
-	_check(_main.get_node("%OpenWorlds").has_focus() and _main.get_node("%Menu").visible, "B возвращает в главное меню")
+	_check(_main.get_node("%NewWorld").has_focus() and _main.get_node("%Menu").visible, "B возвращает фокус на создание")
 	_main._open_all_worlds()
 	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%Storage").is_visible_in_tree(), "все миры и хранилище доступны")
 	_main._return_to_menu_screen()
