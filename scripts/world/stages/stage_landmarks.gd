@@ -200,14 +200,16 @@ static func _place_expedition_settlements(w: WorldData) -> void:
 	var finish_y_min := maxi(H - cfg.finish_from_end_max, H * 3 / 4)
 	var finish_y_max := H - cfg.finish_from_end_min
 	var finish_y_pref := roundi(0.5 * float(finish_y_min + finish_y_max))
-	var start_rhw := axis.river_hw_at(54)
-	var finish_rhw := axis.river_hw_at(H - 94)
+	var start_pref_y := float(start_y_pref if cfg.start_y_min != 42 or cfg.start_y_max != 72 else 54)
+	var finish_pref_y := float(finish_y_pref if cfg.finish_from_end_max != 114 or cfg.finish_from_end_min != 72 else H - 94)
+	var start_rhw := axis.river_hw_at(roundi(start_pref_y))
+	var finish_rhw := axis.river_hw_at(roundi(finish_pref_y))
 	var settlements: Array = []
 	var specs := [
 		{
 			y_min = cfg.start_y_min, y_max = mini(cfg.start_y_max, H / 4),
 			sd_min = start_rhw + cfg.start_sd_min, sd_max = start_rhw + cfg.start_sd_max,
-			prefer_y = float(start_y_pref if cfg.start_y_min != 42 or cfg.start_y_max != 72 else 54),
+			prefer_y = start_pref_y,
 			prefer_sd = start_rhw + 0.5 * (cfg.start_sd_min + minf(cfg.start_sd_max, 12.5)),
 			role = "forest", importance = 0.90, homes_min = cfg.start_homes_min, homes_max = cfg.start_homes_max,
 			character = "лагерь в верховье",
@@ -215,7 +217,7 @@ static func _place_expedition_settlements(w: WorldData) -> void:
 		{
 			y_min = finish_y_min, y_max = finish_y_max,
 			sd_min = finish_rhw + cfg.finish_sd_min, sd_max = finish_rhw + cfg.finish_sd_max,
-			prefer_y = float(finish_y_pref if cfg.finish_from_end_max != 114 or cfg.finish_from_end_min != 72 else H - 94),
+			prefer_y = finish_pref_y,
 			prefer_sd = finish_rhw + 0.5 * (cfg.finish_sd_min + minf(cfg.finish_sd_max, 11.5)),
 			role = "coastal", importance = 0.85, homes_min = cfg.finish_homes_min, homes_max = cfg.finish_homes_max,
 			character = "речная база",

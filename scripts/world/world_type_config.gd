@@ -441,7 +441,7 @@ func places_cache_digest() -> String:
 	for k: String in ov_keys:
 		ov_pairs.append([k, routing_overrides[k]])
 	var values: Array = [
-		single_road, ov_pairs,
+		single_road, ov_pairs, home_is_first_settlement,
 		anchor_end_margin, anchor_basin_gap, anchor_min_dy, anchor_diag_ratio,
 		anchor_river_pad_min, anchor_river_pad_max, anchor_inland_min, anchor_inland_max,
 		anchor_inland_start_chance, anchor_inland_streak_chance, anchor_river_streak_chance,
