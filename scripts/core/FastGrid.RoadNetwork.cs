@@ -319,7 +319,7 @@ public partial class FastGrid
 			bool smooth = input.ContainsKey("smooth_line") && input["smooth_line"].AsBool();
 			if (smooth)
 			{
-				builder.Biharmonic = input.ContainsKey("biharmonic") && input["biharmonic"].AsBool();
+				var shaper = builder.CreateShaper(input.ContainsKey("biharmonic") && input["biharmonic"].AsBool());
 				RoadGraph axes = null;
 				if (input.ContainsKey("near_axis_start"))
 				{
@@ -329,11 +329,11 @@ public partial class FastGrid
 				}
 				var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), axes,
 					input.ContainsKey("reach") ? input["reach"].AsDouble() : 0.0);
-				line = builder.Smooth(line, validator);
-				smoothStats["moved"] = builder.SmoothMoved;
-				smoothStats["rejected"] = builder.SmoothRejected;
-				smoothStats["hairpins"] = builder.Hairpins;
-				smoothStats["hairpins_moved"] = builder.HairpinsMoved;
+				line = shaper.Smooth(line, validator);
+				smoothStats["moved"] = shaper.SmoothMoved;
+				smoothStats["rejected"] = shaper.SmoothRejected;
+				smoothStats["hairpins"] = shaper.Hairpins;
+				smoothStats["hairpins_moved"] = shaper.HairpinsMoved;
 			}
 			var ox = new double[line.Count];
 			var oy = new double[line.Count];
