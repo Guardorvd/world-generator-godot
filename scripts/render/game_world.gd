@@ -684,6 +684,9 @@ static func save_signature(w: WorldData) -> String:
 
 
 static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings = null) -> bool:
+	var saved_tid := WorldTemplate.normalize_id(str(saved.get("template_id", WorldTemplate.DEFAULT_ID)))
+	if saved_tid != WorldTemplate.normalize_id(w.template_id):
+		return false
 	if saved.signature != save_signature(w):
 		return false
 	# 13.9+final: места и задания соседних областей — из их журнала на диске
