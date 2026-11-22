@@ -11,6 +11,8 @@ var base_heights: Heightfield
 var trail_surface: Heightfield # готовый рельеф с путями; передаётся загрузчику и не сериализуется
 var light := PackedFloat32Array() # только до конца генерации; в дисковый кэш не входит
 var surface_rock := PackedByteArray() # one byte/cell, shared by placement and the existing forest texture
+## Дополнительные деревни, для которых StageTrails может искать горный подъезд.
+var coverage_cells := PackedInt32Array()
 ## 11.11.2026: дорожная сеть этапа StageTrails как набор уникальных участков (StageTrails._add_trail).
 ## road_owner — номер записи w.trails, которой принадлежит клетка поиска (-1 — ничья); road_cells — сырые клетки
 ## каждой записи (пусто у звериных троп); road_side — клетка рядом с участком уже подорожала. Только на время этапа.

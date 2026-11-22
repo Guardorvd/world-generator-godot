@@ -4,6 +4,7 @@ extends SceneTree
 ## насквозь, повышение класса делит тропу узлами, рядом с участком нет «призрачной» дешёвой полосы, правило
 ## параллельных полотен. Секунды, без окна.
 ##   godot --headless --path . --script res://tools/road_passage_test.gd
+const RoadReference := preload("res://tools/road_network_reference.gd")
 const Fixture := preload("res://tools/road_relief_fixture.gd")
 const Rides := preload("res://scripts/world/road_rides.gd")
 const Topology := preload("res://scripts/world/road_topology.gd")
@@ -180,11 +181,11 @@ func run() -> void:
 	var road: Dictionary = w.trails[0]
 	check(road.kind == "road" and road.pts.all(func(p: Dictionary) -> bool: return p.w == RoadTuning.current().section.widths.road), "promoted part has one road width")
 	# Параллельное полотно в 3 клетках вдоль сети на той же высоте — не новое; далеко — новое
-	var near := StageTrails._net_near(w)
+	var near := RoadReference._net_near(w)
 	var beside := cells(line(Vector2i(8, 23), Vector2i(88, 23)))
 	var far := cells(line(Vector2i(8, 60), Vector2i(88, 60)))
-	check(not StageTrails._adds_network(w, beside, near), "a parallel tread 12 m beside the network is rejected")
-	check(StageTrails._adds_network(w, far, near), "a route 160 m away is a real addition")
+	check(not RoadReference._adds_network(w, beside, near), "a parallel tread 12 m beside the network is rejected")
+	check(RoadReference._adds_network(w, far, near), "a route 160 m away is a real addition")
 	turns()
 	junction()
 	surface_metrics()

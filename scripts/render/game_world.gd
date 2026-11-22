@@ -794,7 +794,9 @@ func sync_mouse_mode() -> void:
 func set_paused(p: bool) -> void:
 	if p:
 		_cancel_repair()
-		if hud != null: hud.note_interaction_target("")
+		if hud != null:
+			hud.set_summary_blocked(true)
+			hud.note_interaction_target("")
 		services.controls.release_motion()
 		if bike != null: services.controls.read_bike_body(bike, false)
 		_cancel_bike_placement()
@@ -811,7 +813,7 @@ func set_paused(p: bool) -> void:
 	if p and is_instance_valid(_bag_label):
 		_bag_label.hide()
 	if p and is_instance_valid(bike_view) and not crash.active():
-		bike_view.watch_requested = false
+		bike_view.cancel_watch()
 		bike_view.draw(1.0, false)
 	if is_instance_valid(_speed_wind):
 		_speed_wind.visible = not p
@@ -1672,9 +1674,6 @@ func _physics_process(dt: float) -> void:
 		fw = services.controls.bike_brake(fw, dt)
 	else:
 		services.controls.reset_motion()
-	if hud != null:
-		hud.set_ride_activity(bike.riding and not crash.active() and not _opening and not map_lock
-			and time >= _rescue_input_until and (fw < -0.01 or Input.is_action_pressed("run")))
 	_moving = false
 	var crashed := false
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
@@ -1716,7 +1715,7 @@ func _physics_process(dt: float) -> void:
 	# пружина проседания и затухающая тряска камеры
 	camera_controller.tick_effects(dt)
 	if not crash.active():
-		bike_view.watch_requested = hud.summary_visible() and not _opening and not show_map and not photo.active
+		bike_view.watch_requested = hud.summary_requested() and not input_lock and not _opening and not _placing_bike() and not startup_input_locked
 		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.surging(fw))
 	bike.clear_tick_events()
 	t0 = _tick_mark("effects", t0)
@@ -1815,8 +1814,6 @@ func _process(delta: float) -> void:
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
 	var t0 := Time.get_ticks_usec()
-	hud.lock_hint.visible = (not paused and not _opening and not has_cursor_overlay() and not photo.active
-		and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 	if paused:
 		# 21.11.2026: «Авто» выключили в настройках на паузе — полное разрешение сразу, а не после выхода из паузы
 		# (запись сессии: ступень 0,8 держалась все 6,6 с в настройках). Замер ступеней на паузе не идёт
@@ -1833,8 +1830,8 @@ func _process(delta: float) -> void:
 		board_display.tick(Vector3(player.x, player.feet + GameConfig.EYE, player.z))
 	t0 = _tick_mark("frame_setup", t0)
 	tick_us.frames = tick_us.get("frames", 0) + 1
-	hud.set_summary_blocked(_opening or crash.active() or _placing_bike())
-	var summary := hud.summary_visible()
+	hud.set_summary_blocked(_opening or crash.active() or _placing_bike() or startup_input_locked)
+	var summary := hud.summary_requested()
 	if not summary:
 		info_timer = 0.0
 	if not startup_input_locked and not show_map and not _settlement_open() and not _journal_open() and not _plaque_open():
@@ -1850,7 +1847,7 @@ func _process(delta: float) -> void:
 		if crash.active():
 			crash.draw()
 		else:
-			bike_view.draw(alpha, summary)
+			bike_view.draw(alpha, not _opening and not show_map and not photo.active and not _placing_bike())
 	t0 = _tick_mark("frame_bike_view", t0)
 	_update_camera(alpha, delta)
 	_update_bike_placement(delta)
@@ -1861,7 +1858,7 @@ func _process(delta: float) -> void:
 	t0 = _tick_mark("frame_camera", t0)
 	if navigation_line != null:
 		var navigating := not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike() and not _settlement_open()
-		navigation_line.update_line(pos, delta, navigating, hud.navigation_visible())
+		navigation_line.update_line(pos, delta, navigating, false)
 		t0 = _tick_mark("frame_route", t0)
 		if navigation_line.route_revision != _route_revision:
 			_route_revision = navigation_line.route_revision
@@ -1872,13 +1869,11 @@ func _process(delta: float) -> void:
 			if _navigation_status != "" and _navigation_status != NavigationLine.SEARCHING: hud.toast_now(_navigation_status)
 	t0 = _tick_mark("frame_route_ui", t0)
 	if place_names != null and not _map_covers_world:
-		place_names.update(camera, delta, hud.visited, not summary, quests.known, hud.explore.revealed)
+		place_names.update(camera, delta, hud.visited, true)
 	if _bag != null and _bag.visible and _bag_pickup == null and not _map_covers_world:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
-		_bag_label.visible = summary and camera.global_position.distance_to(_bag.position) < 60.0
-		if _bag_label.visible:
-			_update_bag_label()
+		_bag_label.hide()
 	photo.bike_at = Vector3.INF if bike.riding or crash.active() else Vector3(bike.x, bike.y + 0.6, bike.z)
 	photo.update(camera, delta)
 	_target = _aim()
@@ -2037,53 +2032,18 @@ func _crash() -> void:
 	_trauma = 1.0
 
 
-## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас.
-## Действия к месту чипами [клавиша] действие; полная раскладка — в паузе.
+## Подтверждение показывается во время ручного размещения велосипеда.
 func _update_hints() -> void:
-	# 19.11.2026: подсказки собираются заново (подписи клавиш из InputMap, массивы) только когда сменилось то,
-	# от чего они зависят; раньше — каждый кадр
-	var kind: String = _target.get("kind", "")
-	var key := [_placing_bike(), bike_placement.reason if _placing_bike() else "", _opening or show_map or _settlement_open() or photo.active,
-		crash.active(), kind, _target.place.name if kind == "board" else "", _target.get("repair_kind", ""), _seat_id,
-		bike.riding, services.controls.joypad]
+	var placing := _placing_bike()
+	var key := [placing, bike_placement.reason if placing else "", services.controls.joypad]
 	if key == _hints_key:
 		return
 	_hints_key = key
-	var k := services.controls.label
-	if _placing_bike():
-		var confirm_key: String = k.call("jump") if services.controls.joypad else "ЛКМ / " + k.call("interact")
-		var cancel_key: String = k.call("back") if services.controls.joypad else "ПКМ / " + k.call("recover_bike") + " / " + k.call("pause")
-		var help := [[cancel_key, "Отмена"], ["Левый стик", "Поворот и расстояние"]] if services.controls.joypad else [[cancel_key, "Отмена"], ["A/D / колесо", "Поворот"], ["W/S", "Расстояние"]]
-		hud.set_hints(help, [[confirm_key, bike_placement.reason]], true, false)
-		return
-	if _opening or show_map or _settlement_open() or photo.active:
+	if placing:
+		var label := services.controls.label(&"jump") if services.controls.joypad else "ЛКМ / " + services.controls.label(&"interact")
+		hud.set_hints([], [[label, bike_placement.reason]], true, false)
+	else:
 		hud.set_hints([], [])
-		return
-	if crash.active():
-		hud.set_hints([], [], true)
-		return
-	var near: Array = []
-	match _target.get("kind", ""):
-		"board": near = [[k.call("interact"), "Доска «%s»" % _target.place.name]]
-		"bike": near = [[k.call("interact"), "Сесть"]]
-		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
-		"beacon": near = [[k.call("interact"), "Установить маяк"]]
-		"paint": near = [[k.call("interact"), "Нанести метку"]]
-		"bench": near = [[k.call("interact"), "Присесть"]]
-		"plaque": near = [[k.call("interact"), "Прочитать табличку"]]
-		"repair": near = [[k.call("interact"), "Удерживайте: починить %s" % Repairables.KINDS[_target.repair_kind].title]]
-	if _seat_id != "":
-		near = [[k.call("interact"), "Встать"]]
-	# Внизу сводки — главное для того, чем игрок занят.
-	if bike.riding:
-		var hints := [[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]]
-		if not services.controls.joypad:
-			hints.insert(2, [k.call("bike_back") + " → " + k.call("bike_forward"), "Баннихоп"])
-			hints.insert(3, [services.controls.labels(&"bike_pump"), "Памп (держать)"])
-		hud.set_hints(hints, near)
-		return
-	var photo_key: String = k.call("photo") if services.controls.joypad else "ПКМ"
-	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], near, false, _seat_id.is_empty())
 
 
 func _update_bag_label() -> void:

@@ -21,11 +21,11 @@ func _run() -> void:
 	var hud: Hud = main.get_node("UI/Root/Hud")
 	hud.toast("")
 	_check(hud._toast_left == 0.0 and hud._toast_queue.is_empty(), "пустое сообщение не занимает HUD")
-	hud.toast("Сообщение прошлого мира")
-	hud.toast("Сообщение в очереди")
-	hud.toast("Ещё одно сообщение")
-	hud.toast("Сообщение в очереди")
-	hud.toast("Сообщение прошлого мира")
+	hud.toast("Сообщение прошлого мира", &"discovery")
+	hud.toast("Сообщение в очереди", &"discovery")
+	hud.toast("Ещё одно сообщение", &"discovery")
+	hud.toast("Сообщение в очереди", &"discovery")
+	hud.toast("Сообщение прошлого мира", &"discovery")
 	_check(hud._toast_queue == PackedStringArray(["Сообщение в очереди", "Ещё одно сообщение"]),
 		"повтор текущего и несоседнего сообщения в очереди не дублируется")
 	hud.set_hints([["E", "Подсказка"]], [["E", "Действие"]])
@@ -34,7 +34,7 @@ func _run() -> void:
 	hud.set_map_visible(true)
 	hud.big_map.hover = {name = "Старое место"}
 	hud.clear_world()
-	_check(hud._toast_queue.is_empty() and hud._toast_left == 0.0 and hud.toast_label.modulate.a == 0.0,
+	_check(hud._toast_queue.is_empty() and hud._toast_left == 0.0 and not hud.get_node("Toast").visible,
 		"выход в меню очищает текущие сообщения и очередь")
 	_check(not hud.bike_shown and hud.bike_pos == Vector2.ZERO and hud.hint.get_child_count() == 0 and hud.prompt.get_child_count() == 0,
 		"выход в меню очищает маркер велосипеда и подсказки")

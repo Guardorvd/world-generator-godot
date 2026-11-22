@@ -77,15 +77,19 @@ func _run() -> void:
 		rows[seed_text] = row
 		maps.append(_map(w, roads))
 		var p: Dictionary = row.places
-		var line := "%s: %d мест, у воды %d, пустая суша %d %%, просвет %d м, сосед %d м, %s; старт — %s; отбор %.0f мс" % [seed_text, p.n,
+		var line := "%s: %d мест (добавлено покрытием %d: %s), у воды %d, пустая суша %d %%, просвет %d м, сосед %d м, %s; старт — %s; отбор %.0f мс" % [seed_text, p.n,
+			int(w.generation_profile.get("cover_added", 0)), w.generation_profile.get("cover_cells", []),
 			p.by_water, roundi(p.land_far_800m * 100.0), p.widest_gap_m, p.mean_neighbor_m, JSON.stringify(p.kinds), p.home, row.landmarks_ms]
 		print(line)
+		print("    сетка 3×3: кандидаты %s, walk %s, основной отбор %s, с покрытием %s" % [
+			w.generation_profile.get("sector_cand", []), w.generation_profile.get("sector_walk", []),
+			w.generation_profile.get("sector_main", []), p.sectors])
 		print("    роли [мест, связей]: %s; посёлков %d" % [JSON.stringify(p.roles), p.towns])
 		if roads:
 			print("    поездки: %s" % JSON.stringify(row.roads.journeys))
-			print("    после дорог роли [мест, связей]: %s; меньше всего жилых домов в одном месте: %d" % [JSON.stringify(row.after.roles), row.after.min_homes])
+			print("    после дорог сетка 3×3: %s; роли [мест, связей]: %s; меньше всего жилых домов в одном месте: %d; край >= %d кл." % [JSON.stringify(row.after.sectors), JSON.stringify(row.after.roles), row.after.min_homes, row.after.min_border])
 			var r: Dictionary = row.roads
-			print("    дороги: осталось %d из %d, отказы %s, связи %s, км %s, мостов %d, туннелей %d, вторые %s, этап %.1f с, домов %d" % [r.kept, r.placed,
+			print("    дороги: осталось %d из %d, оторванных %d, отказы %s, связи %s, км %s, мостов %d, туннелей %d, вторые %s, этап %.1f с, домов %d" % [r.kept, r.placed, r.orphan_trails,
 				JSON.stringify(r.failures), JSON.stringify(r.degrees), JSON.stringify(r.km), r.bridges, r.tunnels, JSON.stringify(r.second_ways), r.ms / 1000.0, r.homes])
 	_summary(rows, roads)
 	var sheet := MacroLook._sheet(maps)
@@ -176,7 +180,18 @@ func _describe(w: WorldData, land: PackedInt32Array) -> Dictionary:
 			if b != a: near = minf(near, Vector2(a.x - b.x, a.y - b.y).length())
 		nn += near
 	var home: Variant = PlayerState.home(w)
-	return {n = w.settlements.size(), by_water = water, kinds = kinds, roles = roles, cells = cells,
+	var sectors := [0, 0, 0, 0, 0, 0, 0, 0, 0]
+	var min_border := w.W
+	for s: SettlementData in w.settlements:
+		sectors[StageLandmarks.sector_of(s.i, w.W, w.H)] += 1
+		min_border = mini(min_border, floori(minf(minf(s.x, s.y), minf(w.W - s.x, w.H - s.y))))
+	return {n = w.settlements.size(), by_water = water, kinds = kinds, roles = roles, cells = cells, sectors = sectors,
+		min_border = min_border,
+		cover_added = int(w.generation_profile.get("cover_added", 0)),
+		cover_cells = Array(w.generation_profile.get("cover_cells", PackedInt32Array())),
+		sector_cand = w.generation_profile.get("sector_cand", []),
+		sector_walk = w.generation_profile.get("sector_walk", []),
+		sector_main = w.generation_profile.get("sector_main", []),
 		min_homes = w.settlements.map(func(s: SettlementData) -> int: return StageLandmarks.homes_of(s)).min() if not w.settlements.is_empty() else 0,
 		towns = w.settlements.filter(func(s: SettlementData) -> bool: return s.town).size(),
 		land_far_800m = snappedf(float(far) / maxi(1, land.size()), 0.01), widest_gap_m = roundi(gap * GameConfig.TILE),
@@ -214,10 +229,51 @@ func _roads(w: WorldData, placed: int, ms: float) -> Dictionary:
 		zones_2plus = trips.filter(func(t: Array) -> bool: return t[2] >= 2).size(),
 		pass_20m = trips.filter(func(t: Array) -> bool: return t[3] >= 20).size(),
 		mean_ratio = snappedf(trips.reduce(func(s: float, t: Array) -> float: return s + t[1], 0.0) / maxi(1, trips.size()), 0.01)}
-	return {journeys = journeys, placed = placed, kept = w.settlements.size(), failures = gp.get("road_failures", {}), degrees = degrees, km = km,
+	return {journeys = journeys, placed = placed, kept = w.settlements.size(), orphan_trails = _count_orphan_trails(w),
+		failures = gp.get("road_failures", {}), degrees = degrees, km = km,
 		bridges = w.bridges.size(), tunnels = w.tunnels.size(), second_ways = ways, ms = ms,
 		main_ms = gp.get("main_roads_ms", 0), secondary_ms = gp.get("secondary_roads_ms", 0),
 		budget_stops = gp.get("budget_stops", 0), homes = gp.get("homes_kept", 0)}
+
+
+static func _count_orphan_trails(w: WorldData) -> int:
+	if w.settlements.is_empty():
+		return 0
+	var seen := PackedByteArray()
+	seen.resize(w.N)
+	var queue := PackedInt32Array()
+	for s: SettlementData in w.settlements:
+		if seen[s.i] == 0:
+			seen[s.i] = 1
+			queue.append(s.i)
+	var head := 0
+	while head < queue.size():
+		var c := queue[head]
+		head += 1
+		var cx := c % w.W
+		var cy := c / w.W
+		for k in 8:
+			var nx: int = cx + Grid.DX[k]
+			var ny: int = cy + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= w.W or ny >= w.H:
+				continue
+			var n := ny * w.W + nx
+			if seen[n] == 0 and w.path_mask[n] >= 2:
+				seen[n] = 1
+				queue.append(n)
+	var orphans := 0
+	for tr: Dictionary in w.trails:
+		if tr.get("kind", "") == "animal":
+			continue
+		var connected := false
+		for p: Dictionary in tr.get("pts", []):
+			var pc := clampi(floori(float(p.y)), 0, w.H - 1) * w.W + clampi(floori(float(p.x)), 0, w.W - 1)
+			if seen[pc] != 0:
+				connected = true
+				break
+		if not connected:
+			orphans += 1
+	return orphans
 
 
 func _map(w: WorldData, roads: bool) -> Image:
@@ -228,6 +284,11 @@ func _map(w: WorldData, roads: bool) -> Image:
 			for px in img.get_width():
 				if w.path_mask[(py * s + 1) * w.W + px * s + 1] >= 2:
 					img.set_pixel(px, py, Color(0.25, 0.16, 0.08))
+	for cut in [img.get_width() / 3, img.get_width() * 2 / 3]:
+		for py in img.get_height():
+			img.set_pixel(cut, py, img.get_pixel(cut, py).lerp(Color(1.0, 1.0, 1.0), 0.38))
+		for px in img.get_width():
+			img.set_pixel(px, cut, img.get_pixel(px, cut).lerp(Color(1.0, 1.0, 1.0), 0.38))
 	for st: SettlementData in w.settlements:
 		# Роль: центр — красный, спутник — оранжевый, лесное — тёмно-зелёный, предгорное — фиолетовый,
 		# удалённое — белый, обычное и без ролей — жёлтый (посёлок — красный).
@@ -257,7 +318,7 @@ func _print_profile(seed_text: String, gp: Dictionary) -> void:
 		if r[0] >= 20.0:
 			print("    %8.0f мс  %s" % [r[0], r[1]])
 	for key: String in gp:
-		if key.ends_with("_search") or key.ends_with("_details") or key == "rides":
+		if key.ends_with("_search") or key.ends_with("_details") or key == "rides" or key == "road_links":
 			print("    %s %s" % [key, JSON.stringify(gp[key])])
 
 

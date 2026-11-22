@@ -1,6 +1,6 @@
 extends SceneTree
-## 14.2: изолированная сцена интерфейса игры без мира на светлом «снежном» фоне: панель сведений, компас,
-## сообщение, чипы подсказок, дуга выносливости (трата ниже 20 % с затемнением краёв, истощение, накат)
+## Изолированная сцена интерфейса игры на светлом фоне: сводка по удержанию Tab,
+## уведомления, дуга выносливости и большая карта.
 ## и меню выбора мира. Снимки hud_drain.png, hud_coast.png, menu.png. Нужно окно.
 ##   godot --path . --script res://tools/hud_look.gd -- [--out <папка>]
 
@@ -214,43 +214,41 @@ func _map_fixture() -> WorldData:
 	return world
 
 
-func _tap_hud() -> void:
+func _hold_hud(pressed: bool) -> void:
 	var event := InputEventAction.new()
 	event.action = &"show_hud"
-	event.pressed = true
+	event.pressed = pressed
 	Input.parse_input_event(event)
 	await process_frame
 	await process_frame
-	event = InputEventAction.new()
-	event.action = &"show_hud"
-	Input.parse_input_event(event)
 
 
 func _map_checks(world: WorldData) -> void:
-	# 18.11.2026: три вида — лёгкий (основной: мини-карта на 75 % и навигация), полный, скрытый
-	_check(not hud.summary_visible() and hud.navigation_visible() and hud.minimap.visible and not hud.compass.visible
-		and is_equal_approx(hud.minimap.modulate.a, Hud.LIGHT_ALPHA), "при старте лёгкий вид: мини-карта на 75 %, навигация видна")
-	await _tap_hud()
+	_check(not hud.minimap.visible and not hud.compass.visible and not hud._ride.visible, "при старте HUD скрыт")
+	await _hold_hud(true)
 	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
-	_check(hud.summary_visible() and hud.compass.visible and is_equal_approx(hud.minimap.modulate.a, 1.0), "Tab — полная сводка")
-	await _tap_hud()
-	_check(not hud.summary_visible() and hud.minimap.visible, "Tab запускает плавное скрытие")
+	_check(hud.summary_requested() and not hud.compass.visible and is_equal_approx(hud.minimap.modulate.a, 1.0), "удержание Tab показывает мини-карту")
+	await _hold_hud(false)
+	_check(not hud.summary_requested(), "отпускание Tab запускает затухание")
+	await create_timer(Hud.SUMMARY_HIDE + 0.1).timeout
+	_check(not hud.minimap.visible and not hud.hint.visible, "после отпускания HUD скрыт")
+	await _hold_hud(true)
 	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
-	_check(not hud.minimap.visible and not hud.navigation_visible() and hud._summary_hint.text.ends_with("показать сводку"), "скрытие оставляет подсказку и прячет навигацию")
-	await _tap_hud()
-	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
-	_check(not hud.summary_visible() and hud.navigation_visible() and is_equal_approx(hud.minimap.modulate.a, Hud.LIGHT_ALPHA), "Tab возвращает лёгкий вид")
-	await _tap_hud()
-	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
-	_check(hud.summary_visible() and is_equal_approx(hud.minimap.modulate.a, 1.0), "Tab возвращает сводку")
 	hud.set_map_visible(true)
-	_check(not hud.summary_visible() and not hud.minimap.visible and not hud._summary_hint.visible, "большая карта скрывает сводку и подсказку")
+	_check(not hud.summary_requested() and not hud.minimap.visible, "большая карта прерывает показ сводки")
 	hud.set_map_visible(false)
+	await _hold_hud(false)
+	await _hold_hud(true)
 	hud.set_photo_mode(true)
-	_check(not hud.minimap.visible and not hud._summary_hint.visible, "фоторежим скрывает сводку и подсказку")
+	_check(not hud.minimap.visible and not hud.summary_requested(), "фоторежим скрывает сводку")
 	hud.set_photo_mode(false)
+	await _hold_hud(false)
+	await _hold_hud(true)
 	hud.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
-	_check(hud.summary_visible(), "потеря фокуса сохраняет выбор игрока")
+	_check(not hud.summary_requested(), "потеря фокуса сбрасывает удержание")
+	await _hold_hud(false)
+	await _hold_hud(true)
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
 	var original := InputMap.action_get_events("interact")
 	var remap := InputEventKey.new()
 	remap.physical_keycode = KEY_F
@@ -395,9 +393,34 @@ func _journal_checks() -> void:
 	_check(atlas.ride_legs.size() == 1 and atlas.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed,
 		"выбранная поездка и её маршрут сохраняются при возврате")
 	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	await process_frame
+	await process_frame
+	atlas._reframe()
+	var full_center: Vector2 = atlas._center
+	var full_scale: float = atlas._scale
+	atlas._zoom_at(atlas.size * 0.5, 0.01)
+	_check(is_equal_approx(atlas._scale, full_scale), "личная карта не отдаляется дальше полного вида")
+	_check(atlas._bounded_center(full_center + Vector2(999999, 999999)).is_equal_approx(full_center),
+		"на полном масштабе карта не уходит в пустоту")
+	atlas._base_dirty = false
+	atlas._pressed = Vector2(10, 10)
+	atlas._dragged = false
+	atlas._move_pointer(Vector2(110, 110))
+	_check(not atlas._base_dirty, "попытка сдвинуть полный вид не обновляет подложку")
+	atlas._pressed = Vector2.INF
+	atlas._dragged = false
+	atlas._zoom_at(atlas.size * 0.5, 2.0)
+	var edge: Vector2 = atlas._bounded_center(Vector2(999999, 999999))
+	_check(edge.x <= atlas._bounds.end.x and edge.y <= atlas._bounds.end.y, "при приближении сдвиг ограничен краем карты")
+	atlas._zoom_at(atlas.size * 0.5, 0.01)
+	_check(is_equal_approx(atlas._scale, full_scale) and atlas._center.is_equal_approx(full_center), "отдаление возвращает полный вид")
 	if not atlas.places.is_empty():
 		var pin: Dictionary = atlas.places[0]
-		hud.journal_panel.refresh_inspector(pin)
+		hud.set_goal({})
+		atlas._select_place(pin)
+		_check(hud.goal.is_empty() and hud.journal_panel._inspected_place.get("key") == pin.key,
+			"выбор места открывает карточку без изменения цели")
+		atlas._set_hover({})
 		hud.journal_panel.refresh_inspector({}) # указатель ушёл с карты к кнопкам
 		_check(hud.journal_panel._inspected_place.get("key") == pin.key and hud.journal_panel._place_goal.visible,
 			"карточка сохраняет место при переходе к её действиям")
@@ -480,9 +503,9 @@ func _journal_checks() -> void:
 	await _await_cards()
 	_check((modes[0] as Button).has_meta(&"_ui_audio_bound"), "динамические кнопки журнала подключены к звукам интерфейса")
 	# 19.11.2026: Tab под «Путешествием» не переключает вид сводки вслепую
-	var mode_before: int = hud.view_mode
-	await _tap_hud()
-	_check(hud.view_mode == mode_before and not hud.summary_visible(), "Tab под «Путешествием» не меняет вид сводки")
+	await _hold_hud(true)
+	_check(not hud.summary_requested(), "Tab под журналом не открывает сводку")
+	await _hold_hud(false)
 	var old_scale := root.content_scale_size
 	var old_size := root.size
 	root.content_scale_size = Vector2i.ZERO
@@ -491,6 +514,27 @@ func _journal_checks() -> void:
 	await _shot("hud_tablet_narrow")
 	_check(hud.journal_panel._map_row.vertical and root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()),
 		"на узком экране док переезжает под карту")
+	hud.show_tablet(Hud.Tablet.Tab.MAP)
+	await _shot("hud_map_narrow")
+	_check(root.get_visible_rect().encloses(hud.journal_panel._map_frame.get_global_rect())
+		and root.get_visible_rect().encloses(hud.journal_panel._right_dock.get_global_rect())
+		and root.get_visible_rect().encloses(hud.journal_panel._map_footer.get_global_rect()),
+		"карта, задание и управление помещаются на узком экране")
+	var map_rect := Rect2(Vector2.ZERO, atlas.size)
+	_check(map_rect.has_point(atlas.world_to_screen(atlas._bounds.position))
+		and map_rect.has_point(atlas.world_to_screen(atlas._bounds.end)),
+		"при переходе на карту весь лист виден на узком экране")
+	var original_bounds: Rect2 = atlas._bounds
+	var original_fit: Rect2 = atlas._fit
+	atlas._bounds = Rect2(Vector2.ZERO, Vector2.ONE * 3072.0)
+	atlas._fit = atlas._bounds.grow(50.0)
+	atlas._reframe()
+	_check(map_rect.has_point(atlas.world_to_screen(atlas._bounds.position))
+		and map_rect.has_point(atlas.world_to_screen(atlas._bounds.end)),
+		"полный размер игрового мира помещается на узком экране")
+	atlas._bounds = original_bounds
+	atlas._fit = original_fit
+	atlas._reframe()
 	hud.show_tablet(Hud.Tablet.Tab.ALBUM)
 	await _await_cards()
 	await _shot("hud_album_narrow")
@@ -508,14 +552,15 @@ func _journal_checks() -> void:
 	await process_frame
 	await _journal_photo_stress(shot_path)
 	# сообщения: пролежавшее под окном дольше TOAST_STALE некритичное сгорает, задание остаётся
+	hud.journal_panel.clear()
+	_check(not hud.journal_panel.visible, "закрытие прячет экран")
+	await _hold_hud(true)
 	hud._toast_queue.clear()
 	hud._toast_kinds.clear()
 	hud._toast_left = 0.0
 	hud.toast("Открыто: проба", &"discovery")
 	hud.toast("Задание: проба", &"quest")
 	hud._toast_hidden_for = Hud.TOAST_STALE + 1.0
-	hud.journal_panel.clear()
-	_check(not hud.journal_panel.visible, "закрытие прячет экран")
 	await process_frame
 	_check(hud.toast_label.text == "Задание: проба" and hud._toast_queue.is_empty(), "устаревшее сообщение не всплывает после окна, задание остаётся")
 	# переполненная очередь теряет неважное, а не последнее пришедшее задание
@@ -530,6 +575,7 @@ func _journal_checks() -> void:
 	hud._toast_queue.clear()
 	hud._toast_kinds.clear()
 	hud._toast_left = 0.0
+	await _hold_hud(false)
 	hud.explore = Exploration.new()
 
 
@@ -689,6 +735,8 @@ func _run() -> void:
 	hud.set_map_visible(false)
 	await _journal_checks()
 	await _panel_shots(world)
+	await _hold_hud(true)
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
 	var seen_icons := {}
 	for qkind: String in Hud.Quests.KINDS:
 		var tex := Hud.UiIcons.quest(qkind)
@@ -742,14 +790,18 @@ func _run() -> void:
 	hud.get_node("Toast").hide()
 	hud.set_hints([["Shift", "Сильнее"], ["Пробел", "Прыжок"], ["F", "Слезть"], ["Y", "Поставить велосипед"]], [["F", "Доска «Ольховка»"]])
 	_check(hud.hint.get_child_count() == 4 and hud.prompt.get_child_count() == 1, "чипы: четыре внизу и один у прицела")
-	_check(hud._reticle_on_target, "прицел обозначает доступное действие")
-	# 15.0: рывок (Shift) берёт треть полоски: с 40 % остаётся ~7 % — пульс и затемнение краёв в приливе
+	_check(not hud.hint.visible and not hud.prompt.visible and not hud._reticle_on_target, "игровые подсказки и прицел отключены")
+	# Рывок (Shift) берёт треть полоски: с 40 % остаётся ~7 % — шкала видна даже после отпускания Tab.
+	await _hold_hud(false)
+	await create_timer(Hud.SUMMARY_HIDE + 0.1).timeout
 	var stamina := Stamina.new()
 	stamina.value = 0.4
 	await _tick(stamina, 75, true, 1.0, true)
-	_check(stamina.value < 0.2 and hud._ride.warning > 0.05 and hud._vignette.visible and hud._ride.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._ride.warning)
+	_check(stamina.value < 0.2 and hud._ride.warning > 0.05 and hud._ride.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._ride.warning)
 	_check(hud._ride._ghost > stamina.value, "шлейф отстаёт от заливки")
 	await _shot("hud_drain")
+	await _hold_hud(true)
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
 	# Brake gauge: normal braking, danger, and contexts where it must disappear.
 	var bike := BikeRide.new()
 	bike.riding = true
@@ -784,8 +836,8 @@ func _run() -> void:
 		["Кружок", "Отменить размещение"], ["Левый бампер", "Переключить карту"]], [])
 	await process_frame
 	await process_frame
-	_check(hud.hint.get_line_count() > 1 and hud.get_global_rect().encloses(hud.hint.get_global_rect()),
-		"длинные подсказки переносятся внутри экрана")
+	_check(not hud.hint.visible,
+		"нижние подсказки геймпада скрыты")
 	# меню: карточка над кнопкой запуска, зерно можно изменить на отдельном экране
 	hud.visible = false
 	main.get_node("UI/Root/Back").visible = true
@@ -793,9 +845,10 @@ func _run() -> void:
 	main._show_seed_tab("recommended")
 	var start: Button = main.get_node("%Start")
 	var edit: LineEdit = main.get_node("%SeedEdit")
-	_check(start.get_index() > main.get_node("%Carousel").get_index(), "«Начать путешествие» под карточкой")
+	_check(start.get_global_rect().position.y > main.get_node("%Carousel").get_global_rect().position.y,
+		"кнопка путешествия расположена под карточкой")
 	main._pick_seed("Туман-4821")
-	_check(edit.text == "Туман-4821" and main._chosen_seed() == "Туман-4821", "выбор в списке ставит зерно в поле")
+	_check(main._chosen_seed() == "Туман-4821" and is_instance_valid(edit), "выбор мира и поле создания доступны")
 	await _shot("menu")
 	var panel: Control = main.get_node("UI/Root/Menu/Panel")
 	_check(root.get_visible_rect().encloses(panel.get_global_rect()), "меню целиком помещается в 1280×720")

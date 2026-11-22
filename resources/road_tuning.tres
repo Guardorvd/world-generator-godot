@@ -18,6 +18,89 @@ animal_reuse = 0.6
 human_reuse = 0.35
 straighten = {"road": 0.5, "trail": 1.0, "mountain": 1.0}
 line_relax = {"road": 1.4, "trail": 1.4, "mountain": 1.3}
+character_field = {
+	"relief_sigma": 3.0, "relief_wide_sigma": 9.0,
+	"meander_sigma": 20.0, "meander_rms": 1.0, "meander_flat": 0.035, "meander_slope": 0.12,
+	"meander_amp_road": 0.28, "meander_amp": 0.35, "meander_amp_mountain": 0.32, "meander_amp_ride": 0.35,
+	"ridge_tpi": 4.0, "ridge_mul": 1.36, "break_tpi": 2.5, "break_mul": 0.88,
+	"eco_radius": 4, "eco_low": 0.16, "eco_high": 0.84, "eco_mul": 0.86,
+	"shore_band": 4.0, "shore_mul": 1.65, "mul_min": 0.7, "mul_max": 1.8,
+	"shape_radius": 18, "shape_portal": 24, "shape_min": 16,
+	"shore_run_band": 3.75, "shore_run_m": 48.0, "short_turnback_m": 120.0
+}
+network_rules = {
+	"node_sep": 25.0,
+	"node_same": 0.6,
+	"max_degree": 4,
+	"loop_ratio": 1.65,
+	"loop_accept": 1.25,
+	"loop_share": 0.35,
+	"loop_len_old": 2.0,
+	"far_r": 15.0,
+	"far_share": 0.4,
+	"window_margin": 14,
+	"window_retry": 24,
+	"shore_share": 0.25,
+	"exit_angle": 45.0,
+	"exit_chord": 10.0,
+	"spur_net_floor": 2.0,
+	"mountain_reach": 1.5,
+	"join_same": 1.5,
+	"ride_node_sep": 12.0,
+	"ride_shared_node": 1.5,
+	"shore_target_factor": 3,
+	"shore_min_count": 2,
+	"shore_settlement_divisor": 4,
+	"near_axis_search_pad": 3.0
+}
+line_shape = {
+	"smooth_spacing": 0.98,
+	"axis_pin_cells": 2.0,
+	"biharmonic_passes": 10,
+	"biharmonic_step": 0.375,
+	"laplacian_passes": 4,
+	"kink_laplacian_passes": 4,
+	"kink_laplacian_angle": 34.0,
+	"final_kink_passes": 2,
+	"smooth_step": 0.45,
+	"biharmonic_edge_step": 0.35,
+	"move_eps_sq": 0.0001,
+	"move_retries": 3,
+	"move_retry_scale": 0.5,
+	"round_angle": 18.0,
+	"round_fractions": PackedFloat64Array(0.34, 0.22, 0.14, 0.08),
+	"mountain_round_fractions": PackedFloat64Array(0.14, 0.08),
+	"round_corridor": 0.65,
+	"min_subdivision": 0.35,
+	"profile_restore_limit": 64,
+	"restore_back": 4.0,
+	"restore_forward": 1.5,
+	"turn_chord": 1.0,
+	"min_turn_chord": 0.3,
+	"round_sampling": 0.22,
+	"round_min_arm": 0.25,
+	"round_trim_limit": 1.2
+}
+arc_bends_enabled = true
+arc_radii_m = PackedFloat64Array(150.0, 100.0, 60.0)
+arc_angle_deg = 8.0
+arc_shoulder_m = 24.0
+arc_fit_m = 4.0
+arc_transitions_m = PackedFloat64Array(18.0, 10.0)
+axis_protection_m = 12.0
+axis_min_radius_m = 15.0
+axis_meander_enabled = true
+axis_meander_min_m = 200.0
+axis_meander_fit_m = 4.0
+axis_meander_search_m = 12.0
+axis_meander_min_shift_m = 0.35
+axis_meander_slope = 0.06
+axis_meander_slope_fade = 0.03
+axis_meander_water_m = Vector2(8.0, 28.0)
+axis_meander_road = {"amplitude_m": Vector2(6.0, 15.0), "wave_m": Vector2(250.0, 500.0), "fade_m": 85.0, "radius_m": 60.0}
+axis_meander_trail = {"amplitude_m": Vector2(4.0, 10.0), "wave_m": Vector2(120.0, 300.0), "fade_m": 55.0, "radius_m": 30.0}
+ride_search_reserve = 0.40
+inland_connector = {"min_m": 240.0, "max_m": 980.0, "search_count": 16, "accept_count": 4}
 
 [sub_resource type="Resource" id="Resource_section"]
 script = ExtResource("4_section")

@@ -7,10 +7,19 @@ signal preview_ready(seed_text: String, texture: Texture2D)
 signal map_changed
 signal stepped(direction: int)
 signal favorite_requested(seed_text: String, source: Control)
+signal type_changed
 
 const MapPreview := preload("res://scripts/ui/menu_map_preview.gd")
 const Icons := preload("res://scripts/ui/ui_icons.gd")
 const MAX_DERIVED_MAPS := 8
+# Каталог только для интерфейса. При подключении нового генератора необходимо
+# заменить заглушку и отдельно реализовать изоляцию миров, сохранений и кэша.
+const WORLD_TYPES := [
+	{id = "mountain_valley", title = "Горная долина", available = true},
+	{id = "future_2", title = "Будущий тип 2", available = false},
+	{id = "future_3", title = "Будущий тип 3", available = false},
+	{id = "future_4", title = "Будущий тип 4", available = false},
+]
 
 class PreviewCancel extends RefCounted:
 	var mutex := Mutex.new()
@@ -51,6 +60,7 @@ var force_animate_in_headless := false
 var _entries: Array[Dictionary] = []
 var _index := -1
 var _mode := 0
+var _type_index := 0
 var _zoom: Tween
 var _indicator_tween: Tween
 var _slide_tween: Tween
@@ -67,8 +77,8 @@ var _preview_errors := {}
 
 func setup(start_button: Button, actions: Array[Button], trail_lab: Button) -> void:
 	set_process(false)
-	_previous.pressed.connect(move.bind(-1))
-	_next.pressed.connect(move.bind(1))
+	_previous.pressed.connect(move_type.bind(-1))
+	_next.pressed.connect(move_type.bind(1))
 	_favorite.pressed.connect(func() -> void:
 		if _index >= 0: favorite_requested.emit(str(_entries[_index].seed), _favorite))
 	_card.resized.connect(_layout_slide)
@@ -99,7 +109,7 @@ func setup(start_button: Button, actions: Array[Button], trail_lab: Button) -> v
 	_previous.set_meta(&"ui_sound_custom", true)
 	_next.set_meta(&"ui_sound_custom", true)
 	_mode_buttons.resized.connect(_position_indicator.bind(false))
-	var chain: Array[Control] = [start_button]
+	var chain: Array[Control] = [_previous, _next, start_button]
 	chain.append_array(actions)
 	chain.append(trail_lab)
 	for i in chain.size():
@@ -198,6 +208,16 @@ func selected_texture() -> Texture2D:
 func selected_index() -> int:
 	return _index
 
+func type_available() -> bool:
+	return bool(WORLD_TYPES[_type_index].available)
+
+func move_type(direction: int) -> void:
+	if direction == 0: return
+	_type_index = posmod(_type_index + signi(direction), WORLD_TYPES.size())
+	_apply_entry()
+	stepped.emit(signi(direction))
+	type_changed.emit()
+
 func move(direction: int) -> void:
 	if _entries.size() < 2 or direction == 0: return
 	var dir := signi(direction)
@@ -208,7 +228,7 @@ func move(direction: int) -> void:
 func move_focused(direction: int) -> bool:
 	var focus := get_viewport().gui_get_focus_owner()
 	if focus == _previous or focus == _next:
-		move(direction)
+		move_type(direction)
 		return true
 	return false
 
@@ -250,9 +270,13 @@ func _layout_slide() -> void:
 
 func _apply_entry() -> void:
 	var entry: Dictionary = _entries[_index] if _index >= 0 else {}
-	_name.text = str(entry.get("seed", "Ваш первый мир"))
-	_count.text = "%d / %d" % [_index + 1, _entries.size()]
-	_previous.disabled = _entries.size() < 2
+	var available := type_available()
+	_name.text = WORLD_TYPES[_type_index].title
+	$Card/Slide/Frame/WorldInfo/Caption.text = "ВЫБРАННЫЙ МИР" if available else "СТАТУС"
+	$Card/Slide/Frame/WorldInfo/Name.text = str(entry.get("seed", "Пока нет мира")) if available else "В разработке"
+	$Card/Slide/Frame/WorldInfo/Detail.text = ("Сохранение" if entry.get("saved", false) else ("Ещё не начат" if _index >= 0 else "Создайте первый мир")) if available else "Этот тип появится позже"
+	_count.text = "%d / %d" % [_type_index + 1, WORLD_TYPES.size()]
+	_previous.disabled = WORLD_TYPES.size() < 2
 	_next.disabled = _previous.disabled
 	_favorite.disabled = _index < 0
 	for button in _modes: button.disabled = _index < 0
@@ -291,25 +315,28 @@ func _refresh_map(animate := false) -> void:
 		_touch_maps(seed_text)
 		var images: Array = _derived[seed_text]
 		if images.size() == 2: tex = images[_mode - 1]
+	if not type_available(): tex = null
 	_set_map_texture(tex, animate)
 	var empty := _index < 0
-	_mode_panel.visible = not empty
-	_pattern.anchor_right = 1.0 if empty else 0.0
-	_pattern.offset_right = 0.0 if empty else 190.0
-	_placeholder.anchor_right = 1.0 if empty else 0.0
-	_placeholder.offset_left = 20.0 if empty else 4.0
-	_placeholder.offset_right = -20.0 if empty else 186.0
+	_mode_panel.visible = false
+	_pattern.anchor_right = 0.0
+	_pattern.offset_right = 130.0
+	_placeholder.anchor_right = 0.0
+	_placeholder.offset_left = 4.0
+	_placeholder.offset_right = 126.0
 	var working := _thread != null and _loading_seed == seed_text and _job_kind == "preview" and not _cancel_flag.is_cancelled()
 	_pattern.visible = tex == null
 	_preview_note.visible = tex != null and (_generated.get(seed_text) == tex or (_mode > 0 and _provisional_derived.has(seed_text)))
 	_placeholder.visible = tex == null
-	_quick_seed.visible = empty
-	_create_first.visible = empty
-	_build_preview.visible = not empty and tex == null and not working and not entry.get("map_ready", false) and not _derived.has(seed_text)
+	_quick_seed.visible = false
+	_create_first.visible = false
+	_build_preview.visible = false
 	_build_preview.disabled = _thread != null
 	_build_preview.tooltip_text = "География без дорог и 3D; построение может занять некоторое время."
-	if empty:
-		_hint.text = "Ваше путешествие начинается здесь"
+	if not type_available():
+		_hint.text = "Скоро"
+	elif empty:
+		_hint.text = "Карта появится после создания мира"
 	elif working:
 		_hint.text = "Создаём карту…"
 	elif _preview_errors.has(seed_text):
@@ -317,8 +344,8 @@ func _refresh_map(animate := false) -> void:
 	elif entry.get("map_ready", false) and _mode > 0:
 		_hint.text = "Подготовка карты…" if not _derived.has(seed_text) else "Данные карты недоступны"
 	else:
-		_hint.text = "География без дорог и 3D"
-	if _mode > 0 and tex == null and not seed_text.is_empty() and entry.get("map_ready", false) and not _derived.has(seed_text) and _thread == null:
+		_hint.text = "Карта пока недоступна"
+	if type_available() and _mode > 0 and tex == null and not seed_text.is_empty() and entry.get("map_ready", false) and not _derived.has(seed_text) and _thread == null:
 		_start_job(seed_text, "cached")
 	map_changed.emit()
 
@@ -420,8 +447,8 @@ func _hover_link(button: Button, active: bool) -> void:
 		var margin: float = button.get_meta(key + "_margin")
 		tween.tween_property(style, "content_margin_left", margin + (4.0 if active else 0.0), 0.075)
 
-func _gui_input(event: InputEvent) -> void:
-	if _scroll(event): accept_event()
+func _gui_input(_event: InputEvent) -> void:
+	pass
 
 func _scroll(event: InputEvent) -> bool:
 	if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
@@ -429,12 +456,5 @@ func _scroll(event: InputEvent) -> bool:
 		return true
 	return false
 
-func _card_input(event: InputEvent) -> void:
-	if _scroll(event):
-		_artwork.accept_event()
-	elif event is InputEventMouseButton and event.pressed and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
-		_artwork.accept_event()
-		if _index >= 0: play_requested.emit()
-	elif event.is_action_pressed("ui_accept"):
-		_artwork.accept_event()
-		if _index >= 0: play_requested.emit()
+func _card_input(_event: InputEvent) -> void:
+	pass

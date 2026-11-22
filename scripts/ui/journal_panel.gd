@@ -40,6 +40,11 @@ var _cards_loading: Label
 var _map_page: VBoxContainer
 var _map_row: BoxContainer
 var _dock: PanelContainer
+var _map_frame: PanelContainer
+var _right_dock: PanelContainer
+var _narrow_docks: HBoxContainer
+var _map_footer: HBoxContainer
+var _map_key: VBoxContainer
 var _details: BoxContainer
 var _dock_divider: HSeparator
 var _place_title: Label
@@ -48,6 +53,7 @@ var _place_goal: Button
 var _place_photo: Button
 var _inspected_place := {}
 var _checklist: VBoxContainer
+var _quest_style: StyleBoxFlat
 var _shown_quest := {}
 var _map_hint: Label
 var _track_layer: Button
@@ -301,8 +307,14 @@ func _build_map() -> void:
 	map_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	map_view.custom_minimum_size = Vector2(120, 130)
-	_map_row.add_child(map_view)
-	map_view.hover_changed.connect(refresh_inspector)
+	_map_frame = PanelContainer.new()
+	_map_frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_map_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_map_frame.add_theme_stylebox_override("panel", HudStyle.panel(Color("#34483b"), Color("#99875e"), 6, Vector2(8, 8), false))
+	_map_row.add_child(_map_frame)
+	_map_frame.add_child(map_view)
+	map_view.place_selected.connect(refresh_inspector)
+	map_view.places_changed.connect(_rebuild_map_key)
 	map_view.photo_thumbnail_requested.connect(_queue_photo)
 
 	_dock = PanelContainer.new()
@@ -340,26 +352,63 @@ func _build_map() -> void:
 	_place_photo.custom_minimum_size.y = 40
 	_place_photo.pressed.connect(_open_place_photo)
 	inspector.add_child(_place_photo)
-	_dock_divider = HSeparator.new()
-	_details.add_child(_dock_divider)
+	_right_dock = PanelContainer.new()
+	_right_dock.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 4, Vector2(14, 14), false))
+	_map_row.add_child(_right_dock)
+	var right_scroll := ScrollContainer.new()
+	right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	right_scroll.follow_focus = true
+	_right_dock.add_child(right_scroll)
+	var right_content := VBoxContainer.new()
+	right_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_content.add_theme_constant_override("separation", 12)
+	right_scroll.add_child(right_content)
+	var quest_card := PanelContainer.new()
+	_quest_style = HudStyle.panel(Color("#263d37"), ACCENT, 4, Vector2(12, 12), false)
+	_quest_style.border_width_left = 3
+	quest_card.add_theme_stylebox_override("panel", _quest_style)
+	right_content.add_child(quest_card)
 	var objective := VBoxContainer.new()
 	objective.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_details.add_child(objective)
+	quest_card.add_child(objective)
 	_label("ТЕКУЩЕЕ ЗАДАНИЕ", 12, objective, ACCENT)
 	_checklist = VBoxContainer.new()
 	_checklist.add_theme_constant_override("separation", 4)
 	objective.add_child(_checklist)
+	right_content.add_child(HSeparator.new())
+	_label("ОБОЗНАЧЕНИЯ", 12, right_content, ACCENT)
+	_map_key = VBoxContainer.new()
+	_map_key.add_theme_constant_override("separation", 5)
+	right_content.add_child(_map_key)
+	_rebuild_map_key()
+	_narrow_docks = HBoxContainer.new()
+	_narrow_docks.add_theme_constant_override("separation", 8)
+	_narrow_docks.hide()
+	_map_row.add_child(_narrow_docks)
 	_path_page = VBoxContainer.new()
 	_path_page.add_theme_constant_override("separation", 4)
 	dock_content.add_child(_path_page)
 
 	var footer := HBoxContainer.new()
+	_map_footer = footer
 	footer.add_theme_constant_override("separation", 8)
 	_map_page.add_child(footer)
 	_map_hint = _label("", 13, footer, MUTED)
 	_map_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_map_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_map_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var zoom_out := Button.new()
+	zoom_out.text = "−"
+	zoom_out.tooltip_text = "Отдалить карту"
+	zoom_out.custom_minimum_size = Vector2(40, 40)
+	zoom_out.pressed.connect(func() -> void: map_view._zoom_at(map_view.size * 0.5, 0.8))
+	footer.add_child(zoom_out)
+	var zoom_in := Button.new()
+	zoom_in.text = "+"
+	zoom_in.tooltip_text = "Приблизить карту"
+	zoom_in.custom_minimum_size = Vector2(40, 40)
+	zoom_in.pressed.connect(func() -> void: map_view._zoom_at(map_view.size * 0.5, 1.25))
+	footer.add_child(zoom_in)
 	_track_layer = Button.new()
 	_track_layer.text = "Путь"
 	_track_layer.tooltip_text = "Показать пройденный путь"
@@ -383,15 +432,68 @@ func _build_map() -> void:
 	footer.add_child(center)
 
 
+## Легенда перестраивается только при изменении известных мест, не при панорамировании.
+func _rebuild_map_key() -> void:
+	if _map_key == null:
+		return
+	for child: Node in _map_key.get_children():
+		_map_key.remove_child(child)
+		child.queue_free()
+	for item in [["━", "Мой путь", Color("#a596ff")], ["━", "Дорога", Color("#d6bc8a")],
+			["━", "Тропа", Color("#b59d72")], ["━", "Велотрасса", Color("#90bd8d")],
+			["▲", "Игрок", Color("#75b7ff")], ["★", "Цель", HudStyle.AMBER],
+			["●", "Велосипед", Color("#75b7ff")], ["◎", "Шаг задания", HudStyle.AMBER],
+			["○", "Узнано", HudStyle.CREAM], ["✓", "Посещено", HudStyle.MINT],
+			["▣", "Есть снимок", Color("#c4a5e5")]]:
+		var line := HBoxContainer.new()
+		_map_key.add_child(line)
+		var mark := _label(item[0], 15, line, item[2])
+		mark.custom_minimum_size.x = 24
+		_label(item[1], 13, line, HudStyle.CREAM)
+	var names := {settlement = "Поселение", peak = "Вершина", lake = "Озеро", site = "Место",
+		tower = "Вышка", obelisk = "Обелиск", ruin = "Руины", stones = "Каменный круг",
+		shelter = "Приют", house = "Дом", farm = "Хутор", fishing = "Рыбацкий дом", bench = "Лавка"}
+	var seen := {}
+	for place: Dictionary in map_view.places:
+		var icon := UiIcons.map_place_icon(place)
+		if not names.has(icon): icon = "site"
+		if seen.has(icon): continue
+		seen[icon] = true
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 6)
+		_map_key.add_child(line)
+		var badge := PanelContainer.new()
+		badge.custom_minimum_size = Vector2(22, 22)
+		badge.add_theme_stylebox_override("panel", HudStyle.panel(Atlas.pin_color(str(place.get("kind", "site")), icon), Color("#f2e7cd"), 12, Vector2(3, 3), false))
+		line.add_child(badge)
+		badge.add_child(UiIcons.rect(UiIcons.map_icon(icon), 14))
+		_label(names[icon], 13, line, HudStyle.CREAM)
+
+
 func _reflow() -> void:
 	var narrow := size.x < 800.0
 	_map_row.vertical = narrow
-	_details.vertical = not narrow
-	_dock_divider.visible = not narrow
+	_details.vertical = true
 	_seed.visible = not narrow
-	_dock.custom_minimum_size = Vector2(0, 180) if narrow else Vector2(320, 0)
-	_map_row.move_child(_dock, 1 if narrow else 0)
+	if narrow and _dock.get_parent() != _narrow_docks:
+		_dock.reparent(_narrow_docks)
+		_right_dock.reparent(_narrow_docks)
+	elif not narrow and _dock.get_parent() != _map_row:
+		_dock.reparent(_map_row)
+		_right_dock.reparent(_map_row)
+	_narrow_docks.visible = narrow
+	_dock.custom_minimum_size = Vector2(0, 112) if narrow else Vector2(220, 0)
+	_right_dock.custom_minimum_size = Vector2(0, 112) if narrow else Vector2(220, 0)
+	_dock.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
+	_right_dock.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
+	if narrow:
+		_map_row.move_child(_map_frame, 0)
+		_map_row.move_child(_narrow_docks, 1)
+	else:
+		_map_row.move_child(_dock, 0)
+		_map_row.move_child(_map_frame, 1)
 	_dock.size_flags_vertical = Control.SIZE_FILL if narrow else Control.SIZE_EXPAND_FILL
+	_right_dock.size_flags_vertical = Control.SIZE_FILL if narrow else Control.SIZE_EXPAND_FILL
 
 
 func enable_shop(profile: ShopPanel.Progress) -> void:
@@ -436,6 +538,7 @@ func _select(tab: Tab) -> void:
 	map_view.visible = _map_page.visible
 	_path_page.visible = tab == Tab.PATH
 	_details.visible = tab == Tab.MAP
+	_right_dock.visible = tab == Tab.MAP
 	_album_page.visible = tab == Tab.ALBUM
 	shop_panel.visible = tab == Tab.SHOP
 	if tab in [Tab.PATH, Tab.ALBUM] and _data.is_empty() and data_provider.is_valid():
@@ -452,9 +555,10 @@ func _select(tab: Tab) -> void:
 	map_view.set_photo_pins(_photo_layer.button_pressed, _cache)
 	if tab != Tab.PATH:
 		map_view.show_ride([], Rect2())
+	map_view.set_field_sheet(tab == Tab.MAP)
 	if tab == Tab.SHOP:
 		shop_panel.open()
-	refresh_inspector(map_view.hover)
+	refresh_inspector(map_view.selected_place)
 	refresh_quest()
 	if move_focus:
 		var tab_button: Button = [_tab_map, _tab_path, _tab_album, _tab_shop][tab]
@@ -471,7 +575,10 @@ func refresh_inspector(place: Dictionary) -> void:
 	var detail := "Наведитесь на метку или выберите её." if place.is_empty() else ""
 	if not place.is_empty():
 		var status := PackedStringArray()
-		var kind: String = {peak = "Вершина", lake = "Озеро", site = "Место", settlement = "Поселение"}.get(place.kind, "")
+		var icon := UiIcons.map_place_icon(place)
+		var kind: String = {peak = "Вершина", lake = "Озеро", site = "Место", settlement = "Поселение",
+			farm = "Хутор", house = "Дом", ruin = "Руины", tower = "Вышка", stones = "Каменный круг",
+			shelter = "Приют", obelisk = "Обелиск", fishing = "Рыбацкий дом", bench = "Лавка"}.get(icon, "Место")
 		if not kind.is_empty():
 			status.append(kind)
 		var flags := int(place.get("map_status", 0))
@@ -504,7 +611,7 @@ func refresh_inspected_place() -> void:
 		if str(place.get("key", "")) == id:
 			_inspected_place = place
 			break
-	refresh_inspector(map_view.hover)
+	refresh_inspector(map_view.selected_place)
 
 
 func _open_place_photo() -> void:
@@ -530,11 +637,14 @@ func _fill_checklist(data: Dictionary) -> void:
 	for child: Node in _checklist.get_children():
 		_checklist.remove_child(child)
 		child.queue_free()
+	_quest_style.border_color = data.get("color", ACCENT)
 	if data.is_empty():
 		_label("Активного задания нет", 14, _checklist, MUTED)
 		return
 	var title := _label(data.title, 16, _checklist, HudStyle.CREAM)
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if int(data.get("reward", 0)) > 0:
+		_label("Награда · %d очк." % int(data.reward), 12, _checklist, data.get("color", ACCENT))
 	for i in data.steps.size():
 		var marker := "✓" if i < data.index else ("▸" if i == data.index else "○")
 		var color := HudStyle.MINT if i <= data.index else MUTED
@@ -657,7 +767,8 @@ func _select_ride(index: int, frame := true) -> void:
 
 func _show_place_on_map(id: String) -> void:
 	_select(Tab.MAP)
-	map_view.focus_place(id)
+	if map_view.focus_place(id):
+		refresh_inspector(map_view.selected_place)
 
 
 func _show_ride_photos(start: float, return_to: Control) -> void:

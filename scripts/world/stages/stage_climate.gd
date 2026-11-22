@@ -35,15 +35,15 @@ static func soil_moisture(rain: float, dw: float, sl: float, t: float, condition
 static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: float, dist_water := INF) -> int:
 	if dist_water <= 1.0 and dist_ocean > 2.5 and slope > 0.55 and e < 0.62:
 		return Biomes.STONESHORE
-	if e > 0.62 or (e > 0.42 and t < 0.2):
+	if e > 0.65 or (e > 0.46 and t < 0.2):
 		# Sheltered summit basins and shoulders retain soil; a high surface
 		# does not become bare bedrock solely by crossing a contour line.
 		if slope < 0.30 and m > 0.50 and t > 0.12:
 			return Biomes.TUNDRA
 		return Biomes.PEAK
-	if slope > 1.3 or (e > 0.4 and (slope > 0.48 or m < 0.40)):
+	if slope > 1.3 or (e > 0.45 and (slope > 0.48 or m < 0.40)):
 		return Biomes.ROCK
-	if e > 0.4:
+	if e > 0.45:
 		return Biomes.TUNDRA
 	if dist_ocean <= 2.5 and e < 0.03:
 		return Biomes.STONESHORE if t < 0.3 else Biomes.BEACH
@@ -54,9 +54,9 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 	if t < 0.42:
 		return Biomes.STEPPE if m < 0.3 else Biomes.TAIGA
 	if t < 0.7:
-		if m < 0.25:
+		if m < 0.20:
 			return Biomes.STEPPE
-		if m < 0.40:
+		if m < 0.31:
 			return Biomes.GRASS
 		# 14.11.2026 (GEO 19): было m > 0.82. Влажные низины — прежде всего густой влажный лес, болото — только
 		# самые сырые ровные места (копия — FastGrid.Fields.cs, ClimateKind.Swamp)
@@ -134,7 +134,7 @@ static func fields_reference(w: WorldData, temp_n: PackedFloat64Array) -> Dictio
 			var e := elev[i]
 			var conditions := natural_conditions(w, x, y)
 			light[i] = conditions.x
-			var t := clampf(0.43 + lat * 0.32 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
+			var t := clampf(0.43 + lat * 0.32 + temp_n[i] * 0.18 - e * 0.48, 0.0, 1.0)
 			var m := clampf(rain[i] + 0.22 * exp(-dist_water[i] / 4.0), 0.0, 1.0)
 			if ocean[i] == 0 and lake[i] == 0:
 				t = clampf(t + (conditions.x - 0.5) * 0.08, 0.0, 1.0)

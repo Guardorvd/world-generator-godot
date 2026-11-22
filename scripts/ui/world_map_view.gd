@@ -12,6 +12,7 @@ extends Control
 signal place_selected(place: Dictionary)
 signal marker_requested(at: Vector2)
 signal hover_changed(place: Dictionary)
+signal places_changed
 signal photo_thumbnail_requested(path: String)
 
 const Data = preload("res://scripts/ui/local_map_data.gd")
@@ -41,6 +42,8 @@ const RIDE_INK := Color("#d0582c")  # трек выбранного заезда
 var park := false
 var paper := false
 var tablet := false
+## Только вкладка личной карты; доска и карта поездок сохраняют прежнее поведение.
+var field_sheet := false
 enum Status { VISITED = 1, REVEALED = 2, PHOTO = 4, QUEST = 8 }
 var selected_place := {}
 var _show_photos := false
@@ -85,6 +88,7 @@ var _stroke_scale := 0.2
 var _stroke_redraw_at := 0
 var _bounds := Rect2()
 var _fit := Rect2()
+var _non_field_view := {}
 var _pressed := Vector2.INF
 var _button := MOUSE_BUTTON_NONE
 var _dragged := false
@@ -169,12 +173,14 @@ func _baked() -> bool:
 
 func set_source(source: Data) -> void:
 	_data = Data.new(source.world, source) if source != null else null
+	_non_field_view.clear()
 	if _data != null:
 		_data.park = park
 		_data.paper_tiles = paper
 	hover = {}
 	selected_place = {}
 	places = []
+	places_changed.emit()
 	player = Vector2.INF
 	bike = Vector2.INF
 	goal = Vector2.INF
@@ -253,6 +259,7 @@ func set_places(pins: Array) -> void:
 		_fog_pending = true
 	_set_hover({})
 	refresh_overlay()
+	places_changed.emit()
 
 
 func set_photo_pins(on: bool, cache: Dictionary) -> void:
@@ -333,9 +340,10 @@ func _process(delta: float) -> void:
 func _reframe() -> void:
 	if _fit.has_area() and size.x > 1.0 and size.y > 1.0:
 		_center = _fit.get_center()
-		var inset := Vector2(92, 96) if park else Vector2(42, 80)
+		var inset := Vector2(24, 24) if field_sheet else (Vector2(92, 96) if park else Vector2(42, 80))
 		var area := (size - inset).max(Vector2.ONE)
-		_scale = clampf(minf(area.x / _fit.size.x, area.y / _fit.size.y), MIN_SCALE, MAX_SCALE)
+		var fit_scale := minf(area.x / _fit.size.x, area.y / _fit.size.y)
+		_scale = clampf(fit_scale, 0.001 if field_sheet else MIN_SCALE, MAX_SCALE)
 		# личная карта не отдаляется дальше, чем видна вся стартовая область
 		_min_scale = _scale if paper else MIN_SCALE
 	if not ride_legs.is_empty():
@@ -343,6 +351,38 @@ func _reframe() -> void:
 		return
 	_update_base()
 	refresh_overlay()
+
+
+## Центр не позволяет увести лист за край; если лист меньше окна, он остаётся по центру.
+func _bounded_center(candidate: Vector2) -> Vector2:
+	if not field_sheet or not _bounds.has_area():
+		return candidate.clamp(_bounds.position, _bounds.end)
+	var half := size * 0.5 / maxf(_scale, 0.0001)
+	var low := _bounds.position + half
+	var high := _bounds.end - half
+	return Vector2(clampf(candidate.x, low.x, high.x) if low.x <= high.x else _bounds.get_center().x,
+		clampf(candidate.y, low.y, high.y) if low.y <= high.y else _bounds.get_center().y)
+
+
+func set_field_sheet(enabled: bool) -> void:
+	if field_sheet == enabled:
+		return
+	if enabled:
+		_non_field_view = {center = _center, scale = _scale, min_scale = _min_scale}
+	field_sheet = enabled
+	if _lines != null:
+		_lines.queue_redraw()
+	queue_redraw()
+	if enabled:
+		_reframe()
+	else:
+		if not _non_field_view.is_empty():
+			_center = _non_field_view.center
+			_scale = _non_field_view.scale
+			_min_scale = _non_field_view.min_scale
+			_non_field_view.clear()
+		_update_base()
+		refresh_overlay()
 
 
 func _update_base() -> void:
@@ -483,11 +523,13 @@ func _gui_input(event: InputEvent) -> void:
 
 func _move_pointer(at: Vector2) -> void:
 	if not park and _pressed.is_finite() and (_dragged or at.distance_to(_pressed) >= 5.0):
-		_center = (_center - (at - _pressed) / _scale).clamp(_bounds.position, _bounds.end)
+		var next_center := _bounded_center(_center - (at - _pressed) / _scale)
 		_pressed = at
 		_dragged = true
-		_update_base()
-		refresh_overlay()
+		if not next_center.is_equal_approx(_center):
+			_center = next_center
+			_update_base()
+			refresh_overlay()
 	_set_hover(_pick(at) if not _dragged else {})
 
 
@@ -510,7 +552,9 @@ func _map_button(event: InputEventMouseButton) -> void:
 					if not place.is_empty():
 						_select_place(place)
 					elif not park and event.ctrl_pressed:
-						marker_requested.emit(screen_to_world(event.position) / TILE)
+						var marker := screen_to_world(event.position)
+						if not field_sheet or _bounds.has_point(marker):
+							marker_requested.emit(marker / TILE)
 			_pressed = Vector2.INF
 			_button = MOUSE_BUTTON_NONE
 			_dragged = false
@@ -543,9 +587,11 @@ func _pad_navigate(delta: float) -> void:
 				- float(Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)))
 	pan = pan.limit_length(1.0)
 	if pan != Vector2.ZERO:
-		_center = (_center + pan * PAD_PAN * delta / _scale).clamp(_bounds.position, _bounds.end)
-		_update_base()
-		refresh_overlay()
+		var next_center := _bounded_center(_center + pan * PAD_PAN * delta / _scale)
+		if not next_center.is_equal_approx(_center):
+			_center = next_center
+			_update_base()
+			refresh_overlay()
 	if zoom != 0.0:
 		_zoom_at(size * 0.5, pow(PAD_ZOOM, clampf(zoom, -1.0, 1.0) * delta))
 	if cross and (device_changed or pan != Vector2.ZERO or zoom != 0.0):
@@ -566,7 +612,9 @@ func map_action(event: InputEvent) -> bool:
 		if not place.is_empty():
 			_select_place(place)
 		else:
-			marker_requested.emit(screen_to_world(at) / TILE)
+			var marker := screen_to_world(at)
+			if not field_sheet or _bounds.has_point(marker):
+				marker_requested.emit(marker / TILE)
 		return true
 	return false
 
@@ -574,7 +622,10 @@ func map_action(event: InputEvent) -> bool:
 func center_on_player() -> void:
 	if park or not player.is_finite():
 		return
-	_center = player
+	var target := _bounded_center(player)
+	if target.is_equal_approx(_center):
+		return
+	_center = target
 	_update_base()
 	refresh_overlay()
 
@@ -584,7 +635,7 @@ func focus_place(id: String) -> bool:
 	for place: Dictionary in places:
 		if str(place.get("key", "")) == id:
 			selected_place = place
-			_center = place_at(place).clamp(_bounds.position, _bounds.end)
+			_center = _bounded_center(place_at(place))
 			_update_base()
 			refresh_overlay()
 			hover_changed.emit(place)
@@ -598,14 +649,14 @@ func _zoom_at(at: Vector2, factor: float) -> void:
 	if is_equal_approx(_scale, next_scale):
 		return
 	_scale = next_scale
-	_center = (_center + anchor - screen_to_world(at)).clamp(_bounds.position, _bounds.end)
+	_center = _bounded_center(_center + anchor - screen_to_world(at))
 	_update_base()
 	refresh_overlay()
 
 
 ## Фон и засечки — в экранных координатах, сама подложка — слой _base
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Paint.PARK_PAPER if _styled() else Data.EMPTY)
+	draw_rect(Rect2(Vector2.ZERO, size), Color("#26372f") if field_sheet else (Paint.PARK_PAPER if _styled() else Data.EMPTY))
 
 
 ## Подложка в мировых метрах: положение и масштаб слоя задаёт _refresh_base
@@ -623,7 +674,7 @@ func _draw_base() -> void:
 		return
 	if not _baked():
 		Paint.lines(_lines, _data, _stroke_scale, _styled())
-	if _baked():
+	if _baked() and not field_sheet:
 		# за краем стартовой области — чистая бумага: соседние земли на личной карте не показываются
 		var plan := Rect2(Vector2.ZERO, Vector2(_data.world.W, _data.world.H) * TILE)
 		var far := 4000.0
@@ -747,7 +798,7 @@ func _publish_fog() -> void:
 func _draw_overlay() -> void:
 	if _data == null:
 		return
-	if _styled():
+	if _styled() and not field_sheet:
 		_park_grid() # засечки поверх бумаги и подложки, как сетка на печатной карте
 	_draw_pins()
 	if not park:
@@ -823,6 +874,16 @@ static func _pin_color(kind: String) -> Color:
 		_: return Color("#5f507a")
 
 
+static func pin_color(kind: String, icon: String) -> Color:
+	match icon:
+		"farm": return Color("#92613a")
+		"house", "fishing": return Color("#7d7243")
+		"ruin": return Color("#95534a")
+		"tower", "obelisk", "stones": return Color("#397474")
+		"shelter": return Color("#526c54")
+		_: return _pin_color(kind)
+
+
 func _draw_pins() -> void:
 	var labels: Array[Rect2] = []
 	var photos: Array[Dictionary] = []
@@ -836,15 +897,16 @@ func _draw_pins() -> void:
 		var focused: bool = place.key == hover.get("key") or (tablet and place.key == selected_place.get("key"))
 		var here := park and i == 0
 		var kind := str(place.get("kind", "settlement"))
-		var color := Color("#c14930") if here else _pin_color(kind)
-		var halo := 10.0 if _styled() else 8.5
-		var radius := 8.2 if _styled() else 6.8
-		var icon_size := 12.0 if _styled() else 10.0
+		var icon_kind := UiIcons.map_place_icon(place)
+		var color := Color("#c14930") if here else (pin_color(kind, icon_kind) if field_sheet else _pin_color(kind))
+		var halo := 11.0 if field_sheet else (10.0 if _styled() else 8.5)
+		var radius := 9.2 if field_sheet else (8.2 if _styled() else 6.8)
+		var icon_size := 14.0 if field_sheet else (12.0 if _styled() else 10.0)
 		if focused:
 			_overlay.draw_circle(at, halo + 4.5, Color(color, 0.28), true, -1.0, true)
 		_overlay.draw_circle(at, halo, Color("#fff9e9"), true, -1.0, true)
 		_overlay.draw_circle(at, radius, color, true, -1.0, true)
-		_overlay.draw_texture_rect(UiIcons.map_icon(UiIcons.map_place_icon(place)), Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, Color.WHITE)
+		_overlay.draw_texture_rect(UiIcons.map_icon(icon_kind), Rect2(at - Vector2.ONE * icon_size * 0.5, Vector2.ONE * icon_size), false, Color.WHITE)
 		if tablet:
 			_draw_status(at, int(place.get("map_status", 0)))
 			var path: String = place.get("map_photo", "")
@@ -853,6 +915,8 @@ func _draw_pins() -> void:
 					photo_thumbnail_requested.emit(path)
 				elif _photo_cache[path] != null:
 					photos.append({at = at, image = _photo_cache[path]})
+		if field_sheet and not focused and kind != "settlement" and _scale <= _min_scale * 1.4:
+			continue
 		var title: String = "Вы здесь" if here else place.name
 		var width := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var x := clampf(at.x, width * 0.5 + 10.0, maxf(width * 0.5 + 10.0, size.x - width * 0.5 - 10.0))
@@ -916,17 +980,17 @@ func _draw_photo_pins(photos: Array[Dictionary], occupied: Array[Rect2]) -> void
 func _draw_legend() -> void:
 	if _data == null:
 		return
-	var color := Paint.PARK_INK if _styled() else Paint.INK
+	var color := HudStyle.CREAM if field_sheet else (Paint.PARK_INK if _styled() else Paint.INK)
 	var font: Font = _park_font if _styled() else ThemeDB.fallback_font
 	var north := Vector2(size.x - 26.0, 28.0) if park or tablet else Vector2(size.x - 38.0, 84.0)
 	_legend.draw_colored_polygon(PackedVector2Array([north + Vector2(0, -8), north + Vector2(5, 7),
 		north + Vector2(0, 4), north + Vector2(-5, 7)]), color)
-	Paint.text(_legend, north + Vector2(0, 23), "С", color, 12, font)
+	_legend_text(north + Vector2(0, 23), "С", color, font)
 	var metres := 50.0 if _scale > 0.9 else (100.0 if _scale > 0.4 else (250.0 if _scale > 0.18 else 500.0))
 	var start := Vector2(18, size.y - 16)
 	var end := start + Vector2(metres * _scale, 0)
 	_legend.draw_polyline(PackedVector2Array([start - Vector2(0, 5), start, end, end - Vector2(0, 5)]), color, 1.7, true)
-	Paint.text(_legend, (start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, 12, font)
+	_legend_text((start + end) * 0.5 - Vector2(0, 8), "%d м" % metres, color, font)
 	if _styled():
 		_legend.draw_rect(Rect2(Vector2.ONE, size - Vector2.ONE * 2), Color("#aca17e"), false, 2.0)
 	if not park and journal != null and not tablet:
@@ -939,7 +1003,7 @@ func _draw_legend() -> void:
 		Paint.text(_legend, Vector2(121, 85), "Открыто мест · %d" % places.size(), color, 14, font)
 		Paint.text(_legend, Vector2(size.x * 0.5, size.y - 19), move_hint, color, 12, font)
 		_draw_key(color, font)
-	elif tablet:
+	elif tablet and not field_sheet:
 		_draw_key(color, _park_font)
 	if _pad_cross:
 		# прицел геймпада: метка и выбор места — под ним
@@ -947,6 +1011,15 @@ func _draw_legend() -> void:
 		for d: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
 			_legend.draw_line(c + d * 5.0, c + d * 13.0, Color("#fffaf0"), 4.0, true)
 			_legend.draw_line(c + d * 5.0, c + d * 13.0, color, 1.8, true)
+
+
+func _legend_text(at: Vector2, caption: String, color: Color, font: Font) -> void:
+	if not field_sheet:
+		Paint.text(_legend, at, caption, color, 12, font)
+		return
+	var face := font if font != null else ThemeDB.fallback_font
+	at.x -= face.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x * 0.5
+	_legend.draw_string(face, at, caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, color)
 
 
 ## Условные знаки: только известные виды мест, чтобы легенда не раскрывала ещё не найденные объекты.

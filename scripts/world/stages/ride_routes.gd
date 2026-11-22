@@ -99,18 +99,39 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var fields := cost_fields(w, hv, net, dist, fast)
 	var cost: PackedFloat32Array = fields.cost
 	var wood: PackedFloat32Array = fields.wood
+	var uphill := cost
+	var heuristic_scale := 1.0
+	if StageTrails.network_v2:
+		var core: Object = finder.fast()
+		var flow_fields: Dictionary = core.CharacterCosts(cost, on_axis, "ride")
+		var forest_fields: Dictionary = core.CharacterCosts(wood, on_axis, "ride")
+		var uphill_fields: Dictionary = core.CharacterCosts(cost, on_axis, "mountain")
+		heuristic_scale = minf(flow_fields.heuristic_scale, minf(forest_fields.heuristic_scale, uphill_fields.heuristic_scale))
+		cost = flow_fields.cost
+		wood = forest_fields.cost
+		uphill = uphill_fields.cost
 	var block: PackedInt32Array = fields.block
 	var bw := ceili(float(W) / BLOCK)
 	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
 	var anchors := _anchors(w, hv, on_axis, cost)
+	var shared_junctions := {}
+	if StageTrails.network_v2:
+		stats.density = {anchors_before = anchors.size(), anchors_blocked = 0, anchors_combined = 0,
+			anchors_snapped = 0, refused = {}, trimmed = {count = 0, m = 0.0}}
+		var adjusted := StageTrails.RoadNetworkV2.ride_anchors(w, finder, surface, on_axis, anchors, cost, stats.density)
+		anchors = adjusted.anchors
+		shared_junctions = adjusted.junctions
 	stats.anchors = anchors.size()
 	var virtual := _virtual_tops(w, hv, dist, block, bw, anchors)
 	stats.virtual_tops = virtual.map(func(v: Dictionary) -> Array: return [v.x, v.y, roundi(v.rise)])
 	var pairs := _pairs(w, anchors, virtual, stats)
 	var budget := roundi(SEARCHES * w.scale)
+	if StageTrails.network_v2:
+		budget += roundi(budget * RoadTuning.current().routing.ride_search_reserve)
 	var candidates: Array = []
 	var cost_version := finder.next_cost_version()
 	var wood_version := finder.next_cost_version()
+	var uphill_version := finder.next_cost_version() if StageTrails.network_v2 else cost_version
 	var network := StageTrails._network_cost(w)
 	var network_version := finder.next_cost_version()
 	finder.use_corridor = true
@@ -124,7 +145,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if not s.has("approach") and stats.searches < budget:
 				s.approach = PackedInt32Array()
 				for from: int in s.from:
-					s.approach = _search(finder, w, cost, cost_version, from, s.i, approach, stats)
+					s.approach = _search(finder, w, uphill, uphill_version, from, s.i, approach, stats, heuristic_scale)
 					if not s.approach.is_empty(): break
 				# Не поднялись: вокруг вершины стены круче горной тропы (замер 07.11: путь есть только с уклоном больше 55 %)
 				if s.approach.is_empty(): stats.virtual_failed.append([s.x, s.y, roundi(s.rise)])
@@ -139,18 +160,29 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if spec.via:
 				var via := _via(w, hv, dist, s, t)
 				if via < 0: continue
-				var a := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, via, spec, stats)
-				var b := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, via, t.i, spec, stats) if not a.is_empty() else a
+				var a := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, via, spec, stats, heuristic_scale)
+				var b := _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, via, t.i, spec, stats, heuristic_scale) if not a.is_empty() else a
 				if not b.is_empty():
 					path = _join(w, a, b)
 			else:
-				path = _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, t.i, spec, stats)
+				path = _search(finder, w, wood if spec.wood else cost, wood_version if spec.wood else cost_version, s.i, t.i, spec, stats, heuristic_scale)
 			var tally: Array = stats.by_search.get(style, [0, 0, 0])
 			stats.by_search[style] = tally
 			tally[0] += 1
 			if path.is_empty(): continue
 			stats.found += 1
 			tally[1] += 1
+			var top := s
+			if StageTrails.network_v2 and s.virtual:
+				var turnback := _short_turnback(w, s.approach, path)
+				if turnback > 0:
+					stats.density.trimmed.count += 1
+					stats.density.trimmed.m += (StageTrails._length(w, path.slice(0, turnback + 1)) +
+						StageTrails._length(w, s.approach.slice(s.approach.size() - turnback - 1))) * GameConfig.TILE
+					var trimmed: Dictionary = s.get_or_add("trimmed_ride_tops", {})
+					top = trimmed.get_or_add(turnback, {i = s.i, virtual = true, mountain = s.mountain,
+						approach = s.approach.slice(0, s.approach.size() - turnback), turnback = turnback})
+					path = path.slice(turnback)
 			var c := _score(w, hv, dist, path, style == "traverse")
 			# 11.11.2026: и не идёт подряд вдоль готовой сети на той же высоте (параллельное полотно)
 			if c.reason.is_empty() and StageTrails._parallel_stats(w, path, dist, net).y > StageTrails.PARALLEL_RUN:
@@ -162,12 +194,13 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 					finder.search_budget = SEARCH_BUDGET
 					echo = finder.find_path(network, s.i, t.i, 0.0, INF, network_version)
 				# траверс: копия пути сети — только ближе NEAR_R (40 м); дальше — другой уровень склона (это и проверяет доля новой земли)
-				if _echo_share(w, path, echo, NEAR_R if style == "traverse" else ECHO_R) > ECHO_SHARE: c.reason = "повторяет путь сети"
+				if _echo_share(w, path, top.approach if s.virtual else echo, NEAR_R if style == "traverse" else ECHO_R) > ECHO_SHARE:
+					c.reason = "повторяет путь сети"
 			if not c.reason.is_empty():
-				stats.rejected[c.reason] = int(stats.rejected.get(c.reason, 0)) + 1
+				_reject(stats, c.reason, c.length)
 				continue
 			tally[2] += 1
-			c.top = s
+			c.top = top
 			c.search = style
 			candidates.append(c)
 	finder.window = Rect2i()
@@ -177,11 +210,16 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	forks.refresh(on_axis)
 	for c: Dictionary in candidates:
 		c.fork_rank = float(c.score) - 0.60 * forks.ride_pressure(c.path)
+	# Сеть V2 (шаг 4, 21.11): точки примыкания маршрутов — по правилам узлов сети V2 (RoadNetworkV2.ride_nodes)
+	if StageTrails.network_v2:
+		StageTrails.RoadNetworkV2.ride_nodes(w, finder, surface, on_axis, candidates)
 	var chosen := _select(w, candidates, stats, forks)
 	var publish_us := Time.get_ticks_usec()
 	var number := 0
+	StageTrails.v2_junctions = shared_junctions
 	for c: Dictionary in chosen:
 		var top: Dictionary = c.top
+		if top.has("turnback"): stats.trimmed_turnbacks = int(stats.get("trimmed_turnbacks", 0)) + 1
 		if top.virtual and not top.has("published"):
 			# Подъём к вершине — часть маршрута: публикуется как горная тропа перед первым спуском с неё
 			top.published = "climb_%d" % number
@@ -212,11 +250,20 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		woods.append(roundi(c.wood * 100.0))
 		stats.wood[c.style] = woods
 		if c.top.mountain: stats.from_mountain += 1
+	StageTrails.v2_junctions = {}
 	stats.publish_ms = (Time.get_ticks_usec() - publish_us) / 1000.0
 	stats.accepted = chosen.size()
 	stats.km = snappedf(stats.km, 0.01)
 	stats.climb_km = snappedf(stats.climb_km, 0.01)
 	stats.ms = (Time.get_ticks_usec() - started) / 1000.0
+
+
+static func _reject(stats: Dictionary, reason: String, length_m: float) -> void:
+	stats.rejected[reason] = int(stats.rejected.get(reason, 0)) + 1
+	if not stats.has("density"): return
+	var entry: Dictionary = stats.density.refused.get_or_add(reason, {count = 0, m = 0.0})
+	entry.count += 1
+	entry.m += length_m
 
 
 static func _net_mask(mask: PackedByteArray) -> PackedByteArray:
@@ -270,8 +317,11 @@ static func cost_fields(w: WorldData, hv: PackedFloat32Array, net: PackedByteArr
 static func _anchors(w: WorldData, hv: PackedFloat32Array, on_axis: PackedByteArray, cost: PackedFloat32Array) -> Array:
 	var out: Array = []
 	var seen := {}
+	var section := -1
 	for t: Dictionary in w.trails:
-		if t.kind == "animal" or t.has("ride"): continue
+		if t.kind == "animal": continue
+		section += 1
+		if t.has("ride"): continue
 		var pts: Array = t.pts
 		var run := ANCHOR_STEP # первая точка — конец пути (поселение, вершина горной тропы)
 		for k in pts.size():
@@ -281,7 +331,7 @@ static func _anchors(w: WorldData, hv: PackedFloat32Array, on_axis: PackedByteAr
 			if seen.has(i) or on_axis[i] != 0 or cost[i] == INF or StageTrails._wet(w, i): continue
 			seen[i] = true
 			run = 0.0
-			out.append({i = i, x = i % w.W, y = i / w.W, h = hv[i], mountain = t.kind == "mountain", virtual = false})
+			out.append({i = i, x = i % w.W, y = i / w.W, h = hv[i], mountain = t.kind == "mountain", virtual = false, section = section})
 	return out
 
 
@@ -333,6 +383,7 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 	stats.tops = tops.size()
 	tops.append_array(virtual)
 	var pairs: Array = []
+	var reserve: Array = []
 	for s: Dictionary in tops:
 		var ends: Array = []
 		for t: Dictionary in anchors:
@@ -356,10 +407,33 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 			# Вершина горной тропы — готовый подъём к спуску: небольшой приоритет
 			pairs.append([s, t, e[1] * (1.25 if s.mountain else 1.0)])
 			if taken.size() >= ENDS_PER_TOP: break
+		if StageTrails.network_v2:
+			_add_reserve_ends(s, ends, taken, reserve)
 	_traverse_pairs(w, anchors, pairs)
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
+	reserve.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
+	pairs.append_array(reserve)
+	if StageTrails.network_v2: stats.density.reserve_pairs = reserve.size()
 	stats.pairs = pairs.size()
 	return pairs
+
+
+static func _add_reserve_ends(start: Dictionary, ends: Array, chosen: Array, reserve: Array) -> void:
+	var node_sep: float = RoadTuning.current().routing.network_rules.ride_node_sep
+	var used := {}
+	for primary: Array in chosen: used[primary[0].i] = true
+	for primary: Array in chosen:
+		var target: Dictionary = primary[0]
+		var direction := Vector2(target.x - start.x, target.y - start.y).normalized()
+		for entry: Array in ends:
+			var alternate: Dictionary = entry[0]
+			if used.has(alternate.i): continue
+			if Grid.hypot(alternate.x - target.x, alternate.y - target.y) < node_sep: continue
+			var offset := Vector2(alternate.x - start.x, alternate.y - start.y)
+			if offset.dot(direction) / entry[2] < END_ANGLE: continue
+			used[alternate.i] = true
+			reserve.append([start, alternate, entry[1] * (1.25 if start.mountain else 1.0)])
+			break
 
 
 ## Пары траверса (четвёртый элемент — вершина): начало — опорная точка горной тропы, вершина w.peaks в TRAVERSE_R выше
@@ -421,7 +495,8 @@ static func _via(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Array,
 	return best
 
 
-static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, version: int, a: int, b: int, spec: Dictionary, stats: Dictionary) -> PackedInt32Array:
+static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, version: int, a: int, b: int,
+		spec: Dictionary, stats: Dictionary, heuristic_scale: float) -> PackedInt32Array:
 	stats.searches += 1
 	var x0 := mini(a % w.W, b % w.W) - WINDOW_MARGIN
 	var y0 := mini(a / w.W, b / w.W) - WINDOW_MARGIN
@@ -429,7 +504,25 @@ static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, 
 	var y1 := maxi(a / w.W, b / w.W) + WINDOW_MARGIN + 1
 	finder.window = Rect2i(maxi(0, x0), maxi(0, y0), mini(w.W, x1) - maxi(0, x0), mini(w.H, y1) - maxi(0, y0))
 	finder.search_budget = SEARCH_BUDGET
-	return finder.find_path(cost, a, b, spec.climb, spec.grade, version)
+	return finder.find_path(cost, a, b, spec.climb, spec.grade, version, 0.0, 0.0, heuristic_scale)
+
+
+## В виртуальной вершине спуск иногда начинается точным возвратом по подъёму.
+## Убираем оба прохода до развилки до публикации полотна, если эта ветка короче 120 м.
+static func _short_turnback(w: WorldData, climb: PackedInt32Array, descent: PackedInt32Array) -> int:
+	if climb.size() < 2 or descent.size() < 2 or climb[-1] != descent[0]: return 0
+	var limit: float = RoadTuning.current().routing.character_field.short_turnback_m
+	var length := 0.0
+	var common := 0
+	for k in range(1, mini(climb.size(), descent.size())):
+		if climb[climb.size() - 1 - k] != descent[k]: break
+		var a := descent[k - 1]
+		var b := descent[k]
+		length += Grid.hypot((a % w.W) - (b % w.W), (a / w.W) - (b / w.W)) * GameConfig.TILE
+		if length >= limit: return 0
+		common = k
+	# Когда одна из половин целиком повторяется, её оценка и отбраковка остаются обычными.
+	return common if common + 1 < mini(climb.size(), descent.size()) else 0
 
 
 ## Две части через ориентир без «шипа»: срезаем возврат в общей клетке частей.
@@ -561,6 +654,7 @@ static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: R
 	var used := {}
 	var per_top := {}
 	var limit := maxi(1, roundi(MAX_RIDES * w.scale))
+	var v2_chosen: Array = [] # точки примыкания принятых маршрутов (только сеть V2)
 	# Prefer space between the chosen junctions both within each style and when
 	# filling the remaining slots. Revisit the original candidates in each fallback.
 	for pass_n in 4:
@@ -573,13 +667,20 @@ static func _select(w: WorldData, candidates: Array, stats: Dictionary, forks: R
 			if pass_n < 2 and styles.has(c.style): continue
 			var path: PackedInt32Array = c.path
 			if forks != null and pass_n % 2 == 0 and forks.crowds_chosen(path): continue
+			if c.has("v2_reject"):
+				var why: String = c.v2_reject
+				if why.is_empty() and not StageTrails.RoadNetworkV2.ride_nodes_spaced(w, c.v2_nodes, v2_chosen): why = "node_pair_rides"
+				if not why.is_empty():
+					if pass_n == 3: _reject(stats, "узлы V2: " + why.get_slice(" ", 0), c.length)
+					continue
 			var same := 0
 			for i: int in path:
 				if near[i] != 0: same += 1
 			if float(same) / path.size() > SAME_SHARE:
-				if pass_n == 3: stats.rejected["похож на принятый"] = int(stats.rejected.get("похож на принятый", 0)) + 1
+				if pass_n == 3: _reject(stats, "похож на принятый", c.length)
 				continue
 			chosen.append(c)
+			if c.has("v2_nodes"): v2_chosen.append(c.v2_nodes)
 			used[n] = true
 			styles[c.style] = true
 			per_top[c.top.i] = int(per_top.get(c.top.i, 0)) + 1

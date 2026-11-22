@@ -94,19 +94,15 @@ static func fields(w: WorldData) -> Dictionary:
 	return out
 
 
-## Куда можно дойти пешком от клетки start (первый центр): уклон шага не круче предела тропы StageTrails.TRAIL_GRADE,
-## вода — там, где её перекроет мост (StageTrails.BRIDGE_REACH). Приближение (без ширины тропы и берегов моста), но
-## место вне маски почти наверняка осталось бы без пути и было бы удалено. Пусто без C# — тогда проверки нет.
-## wet — вода (океан, озёра, реки), как в StageLandmarks._place_settlements.
-## Предел уклона маски — запасной предел дороги: с ним ищется каркас сети. Маска грубее поиска (нет ширины полотна,
-## берегов моста и прорезанного рельефа), поэтому редкое место всё же может остаться без связи и удалиться
-## (16.11.2026: одно предгорное на Север-1234 — и с пределом тропы 0,4, и с 0,28).
+## Предварительная маска достижимости от центра. По умолчанию действует запасной предел дороги.
+## Полотно и переправы проверяет StageTrails перед публикацией. Без C# маска пуста.
 const WALK_GRADE := StageTrails.ROAD_LIMIT
-static func walk(w: WorldData, wet: PackedByteArray, start: int) -> PackedByteArray:
+static func walk(w: WorldData, wet: PackedByteArray, start: int, max_grade := WALK_GRADE) -> PackedByteArray:
 	var fast := Grid.fast_grid()
 	if fast == null:
 		return PackedByteArray()
-	return fast.WalkRegion(w.W, w.H, w.h, StageTrails.HEIGHT_SCALE, wet, StageTrails.BRIDGE_REACH, start, WALK_GRADE)
+	var h_field := w.filled if w.filled.size() == w.N else w.h
+	return fast.WalkRegion(w.W, w.H, h_field, StageTrails.HEIGHT_SCALE, wet, StageTrails.BRIDGE_REACH, start, max_grade)
 
 
 ## Отбор работает по прореженным спискам: в каждом квадрате BLOCK × BLOCK клеток — только лучший подходящий кандидат

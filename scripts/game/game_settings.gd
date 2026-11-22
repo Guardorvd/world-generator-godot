@@ -143,7 +143,6 @@ var start_hour_set := false  # час начала выбран игроком; 
 var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
 var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
 var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
-var hud_toggle_learned := false # 20.11: игрок уже нажимал переключатель сводки — подсказка «Tab · вся сводка» гаснет сама
 var hide_recommended_worlds := false # после очистки список остаётся пустым и при следующем запуске
 ## 14.4+: бесконечная генерация — соседние области за краем стартовой готовятся и по ним можно ездить.
 ## Выключена — мир это стартовая область, дальний рельеф виден, но выехать нельзя и области не готовятся
@@ -204,7 +203,6 @@ func _apply_config(cfg: ConfigFile) -> void:
 	recent_seeds = _seeds(cfg, "recent", RECENT_MAX)
 	favorite_seeds = _seeds(cfg, "favorites", FAVORITES_MAX)
 	hide_recommended_worlds = _flag(cfg, "world", "hide_recommended", false)
-	hud_toggle_learned = _flag(cfg, "hud", "toggle_learned", false)
 
 
 func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low: float, high: float) -> float:
@@ -337,7 +335,6 @@ func save_settings() -> Error:
 	cfg.set_value("world", "recent", Array(recent_seeds))
 	cfg.set_value("world", "favorites", Array(favorite_seeds))
 	cfg.set_value("world", "hide_recommended", hide_recommended_worlds)
-	cfg.set_value("hud", "toggle_learned", hud_toggle_learned)
 	cfg.set_value("world", "infinite", infinite_world)
 	var err := cfg.save(settings_path)
 	if err != OK:

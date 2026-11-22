@@ -32,24 +32,26 @@ func _run() -> void:
 		and carousel._indicator.position.is_equal_approx(mode_button.position + carousel._mode_buttons.position),
 		"подложка точно совпадает с выбранным переключателем")
 	main._select_world("One")
-	var old_name: String = carousel._name.text
+	var world_name: Label = carousel.get_node("Card/Slide/Frame/WorldInfo/Name")
+	var old_name: String = world_name.text
 	carousel.move(1)
 	check(main._selected_seed == "Two" and "Two" in main.get_node("%Start").text, "кнопка запуска обновляется сразу при смене мира")
-	check(carousel._name.text == old_name and carousel._slide_tween != null, "старая карточка уходит до смены содержимого")
+	check(world_name.text == old_name and carousel._slide_tween != null, "старая карточка уходит до смены содержимого")
 	carousel._slide_tween.custom_step(0.04)
 	check(carousel._slide.position.x < 0.0 and carousel._card.clip_contents, "уход ограничен обрезаемым контейнером")
 	carousel._slide_tween.custom_step(0.04)
-	check(carousel._name.text == "Two" and carousel._slide.position.x > 0.0, "новый мир появляется с противоположной стороны")
+	check(world_name.text == "Two" and carousel._slide.position.x > 0.0, "новый мир появляется с противоположной стороны")
 	carousel.move(-1)
 	carousel.move(1)
 	carousel._slide_tween.custom_step(0.4)
-	check(carousel._index == 1 and is_zero_approx(carousel._slide.position.x) and carousel._name.text == "Two", "быстрые переключения завершаются на последнем мире")
+	check(carousel._index == 1 and is_zero_approx(carousel._slide.position.x) and world_name.text == "Two", "быстрые переключения завершаются на последнем мире")
 	var wheel := InputEventMouseButton.new()
 	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
 	wheel.pressed = true
 	carousel._card_input(wheel)
-	check(main._selected_seed == "One" and is_equal_approx(main._ui_audio.last_pitch, 0.94), "колесо переключает мир со звуком влево")
-	carousel._slide_tween.custom_step(0.4)
+	check(main._selected_seed == "Two", "колесо не переключает мир на главном экране")
+	main._select_world("One")
+	if carousel._slide_tween != null: carousel._slide_tween.custom_step(0.4)
 	carousel._derived["One"] = [second, first]
 	carousel._set_mode(1)
 	check(carousel._old_map.visible and carousel._old_map.texture == first and carousel._map.texture == second, "смена режима сохраняет старую и новую текстуры для кроссфейда")
@@ -64,19 +66,16 @@ func _run() -> void:
 	carousel.set_entries(empty, "")
 	await process_frame
 	check(carousel._slide.position.is_equal_approx(Vector2.ZERO) and carousel._slide.size.is_equal_approx(carousel._card.size), "содержимое пустой карточки полностью помещается в рамку")
-	check(carousel._quick_seed.visible and carousel._create_first.visible and carousel._pattern.visible and not carousel._build_preview.visible, "пустая витрина показывает быстрый ввод и создание")
-	var created := [""]
-	for connection: Dictionary in carousel.create_requested.get_connections():
-		carousel.create_requested.disconnect(connection.callable)
-	carousel.create_requested.connect(func(seed_text: String) -> void: created[0] = seed_text)
-	carousel._quick_seed.text = "  Seed-42  "
-	carousel._create_first.pressed.emit()
-	check(created[0] == "Seed-42", "кнопка передаёт зерно без лишних пробелов")
+	check(not carousel._quick_seed.visible and not carousel._create_first.visible and carousel._pattern.visible,
+		"пустая карточка не дублирует создание мира")
 	carousel.set_entries(entries, "One")
-	check(carousel._build_preview.visible == false, "для готового превью кнопка построения не нужна")
 	var unbuilt: Array[Dictionary] = [{seed = "Fresh", texture = null, map_ready = false}]
+	main._world_cards["Fresh"] = {seed = "Fresh", saved = false, map_ready = false}
+	main._selected_seed = "Fresh"
 	carousel.set_entries(unbuilt, "Fresh")
-	check(carousel._build_preview.visible and "без дорог" in carousel._hint.text, "для нового мира показана честная кнопка построения географии")
+	main._update_hub_map()
+	check(not carousel._build_preview.visible and main.get_node("%HubBuildPreview").visible,
+		"построение карты доступно в списке миров, а не на главной")
 	main._fit_menu()
 	var panel: Control = main.get_node("%Loading/Panel")
 	check(is_equal_approx(panel.offset_left, carousel.offset_left) and is_equal_approx(panel.offset_top, carousel.offset_top), "загрузка совмещена с витриной карты")

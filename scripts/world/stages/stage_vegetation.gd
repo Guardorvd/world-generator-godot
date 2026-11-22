@@ -12,8 +12,8 @@ const VILLAGE_R := 7.0 # полуширина квадрата вокруг по
 # С 2.8 растительность следует характеру местности (высота, крутизна, вода), а не только биому
 const HIGH_LO := 0.12    # с этой высоты в лесах прибавляется хвойных
 const HIGH_HI := 0.26    # выше — почти одни хвойные
-const LINE_LO := 0.2     # граница леса: с этой высоты деревья редеют и мельчают
-const LINE_HI := 0.4     # а здесь их остаётся треть
+const LINE_LO := 0.28    # граница леса: с этой высоты деревья редеют и мельчают
+const LINE_HI := 0.50    # а здесь их остаётся треть
 const STEEP := 0.6       # крутизна, с которой деревьев меньше, а камней больше
 const SHORE := 3.0       # клеток до воды: прибрежные рощи, оазисы, тростник
 const LAYER := 1         # слой растительности в WGRandom.hash_cell (с 8.4)
@@ -377,10 +377,10 @@ static func structure_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, par
 		glade = Parallel.fbm_rect(n, x0, y0, cw, ch, GLADE_SCALE, 2, GLADE_OX, GLADE_OY, parallel_rows)}
 
 
-## Доля лесов мира по сиду (9.1), -0.36..0.36: одни миры лесистые, другие открытые. Без квот — только сдвиг
+## Доля лесов мира по сиду (9.1), -0.18..0.18: одни миры лесистые, другие чуть свободнее. Без квот — только сдвиг
 ## порога, поэтому массивы по-прежнему разного размера.
 static func world_cover(seed_num: int) -> float:
-	return 0.36 * (WGRandom.new(WGRandom.derive(seed_num, "forest.cover")).next_float() * 2.0 - 1.0)
+	return 0.18 * (WGRandom.new(WGRandom.derive(seed_num, "forest.cover")).next_float() * 2.0 - 1.0)
 
 
 ## Растительность клеток [x0, x1) × [y0, y1) одного чанка (с 8.4). Клетка (x, y) — в общих координатах мира
@@ -495,7 +495,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			# вызов функции на каждую клетку заметен по времени: большинство клеток ниже границы леса
 			# Moist, sheltered slopes support forest above exposed slopes at the same height.
 			var line := 0.0 if e <= LINE_LO else _ss(LINE_LO+0.05*moist[i], LINE_HI+0.10*moist[i]-0.04*light, e)
-			dens *= 1.0-0.85*exposed
+			dens *= 1.0-0.72*exposed
 			if line > 0.0 and bi != Biomes.SNOW and bi != Biomes.ROCK and bi != Biomes.PEAK:
 				dens *= 1.0 - 0.65 * line
 			if sl > STEEP:

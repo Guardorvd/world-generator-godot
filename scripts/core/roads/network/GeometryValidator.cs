@@ -1,0 +1,231 @@
+using System;
+using System.Collections.Generic;
+
+namespace Roads.Network;
+
+/// <summary>Единый валидатор геометрии пути V2 (план V2, фаза 1, п. 2). Правила не копируются:
+/// отрезок — FastGrid.RoadSegment (= RoadLine.segment_ok: вода 0,3 м, уклон, крен BENCH_CROSS);
+/// профиль — порт RoadLine.profile_ok (окно PROFILE_BASE, источник scripts/world/road_line.gd; сверка на стенде
+/// road_v2_test с GDScript); брод — клетки небезопасных бродов приходят готовыми из StageTrails._unsafe_fords,
+/// здесь только длина брода ≤ FORD_LEN; радиус ≥ полуширина + 0,5 м; зазор до чужих рёбер вне узлов
+/// ≥ 2·half + 2·REACH + 2 м. Результат — (Ok, нарушения, наибольшее отношение нарушения к пределу).</summary>
+public sealed class GeometryValidator
+{
+	private readonly TerrainSnapshot _t;
+	private readonly FastGrid _water;
+	private readonly double _tile, _profileBase;
+	private readonly RoadGraph _axes;
+	private readonly double _reach;
+	public GeometryValidator(TerrainSnapshot t) { _t = t; _water = t.Water; _tile = t.P.Tile; _profileBase = t.P.ProfileBase; }
+
+	/// <summary>Сглаживание линии с проверкой зазора до уже опубликованных осей.</summary>
+	public GeometryValidator(FastGrid water, double tile, double profileBase, RoadGraph axes = null, double reach = 0.0)
+	{
+		_water = water ?? throw new ArgumentException("GeometryValidator: нет земли и воды");
+		_tile = tile;
+		_profileBase = profileBase;
+		_axes = axes;
+		_reach = reach;
+	}
+
+	/// <summary>Узел на конце и пересечение исходной оси допустимы. За их пределами сдвиг
+	/// сохраняет полный зазор или увеличивает уже недостаточный зазор.</summary>
+	public bool KeepsClearance(LineBuilder.P before, LineBuilder.P after, LineBuilder.P start, LineBuilder.P end)
+	{
+		if (_axes == null || RoadGraph.Hypot(after.X - start.X, after.Y - start.Y) < RoadGraph.EndSkip ||
+			RoadGraph.Hypot(after.X - end.X, after.Y - end.Y) < RoadGraph.EndSkip) return true;
+		double gap = (after.W * _tile + 2.0 * _reach + 2.0) / _tile;
+		double distance = _axes.Clearance(after.X, after.Y, gap, null);
+		if (distance >= gap) return true;
+		return distance + 1e-5 >= _axes.Clearance(before.X, before.Y, gap, null);
+	}
+
+	public bool KeepsCrossings(IReadOnlyList<LineBuilder.P> before, IReadOnlyList<LineBuilder.P> after)
+	{
+		if (_axes == null) return true;
+		static double[] Pack(IReadOnlyList<LineBuilder.P> points)
+		{
+			var pts = new double[2 * points.Count];
+			for (int k = 0; k < points.Count; k++)
+			{
+				pts[2 * k] = points[k].X;
+				pts[2 * k + 1] = points[k].Y;
+			}
+			return pts;
+		}
+		return !_axes.DoubleCross(Pack(after), 20.0) || _axes.DoubleCross(Pack(before), 20.0);
+	}
+
+	/// <summary>Отрезок полосы шириной width (клетки): FastGrid.RoadSegment.</summary>
+	public bool Segment(double ax, double ay, double bx, double by, double width, double maxGrade, double maxCross)
+	{
+		bool ok = _water.RoadSegment(ax, ay, bx, by, width, maxGrade, maxCross);
+		if (!ok && _water.WaterSetupError().Length > 0)
+			throw new InvalidOperationException("V2: RoadSegment: " + _water.WaterSetupError());
+		return ok;
+	}
+
+	internal double Ground(double x, double y) => _water.GroundAt(x * _tile, y * _tile);
+	internal double ProfileWindowMetres => _profileBase * _tile;
+
+	internal bool NearAxis(LineBuilder.P p, double distance) =>
+		_axes != null && _axes.Clearance(p.X, p.Y, distance, null) < distance;
+
+	internal string SegmentRefusal(LineBuilder.P a, LineBuilder.P b, double grade, double cross)
+	{
+		double width = Math.Max(a.W, b.W);
+		if (Segment(a.X, a.Y, b.X, b.Y, width, grade, cross)) return null;
+		if (!Segment(a.X, a.Y, b.X, b.Y, width, 1e6, 1e6)) return "water";
+		return !Segment(a.X, a.Y, b.X, b.Y, width, grade, 1e6) ? "grade" : "crossfall";
+	}
+
+	internal double TerrainGrade(double x, double y) => RoadGraph.Hypot(
+		Ground(x + 1, y) - Ground(x - 1, y), Ground(x, y + 1) - Ground(x, y - 1)) / (2 * _tile);
+
+	internal bool HasClearance(LineBuilder.P a, LineBuilder.P b)
+	{
+		if (_axes == null) return true;
+		double length = RoadGraph.Hypot(b.X - a.X, b.Y - a.Y);
+		int steps = Math.Max(1, (int)Math.Ceiling(length / 0.25));
+		double gap = Math.Max(a.W, b.W) + (2 * _reach + 2) / _tile + length / (2 * steps);
+		for (int k = 0; k <= steps; k++)
+		{
+			double t = k / (double)steps;
+			if (_axes.Clearance(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, gap, null) < gap) return false;
+		}
+		return true;
+	}
+
+	/// <summary>Порт RoadLine.profile_ok (scripts/world/road_line.gd): точки (клетки) не реже 0,25 клетки; на каждом окне
+	/// не короче PROFILE_BASE уклон не круче grade; skip — точки на настилах начинают окно заново.</summary>
+	public bool Profile(double[] pts, double grade, byte[] skip = null)
+	{
+		double T = _tile, baseLen = _profileBase;
+		int n = pts.Length / 2;
+		var heights = new double[n];
+		var along = new double[n];
+		double run = 0;
+		for (int k = 0; k < n; k++)
+		{
+			if (k > 0) run += RoadGraph.Hypot(pts[2 * k] - pts[2 * k - 2], pts[2 * k + 1] - pts[2 * k - 1]);
+			along[k] = run;
+			heights[k] = _water.GroundAt(pts[2 * k] * T, pts[2 * k + 1] * T);
+		}
+		return FirstProfileFailure(along, heights, skip, T, baseLen, grade) < 0;
+	}
+
+	/// <summary>RoadLine uses float32 positions and distances. Preserve that sampling before checking the same windows.</summary>
+	internal static int FirstProfileFailure(FastGrid water, LineBuilder.V[] points, ReadOnlySpan<byte> skip,
+		double tile, double window, double grade)
+	{
+		var heights = new double[points.Length];
+		var along = new double[points.Length];
+		double run = 0.0;
+		for (int k = 0; k < points.Length; k++)
+		{
+			if (k > 0) run += points[k].DistanceTo(points[k - 1]);
+			along[k] = run;
+			heights[k] = water.GroundAt((double)points[k].X * tile, (double)points[k].Y * tile);
+		}
+		return FirstProfileFailure(along, heights, skip, tile, window, grade);
+	}
+
+	/// <summary>Check grade in the trailing window. A clipped range starts only after a full window or a deck.</summary>
+	internal static int FirstProfileFailure(ReadOnlySpan<double> along, ReadOnlySpan<double> heights, ReadOnlySpan<byte> skip,
+		double tile, double window, double grade, bool atStart = true)
+	{
+		int first = 0;
+		bool allowShortWindow = atStart;
+		for (int k = 1; k < along.Length; k++)
+		{
+			if (!skip.IsEmpty && skip[k] != 0)
+			{
+				first = k;
+				allowShortWindow = true;
+				continue;
+			}
+			while (first + 1 < k && along[k] - along[first + 1] >= window) first++;
+			double length = along[k] - along[first];
+			if (!allowShortWindow && length < window) continue;
+			if (Math.Abs(heights[k] - heights[first]) > grade * length * tile + 0.00001) return k;
+		}
+		return -1;
+	}
+
+	/// <summary>Брод по клеткам пути: подряд не больше FORD_LEN клеток реки вне осей сооружений, ни одной клетки
+	/// небезопасного брода, моря или озера (они непроходимы в цене V1).</summary>
+	public bool Ford(int[] cells)
+	{
+		int run = 0;
+		foreach (int c in cells)
+		{
+			if (_t.OnAxis[c] != 0) { run = 0; continue; }
+			if (_t.Unsafe[c] != 0 || _t.Ocean[c] != 0 || _t.Lake[c] != 0) return false;
+			if (_t.River[c] != 0)
+			{
+				if (++run > _t.P.FordLen) return false;
+			}
+			else run = 0;
+		}
+		return true;
+	}
+
+	/// <summary>Наименьший радиус поворота по хордам не короче 4 м (при короткой ломаной — по тройкам точек ≥ 0,3 кл), м.</summary>
+	public double MinRadius(double[] pts)
+	{
+		double best = double.PositiveInfinity, T = _tile;
+		int n = pts.Length / 2;
+		if (n < 3) return best;
+		double minChord = 4.0 / T;
+		double totalLen = 0.0;
+		for (int k = 1; k < n; k++)
+			totalLen += RoadGraph.Hypot(pts[2 * k] - pts[2 * k - 2], pts[2 * k + 1] - pts[2 * k - 1]);
+		if (totalLen < 2.0 * minChord)
+		{
+			for (int k = 1; k + 1 < n; k++)
+			{
+				double ax = pts[2 * k - 2], ay = pts[2 * k - 1], bx = pts[2 * k], by = pts[2 * k + 1], cx = pts[2 * k + 2], cy = pts[2 * k + 3];
+				double a = RoadGraph.Hypot(bx - ax, by - ay), b = RoadGraph.Hypot(cx - bx, cy - by), c = RoadGraph.Hypot(cx - ax, cy - ay);
+				if (a < 0.3 || b < 0.3) continue;
+				double cross = Math.Abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+				if (cross < 1e-9) continue;
+				best = Math.Min(best, a * b * c / (2.0 * cross) * T);
+			}
+			return best;
+		}
+		for (int k = 1; k + 1 < n; k++)
+		{
+			if (!WalkArc(pts, n, k, -1, minChord, out double ax, out double ay)) continue;
+			if (!WalkArc(pts, n, k, 1, minChord, out double cx, out double cy)) continue;
+			double bx = pts[2 * k], by = pts[2 * k + 1];
+			double a = RoadGraph.Hypot(bx - ax, by - ay), b = RoadGraph.Hypot(cx - bx, cy - by), c = RoadGraph.Hypot(cx - ax, cy - ay);
+			if (a < 1e-6 || b < 1e-6) continue;
+			double cross = Math.Abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+			if (cross < 1e-9) continue;
+			best = Math.Min(best, a * b * c / (2.0 * cross) * T);
+		}
+		return best;
+	}
+
+	private static bool WalkArc(double[] pts, int n, int start, int dir, double targetLen, out double ox, out double oy)
+	{
+		double rem = targetLen;
+		int cur = start;
+		while (true)
+		{
+			int next = cur + dir;
+			if (next < 0 || next >= n) { ox = oy = 0.0; return false; }
+			double sx = pts[2 * next] - pts[2 * cur], sy = pts[2 * next + 1] - pts[2 * cur + 1];
+			double seg = RoadGraph.Hypot(sx, sy);
+			if (seg >= rem - 1e-9)
+			{
+				double t = seg > 1e-12 ? Math.Min(1.0, rem / seg) : 0.0;
+				ox = pts[2 * cur] + sx * t;
+				oy = pts[2 * cur + 1] + sy * t;
+				return true;
+			}
+			rem -= seg;
+			cur = next;
+		}
+	}
+}

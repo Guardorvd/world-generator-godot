@@ -59,6 +59,9 @@ const S_SHAKE := 35     # 12.11: встряхнуть кисть в спокой
 const S_SHAKE_WIG := 36 # взмах кисти
 const S_BRAKE_POSE := 37 # 12.11: поза торможения корпуса — входит и выходит плавно, ручки (S_BRAKE) жмутся сразу
 const S_WATCH := 38
+const WATCH_RAISE := 0.34
+const WATCH_LOWER := 0.25
+const WATCH_BRACE := 0.09
 const STATE_SIZE := 39
 const SURGE_STAND := 0.85 # насколько седок встаёт в рывке (1 — как на крутом подъёме)
 const TURN_IN_SWAY := 0.014 # плечи доворачиваются в поворот на резком движении руля, рад на долю хода руля в секунду
@@ -338,11 +341,13 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 		_cur[S_CRANK] = view_crank
 	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
 	_update_rider(b, dt, throttle, boost)
-	var safe := b.riding and not b.fallen and not b.airborne and not boost and not b.pump_pressed \
-		and absf(b.speed) <= 3.2 and absf(b.steer) < 0.15 and absf(b.lean) < 0.10 \
-		and absf(b.slip) < 0.06 and b.effort < 0.20 and absf(throttle) < 0.12 and _cur[S_BRAKE] < 0.07 \
-		and absf(_stand) < 0.15 and b.land_impact < 1.0 and _jump_prep < 0.1
-	_cur[S_WATCH] = move_toward(_prev[S_WATCH], float(watch_requested), dt * (4.0 if watch_requested else 7.0)) if safe and _has_state else 0.0
+	var safe := not b.airborne and not boost and not b.pump_pressed and absf(b.speed) <= 11.0 \
+		and absf(b.steer) < 0.33 and absf(b.lean) < 0.22 and absf(b.slip) < 0.12 \
+		and throttle > -0.15 and _cur[S_BRAKE] < 0.16 and absf(_stand) < 0.42 \
+		and b.land_impact < 1.0 and _jump_prep < 0.1
+	var raising := watch_requested and safe
+	var duration := WATCH_RAISE if raising else (WATCH_LOWER if safe else WATCH_BRACE)
+	_cur[S_WATCH] = move_toward(_prev[S_WATCH], float(raising), dt / duration) if b.riding and not b.fallen else 0.0
 	# Отдача руля от удара переднего колеса — только вид: руль дёргается в сторону, курс не меняется.
 	_cur[S_STEER] += _hit_f * 0.15 * _recoil
 	# 11.11: стоя на педалях седок тянет руль в такт: колесо чуть виляет навстречу раскачке рамы (только вид)
@@ -697,6 +702,12 @@ func _set_placement_appearance(amount: float) -> void:
 			mesh.transparency = 0.55 * (1.0 - amount)
 
 
+func cancel_watch() -> void:
+	watch_requested = false
+	_prev[S_WATCH] = 0.0
+	_cur[S_WATCH] = 0.0
+
+
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
 func draw(alpha: float, allow_watch := true) -> void:
 	if not _has_state:
@@ -758,9 +769,8 @@ func draw(alpha: float, allow_watch := true) -> void:
 		var grip_l := _steering.position + _steering.basis * (GRIP * Vector3(-1, 1, 1) - STEERING_PIVOT)
 		var grip_r := _steering.position + _steering.basis * (GRIP - STEERING_PIVOT)
 		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
-		# При переходе к манёвру возвращаем руку на руль в текущем кадре.
-		var watch := _mix[S_WATCH] if allow_watch and _cur[S_WATCH] > 0.0 else 0.0
-		var gaze := Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH]).lerp(Vector2(0.17, -0.20), watch)
+		var watch := _mix[S_WATCH] if allow_watch else 0.0
+		var gaze := Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH])
 		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE_POSE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD],
 				_mix[S_STOP], _mix[S_SQUASH] - 0.008, STOP_LEAN, gaze, _mix[S_REST] * (1.0 - watch), Vector2(_mix[S_SHAKE] * (1.0 - watch), _mix[S_SHAKE_WIG]), watch)
 		if is_instance_valid(_pack_bag):

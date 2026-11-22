@@ -54,11 +54,8 @@ func _run() -> void:
 	if "--capture-hub" in OS.get_cmdline_user_args():
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png("res://.godot/world_hub_capture.png")
-	check(main._is_screen("world_hub") and main.get_node("%WorldSearch").has_focus(), "библиотека открывается с фокусом на поиске")
+	check(main._is_screen("world_hub") and input.has_focus(), "общий экран открывается с фокусом на поле")
 	check(main._hub_rows.size() == 20 and main.get_node("%SeedList").get_child_count() == 20, "каждому миру соответствует одна строка")
-	main._open_storage()
-	check(main._confirm != null and not main.get_node("%ClearAllSaves").visible, "массовая очистка перенесена в хранилище")
-	main._close_confirm()
 	check(main.get_node("%SeedList").get_child(0).get_meta("seed") == "World-00" and main.get_node("%SeedList").get_child(1).get_meta("seed") == "World-10", "сохранения и избранные отсортированы первыми")
 	var scroll := main.get_node("%SeedList").get_parent() as ScrollContainer
 	var cache := GameContext.scope.cache
@@ -119,24 +116,9 @@ func _run() -> void:
 	carousel._thread = null
 	main._show_seed_tab("favorites")
 	check(row.visible and not (main._hub_rows["World-01"] as Control).visible, "фильтр показывает избранные и скрывает остальные")
-	main._show_seed_tab("all")
-	var search: LineEdit = main.get_node("%WorldSearch")
-	var selected: String = main._selected_seed
-	search.text = "World-10"
-	search.text_changed.emit(search.text)
-	check((main._hub_rows["World-10"] as Control).visible and not (main._hub_rows["World-01"] as Control).visible and main._selected_seed == selected, "поиск фильтрует библиотеку, не выбирая и не запуская мир")
-	check(main.get_node("%PlaySelected").disabled and main.get_node("%Star").disabled and main.get_node("%OpenWorldDetails").disabled and main.get_node("%HubBuildPreview").disabled and main.get_node("%HubRelief").disabled, "скрытый фильтром мир нельзя запустить, изменить или построить для него карту")
-	search.text = ""
-	search.text_changed.emit(search.text)
-	check(not main.get_node("%PlaySelected").disabled, "после очистки поиска выбранный мир снова доступен")
-	main._open_new_world()
-	check(input.has_focus() and not main.get_node("%WorldSearch").is_visible_in_tree(), "форма создания открывается отдельно от библиотеки")
 	input.text = "World-01"
-	main._on_create_world()
-	check(not main.busy and main._selected_seed == "World-01" and main.get_node("%WorldSearch").is_visible_in_tree(), "существующее зерно выбирает мир без запуска")
-	for child in main.get_children():
-		if child is AcceptDialog and child.title == "Мир уже есть":
-			child.queue_free()
+	main._on_seed_changed(input.text)
+	check(main._selected_seed == "World-01" and main._seed_tab == "all", "точное зерно выбирает и показывает найденный мир")
 	await process_frame
 	await process_frame
 	scroll.scroll_vertical = 0
@@ -150,37 +132,18 @@ func _run() -> void:
 	check(not main.get_node("%LoadManual").visible, "ручная загрузка скрыта при отсутствии слота")
 	main._world_cards["World-01"].manual = true
 	main._update_selection()
-	check(not main.get_node("%LoadManual").visible, "ручная загрузка не занимает место в закрытом меню")
-	main.get_node("%MoreWorldActions").button_pressed = true
-	check(main.get_node("%LoadManual").visible and not main.get_node("%LoadManual").disabled, "ручная загрузка доступна в дополнительных действиях")
-	main.get_node("%MoreWorldActions").button_pressed = false
+	check(main.get_node("%LoadManual").visible and not main.get_node("%LoadManual").disabled, "ручная загрузка доступна при наличии слота")
 	var map_square := main.get_node("%Preview").get_parent().get_parent() as Control
 	await process_frame
 	check(absf(map_square.size.x - map_square.size.y) < 1.0, "карта инспектора квадратная")
 	var panel := main.get_node("%AllWorlds/Panel") as Control
 	check(panel.get_global_rect().end.y <= root.size.y + 1 and panel.get_global_rect().position.y >= -1, "экран помещается по высоте при 1280×720")
-	main.get_node("%PlaySelected").grab_focus()
-	root.size = Vector2i(800, 600)
-	main._fit_menu()
-	check(main._hub_show_details and main.get_node("%PlaySelected").has_focus(), "при сужении окна фокус и открытая карточка сохраняются")
-	main._show_world_list()
 	for dimensions: Vector2i in [Vector2i(800, 600), Vector2i(640, 360)]:
 		root.size = dimensions
 		main._fit_menu()
 		await process_frame
 		await process_frame
 		check(root.get_visible_rect().encloses(panel.get_global_rect()), "экран помещается при %s" % dimensions)
-		if main._hub_narrow:
-			check(main.get_node("%Worlds").visible and not main.get_node("%Side").visible, "узкое окно открывает список миров")
-			main._select_hub_row("World-01")
-			check(main.get_node("%Side").visible and not main.get_node("%Worlds").visible, "выбор открывает карточку мира в узком окне")
-			main.get_node("%MoreWorldActions").button_pressed = true
-			await process_frame
-			await process_frame
-			check(main.get_node("%LoadManual").is_visible_in_tree() and root.get_visible_rect().encloses(panel.get_global_rect()), "дополнительные действия с ручным сохранением помещаются в узком окне")
-			main.get_node("%MoreWorldActions").button_pressed = false
-			main._show_world_list()
-			check(main.get_node("%Worlds").visible, "возврат показывает список миров")
 		if "--capture-hub" in OS.get_cmdline_user_args():
 			print("HUB_LAYOUT ", dimensions, " panel=", panel.size, " scale=", panel.scale, " viewport=", root.get_visible_rect().size)
 			await RenderingServer.frame_post_draw
@@ -243,7 +206,6 @@ func _run() -> void:
 	check(not main.busy and main._selected_seed == "Broken" and main.get_node("%RestartWorld").has_focus()
 		and main.get_node("%RestartWorld").modulate.r > main.get_node("%RestartWorld").modulate.g,
 		"повреждённое сохранение открывает восстановление с красным акцентом")
-	check(not main.get_node("%MoreWorldActions").visible and main.get_node("%WorldActions").visible, "восстановление сразу видно без ложного переключателя действий")
 	DirAccess.remove_absolute(corrupt_path)
 	DirAccess.remove_absolute(Saves.dir)
 	Saves.dir = old_saves
@@ -282,10 +244,10 @@ func _test_large_list(settings: GameSettings) -> void:
 	main._update_carousel()
 	main._open_all_worlds()
 	check(main._hub_rows.size() < 120 and not main._hub_build_queue.is_empty(), "большой список начинает открываться по частям")
-	main.get_node("%WorldSearch").text = "Many-119"
+	main.seed_edit.text = "Many-119"
+	main._on_seed_changed("Many-119")
 	main._build_hub_rows()
-	check(main._selected_seed == "Many-000" and main._hub_rows.has("Many-119"), "поиск подготавливает ещё не построенную строку, не меняя выбор")
-	main.get_node("%WorldSearch").text = ""
+	check(main._selected_seed == "Many-119" and main._hub_rows.has("Many-119"), "поиск сразу подготавливает строку, ещё не дошедшую до очереди")
 	main._on_star("Many-119", main._hub_rows["Many-119"].get_meta("star_button"))
 	main._show_seed_tab("favorites")
 	check((main._hub_rows["Many-119"] as Control).visible, "фильтр работает во время построения списка")

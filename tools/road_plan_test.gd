@@ -7,19 +7,24 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/road_plan_test.gd -- [--seed Север-1234] [--save <файл.json>] [--compare <файл.json>]
 ## --save пишет отпечаток (было), --compare сверяет с ним (стало): тот же мир — рефакторинг, разный — изменение маршрутов.
 ## --metrics-json <файл> сохраняет сравнимый отчёт о готовой сети; --metrics также пишет картинку.
+## --climb-data <файл> сохраняет оси и профиль земли горных троп для сравнения подъёмов.
 ## --forks — где отходят необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты): у поселения или на перегоне.
+## Дорожная сеть V2 включена по умолчанию; прежний --v2 ничего не меняет. --nav — навигация игры
+## (RoadNavigation на готовой поверхности) между каждой парой поселений: сколько пар, неполных маршрутов и рёбер
+## с разрывом высоты > 0,5 м.
 ## Первый запуск на этом ПК ~1,5 мин (география), следующие ~1 мин.
 
 const SelfTest := preload("res://tools/selftest.gd")
 const Metrics := preload("res://tools/road_network_metrics.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const Navigation := preload("res://scripts/game/road_navigation.gd")
 const SIZE := 512
 const DIR := "user://road_plan_test"
 const KEYS := ["stage_ms", "main_roads_ms", "secondary_roads_ms", "mountain_trails_ms", "settlement_attempts",
 	"settlement_rejected", "road_failures", "expanded", "prefetch_expanded", "budget_stops", "no_path", "skipped",
 	"reach_calls", "reach_rejects", "reach_visited", "checkpoints", "checkpoint_mb", "restores", "road_windows", "no_bridge_cells", "cost_ms", "route_heightfield_ms", "finder_setup_ms",
 	"animal_trails_ms", "corridor_road_ms", "corridor_trail_ms", "corridor_mountain_ms", "layout_ms", "native_ms", "call_ms", "calls",
-	"parts_ms"]
+	"parts_ms", "network_v2"]
 
 
 func _initialize() -> void:
@@ -73,6 +78,14 @@ func _initialize() -> void:
 	if not line_arg.is_empty():
 		StageTrails.routing_overrides.line_relax = {road = float(line_arg.get_slice(",", 0)), trail = float(line_arg.get_slice(",", 1)), mountain = float(line_arg.get_slice(",", 2))}
 		print("линия: срезаемый бугор ", StageTrails.routing_overrides.line_relax)
+	var character_audit := "--character-audit" in args
+	StageTrails.RoadNetworkV2.audit_character = character_audit
+	# --v2-param k=v,k=v: числа V2 на время запуска (RoadNetworkV2.overrides) — подбор без правки кода
+	var v2_param := _arg(args, "--v2-param", "")
+	if not v2_param.is_empty():
+		for pair: String in v2_param.split(","):
+			StageTrails.RoadNetworkV2.overrides[pair.get_slice("=", 0)] = float(pair.get_slice("=", 1))
+		print("числа V2: ", StageTrails.RoadNetworkV2.overrides)
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true
@@ -119,6 +132,15 @@ func _initialize() -> void:
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
 	print("линий без поблажки на бугры (профиль круче предела): ", StageTrails.RoadLine.fallbacks)
 	print("PROFILE ", JSON.stringify(profile))
+	if character_audit:
+		print("CHARACTER AUDIT ", JSON.stringify(w.generation_profile.get("character_search", {})))
+		var branches := {view = [], shore = []}
+		for note: Array in w.generation_profile.get("second_ways", []):
+			if not branches.has(note[0]): continue
+			var length := 0.0
+			for k: int in note[1]: length += StageTrails._kind_length_of(w.trails[k]) * GameConfig.TILE
+			branches[note[0]].append(snappedf(length, 0.1))
+		print("BRANCH AUDIT ", JSON.stringify(branches))
 	print("SECOND WAYS ", JSON.stringify(w.generation_profile.get("second_ways", [])), " повышено до дорог, м: ", w.generation_profile.get("upgraded_m", 0))
 	for link: Array in w.generation_profile.get("road_links", []):
 		print("  связь %d→%d, %d клеток: запас %d, %s, %.0f мс (поиск %.0f)" % link)
@@ -156,6 +178,24 @@ func _initialize() -> void:
 		StageTrails.BRIDGE_LANDING_GAP, worst.size(), str(worst.slice(0, 8)), Time.get_ticks_msec() - started])
 	# --rides: природные велосипедные маршруты (RideRoutes): сводка, проходимость на готовой поверхности, картинка.
 	var fails := 0
+	var climbs_file := _arg(args, "--climb-data", "")
+	if not climbs_file.is_empty():
+		var climbs := []
+		for t: Dictionary in w.trails:
+			if t.kind != "mountain": continue
+			var stations := []
+			var along := 0.0
+			var previous := Vector2.ZERO
+			for p: Dictionary in t.pts:
+				var at := Vector2(p.x, p.y) * GameConfig.TILE
+				if not stations.is_empty(): along += at.distance_to(previous)
+				stations.append([p.x, p.y, along, final.ground_at(at.x, at.y)])
+				previous = at
+			climbs.append({id = t.road_id, stations = stations})
+		var output := FileAccess.open(climbs_file, FileAccess.WRITE)
+		if output == null or not output.store_string(JSON.stringify(climbs) + "\n"):
+			printerr("Не записаны профили ", climbs_file)
+			fails += 1
 	if "--rides" in args:
 		fails += _rides(w, final, seed_text)
 	# --metrics: измеритель сети (tools/road_network_metrics.gd) и картинка tools/control/runs/network/<сид>[-<метка>].png
@@ -168,6 +208,7 @@ func _initialize() -> void:
 		w.cost = trodden
 		var m: Dictionary = Metrics.measure(w, base, final, Floor.surface_image(w))
 		var report := Metrics.summary(m)
+		print("ROUTE AXES SHA256 ", _digest(w.trails))
 		print("NETWORK ", JSON.stringify(report))
 		if report.route_usage.status != "recorded" or report.route_usage.routes.size() != w.generation_profile.rides.accepted:
 			printerr("Отчёт не содержит полного набора принятых веломаршрутов")
@@ -183,7 +224,7 @@ func _initialize() -> void:
 		if "--metrics" in args:
 			var tag := _arg(args, "--tag", "")
 			var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
-			Metrics.draw(w, m, file)
+			Metrics.draw(w, m, file, "--shape-map" in args)
 			print("картинка сети: %s (%d мс)" % [file, Time.get_ticks_msec() - started])
 	# --bed: полотно RoadBed на этой сети (только C#): время, число клеток и хеш рельефа; --refine — и метровая сетка.
 	# Хеши сравнивать между версиями кода (было — запуск на прежнем коммите): изменение значит, что результат другой
@@ -208,6 +249,9 @@ func _initialize() -> void:
 	if "--landmarks" in args:
 		if "--landmarks-old" in args: _landmarks(w, final, true)
 		_landmarks(w, final, false)
+	# --nav: маршруты навигации игры между поселениями на готовой поверхности
+	if "--nav" in args:
+		fails += _nav(w, final)
 	# --forks: где необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты) отходят от сети
 	if "--forks" in args:
 		_forks(w)
@@ -224,6 +268,58 @@ func _initialize() -> void:
 			if best <= 12.0:
 				print("  путь %d %s%s: %d точек, %.0f м, (%.1f,%.1f)→(%.1f,%.1f), до точки %.1f кл" % [k, t.kind, " " + str(t.ride) if t.has("ride") else "",
 					t.pts.size(), StageTrails._kind_length_of(t) * GameConfig.TILE, t.pts[0].x, t.pts[0].y, t.pts[-1].x, t.pts[-1].y, best])
+	# --probe-h x,y: высоты готовой поверхности (surface_at) и рельефа без полотна вокруг точки (клетки), точки путей рядом
+	var probe_h := _arg(args, "--probe-h", "")
+	if not probe_h.is_empty():
+		var at := Vector2(float(probe_h.get_slice(",", 0)), float(probe_h.get_slice(",", 1)))
+		var raw := Heightfield.new(w, false)
+		for dy in range(-2, 3):
+			var row := ""
+			for dx in range(-2, 3):
+				var q := (at + Vector2(dx, dy) * 0.25) * GameConfig.TILE
+				row += "%6.2f/%6.2f/%6.2f/%6.2f " % [final.surface_at(q.x, q.y, INF), final.ground_at(q.x, q.y), final.deck_at(q.x, q.y, INF), raw.ground_at(q.x, q.y)]
+			print("  высоты ", row)
+		var rock := raw.copy()
+		RockRelief.apply(rock)
+		var bed := raw.copy()
+		RoadBed.refine(bed)
+		var stages := ""
+		for dx in range(-2, 3):
+			var q := (at + Vector2(dx, 0) * 0.25) * GameConfig.TILE
+			stages += "%.2f/%.2f/%.2f " % [raw.ground_at(q.x, q.y), rock.ground_at(q.x, q.y), bed.ground_at(q.x, q.y)]
+		print("  рельеф / скалы / полотно: ", stages, " refinement ", final.road_refinement != null)
+		var rr: RoadRefinement = final.road_refinement
+		var key := floori(at.y) * w.W + floori(at.x)
+		var patch: Dictionary = rr.patches.get(key, {})
+		var info := {}
+		for f: String in patch:
+			var v: Variant = patch[f]
+			info[f] = v if not (v is PackedFloat32Array or v is PackedByteArray or v is PackedInt32Array) else "%s[%d] %s" % [type_string(typeof(v)), v.size(), str(Array(v).slice(0, 12))]
+		print("  патч клетки: ", JSON.stringify(info).left(900))
+		for k in w.trails.size():
+			if w.trails[k].has("ride") and String(w.trails[k].get("road_id", "")).begins_with("55d8619da7"):
+				var fit: Dictionary = rr.fit_routes.get(k, {})
+				print("  подгонка пути %d: есть %s, точек %d, маршрутов с подгонкой %d" % [k, not fit.is_empty(), (fit.get("points", []) as Array).size(), rr.fit_routes.size()])
+				if not fit.is_empty():
+					var pts: Array = fit.points
+					for j in pts.size():
+						var q: Vector2 = Vector2(pts[j].x, pts[j].y) if pts[j] is Dictionary else pts[j]
+						if q.distance_to(at * GameConfig.TILE) < 3.0: print("    м %d: %s профиль %.2f сила %.2f предел %.2f" % [j, str(q), fit.profile[j], fit.strength[j], fit.limit[j]])
+		var mrow := ""
+		for dy in range(-3, 4):
+			for dx in range(-3, 4): mrow += str(w.path_mask[(floori(at.y) + dy) * w.W + floori(at.x) + dx])
+			mrow += " "
+		print("  маска путей 7×7: ", mrow, " мест ", w.sites.size(), " rock ", w.generation.surface_rock.size())
+		for site: SiteData in w.sites:
+			if Vector2(site.x, site.y).distance_to(at) < 20.0: print("  место ", site.kind if "kind" in site else "", " (%.1f,%.1f) clear %.1f" % [site.x, site.y, site.clear])
+		for s: Dictionary in final.structures:
+			if Grid.segment_dist(at.x * GameConfig.TILE, at.y * GameConfig.TILE, s.ax, s.az, s.bx, s.bz) < 40.0: print("  сооружение ", JSON.stringify(s).left(300))
+		for k in w.trails.size():
+			var t: Dictionary = w.trails[k]
+			for j in t.pts.size():
+				var p := Vector2(t.pts[j].x, t.pts[j].y)
+				if p.distance_to(at) < 0.6: print("  точка пути %d %s №%d (%.2f,%.2f) w %.2f surf %s style %s id %s" % [k, t.kind, j, p.x, p.y, t.pts[j].w,
+					str(t.surf[j]) if t.has("surf") and j < t.surf.size() else "-", t.get("ride_style", ""), String(t.get("road_id", "")).left(10)])
 	# Через JSON, как в файле: числа сравниваются одного вида.
 	var print_out: Dictionary = JSON.parse_string(JSON.stringify(_fingerprint(w)))
 	print("FINGERPRINT ", JSON.stringify(print_out))
@@ -375,6 +471,52 @@ func _forks(w: WorldData) -> void:
 		close, spacing[spacing.size() / 2] if not spacing.is_empty() else 0.0])
 
 
+## 21.11.2026 (план V2, фаза 0): навигация игры (RoadNavigation.build на готовой поверхности final, как в игре)
+## между каждой парой поселений одной связной группы. Печать: пар, неполных (complete == false), рёбер графа,
+## отброшенных из-за разрыва высоты > 0,5 м. Неполный маршрут — отказ стенда.
+func _nav(w: WorldData, final: Heightfield) -> int:
+	var started := Time.get_ticks_msec()
+	var nav := Navigation.new()
+	nav.build(w, final)
+	var graph: Dictionary = Navigation.Topology.compile(w, func() -> bool: return false)
+	var gaps := 0
+	var seen := {}
+	for edge: Dictionary in graph.get("edges", []):
+		var key := Vector2i(mini(edge.from, edge.to), maxi(edge.from, edge.to))
+		if seen.has(key) or not nav.points.has(edge.from) or not nav.points.has(edge.to): continue
+		seen[key] = true
+		if not nav._edges.has(key):
+			gaps += 1
+			# где разрыв: точки (клетки), уровни концов, высота конца по пути ребра, участок и его вид
+			var pa: Vector2 = nav.points[edge.from]
+			var pb: Vector2 = nav.points[edge.to]
+			var end: float = nav._edge_level(pa, pb, nav.levels[edge.from])
+			var kind := "?"
+			for k in w.trails.size():
+				if String(w.trails[k].get("road_id", "")) == String(edge.section): kind = "%d %s%s" % [k, w.trails[k].kind, " ride" if w.trails[k].has("ride") else ""]
+			# сухой овраг метровой сетки (road_gaps.gd) поперёк тропы — намеренная ступень с объездом
+			var gully := false
+			if final.road_refinement != null:
+				for g: Dictionary in final.road_refinement.gaps:
+					if (g.area as Rect2).grow(2.0).has_point(pa): gully = true
+			if gaps <= 5: print("  разрыв: (%.1f,%.1f)→(%.1f,%.1f) кл, уровни %.2f / %.2f м, по ребру %.2f м, участок %s%s" % [pa.x / GameConfig.TILE,
+				pa.y / GameConfig.TILE, pb.x / GameConfig.TILE, pb.y / GameConfig.TILE, nav.levels[edge.from], nav.levels[edge.to], end, kind,
+				", в сухом овраге (road_gaps)" if gully else ""])
+	var pairs := 0
+	var broken: Array = []
+	var st := w.settlements
+	for a in st.size():
+		for b in range(a + 1, st.size()):
+			pairs += 1
+			var from := Vector2(st[a].i % w.W + 0.5, st[a].i / w.W + 0.5) * GameConfig.TILE
+			var to := Vector2(st[b].i % w.W + 0.5, st[b].i / w.W + 0.5) * GameConfig.TILE
+			nav.route_to(from, to)
+			if not nav.complete: broken.append("%d-%d" % [a, b])
+	print("NAV пар %d, неполных %d %s, рёбер с разрывом > 0,5 м %d из %d (%d мс)" % [pairs, broken.size(),
+		str(broken.slice(0, 12)), gaps, seen.size(), Time.get_ticks_msec() - started])
+	return broken.size()
+
+
 ## Ориентиры вдоль дорог: число по видам, на км дорог, туров на гребне (выше обоих концов участка на 8 м).
 ## old — прежний SettlementsBuilder._add_road_landmarks из копии .godot/landmarks_old/settlements_builder_old.gd
 ## (git show <коммит>:scripts/render/settlements_builder.gd без строки class_name) через счётчик вместо MeshBatch.
@@ -405,7 +547,7 @@ func _landmarks(w: WorldData, final: Heightfield, old: bool) -> void:
 
 class LandmarkCounter extends MeshBatch:
 	var marks: Array = []
-	func add_detail(mesh: Mesh, xform: Transform3D, _color: Color, _mat: Material) -> void:
+	func add_detail(mesh: Mesh, xform: Transform3D, _color: Color, _mat: Material, _landmark := false) -> void:
 		marks.append([mesh, xform])
 
 

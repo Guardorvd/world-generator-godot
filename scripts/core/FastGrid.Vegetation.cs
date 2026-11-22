@@ -17,7 +17,7 @@ public partial class FastGrid
 	// ForestModels ages
 	private const int AdultAge = 0, YoungAge = 1, OldAge = 2;
 	// StageVegetation
-	private const double VegVillageR = 7.0, VegHighLo = 0.12, VegHighHi = 0.26, VegLineLo = 0.2, VegLineHi = 0.4,
+	private const double VegVillageR = 7.0, VegHighLo = 0.12, VegHighHi = 0.26, VegLineLo = 0.28, VegLineHi = 0.50,
 		VegSteep = 0.6, VegShore = 3.0, VegSpread = 0.55, VegLowCrown = 0.3, VegGapK = 0.75;
 	private const int VegLayer = 1;
 	private const double HutSearchRadius = 2.0;
@@ -545,7 +545,7 @@ public partial class FastGrid
 				if (bi == BBeach && f.Temp[i] < 0.6)
 					dens = 0.0;
 				double line = e <= VegLineLo ? 0.0 : VegSs(VegLineLo + 0.05 * moistI, VegLineHi + 0.10 * moistI - 0.04 * light, e);
-				dens *= 1.0 - 0.85 * exposed;
+				dens *= 1.0 - 0.72 * exposed;
 				if (line > 0.0 && bi != BSnow && bi != BRock && bi != BPeak)
 					dens *= 1.0 - 0.65 * line;
 				if (sl > VegSteep)

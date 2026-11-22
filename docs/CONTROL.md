@@ -284,6 +284,8 @@ godot --headless --path . --script res://tools/road_plan_test.gd -- [--seed Се
 godot --headless --path . --script res://tools/road_passage_test.gd
 ```
 
+С 22.11.2026 `road_plan_test.gd` строит V2 без флага. Синтетический `road_v2_test.gd` проверяет ядро, сглаживание, круговые дуги и меандр без генерации мира. Лимиты обоих стендов остаются прежними.
+
 `tools/display_test.gd` (12.1) — экран и масштабирование без генерации: шесть разрешений от 640×360 до 4K, меню, настройки, HUD и карта, миграция, применение и откат. Тест использует отдельный файл настроек в `.godot/display_test/`. Подробности — [PATCH_12_1.md](PATCH_12_1.md).
 
 `tools/save_test.gd` (12.0) — сохранения и меню без генерации: запись и чтение, ручной и автоматический слоты, резервная копия, повреждённые данные, восстановление задания, независимость от кэша. Оконный запуск также снимает меню и паузу. `-- --integration` добавляет одну генерацию мира для проверки восстановления игровой сцены; вместо других тестов с генерацией. Подробнее — [PATCH_12_0.md](PATCH_12_0.md).
@@ -492,6 +494,7 @@ godot --headless --path . --script res://tools/control/check.gd -- --deep
 
 Не запускать без прямой просьбы пользователя.
 
+- `route_test.gd` проверяет прежний выбор сокращений и обходов. Для текущих путей используются `road_v2_test.gd` и `road_plan_test.gd`.
 - **Замеры и разовые исследования:** `bench`, `audit_perf`, `fps_test`, `forest_ride_perf`, `road_perf`, `streaming_perf`, `vegetation_perf`, `forest_scene_perf` (изолированный смешанный лес 1 км, без генерации мира: FPS, GPU/CPU мс, draw calls; `-- --eye 45 --shot файл.png`), `control/outer_perf`, `runtime_stutter_probe`, `runtime_fps_diagnosis`.
 - **Старые снимки и длинные прогоны:** `smoke_test`, `structures_shots`, `water_shots`, `forest_shots`, `forest_floor_shots`, `selftest` (хеши даёт `check.gd`), `geography_test` без `--quick`, `generation_regression_test -- --worlds`, `route_test` без `--quick`, `road_safety_test`, `lifecycle_test` с настройками по умолчанию, `control/shots`, `control/perf`, `control/compare` (см. ниже).
 - **Не тесты, а сборщики:** `build_bike`, `build_cyclist`, `bundle_cache` — запускать только когда нужно пересобрать их результат.

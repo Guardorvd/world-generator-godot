@@ -11,8 +11,8 @@ extends RefCounted
 ## Полоса соседей для уклона, в клетках
 const DETAIL_PAD := 2
 ## Высоты над морем, м: начало широких форм, начало горных рёбер и конец перехода.
-const DETAIL_LOW := 5.0
-const DETAIL_LOW_FULL := 28.0
+const DETAIL_LOW := 3.0
+const DETAIL_LOW_FULL := 20.0
 const DETAIL_MOUNTAIN := 30.0
 const DETAIL_TRANSITION := 42.0
 const DETAIL_HIGH := 60.0
@@ -62,9 +62,9 @@ static func apply(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: i
 	var gx := ((base[k + 2 - b] + 2.0 * base[k + 2] + base[k + 2 + b]) - (base[k - 2 - b] + 2.0 * base[k - 2] + base[k - 2 + b])) * per_raw / (16.0 * tile)
 	var gy := ((base[k - 2 + b] + 2.0 * base[k + b] + base[k + 2 + b]) - (base[k - 2 - b] + 2.0 * base[k - b] + base[k + 2 - b])) * per_raw / (16.0 * tile)
 	var g2 := gx * gx + gy * gy
-	# Широкие формы проявляются от 2,5 % на низких холмах; к горным склонам возвращается прежний диапазон.
+	# Широкие формы проявляются от 1,5 % на низких холмах; к горным склонам возвращается прежний диапазон.
 	var lowland := 1.0 - mountain
-	var gentle_start := 0.04 - 0.015 * lowland
+	var gentle_start := 0.04 - 0.025 * lowland
 	if g2 <= gentle_start * gentle_start:
 		return v
 	var s := sqrt(g2)
