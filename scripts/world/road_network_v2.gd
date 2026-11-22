@@ -53,19 +53,20 @@ static func cache_suffix(enabled: bool) -> String:
 		RoadTuning.Routing.KINDS.map(func(kind: String) -> Array: return [routing.broad_spacing_m[kind], routing.broad_radius_m[kind],
 			routing.broad_offset_m[kind]]), routing.broad_straight_m, routing.broad_curves_enabled, routing.ride_search_reserve,
 		[routing.inland_connector.min_m, routing.inland_connector.max_m, routing.inland_connector.search_count, routing.inland_connector.accept_count],
-		[routing.arc_bends_enabled, arc_settings(routing), routing.axis_protection_m],
+		[routing.arc_bends_enabled, arc_settings(routing), routing.axis_protection_m, routing.axis_min_radius_m],
 		[routing.axis_meander_enabled, meander_settings(routing, "road"), meander_settings(routing, "trail")]])
 	return "|net=v2.%d.%s" % [VERSION, digest]
 
 
 static func arc_settings(routing: RoadTuning.Routing) -> Dictionary:
 	return {radii_m = routing.arc_radii_m, angle_deg = routing.arc_angle_deg, shoulder_m = routing.arc_shoulder_m,
-		fit_m = routing.arc_fit_m, transition_m = routing.arc_transition_m}
+		fit_m = routing.arc_fit_m, transitions_m = routing.arc_transitions_m}
 
 
 static func meander_settings(routing: RoadTuning.Routing, kind: String) -> Dictionary:
 	var tuning := routing.axis_meander_road if kind == "road" else routing.axis_meander_trail
-	return {min_m = routing.axis_meander_min_m, fit_m = routing.axis_meander_fit_m, min_shift_m = routing.axis_meander_min_shift_m,
+	return {min_m = routing.axis_meander_min_m, fit_m = routing.axis_meander_fit_m, search_m = routing.axis_meander_search_m,
+		min_shift_m = routing.axis_meander_min_shift_m,
 		slope = routing.axis_meander_slope, slope_fade = routing.axis_meander_slope_fade,
 		water_m = routing.axis_meander_water_m}.merged(tuning)
 
@@ -652,7 +653,7 @@ static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByte
 	for ride: Dictionary in w.road_rides.routes.values():
 		for leg: Dictionary in ride.legs:
 			(legs.get_or_add(leg.section, []) as Array).append(leg)
-	var input := {on_axis = on_axis, W = w.W, H = w.H, protection_m = routing.axis_protection_m,
+	var input := {on_axis = on_axis, W = w.W, H = w.H, protection_m = routing.axis_protection_m, min_radius_m = routing.axis_min_radius_m,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, bench_cross = StageTrails.BENCH_CROSS, reach = RoadRefinement.REACH}
 	if routing.arc_bends_enabled:
 		_align_sections(w, water, input.merged(arc_settings(routing)), anchors, legs, primary_end, false)

@@ -7,17 +7,14 @@ namespace Roads.Network;
 
 internal sealed partial class AxisAlignment
 {
-	internal record MeanderSettings(double MinLength, double Fit, double MinShift, double Slope, double SlopeFade, V WaterFade,
+	internal record MeanderSettings(double MinLength, double Fit, double Search, double MinShift, double Slope, double SlopeFade, V WaterFade,
 		V Amplitude, V Wavelength, double EndFade, double Radius);
 
 	internal void FitMeanders(double[] noise, double[] waterDistance, MeanderSettings settings)
 	{
-		var knots = Knots(settings.Fit / Tile);
-		for (int i = 1; i < knots.Count; i++)
+		foreach (var (first, last) in StraightSpans(settings.MinLength / Tile, settings.Fit / Tile, settings.Search / Tile))
 		{
-			int first = knots[i - 1], last = knots[i];
 			double length = _along[last] - _along[first];
-			if (length * Tile <= settings.MinLength) continue;
 			V normal = (At(_source[last]) - At(_source[first])).Normalized().Orthogonal();
 			double targetWave = Lerp(settings.Wavelength, NoiseAt(first, last, 0.5)) / Tile;
 			int spans = Math.Max(1, (int)Math.Round(length / targetWave));
@@ -40,6 +37,47 @@ internal sealed partial class AxisAlignment
 			double t = (station - _along[index]) / (_along[index + 1] - _along[index]);
 			return Math.Clamp(0.5 + 0.5 * (noise[index] + (noise[index + 1] - noise[index]) * t), 0, 1);
 		}
+	}
+
+	// Slide the initial chord inside each free interval. A small bend at one end
+	// must not hide the straight run behind it.
+	private IEnumerable<(int First, int Last)> StraightSpans(double minLength, double tolerance, double step)
+	{
+		int first = 0;
+		for (int protectedEnd = 1; protectedEnd < _source.Count; protectedEnd++)
+		{
+			if (!_protected[protectedEnd]) continue;
+			while (_along[protectedEnd] - _along[first] > minLength)
+			{
+				int end = AtOrBefore(_along[first] + minLength) + 1;
+				if (!Straight(first, end, tolerance))
+				{
+					first = Math.Min(protectedEnd, AtOrBefore(_along[first] + step) + 1);
+					continue;
+				}
+				while (end < protectedEnd)
+				{
+					int next = Math.Min(protectedEnd, AtOrBefore(_along[end] + step) + 1);
+					if (!Straight(first, next, tolerance)) break;
+					end = next;
+				}
+				yield return (first, end);
+				first = end;
+			}
+			first = protectedEnd;
+		}
+	}
+
+	private bool Straight(int first, int last, double tolerance)
+	{
+		V a = At(_source[first]), b = At(_source[last]);
+		if (a.DistanceTo(b) + tolerance < _along[last] - _along[first]) return false;
+		for (int k = first + 1; k < last; k++)
+		{
+			V point = At(_source[k]);
+			if (point.DistanceSquaredTo(LineBuilder.ClosestOnSegment(point, a, b)) >= tolerance * tolerance) return false;
+		}
+		return true;
 	}
 
 	private void FitWave(int first, int last, V normal, double amplitude, double wavelength, double phase,

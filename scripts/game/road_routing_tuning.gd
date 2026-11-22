@@ -45,12 +45,14 @@ const KINDS := ["road", "trail", "mountain"]
 @export var arc_angle_deg := 8.0
 @export var arc_shoulder_m := 24.0
 @export var arc_fit_m := 4.0
-@export var arc_transition_m := 10.0
+@export var arc_transitions_m := PackedFloat64Array([18.0, 10.0])
 @export var axis_protection_m := 12.0
+@export var axis_min_radius_m := 15.0
 ## Меандр по длинным прямым. Длины и амплитуды в метрах, уклоны в долях.
 @export var axis_meander_enabled := true
 @export var axis_meander_min_m := 200.0
 @export var axis_meander_fit_m := 4.0
+@export var axis_meander_search_m := 12.0
 @export var axis_meander_min_shift_m := 0.35
 @export var axis_meander_slope := 0.06
 @export var axis_meander_slope_fade := 0.03

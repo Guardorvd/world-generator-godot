@@ -375,7 +375,7 @@ public partial class FastGrid
 		var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), graph, input["reach"].AsDouble());
 		var bounds = new LineBuilder(water, input["on_axis"].AsByteArray(), input["W"].AsInt32(), input["H"].AsInt32());
 		var fit = new AxisAlignment(source, input["pins"].AsByteArray(), validator, bounds.AxisBlocked,
-			input["grade"].AsDouble(), input["bench_cross"].AsDouble(), input["protection_m"].AsDouble());
+			input["grade"].AsDouble(), input["bench_cross"].AsDouble(), input["protection_m"].AsDouble(), input["min_radius_m"].AsDouble());
 		if (input.ContainsKey("noise"))
 		{
 			LineBuilder.V Bounds(string key)
@@ -383,7 +383,8 @@ public partial class FastGrid
 				Vector2 value = input[key].AsVector2();
 				return new LineBuilder.V(value.X, value.Y);
 			}
-			var options = new AxisAlignment.MeanderSettings(input["min_m"].AsDouble(), input["fit_m"].AsDouble(), input["min_shift_m"].AsDouble(),
+			var options = new AxisAlignment.MeanderSettings(input["min_m"].AsDouble(), input["fit_m"].AsDouble(), input["search_m"].AsDouble(),
+				input["min_shift_m"].AsDouble(),
 				input["slope"].AsDouble(), input["slope_fade"].AsDouble(), Bounds("water_m"), Bounds("amplitude_m"),
 				Bounds("wave_m"), input["fade_m"].AsDouble(), input["radius_m"].AsDouble());
 			fit.FitMeanders(input["noise"].AsFloat64Array(), input["water_m_at_station"].AsFloat64Array(), options);
@@ -391,7 +392,7 @@ public partial class FastGrid
 		else
 		{
 			fit.FitArcs(input["radii_m"].AsFloat64Array(), input["angle_deg"].AsDouble(), input["shoulder_m"].AsDouble(),
-				input["fit_m"].AsDouble(), input["transition_m"].AsDouble());
+				input["fit_m"].AsDouble(), input["transitions_m"].AsFloat64Array());
 		}
 		var refused = new Godot.Collections.Dictionary();
 		foreach (var (reason, count) in fit.Refused) refused[reason] = count;

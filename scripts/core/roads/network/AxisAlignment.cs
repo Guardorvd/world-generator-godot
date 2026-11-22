@@ -15,7 +15,7 @@ internal sealed partial class AxisAlignment
 	private readonly bool[] _protected;
 	private readonly GeometryValidator _validator;
 	private readonly Func<V, bool> _blocked;
-	private readonly double _grade, _cross;
+	private readonly double _grade, _cross, _minimumRadius;
 	private readonly List<Splice> _splices = new();
 	internal readonly Dictionary<string, int> Refused = new();
 	internal readonly List<double> AcceptedRadii = new();
@@ -23,13 +23,14 @@ internal sealed partial class AxisAlignment
 	private record Splice(int First, int Last, List<P> Points);
 
 	internal AxisAlignment(List<P> source, byte[] pins, GeometryValidator validator, Func<V, bool> blocked,
-		double grade, double cross, double protection)
+		double grade, double cross, double protection, double minimumRadius)
 	{
 		_source = source;
 		_validator = validator;
 		_blocked = blocked;
 		_grade = grade;
 		_cross = cross;
+		_minimumRadius = minimumRadius;
 		_along = Stations(source);
 		_protected = new bool[source.Count];
 		for (int i = 0; i < source.Count; i++)
@@ -43,7 +44,7 @@ internal sealed partial class AxisAlignment
 		}
 	}
 
-	internal void FitArcs(double[] radii, double minAngle, double shoulder, double tolerance, double transition)
+	internal void FitArcs(double[] radii, double minAngle, double shoulder, double tolerance, double[] transitions)
 	{
 		var knots = Knots(tolerance / Tile);
 		for (int i = 1; i + 1 < knots.Count; i++)
@@ -63,26 +64,32 @@ internal sealed partial class AxisAlignment
 				if (trim > 0.5 * Math.Min(before.Length(), after.Length())) { Reject("shoulder"); continue; }
 				// The circle bisector passes R * (sec(turn/2) - 1) inside the corner.
 				V start = corner - incoming * (float)trim, finish = corner + outgoing * (float)trim;
-				int first = AtOrBefore(_along[vertex] - trim - transition / Tile);
-				int last = AtOrBefore(_along[vertex] + trim + transition / Tile) + 1;
-				if (first <= left || last >= right || (_splices.Count > 0 && first < _splices[^1].Last))
-				{
-					Reject("approach");
-					continue;
-				}
 				V centre = start - incoming.Orthogonal() * (float)(Math.Sign(turn) * radius);
 				double width = _source[vertex].W;
-				var curve = new List<P> { _source[first] };
-				AddTransition(curve, start, Direction(first, -1), incoming, width);
 				int steps = Math.Max(2, (int)Math.Ceiling(Math.Abs(turn) * radius / Sample));
-				for (int j = 1; j < steps; j++)
-					curve.Add(Point(centre + (start - centre).Rotated((float)(turn * j / steps)), width));
-				curve.Add(Point(finish, width));
-				AddTransition(curve, At(_source[last]), outgoing, Direction(last, 1), width);
-				curve[^1] = _source[last];
-				if (!TrySplice(first, last, curve, radiusMetres)) continue;
-				AcceptedRadii.Add(radiusMetres);
-				break;
+				bool accepted = false;
+				foreach (double transition in transitions)
+				{
+					int first = AtOrBefore(_along[vertex] - trim - transition / Tile);
+					int last = AtOrBefore(_along[vertex] + trim + transition / Tile) + 1;
+					if (first <= left || last >= right || (_splices.Count > 0 && first < _splices[^1].Last))
+					{
+						Reject("approach");
+						continue;
+					}
+					var curve = new List<P> { _source[first] };
+					AddTransition(curve, start, Direction(first, -1), incoming, width);
+					for (int j = 1; j < steps; j++)
+						curve.Add(Point(centre + (start - centre).Rotated((float)(turn * j / steps)), width));
+					curve.Add(Point(finish, width));
+					AddTransition(curve, At(_source[last]), outgoing, Direction(last, 1), width);
+					curve[^1] = _source[last];
+					if (!TrySplice(first, last, curve, radiusMetres)) continue;
+					AcceptedRadii.Add(radiusMetres);
+					accepted = true;
+					break;
+				}
+				if (accepted) break;
 			}
 		}
 	}
@@ -166,6 +173,7 @@ internal sealed partial class AxisAlignment
 		var context = Context(points);
 		double[] shaped = Pack(context);
 		if (!_validator.Profile(Pack(Context(curve)), _grade) || !_validator.Profile(shaped, _grade)) return Reject("profile");
+		if (_validator.MinRadius(Pack(points)) < _minimumRadius) return Reject("radius");
 		double radius = Math.Min(_validator.MinRadius(Pack(before)), targetRadius);
 		if (_validator.MinRadius(shaped) + 0.1 < Math.Max(points[0].W * Tile * 0.5 + 0.5, radius))
 			return Reject("seam");

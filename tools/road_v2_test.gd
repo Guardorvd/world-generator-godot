@@ -58,7 +58,7 @@ func _arc_bends() -> void:
 	var input := V2.arc_settings(routing).merged({axis = axis, pins = pins, W = S, H = S, on_axis = PackedByteArray(),
 		foreign = {x = PackedFloat64Array(), y = PackedFloat64Array(), starts = PackedInt32Array([0])}, route_index = 0,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = StageTrails.ROAD_LIMIT, bench_cross = StageTrails.BENCH_CROSS,
-		reach = RoadRefinement.REACH, protection_m = routing.axis_protection_m})
+		reach = RoadRefinement.REACH, protection_m = routing.axis_protection_m, min_radius_m = routing.axis_min_radius_m})
 	var core: Object = Grid.native_grid()
 	var flat := Heightfield.new(w, false)
 	var arc: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
@@ -116,7 +116,7 @@ func _axis_meander() -> void:
 	var input := V2.meander_settings(routing, "road").merged({axis = axis, pins = pins, W = w.W, H = w.H,
 		on_axis = PackedByteArray(), route_index = -1, noise = noise, water_m_at_station = dry,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = StageTrails.ROAD_LIMIT, bench_cross = StageTrails.BENCH_CROSS,
-		reach = RoadRefinement.REACH, protection_m = routing.axis_protection_m})
+		reach = RoadRefinement.REACH, protection_m = routing.axis_protection_m, min_radius_m = routing.axis_min_radius_m})
 	var clear := (width * 4.0 + 2.0 * RoadRefinement.REACH + 2.0) / 4.0
 	input.foreign = {x = PackedFloat64Array([6.5, 170.5]), y = PackedFloat64Array([45.5, 45.5]), starts = PackedInt32Array([0, 2])}
 	var core: Object = Grid.native_grid()
