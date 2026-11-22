@@ -108,8 +108,8 @@ func _axis_meander() -> void:
 	var noise := PackedFloat64Array()
 	var dry := PackedFloat64Array()
 	var baseline := 35.5
-	for x in range(10, 161):
-		axis.append_array([x + 0.5, baseline, width])
+	for k in 301:
+		axis.append_array([10.5 + k * 0.5, baseline, width])
 		pins.append(0)
 		noise.append(0.1)
 		dry.append(100.0)
@@ -127,9 +127,11 @@ func _axis_meander() -> void:
 	var offset := 0.0
 	var gap := INF
 	var grade := 0.0
+	var spacing := 0.0
 	var before := Vector2(points[0], points[1])
 	for i in range(3, points.size(), 3):
 		var at := Vector2(points[i], points[i + 1])
+		spacing = maxf(spacing, at.distance_to(before) * 4.0)
 		offset = maxf(offset, absf(at.y - baseline) * 4.0)
 		gap = minf(gap, absf(at.y - 45.5) * 4.0)
 		if at != before:
@@ -137,8 +139,9 @@ func _axis_meander() -> void:
 			grade = maxf(grade, absf(rise) / (4.0 * at.distance_to(before)))
 		before = at
 	check(wave.accepted > 0 and points == again.get("points", axis) and offset >= 6.0 and offset <= 15.0
-		and grade < 0.06 and gap >= clear * 4.0 and points.slice(0, 3) == axis.slice(0, 3) and points.slice(-3) == axis.slice(-3),
-		"меандр: 600 м, отступ %.2f м, уклон %.2f %%, зазор %.2f м, отказы %s" % [offset, 100.0 * grade, gap, wave.refused])
+		and grade < 0.06 and gap >= clear * 4.0 and spacing <= 2.001
+		and points.slice(0, 3) == axis.slice(0, 3) and points.slice(-3) == axis.slice(-3),
+		"меандр: 600 м, отступ %.2f м, уклон %.2f %%, зазор %.2f м, шаг %.2f м, отказы %s" % [offset, 100.0 * grade, gap, spacing, wave.refused])
 	var neighbour := baseline + clear + 0.15
 	input.foreign.y = PackedFloat64Array([neighbour, neighbour])
 	var beside: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
@@ -1054,6 +1057,16 @@ func _flag_check() -> void:
 	var cache_on := QuickTrails.cache_dir()
 	StageTrails.network_v2 = def_flag
 	var expected := V2.cache_suffix(true)
+	var arc_enabled := tuning.routing.arc_bends_enabled
+	tuning.routing.arc_bends_enabled = not arc_enabled
+	var arc_key := V2.cache_suffix(true)
+	tuning.routing.arc_bends_enabled = arc_enabled
+	var meander_enabled := tuning.routing.axis_meander_enabled
+	tuning.routing.axis_meander_enabled = not meander_enabled
+	var meander_key := V2.cache_suffix(true)
+	tuning.routing.axis_meander_enabled = meander_enabled
+	check(expected != arc_key and expected != meander_key and arc_key != meander_key and V2.cache_suffix(false).is_empty(),
+		"дуги и меандр переключаются отдельно, ключ V1 не зависит от настроек оси")
 	check(not def_flag and s_off != s_on and s_on.contains(expected)
 		and saves_off == "user://saves" and cache_off == "user://world_cache"
 		and saves_on == "user://saves_roads_v2" and cache_on == "user://world_cache_roads_v2",

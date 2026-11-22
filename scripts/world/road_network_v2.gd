@@ -5,7 +5,7 @@ extends RefCounted
 ## Ошибка C# — push_error с текстом, без молчаливого отката на V1.
 
 ## Версия результата V2: входит в ключ слоя places только при включённом флаге (WorldCache._road_layer_suffixes).
-const VERSION := 9
+const VERSION := 10
 const Topology := preload("res://scripts/world/road_topology.gd")
 
 ## Числа V2 (раздел 3 плана). Числа V1 берутся из StageTrails и RoadTuning в params(), здесь не повторяются.

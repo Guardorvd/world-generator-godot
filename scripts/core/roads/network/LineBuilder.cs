@@ -294,6 +294,8 @@ public sealed class LineBuilder
 
 	private static readonly float[] Sides = { -1f, 0f, 1f };
 
+	internal const double StationSpacingMetres = 2.0;
+
 	/// <summary>RoadLine.stations: вершины сохраняются, длинные прямые делятся по 2 м (double).</summary>
 	public static List<P> Stations(List<P> points)
 	{
@@ -303,7 +305,7 @@ public sealed class LineBuilder
 			P a = points[k - 1], b = points[k];
 			double dx = b.X - a.X, dy = b.Y - a.Y;
 			double length = Math.Sqrt(dx * dx + dy * dy) * Tile;
-			int steps = (int)Math.Ceiling(length / 2.0);
+			int steps = (int)Math.Ceiling(length / StationSpacingMetres);
 			for (int j = 1; j < steps; j++)
 			{
 				double t = (double)j / steps;

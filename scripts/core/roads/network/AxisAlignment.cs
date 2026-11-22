@@ -80,7 +80,7 @@ internal sealed partial class AxisAlignment
 				curve.Add(Point(finish, width));
 				AddTransition(curve, At(_source[last]), outgoing, Direction(last, 1), width);
 				curve[^1] = _source[last];
-				if (!TrySplice(first, last, curve)) continue;
+				if (!TrySplice(first, last, curve, radiusMetres)) continue;
 				AcceptedRadii.Add(radiusMetres);
 				break;
 			}
@@ -143,8 +143,11 @@ internal sealed partial class AxisAlignment
 		return false;
 	}
 
-	private bool TrySplice(int first, int last, List<P> points, double targetRadius = 200.0)
+	private bool TrySplice(int first, int last, List<P> curve, double targetRadius)
 	{
+		// Check the published chords at the same spacing as RoadLine. Keep the
+		// dense curve for the profile so short variations are checked as well.
+		var points = PublishedStations(curve);
 		for (int i = 1; i < points.Count; i++)
 		{
 			P a = points[i - 1], b = points[i];
@@ -160,11 +163,9 @@ internal sealed partial class AxisAlignment
 		while (from > 0 && (_along[first] - _along[from]) * Tile < _validator.ProfileWindowMetres) from--;
 		while (to + 1 < _source.Count && (_along[to] - _along[last]) * Tile < _validator.ProfileWindowMetres) to++;
 		var before = _source.GetRange(from, to - from + 1);
-		var context = _source.GetRange(from, first - from);
-		context.AddRange(points);
-		for (int j = last + 1; j <= to; j++) context.Add(_source[j]);
+		var context = Context(points);
 		double[] shaped = Pack(context);
-		if (!_validator.Profile(shaped, _grade)) return Reject("profile");
+		if (!_validator.Profile(Pack(Context(curve)), _grade) || !_validator.Profile(shaped, _grade)) return Reject("profile");
 		double radius = Math.Min(_validator.MinRadius(Pack(before)), targetRadius);
 		if (_validator.MinRadius(shaped) + 0.1 < Math.Max(points[0].W * Tile * 0.5 + 0.5, radius))
 			return Reject("seam");
@@ -173,6 +174,32 @@ internal sealed partial class AxisAlignment
 			return Reject("double_cross");
 		_splices.Add(splice);
 		return true;
+
+		List<P> Context(List<P> part)
+		{
+			var context = _source.GetRange(from, first - from);
+			context.AddRange(part);
+			for (int j = last + 1; j <= to; j++) context.Add(_source[j]);
+			return context;
+		}
+	}
+
+	private static List<P> PublishedStations(List<P> curve)
+	{
+		double[] along = Stations(curve);
+		int count = (int)Math.Ceiling(along[^1] * Tile / LineBuilder.StationSpacingMetres);
+		var result = new List<P>(count + 1) { curve[0] };
+		int next = 1;
+		for (int i = 1; i < count; i++)
+		{
+			double station = along[^1] * i / count;
+			while (along[next] < station) next++;
+			double t = (station - along[next - 1]) / (along[next] - along[next - 1]);
+			P a = curve[next - 1], b = curve[next];
+			result.Add(new P(a.X + t * (b.X - a.X), a.Y + t * (b.Y - a.Y), a.W + t * (b.W - a.W)));
+		}
+		result.Add(curve[^1]);
+		return result;
 	}
 
 	internal (List<P> Points, double[] FromMetres, double[] ToMetres) Finish()
