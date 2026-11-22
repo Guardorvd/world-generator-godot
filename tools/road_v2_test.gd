@@ -3,10 +3,11 @@ extends SceneTree
 ## сцены 96×96 — равнина, холм, крутой склон, вода поперёк долины (озеро — без брода, река — с бродом), сеть из
 ## шести мест. Проверки: земля и глубина C# = Heightfield; валидатор (вода, крен, уклон, радиус, зазор, брод);
 ## профиль C# = RoadLine.profile_ok; грубый граф = обход по клеткам и путь в окне; D_net = Дейкстра по осям;
-## двойное пересечение; порты правил V1 = StageTrails; повтор планировщика даёт тот же результат.
+## двойное пересечение; порты C# совпадают с эталоном GDScript; повтор планировщика даёт тот же результат.
 ##   godot --headless --path . --script res://tools/road_v2_test.gd
 ## Лимит 60 с (обычно несколько секунд). Нужен dotnet build после правки .cs.
 
+const RoadReference := preload("res://tools/road_network_reference.gd")
 const V2 := preload("res://scripts/world/road_network_v2.gd")
 const S := 96
 var fails := 0
@@ -35,8 +36,6 @@ func _initialize() -> void:
 	_smooth_foreign_axis()
 	_character_on_flat()
 	_short_ride_turnback()
-	_switchback_climbs()
-	_broad_curves()
 	_arc_bends()
 	_axis_meander()
 	_flag_check()
@@ -147,183 +146,6 @@ func _axis_meander() -> void:
 	var beside: Dictionary = core.ShapeRoadAxis(input, flat.fast_water())
 	check(beside.accepted == 0 and beside.refused.has("clearance") and not beside.has("points"),
 		"меандр у чужой дороги: ось осталась прямой, отказы %s" % [beside.refused])
-
-
-func _broad_curves() -> void:
-	var w := _world("none")
-	w.h.fill(0.15)
-	w.filled.fill(0.15)
-	var routing := RoadTuning.current().routing
-	var x := PackedFloat64Array()
-	var y := PackedFloat64Array()
-	var widths := PackedFloat64Array()
-	for i in range(8, 89):
-		x.append(i + 0.5)
-		y.append(35.5 + 0.32 * minf(i - 8, 88 - i))
-		widths.append(RoadTuning.current().section.widths.road)
-	var data := {x = x, y = y, w = widths, axis = PackedByteArray(), W = S, H = S, kind = "road", smooth = "",
-		relax = 0.0, tolerance = 0.0, road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE,
-		mountain_grade = StageTrails.MOUNTAIN_GRADE, bench_cross = StageTrails.BENCH_CROSS,
-		speed = StageTrails.RoadLine.TURN_SPEED.road, accel = StageTrails.RoadLine.TURN_ACCEL.road,
-		profile_base = StageTrails.RoadLine.PROFILE_BASE, broad_spacing_m = routing.broad_spacing_m.road,
-		broad_radius_m = routing.broad_radius_m.road, broad_offset_m = routing.broad_offset_m.road,
-		broad_straight_m = routing.broad_straight_m, smooth_line = true}
-	var core: Object = Grid.native_grid()
-	var plane := Heightfield.new(w, false)
-	var flat: Dictionary = core.BuildRoadLine(data, plane.fast_water())
-	var plain_data := data.duplicate()
-	plain_data.erase("broad_spacing_m")
-	var plain: Dictionary = core.BuildRoadLine(plain_data, plane.fast_water())
-	var curves := 0
-	var tight := 0
-	for i in range(2, flat.x.size() - 2):
-		var a := Vector2(flat.x[i - 2], flat.y[i - 2])
-		var b := Vector2(flat.x[i], flat.y[i])
-		var c := Vector2(flat.x[i + 2], flat.y[i + 2])
-		var twice_area := absf((b - a).cross(c - a))
-		if twice_area < 1e-5: continue
-		var radius := 2.0 * a.distance_to(b) * b.distance_to(c) * c.distance_to(a) / twice_area
-		if radius >= 60.0 and radius <= 200.0: curves += 1
-		if radius < 59.0: tight += 1
-	check(curves >= 8 and tight == 0 and flat.broad.accepted >= 2 and flat.x[0] == x[0] and flat.y[-1] == y[-1],
-		"крупная форма: равнинная ломаная, %d станций радиусом 60–200 м, тесных %d, %s" % [curves, tight, flat.broad])
-
-	# Найти плечо поворота, где кривая ближе к углу клетки, чем исходная ось.
-	var lake := _world("none")
-	lake.h.fill(0.15)
-	lake.filled.fill(0.15)
-	var chosen := Vector2i.ZERO
-	var best := -INF
-	for col in range(33, 65):
-		for row in range(41, 51):
-			var centre := Vector2(col + 0.5, row + 0.5)
-			# LakeLevel распространяет воду на четыре квадрата вокруг центра клетки.
-			var original_gap := _broad_square_gap(plain, centre)
-			var curve_gap := _broad_square_gap(flat, centre)
-			var margin := minf(original_gap - 1.03, 1.0 - curve_gap)
-			if margin > best:
-				best = margin
-				chosen = Vector2i(col, row)
-	var lake_cell := chosen.y * S + chosen.x
-	lake.lake[lake_cell] = 1
-	lake.filled[lake_cell] += 0.025
-	var wet := Heightfield.new(lake, false)
-	var waterside: Dictionary = core.BuildRoadLine(data, wet.fast_water())
-	var dry := true
-	for i in waterside.x.size(): dry = dry and wet.depth_at(waterside.x[i] * 4.0, waterside.y[i] * 4.0) <= 0.3
-	check(dry and waterside.broad.refused.has("water"), "крупная форма: озеро в %s отклоняет участок, ось сухая %s" % [chosen, waterside.broad])
-
-	var need := (widths[0] * 4.0 + 2.0 * RoadRefinement.REACH + 2.0) / 4.0
-	var other := Vector2.ZERO
-	best = -INF
-	for col in range(132, 260, 2):
-		for row in range(156, 222, 2):
-			var at := Vector2(col, row) * 0.25
-			var margin := minf(_broad_gap(plain, at) - need - 0.15, need - _broad_gap(flat, at))
-			if margin > best:
-				best = margin
-				other = at
-	var beside := data.merged({near_axis_start = PackedInt32Array([0, 2]), near_axis_x = PackedFloat64Array([other.x - 0.1, other.x + 0.1]),
-		near_axis_y = PackedFloat64Array([other.y, other.y]), reach = RoadRefinement.REACH})
-	var foreign: Dictionary = core.BuildRoadLine(beside, plane.fast_water())
-	var gap := INF
-	for i in foreign.x.size(): gap = minf(gap, Grid.segment_dist(foreign.x[i], foreign.y[i], other.x - 0.1, other.y, other.x + 0.1, other.y) * 4.0)
-	check(foreign.broad.refused.has("clearance") and gap >= need * 4.0 - 0.05,
-		"крупная форма: чужая ось, зазор %.2f м, %s" % [gap, foreign.broad])
-
-	for i in w.N:
-		w.h[i] += 0.20 * (i % S) / StageTrails.HEIGHT_SCALE
-		w.filled[i] = w.h[i]
-	var slope := Heightfield.new(w, false)
-	var uphill: Dictionary = core.BuildRoadLine(data, slope.fast_water())
-	var max_grade := 0.0
-	for i in range(1, uphill.x.size()):
-		var a := Vector2(uphill.x[i - 1], uphill.y[i - 1]) * 4.0
-		var b := Vector2(uphill.x[i], uphill.y[i]) * 4.0
-		if a.distance_to(b) > 0.001:
-			max_grade = maxf(max_grade, absf(slope.ground_at(b.x, b.y) - slope.ground_at(a.x, a.y)) / a.distance_to(b))
-	check(uphill.broad.accepted > 0 and max_grade <= 0.201, "крупная форма: склон 20 %% (уклон %.2f %%)" % [100 * max_grade])
-
-
-func _broad_gap(line: Dictionary, at: Vector2) -> float:
-	var gap := INF
-	for i in range(1, line.x.size()):
-		gap = minf(gap, Grid.segment_dist(at.x, at.y, line.x[i - 1], line.y[i - 1], line.x[i], line.y[i]))
-	return gap
-
-
-func _broad_square_gap(line: Dictionary, at: Vector2) -> float:
-	var gap := INF
-	for i in range(1, line.x.size()):
-		if absf(line.x[i] - at.x) > 3.0: continue
-		var a := Vector2(line.x[i - 1], line.y[i - 1]) - at
-		var b := Vector2(line.x[i], line.y[i]) - at
-		for j in 17:
-			var q := a.lerp(b, j / 16.0)
-			gap = minf(gap, maxf(absf(q.x), absf(q.y)))
-	return gap
-
-
-## Синтетический мир: water — "none" | "lake" | "river" (полоса x = 44..45 поперёк карты)
-func _switchback_climbs() -> void:
-	var core: Object = Grid.native_grid()
-	var raw := PackedFloat64Array([48.5, 28.5, 57.5, 35.5, 59.5, 37.5, 59.5, 41.5, 57.5, 43.5, 48.5, 50.5])
-	var axis := PackedFloat64Array()
-	for i in range(0, raw.size(), 2): axis.append_array([raw[i], raw[i + 1], 0.65])
-	var pins := PackedByteArray([1, 0, 0, 0, 0, 1])
-	var cases := [
-		["склон 30 %", 0.30, StageTrails.ROAD_LIMIT, 8.0, true],
-		["склон 42 %", 0.42, StageTrails.TRAIL_GRADE, 6.0, true],
-		["склон 57 %", 0.57, StageTrails.MOUNTAIN_GRADE, 6.0, true],
-		["уступ", 0.42, StageTrails.TRAIL_GRADE, 6.0, true],
-		["узкий гребень", 0.42, StageTrails.TRAIL_GRADE, 6.0, false],
-		["склон над водой", 0.42, StageTrails.TRAIL_GRADE, 6.0, false],
-		["чужие оси", 0.42, StageTrails.TRAIL_GRADE, 6.0, false],
-		["пологая хорда", 0.35, StageTrails.TRAIL_GRADE, 6.0, false],
-	]
-	for row: Array in cases:
-		var w := _world("none")
-		for y in S:
-			for x in S:
-				var i := y * S + x
-				var h: float = 0.20 + row[1] * y / StageTrails.HEIGHT_SCALE
-				if row[0] == "уступ":
-					h -= 0.18 * clampf(y - 39.0, -3.5, 3.5) * clampf((x - 59.0) / 5.0, 0.0, 1.0) / StageTrails.HEIGHT_SCALE
-				elif row[0] != "пологая хорда":
-					# Хорда остаётся крутой, а площадки для разворота лежат в стороне от неё.
-					var shoulder := clampf(maxf(48.0 - x, x - 58.0) / 7.0, 0.0, 1.0)
-					h -= 0.12 * clampf(y - 39.5, -6.0, 6.0) * shoulder / StageTrails.HEIGHT_SCALE
-				if row[0] == "узкий гребень":
-					h -= maxf(48.0 - x, x - 60.0) / StageTrails.HEIGHT_SCALE if x < 48 or x > 60 else 0.0
-				w.h[i] = h
-				w.filled[i] = h
-				if row[0] == "склон над водой" and (x < 48 or x > 60):
-					w.lake[i] = 1
-					w.filled[i] = h + 0.03
-		var surface := Heightfield.new(w, false)
-		var input := {axis = axis, raw = raw, pins = pins, W = S, H = S,
-			on_axis = PackedByteArray(), profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = row[2],
-			bench_cross = StageTrails.BENCH_CROSS, radius = row[3], protected_ride = false}
-		if row[0] == "чужие оси":
-			input.reach = RoadRefinement.REACH
-			input.route_index = -1
-			input.foreign = {x = PackedFloat64Array([42.0, 42.0, 55.0, 55.0]), y = PackedFloat64Array([20.0, 55.0, 20.0, 55.0]),
-				starts = PackedInt32Array([0, 2, 4])}
-		var found: Dictionary = core.BuildRoadSwitchbacks(input, surface.fast_water())
-		var label := "серпантин: %s (%s кандидатов, %s)" % [row[0], found.candidates, str(found.refused)]
-		if row[4] and not found.placements.is_empty():
-			var p: Dictionary = found.placements[0]
-			var pts: PackedFloat64Array = found.points
-			var on_ledge: bool = row[0] != "уступ" or (p.turns[0][0] >= 64.0 and absf(p.turns[0][1] - 39.5) <= 2.5)
-			check(found.candidates > 0 and p.shortest_arm_m >= 25.0 and p.radius_m >= row[3] and p.long_climb and on_ledge
-				and pts[0] == axis[0] and pts[1] == axis[1] and pts[-3] == axis[-3] and pts[-2] == axis[-2],
-				"серпантин: %s (%s)" % [row[0], str(found.placements)])
-		else:
-			var reason_ok: bool = not found.refused.is_empty()
-			if row[0] == "склон над водой": reason_ok = found.refused.has("water")
-			if row[0] == "чужие оси": reason_ok = found.refused.has("clearance")
-			if row[0] == "пологая хорда": reason_ok = found.refused.has("chordgrade")
-			check(not row[4] and found.candidates > 0 and found.placements.is_empty() and reason_ok, label)
 
 
 func _world(water: String, size := S) -> WorldData:
@@ -627,28 +449,28 @@ func _ports() -> void:
 	paths.append(fresh)
 	var out := _core(w, surface, finder, {mode = "probe", probe = "ports", paths = paths})
 	if out.is_empty(): return
-	var near := StageTrails._net_near(w)
-	var net := StageTrails._net_cells(w)
+	var near := RoadReference._net_near(w)
+	var net := RoadReference._net_cells(w)
 	var same := true
 	for k in paths.size():
 		var r: Dictionary = out.ports[k]
 		var q: PackedInt32Array = paths[k]
 		var side := StageTrails._parallel_stats(w, q, near, net)
-		var ok: bool = is_equal_approx(r.share, side.x) and int(r.longest) == int(side.y) and bool(r.rejoins) == StageTrails._rejoins(w, q) \
-			and bool(r.exit_a) == StageTrails._exit_loop(w, q, false) and bool(r.exit_b) == StageTrails._exit_loop(w, q, true) \
-			and PackedInt32Array(r.beyond) == StageTrails._beyond_exits(w, q) and PackedInt32Array(r.core) == StageTrails._core(w, q) \
-			and bool(r.new_ground) == StageTrails._new_ground(w, q)
-		if not ok: print("  путь %d: C# %s, GDScript %.3f/%d %s %s %s" % [k, str(r).left(200), side.x, side.y, StageTrails._rejoins(w, q),
-			StageTrails._exit_loop(w, q, false), StageTrails._exit_loop(w, q, true)])
+		var ok: bool = is_equal_approx(r.share, side.x) and int(r.longest) == int(side.y) and bool(r.rejoins) == RoadReference._rejoins(w, q) \
+			and bool(r.exit_a) == RoadReference._exit_loop(w, q, false) and bool(r.exit_b) == RoadReference._exit_loop(w, q, true) \
+			and PackedInt32Array(r.beyond) == RoadReference._beyond_exits(w, q) and PackedInt32Array(r.core) == RoadReference._core(w, q) \
+			and bool(r.new_ground) == RoadReference._new_ground(w, q)
+		if not ok: print("  путь %d: C# %s, GDScript %.3f/%d %s %s %s" % [k, str(r).left(200), side.x, side.y, RoadReference._rejoins(w, q),
+			RoadReference._exit_loop(w, q, false), RoadReference._exit_loop(w, q, true)])
 		same = same and ok
 	var cells := PackedInt32Array()
 	for q: PackedInt32Array in paths: cells.append_array(q)
-	same = same and finder.fast().CorridorMask(w.W, w.H, cells, StageTrails.AVOID_R) == StageTrails._corridor(w, paths)
+	same = same and finder.fast().CorridorMask(w.W, w.H, cells, StageTrails.AVOID_R) == RoadReference._corridor(w, paths)
 	var lw := _world("lake")
-	same = same and finder.fast().WaterDistance(lw.W, lw.H, lw.ocean, lw.lake) == StageTrails._water_dist(lw)
+	same = same and finder.fast().WaterDistance(lw.W, lw.H, lw.ocean, lw.lake) == RoadReference._water_dist(lw)
 	# берег и смотровые точки: точки вокруг озера и холма
-	var water_d := StageTrails._water_dist(lw)
-	var corr := StageTrails._corridor(lw, [PackedInt32Array([50 * S + 30, 51 * S + 30])])
+	var water_d := RoadReference._water_dist(lw)
+	var corr := RoadReference._corridor(lw, [PackedInt32Array([50 * S + 30, 51 * S + 30])])
 	var anchors := PackedInt32Array()
 	for k in 40: anchors.append((10 + (k * 7) % 76) * S + 8 + (k * 13) % 80)
 	var shores: PackedInt32Array = finder.fast().ShoreTargets(lw.W, lw.H, anchors, corr, lw.cost, water_d, StageTrails.SHORE_MIN, StageTrails.SHORE_MAX)
@@ -656,13 +478,13 @@ func _ports() -> void:
 		StageTrails.VIEW_RISE / (StageTrails.HEIGHT_SCALE * GameConfig.TILE), StageTrails.VIEW_MIN, StageTrails.VIEW_MAX, StageTrails.VIEW_STEP)
 	var found := [0, 0]
 	for k in anchors.size():
-		same = same and shores[k] == StageTrails._shore(lw, anchors[k], corr, water_d) and views[k] == StageTrails._overlook(lw, anchors[k], corr)
+		same = same and shores[k] == RoadReference._shore(lw, anchors[k], corr, water_d) and views[k] == RoadReference._overlook(lw, anchors[k], corr)
 		found[0] += int(shores[k] >= 0)
 		found[1] += int(views[k] >= 0)
 	print("  берег найден у %d, смотровая у %d из %d точек" % [found[0], found[1], anchors.size()])
 	same = same and found[0] > 0 and found[1] > 0
 	var varied: bool = out.ports[0].longest > 0 and out.ports[1].rejoins
-	check(same and varied, "порты правил V1 = StageTrails (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground, _corridor, _water_dist, _shore, _overlook)")
+	check(same and varied, "порты C# совпадают с эталоном GDScript (_parallel_stats, _rejoins, _exit_loop, _beyond_exits, _core, _new_ground, _corridor, _water_dist, _shore, _overlook)")
 
 
 ## Шаг 3: локальное обновление полей после принятия путей = полный пересчёт (в радиусе, где их читают правила)

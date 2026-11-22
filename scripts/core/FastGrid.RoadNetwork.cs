@@ -316,10 +316,8 @@ public partial class FastGrid
 				input["mountain_grade"].AsDouble(), input["bench_cross"].AsDouble(), input["speed"].AsDouble(), input["accel"].AsDouble());
 			// фаза 4: сглаживание линий всех видов (road, trail, mountain и связей остова)
 			var smoothStats = new Godot.Collections.Dictionary();
-			var broadStats = new Godot.Collections.Dictionary();
 			bool smooth = input.ContainsKey("smooth_line") && input["smooth_line"].AsBool();
-			bool broad = input.ContainsKey("broad_spacing_m");
-			if (smooth || broad)
+			if (smooth)
 			{
 				builder.Biharmonic = input.ContainsKey("biharmonic") && input["biharmonic"].AsBool();
 				RoadGraph axes = null;
@@ -331,30 +329,18 @@ public partial class FastGrid
 				}
 				var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), axes,
 					input.ContainsKey("reach") ? input["reach"].AsDouble() : 0.0);
-				if (broad)
-				{
-					line = builder.ShapeBroadCurve(line, pts, validator, input["broad_spacing_m"].AsDouble(), input["broad_radius_m"].AsDouble(),
-						input["broad_offset_m"].AsDouble(), input["broad_straight_m"].AsDouble(), out var pass);
-					var refused = new Godot.Collections.Dictionary();
-					foreach (var (reason, count) in pass.Refused) refused[reason] = count;
-					broadStats["accepted"] = pass.Accepted;
-					broadStats["refused"] = refused;
-				}
-				if (smooth)
-				{
-					line = builder.Smooth(line, validator);
-					smoothStats["moved"] = builder.SmoothMoved;
-					smoothStats["rejected"] = builder.SmoothRejected;
-					smoothStats["hairpins"] = builder.Hairpins;
-					smoothStats["hairpins_moved"] = builder.HairpinsMoved;
-				}
+				line = builder.Smooth(line, validator);
+				smoothStats["moved"] = builder.SmoothMoved;
+				smoothStats["rejected"] = builder.SmoothRejected;
+				smoothStats["hairpins"] = builder.Hairpins;
+				smoothStats["hairpins_moved"] = builder.HairpinsMoved;
 			}
 			var ox = new double[line.Count];
 			var oy = new double[line.Count];
 			var ow = new double[line.Count];
 			for (int k = 0; k < line.Count; k++) { ox[k] = line[k].X; oy[k] = line[k].Y; ow[k] = line[k].W; }
 			return new Godot.Collections.Dictionary { ["x"] = ox, ["y"] = oy, ["w"] = ow, ["fallback"] = builder.Fallback,
-				["smooth"] = smoothStats, ["broad"] = broadStats };
+				["smooth"] = smoothStats };
 		}
 		catch (Exception e)
 		{
@@ -411,58 +397,6 @@ public partial class FastGrid
 		result["from_m"] = from;
 		result["to_m"] = to;
 		return result;
-	}
-
-	/// <summary>Локальная перестройка подъёма на готовой оси. Чужие оси нужны только после прохождения проверок рельефа.</summary>
-	public Godot.Collections.Dictionary BuildRoadSwitchbacks(Godot.Collections.Dictionary input, FastGrid water)
-	{
-		static System.Collections.Generic.List<LineBuilder.P> Unpack(double[] values, int stride)
-		{
-			var points = new System.Collections.Generic.List<LineBuilder.P>(values.Length / stride);
-			for (int i = 0; i < values.Length; i += stride)
-				points.Add(new LineBuilder.P(values[i], values[i + 1], stride == 3 ? values[i + 2] : 0));
-			return points;
-		}
-		var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble());
-		GeometryValidator foreign = null;
-		GeometryValidator Foreign()
-		{
-			if (foreign != null) return foreign;
-			if (!input.ContainsKey("foreign")) return foreign = validator;
-			var packed = input["foreign"].AsGodotDictionary();
-			var graph = new RoadGraph(0.05);
-			graph.IndexAxes(packed["x"].AsFloat64Array(), packed["y"].AsFloat64Array(), packed["starts"].AsInt32Array(),
-				input["route_index"].AsInt32());
-			return foreign = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), graph, input["reach"].AsDouble());
-		}
-		var bounds = new LineBuilder(water, input["on_axis"].AsByteArray(), input["W"].AsInt32(), input["H"].AsInt32());
-		var builder = new SwitchbackBuilder(validator, Foreign, bounds.AxisBlocked, input["grade"].AsDouble(),
-			input["bench_cross"].AsDouble(), input["radius"].AsDouble(), input["protected_ride"].AsBool());
-		var line = builder.Rebuild(Unpack(input["axis"].AsFloat64Array(), 3), Unpack(input["raw"].AsFloat64Array(), 2),
-			input["pins"].AsByteArray());
-		var placements = new Godot.Collections.Array();
-		foreach (var p in builder.Placements)
-		{
-			var turns = new Godot.Collections.Array();
-			foreach (var t in p.Turns) turns.Add(new double[] { t.X, t.Y });
-			placements.Add(new Godot.Collections.Dictionary { ["start"] = new double[] { p.Start.X, p.Start.Y },
-				["end"] = new double[] { p.End.X, p.End.Y }, ["turns"] = turns, ["radius_m"] = p.Radius,
-				["shortest_arm_m"] = p.ShortestArm, ["length_m"] = p.Length, ["rise_m"] = p.Rise, ["long_climb"] = p.Long });
-		}
-		var points = new double[builder.Placements.Count == 0 ? 0 : line.Count * 3];
-		for (int i = 0; i < points.Length / 3; i++)
-		{
-			points[3 * i] = line[i].X;
-			points[3 * i + 1] = line[i].Y;
-			points[3 * i + 2] = line[i].W;
-		}
-		var refused = new Godot.Collections.Dictionary();
-		foreach (var pair in builder.Refused) refused[pair.Key.ToString().ToLowerInvariant()] = pair.Value;
-		var spots = new Godot.Collections.Array();
-		foreach (var (at, why) in builder.RefusalSpots)
-			spots.Add(new Godot.Collections.Dictionary { ["at"] = new double[] { at.X, at.Y }, ["reason"] = why.ToString().ToLowerInvariant() });
-		return new Godot.Collections.Dictionary { ["points"] = points, ["placements"] = placements,
-			["candidates"] = builder.Candidates, ["refused"] = refused, ["spots"] = spots };
 	}
 
 	/// <summary>mode: "loops" — петли (t-спаннер), "spurs" — ответвления; "probe" — проверки стенда road_v2_test.</summary>

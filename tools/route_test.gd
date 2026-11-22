@@ -4,6 +4,7 @@ var climb_costs := RoadTuning.current().routing.climb_costs
 ## Проверка маршрутов: проезжаемый рельеф 4.2, полезные связи, препятствия и реальные миры.
 ## -- --gdscript проверяет ту же логику без C#; -- --quick — только искусственный рельеф.
 
+const RoadReference := preload("res://tools/road_network_reference.gd")
 const SelfTest := preload("res://tools/selftest.gd")
 const SEEDS := ["Север-1234", "Туман-4821", "Ущелье", "Янтарь-5150", "a1", "b2", "c3", "d4", "e5", "f6", "g7", "h8"]
 var _fails := 0
@@ -106,9 +107,9 @@ func _connection_check(blocked: bool) -> void:
 	if blocked:
 		_check(w.trails.is_empty() and is_equal_approx(before, after), "закрытая местность не получает обязательную альтернативную дорогу")
 	else:
-		_check(after < before / StageTrails.SHORTCUT, "доступный проход сокращает обход по существующей сети")
+		_check(after < before / RoadReference.SHORTCUT, "доступный проход сокращает обход по существующей сети")
 	# На ровной земле параллельная линия не считается другим перевалом или долиной.
-	_check(not StageTrails._different_relief(w, paths[0][2], paths[1][2]), "плоская копия пути не оправдывает петлю")
+	_check(not RoadReference._different_relief(w, paths[0][2], paths[1][2]), "плоская копия пути не оправдывает петлю")
 	if not blocked:
 		# Та же пара направлений становится полезной, когда рядом с дорогой через гребень есть долина.
 		w.cost.fill(1.0)

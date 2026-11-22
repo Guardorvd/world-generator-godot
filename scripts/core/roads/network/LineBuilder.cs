@@ -473,19 +473,6 @@ public sealed class LineBuilder
 	/// <summary>Фаза 3.3+: сглаживание с бигармоническим членом Δ⁴.</summary>
 	public bool Biharmonic = true;
 
-	internal List<P> ShapeBroadCurve(List<P> line, List<P> search, GeometryValidator validator, double spacing,
-		double radius, double offset, double straight, out BroadCurve pass)
-	{
-		pass = new BroadCurve(validator, AxisBlocked, spacing, radius, offset, straight, _grade, _cross);
-		if (_raw == null || _raw.Count < 3 || _rawPinned == null || spacing <= 0 || radius <= 0 || offset <= 0)
-			return line;
-		var (points, pins) = pass.Fit(_raw, _rawPinned, search);
-		if (pass.Accepted == 0) return line;
-		_raw = points;
-		_rawPinned = pins;
-		return Stations(points);
-	}
-
 	/// <summary>Сглаживание по прорежённой линии (~4 м) до Stations(): ресэмпл свободных участков с локальным возвратом _raw
 	/// при редком нарушении 2-м профиля, одновременные Δ⁴-проходы и прицельный Лаплас с откатом по очереди зависимостей,
 	/// монотонная защита наибольшего угла на хордах 4 м в [i−3, i+3], 2-м профиль в окне и скругление вершин > 18°.</summary>

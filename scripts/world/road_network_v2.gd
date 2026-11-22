@@ -302,7 +302,7 @@ static func plan_inland_connections(w: WorldData, finder: Pathfinder, surface: H
 
 
 ## Цели ответвлений правилами V1: берег (_shore от точек перегонов), смотровые (_overlook), вершины без тропы.
-## Коридор прежних путей, расстояние до воды, берег и смотровые — StageTrails._corridor, _water_dist, _shore, _overlook
+## Коридор прежних путей, расстояние до воды, берег и смотровые вычисляет FastGrid.
 ## (порты на C#: CorridorMask, WaterDistance, ShoreTargets, Overlooks; сверка — road_v2_test). Береговые цели расставлены через
 ## SHORE_GAP, как в V1 (и неудачная попытка занимает место); их не больше 3 × предел троп к берегу.
 ## Возвращает {targets, kinds, anchors, peaks_keep}.
@@ -541,11 +541,6 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
-	if smooth_lines and routing.broad_curves_enabled:
-		data.broad_spacing_m = float(routing.broad_spacing_m[design])
-		data.broad_radius_m = float(routing.broad_radius_m[design])
-		data.broad_offset_m = float(routing.broad_offset_m[design])
-		data.broad_straight_m = routing.broad_straight_m
 	if smooth_lines:
 		_add_near_axes(w, pts, data)
 	for end in 2:
@@ -562,12 +557,6 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		var smooth: Dictionary = block.get_or_add("smooth", {lines = 0, moved = 0, rejected = 0, hairpins = 0, hairpins_moved = 0})
 		smooth.lines += 1
 		for key: String in ["moved", "rejected", "hairpins", "hairpins_moved"]: smooth[key] += int(out.smooth[key])
-	if not (out.broad as Dictionary).is_empty():
-		var profile: Dictionary = w.generation_profile.get_or_add("road_broad_curves", {})
-		var stats: Dictionary = profile.get_or_add(design, {accepted = 0, refused = {}})
-		stats.accepted += out.broad.accepted
-		for reason: String in out.broad.refused:
-			stats.refused[reason] = int(stats.refused.get(reason, 0)) + int(out.broad.refused[reason])
 	if out.fallback:
 		StageTrails.RoadLine.fallbacks += 1
 		var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
@@ -588,7 +577,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 	for p: Dictionary in pts:
 		width = maxf(width, p.w)
 	# Запас на сглаживание оси хозяина и новой линии, плюс диагональ клетки.
-	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0 + float(data.get("broad_offset_m", 0.0))) / GameConfig.TILE + 3.0)
+	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + 3.0)
 	var hosts := {}
 	for p: Dictionary in pts:
 		var px := floori(p.x)
@@ -700,73 +689,6 @@ static func _aligned_station(station: float, before: PackedFloat64Array, after: 
 	if i <= 0: return after[0]
 	if i >= before.size(): return after[-1]
 	return lerpf(after[i - 1], after[i], inverse_lerp(before[i - 1], before[i], station))
-
-
-## Перестраивает только конечную геометрию. Поиск, связи и записанные интервалы веломаршрутов уже готовы.
-static func reshape_climbs(w: WorldData, surface: Heightfield, on_axis: PackedByteArray) -> void:
-	var enabled: bool = RoadTuning.current().routing.switchbacks_enabled
-	var stats := {enabled = enabled, candidates = 0, rebuilt = 0, turns = 0, long_climb_turns = 0,
-		refused = {}, placements = [], refusals_at = []}
-	w.generation_profile.road_switchbacks = stats
-	if not enabled: return
-	var water: Object = surface.fast_water()
-	if water == null:
-		push_error("Сеть V2: серпантинам нужна поверхность C#")
-		return
-	var core: Object = _line_core if _line_core != null else Grid.native_grid()
-	_line_core = core
-	var ride_sections := {}
-	for ride: Dictionary in w.road_rides.routes.values():
-		for leg: Dictionary in ride.legs: ride_sections[leg.section] = true
-	var anchors := {}
-	for t: Dictionary in w.trails:
-		if t.kind == "animal" or t.pts.is_empty(): continue
-		for i: int in [0, t.pts.size() - 1]:
-			var p: Dictionary = t.pts[i]
-			anchors[Topology.anchor_key(Vector2(p.x, p.y), w.world_origin)] = true
-	var axes := _published_axes(w)
-	for r in w.trails.size():
-		var t: Dictionary = w.trails[r]
-		if t.kind not in ["road", "trail", "mountain"] or t.has("trail_id") or t.pts.size() < 3: continue
-		var cells: PackedInt32Array = w.generation.road_cells[r]
-		if cells.size() < 4: continue
-		var raw := PackedFloat64Array()
-		for c: int in cells:
-			raw.append(c % w.W + 0.5)
-			raw.append(c / w.W + 0.5)
-		var packed := PackedFloat64Array()
-		var pins := PackedByteArray()
-		for p: Dictionary in t.pts:
-			packed.append(p.x)
-			packed.append(p.y)
-			packed.append(p.w)
-			pins.append(int(anchors.has(Topology.anchor_key(Vector2(p.x, p.y), w.world_origin))))
-		var grade := StageTrails.MOUNTAIN_GRADE if t.kind == "mountain" else (StageTrails.ROAD_LIMIT if t.kind == "road" else StageTrails.TRAIL_GRADE)
-		var input := {axis = packed, raw = raw, pins = pins, W = w.W, H = w.H, on_axis = on_axis,
-			profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = grade, bench_cross = StageTrails.BENCH_CROSS,
-			radius = 8.0 if t.kind == "road" else 6.0, protected_ride = ride_sections.has(t.road_id),
-			reach = RoadRefinement.REACH, foreign = axes, route_index = r}
-		var result: Dictionary = core.BuildRoadSwitchbacks(input, water)
-		stats.candidates += result.candidates
-		for reason: String in result.refused:
-			stats.refused[reason] = stats.refused.get(reason, 0) + result.refused[reason]
-		for spot: Dictionary in result.spots:
-			spot.kind = t.kind
-			spot.section = t.road_id
-			stats.refusals_at.append(spot)
-		if result.placements.is_empty(): continue
-		for p: Dictionary in result.placements:
-			p.kind = t.kind
-			p.section = t.road_id
-			stats.placements.append(p)
-			stats.rebuilt += 1
-			stats.turns += p.turns.size()
-			if p.long_climb: stats.long_climb_turns += p.turns.size()
-		var points: PackedFloat64Array = result.points
-		var shaped := []
-		for i in range(0, points.size(), 3): shaped.append({x = points[i], y = points[i + 1], w = points[i + 2]})
-		t.pts = shaped
-		axes = _published_axes(w)
 
 
 static func _published_axes(w: WorldData) -> Dictionary:

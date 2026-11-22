@@ -9,7 +9,7 @@ const Section := preload("res://scripts/game/road_section_tuning.gd")
 const Obstacles := preload("res://scripts/game/road_obstacle_tuning.gd")
 ## Отпечатки значений до добавления зависимостей. С этими значениями старый кэш уже правильный.
 const BASELINE_BED_DIGEST := "2fe77c228432"
-const BASELINE_ROUTING_DIGEST := "0fba647a3bdd"
+const BASELINE_ROUTING_DIGEST := "992078372518"
 const BASELINE_WIDTH_DIGEST := "2f05a2e55136"
 const BASELINE_CLEARANCE_DIGEST := "1a9220c8b0d0"
 const BASELINE_TREAD_DIGEST := "8bc1a25b1f49"

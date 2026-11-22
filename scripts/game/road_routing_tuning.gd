@@ -31,14 +31,6 @@ const KINDS := ["road", "trail", "mountain"]
 }
 
 @export_group("Линия по видам пути")
-## Локальная перестройка крутого подъёма в V2.
-@export var switchbacks_enabled := false
-## Опорный шаг, минимальный радиус и максимальное смещение оси V2, в метрах.
-@export var broad_curves_enabled := false
-@export var broad_spacing_m := {road = 80.0, trail = 50.0, mountain = 40.0}
-@export var broad_radius_m := {road = 60.0, trail = 30.0, mountain = 15.0}
-@export var broad_offset_m := {road = 15.0, trail = 10.0, mountain = 6.0}
-@export var broad_straight_m := 0.35
 ## Круговые дуги и короткие переходы к существующим плечам оси V2.
 @export var arc_bends_enabled := true
 @export var arc_radii_m := PackedFloat64Array([150.0, 100.0, 60.0])
@@ -70,7 +62,7 @@ const KINDS := ["road", "trail", "mountain"]
 
 
 func valid() -> bool:
-	for table: Dictionary in [climb_costs, turn_costs, bend_costs, straighten, line_relax, broad_spacing_m, broad_radius_m, broad_offset_m]:
+	for table: Dictionary in [climb_costs, turn_costs, bend_costs, straighten, line_relax]:
 		if not valid_kind_values(table, KINDS):
 			return false
 	return (is_finite(bridge_cost) and bridge_cost >= 1.0 and is_finite(side_cost) and side_cost >= 1.0
@@ -83,8 +75,7 @@ func cache_values() -> Array:
 	for kind: String in KINDS:
 		values.append_array([float(climb_costs[kind]), float(turn_costs[kind]), float(bend_costs[kind]),
 			float(straighten[kind]), float(line_relax[kind])])
-	values.append_array([_ordered_values(character_field), switchbacks_enabled, broad_curves_enabled,
-		_ordered_values(broad_spacing_m), _ordered_values(broad_radius_m), _ordered_values(broad_offset_m), broad_straight_m,
+	values.append_array([_ordered_values(character_field),
 		ride_search_reserve, _ordered_values(inland_connector), arc_bends_enabled, arc_radii_m, arc_angle_deg,
 		arc_shoulder_m, arc_fit_m, arc_transitions_m, axis_protection_m, axis_min_radius_m, axis_meander_enabled,
 		axis_meander_min_m, axis_meander_fit_m, axis_meander_search_m, axis_meander_min_shift_m,

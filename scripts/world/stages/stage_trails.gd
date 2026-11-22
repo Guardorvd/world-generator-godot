@@ -47,14 +47,10 @@ const FORD_LEN := 2         # тропа переходит вброд реку 
 const FORD_SLOPE := 0.3     # на более крутом перепаде русла глубина между клетками ненадёжна для брода
 const DETOUR := 4.5         # обход горы не длиннее стольких прямых расстояний между входами туннеля
 const DETOUR_PREFER := 2.5  # обход не длиннее стольких длин туннеля выбирается вместо туннеля
-const ALT_LEN := 2.0        # второй путь не длиннее стольких первых
 const BRANCH_LEN := 3.0     # тропа к берегу не длиннее стольких прямых расстояний
-const SHORTCUT := 1.25      # новая связь сокращает существующий обход хотя бы на пятую часть
-const RELIEF_CHOICE := 0.02 # другой проход отличается высотой примерно на 5 м (единицы w.h)
 const SHORE_MIN := 15       # береговой ориентир не ближе стольких клеток от поселения
 const SHORE_MAX := 45       # и не дальше стольких
 const AVOID_R := 3          # коридор вокруг прежнего пути, клеток: второй путь его избегает
-const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
 const REUSE_R := 5.0        # путь идёт по уже построенному мосту или туннелю, если оба его конца не дальше стольких клеток
 const KEY_R := 1.5          # и проходит не дальше стольких клеток от того, что пересекает путь (_key_cell)
 const CROSS_GAP := 8.0      # 10.4: вода ближе стольких клеток к мосту закрыта для следующих путей — они сходятся к одной переправе
@@ -126,7 +122,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	RideRoutes.run(w, finder, surface, on_axis)
 	if network_v2:
 		RoadNetworkV2.reshape_axes(w, surface, on_axis, primary_end)
-	_fit_sections(w, surface, PackedByteArray(), Callable(), on_axis if network_v2 else PackedByteArray())
+	_fit_sections(w, surface)
 	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
 	w.generation_profile.homes_laid = StageLandmarks.count_homes(w.settlements)
@@ -148,13 +144,8 @@ static func run(w: WorldData, step: Callable) -> void:
 
 
 ## Keep inherited plan marks and protected structure footprints when the final tread replaces the search ribbon.
-static func _fit_sections(w: WorldData, surface: Heightfield, inherited := PackedByteArray(), accept := Callable(),
-		switchback_axis := PackedByteArray()) -> void:
+static func _fit_sections(w: WorldData, surface: Heightfield, inherited := PackedByteArray(), accept := Callable()) -> void:
 	Section.fit(w, surface, accept)
-	if not switchback_axis.is_empty():
-		var started := Time.get_ticks_usec()
-		RoadNetworkV2.reshape_climbs(w, surface, switchback_axis)
-		_part("road_switchbacks", started)
 	var mask := w.path_mask
 	for i in mask.size():
 		if mask[i] >= 2:
@@ -1334,7 +1325,7 @@ static func _try_road_structures(w: WorldData, path: PackedInt32Array, finder: P
 ## Новая связь полезна, если сокращает реальный обход по сети. Второй проход нужен,
 ## если идёт по другому уровню рельефа. Оба ищутся по суше, без обязательного числа петель.
 ## Соседи по пространству (Габриэль: внутри круга с диаметром a–b нет другого поселения), без связей остова и не дальше
-## 0,45 карты: [a, b, расстояние], от близких к дальним. Общий отбор пар вторых путей V1 и петель V2.
+## 0,45 карты: [a, b, расстояние], от близких к дальним. Общий отбор пар для bridge_gap и петель V2.
 static func _gabriel_pairs(w: WorldData, paths: Array) -> Array:
 	var st := w.settlements
 	var n := st.size()
@@ -1358,13 +1349,12 @@ static func _gabriel_pairs(w: WorldData, paths: Array) -> Array:
 	return pairs
 
 
+## Связь раздельных дорожных сетей, затем петли и ответвления V2.
 static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, state: Dictionary, step: Callable = Callable()) -> void:
 	var st := w.settlements
 	var pairs := _gabriel_pairs(w, paths)
 	w.generation_profile.second_ways = []
-	var forks := RoadForks.new(w, state.on_axis)
 	var network := _network_cost(w)
-	var near := _net_near(w)
 	for index in pairs.size():
 		if finder.search_budget == 0: break
 		var e: Array = pairs[index]
@@ -1372,150 +1362,17 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			step.call(0.69 + 0.015 * index / maxi(1, pairs.size()), "Дополнительные тропы: %d/%d" % [index + 1, pairs.size()])
 		var a: int = st[e[0]].i
 		var b: int = st[e[1]].i
-		# Сеть V2: путь по сети нужен только сокращениям V1 — здесь достаточно знать, связаны ли места сетью
-		var reach_net := finder.can_reach(network, a, b)
-		if network_v2 and reach_net:
-			continue
-		var old := finder.find_path(network, a, b) if reach_net else PackedInt32Array()
-		if old.is_empty():
-			# С 9.8: соседи из разных сетей дорог (между ними река без места для моста) —
-			# тропа между сетями: вброд, по мосту для тропы или в обход.
-			var link := _land_path(finder, w.cost, a, b, "trail")
-			var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
-			if not joint.is_empty():
-				if network_v2:
-					joint = RoadNetworkV2.shape_land(w, finder, w.cost, joint, state.on_axis, "trail", TRAIL_GRADE)
-				_note_way(w, "bridge_gap", _add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface")))
-				paths.append([e[0], e[1], joint, false, e[2]])
-				network = _network_cost(w)
-				near = _net_near(w)
-			continue
-		# 21.11.2026: в сети V2 из этого цикла остаётся только тропа между сетями (bridge_gap); петли — RoadNetworkV2
-		if network_v2:
-			continue
-		var old_len := _length(w, old)
-		if old.is_empty() or old_len <= e[2] * SHORTCUT:
-			continue
-		# 16.11.2026: у удалённого места (SettlementRoles, роль remote) один подъезд — сокращений к нему нет.
-		# Тропа между сетями выше остаётся: без неё отрезанное место удалилось бы.
-		if _single_access(st[e[0]]) or _single_access(st[e[1]]):
-			continue
-		var corr := _corridor(w, [old])
-		var avoiding := _exit_cost(w, corr, a, b)
-		# Совпадение с прежней связью и доля новой земли — по добавляемой части (_core): общий выезд не в счёт
-		# Повторные касания сети в общем выезде (сход и возврат у поселения) не в счёт: _adds_network — за кругами EXIT_R
-		var q := _secondary_path(w, finder, forks, avoiding, a, b, state,
-			func(q: PackedInt32Array) -> bool: return _length(w, q) * SHORTCUT < old_len and _share(_core(w, q), corr) <= AVOID_SHARE and _new_ground(w, _core(w, q)) and _exit_clean(w, q, near))
-		if q.is_empty():
-			continue
-		_note_way(w, "shortcut", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
-		paths.append([e[0], e[1], q, false, e[2]])
+		if finder.can_reach(network, a, b): continue
+		var link := _land_path(finder, w.cost, a, b, "trail")
+		var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
+		if joint.is_empty(): continue
+		joint = RoadNetworkV2.shape_land(w, finder, w.cost, joint, state.on_axis, "trail", TRAIL_GRADE)
+		_note_way(w, "bridge_gap", _add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface")))
+		paths.append([e[0], e[1], joint, false, e[2]])
 		network = _network_cost(w)
-		near = _net_near(w)
-	# Сеть V2: петли (t-спаннер) и ответвления к берегу и смотровым точкам вместо обходов, берега и смотровых V1
-	if network_v2:
-		finder.search_budget = -1
-		RoadNetworkV2.plan_loops(w, finder, paths, road_cost, state)
-		RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false, state.get("v2_unsafe", PackedByteArray()))
-		return
-	# Проверяем каждую основную связь; плоская копия соседней дороги сама по себе не повод для петли.
-	var primary_paths := paths.duplicate()
-	for index in primary_paths.size():
-		if finder.search_budget == 0: break
-		var e: Array = primary_paths[index]
-		if not e[3] or _single_access(st[e[0]]) or _single_access(st[e[1]]):
-			continue
-		if step.is_valid():
-			step.call(0.705 + 0.015 * index / maxi(1, primary_paths.size()), "Обходные тропы: %d/%d" % [index + 1, primary_paths.size()])
-		var corr := _corridor(w, [e[2]])
-		var avoiding := _exit_cost(w, corr, st[e[0]].i, st[e[1]].i)
-		# Совпадение, новая земля, другой рельеф и удаление от связи — по добавляемой части (_core): общий выезд не в счёт
-		var q := _secondary_path(w, finder, forks, avoiding, st[e[0]].i, st[e[1]].i, state,
-			func(q: PackedInt32Array) -> bool: return _length(w, q) <= _length(w, e[2]) * ALT_LEN and _share(_core(w, q), corr) <= AVOID_SHARE and _new_ground(w, _core(w, q)) and _different_relief(w, _core(w, q), e[2]) and _exit_clean(w, q, near) and _far_share(w, _core(w, q), e[2]) >= FAR_SHARE)
-		if q.is_empty():
-			continue
-		_note_way(w, "alternative", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
-		paths.append([e[0], e[1], q, false, e[4]])
-		near = _net_near(w)
-	# Берег — самостоятельная цель исследования, даже у поселения с несколькими дорогами.
-	var all_paths: Array = []
-	for e in paths:
-		all_paths.append(e[2])
-	# Коридор зависит только от списка путей: пересчёт лишь после новой тропы.
-	var corr := PackedByteArray()
-	var corr_paths := -1
-	# 17.11.2026: берег ищется от точек на перегонах основных связей (_shore_anchors), а не от центра поселения:
-	# тропа к воде отходит там, где дорога проходит у берега, а не пятачком у деревни. Тропы к берегу не ближе
-	# SHORE_GAP друг к другу и не больше, чем поселений (прежний предел — одна на поселение).
-	var settle_d := _settle_dist(w)
-	var water_d := _water_dist(w)
-	var anchors := _shore_anchors(w, paths, settle_d, water_d)
-	var targets: Array[Vector2i] = []
-	var shores := 0
-	for index in anchors.size():
-		if finder.search_budget == 0 or shores >= st.size(): break
-		if step.is_valid():
-			step.call(0.72 + 0.02 * index / maxi(1, anchors.size()), "Тропы к берегам: %d/%d" % [index + 1, anchors.size()])
-		if corr_paths != all_paths.size():
-			corr = _corridor(w, all_paths)
-			corr_paths = all_paths.size()
-		var shore_us := Time.get_ticks_usec()
-		var t := _shore(w, anchors[index], corr, water_d)
-		_part("shore", shore_us)
-		var tv := Vector2i(t % w.W, t / w.W)
-		var spaced := true
-		for o: Vector2i in targets:
-			if (o - tv).length_squared() < SHORE_GAP * SHORE_GAP: spaced = false
-		if t >= 0 and spaced:
-			targets.append(tv) # и неудачная попытка: соседние точки перегона нашли бы тот же берег
-			if _spur(w, finder, anchors[index], t, SHORE_MAX, "shore", road_cost, state, near, settle_d, all_paths, forks):
-				shores += 1
-				near = _net_near(w)
-	# 17.11.2026: смотровые точки — вершины холмов над перегоном (_overlook): короткая тропа наверх, откуда видно долину.
-	# Те же точки перегонов (без условия воды), не ближе VIEW_GAP друг к другу, не больше, чем поселений.
-	var views := 0
-	var view_targets: Array[Vector2i] = []
-	var legs := _shore_anchors(w, paths, settle_d, PackedFloat32Array())
-	for index in legs.size():
-		if finder.search_budget == 0 or views >= st.size(): break
-		if corr_paths != all_paths.size():
-			corr = _corridor(w, all_paths)
-			corr_paths = all_paths.size()
-		var view_us := Time.get_ticks_usec()
-		var t := _overlook(w, legs[index], corr)
-		_part("overlook", view_us)
-		if t < 0: continue
-		var tv := Vector2i(t % w.W, t / w.W)
-		var spaced := true
-		for o: Vector2i in view_targets:
-			if (o - tv).length_squared() < VIEW_GAP * VIEW_GAP: spaced = false
-		if not spaced: continue
-		view_targets.append(tv)
-		if _spur(w, finder, legs[index], t, VIEW_MAX, "view", road_cost, state, near, settle_d, all_paths, forks):
-			views += 1
-			near = _net_near(w)
-
-
-## A single extra search can move where a through route leaves the existing road.
-## Keep all original route and structure checks, and fall back if the detour is poor.
-static func _secondary_path(w: WorldData, finder: Pathfinder, forks: RefCounted, cost: PackedFloat32Array,
-		a: int, b: int, state: Dictionary, accept: Callable) -> PackedInt32Array:
-	var path := _land_path(finder, cost, a, b, "trail")
-	if path.is_empty() or not accept.call(path):
-		return PackedInt32Array()
-	forks.refresh(state.on_axis)
-	var crowd: float = forks.pressure(path)
-	if crowd > 0.0 and finder.search_budget != 0:
-		var preferred: PackedFloat32Array = forks.preferred_cost(cost)
-		var limit := _fork_length_limit(w, path)
-		var better := func(q: PackedInt32Array) -> bool:
-			return _length(w, q) <= limit and forks.pressure(q) + 0.05 < crowd and accept.call(q)
-		var moved := _fork_search(finder, func() -> PackedInt32Array:
-			var q := _land_path(finder, preferred, a, b, "trail")
-			return _structures(w, q, false, finder, preferred, state, 0, ROAD_GRADE, better) if not q.is_empty() and better.call(q) else PackedInt32Array())
-		if not moved.is_empty():
-			return moved
-	return _structures(w, path, false, finder, cost, state, 0, ROAD_GRADE, accept)
+	finder.search_budget = -1
+	RoadNetworkV2.plan_loops(w, finder, paths, road_cost, state)
+	RoadNetworkV2.plan_spurs(w, finder, paths, road_cost, state.on_axis, state.get("surface"), false, state.get("v2_unsafe", PackedByteArray()))
 
 
 static func _fork_length_limit(w: WorldData, path: PackedInt32Array) -> float:
@@ -1563,78 +1420,11 @@ static func _fork_search(finder: Pathfinder, search: Callable) -> PackedInt32Arr
 	return path
 
 
-## Короткая тропа от сети к цели t (берег, смотровая точка): от ближайшей к цели точки сети (не дальше reach), а если
-## она у поселения или её нет — от точки перегона anchor. Не длиннее BRANCH_LEN прямых, не дубль сети. true — добавлена.
-static func _spur(w: WorldData, finder: Pathfinder, anchor: int, t: int, reach: int, what: String, road_cost: PackedFloat32Array,
-		state: Dictionary, near: PackedFloat32Array, settle_d: PackedFloat32Array, all_paths: Array, forks: RefCounted) -> bool:
-	var source := _nearest_path(w, t, reach)
-	if source < 0 or settle_d[source] < EXIT_R:
-		source = anchor
-	var direct := _land_path(finder, w.cost, source, t, "trail")
-	var max_length := _cell_centre(source, w.W).distance_to(_cell_centre(t, w.W)) * BRANCH_LEN
-	var accept := func(q: PackedInt32Array) -> bool:
-		return _length(w, q) <= max_length and _new_ground(w, q) and _adds_network(w, q, near)
-	var q := _from_quieter_fork(w, finder, forks, source, t, direct, "trail", TRAIL_GRADE, state.on_axis, settle_d,
-		func(p: PackedInt32Array, better: Callable) -> PackedInt32Array:
-			var valid := func(route: PackedInt32Array) -> bool: return accept.call(route) and better.call(route)
-			return _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE, valid) if valid.call(p) else PackedInt32Array())
-	if q.is_empty() and not direct.is_empty() and accept.call(direct):
-		q = _structures(w, direct, false, finder, w.cost, state, 0, ROAD_GRADE, accept)
-	if q.is_empty():
-		return false
-	_note_way(w, what, _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
-	all_paths.append(q)
-	return true
-
-
-static func _from_quieter_fork(w: WorldData, finder: Pathfinder, forks: RefCounted, source: int, target: int,
-		direct: PackedInt32Array, kind: String, grade: float, on_axis: PackedByteArray,
-		settle_d: PackedFloat32Array, finish: Callable) -> PackedInt32Array:
-	forks.refresh(on_axis)
-	var crowd: float = forks.pressure_at(source) if direct.is_empty() else forks.pressure(direct)
-	if crowd <= 0.0:
-		return PackedInt32Array()
-	var limit := _fork_length_limit(w, direct) if not direct.is_empty() else _cell_centre(source, w.W).distance_to(_cell_centre(target, w.W)) * BRANCH_LEN
-	var better := func(p: PackedInt32Array) -> bool: return _length(w, p) <= limit and forks.pressure(p) + 0.05 < crowd
-	var takeoff: int = forks.crowded_takeoff(direct)
-	for from: int in forks.sources(takeoff if takeoff >= 0 else source, settle_d, EXIT_R):
-		if from == source: continue # already searched
-		var path := _fork_search(finder, func() -> PackedInt32Array:
-			var p := _land_path(finder, w.cost, from, target, kind, grade)
-			return finish.call(p, better) if not p.is_empty() and better.call(p) else PackedInt32Array())
-		if not path.is_empty():
-			return path
-	return PackedInt32Array()
-
-
 const VIEW_MIN := 12     # смотровая точка не ближе стольких клеток (48 м) от точки перегона
 const VIEW_MAX := 45     # и не дальше (180 м)
 const VIEW_RISE := 15.0  # м: выше точки перегона хотя бы на столько
 const VIEW_GAP := 60     # клеток (240 м) между смотровыми точками
 const VIEW_STEP := 2     # шаг перебора клеток
-
-
-## Смотровая точка у клетки сети s: самая высокая клетка суши в кольце VIEW_MIN..VIEW_MAX (перебор через VIEW_STEP),
-## выше s на VIEW_RISE м, не в коридоре near прежних путей и не на краю кольца (там склон продолжается — это не вершина);
-## -1, если такой нет
-static func _overlook(w: WorldData, s: int, near: PackedByteArray) -> int:
-	var sx := s % w.W
-	var sy := s / w.W
-	var best := -1
-	var top := w.h[s] + VIEW_RISE / (HEIGHT_SCALE * GameConfig.TILE)
-	var best_d := 0
-	for y in range(maxi(0, sy - VIEW_MAX), mini(w.H, sy + VIEW_MAX + 1), VIEW_STEP):
-		for x in range(maxi(0, sx - VIEW_MAX), mini(w.W, sx + VIEW_MAX + 1), VIEW_STEP):
-			var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
-			if d < VIEW_MIN * VIEW_MIN or d > VIEW_MAX * VIEW_MAX: continue
-			var i := y * w.W + x
-			if w.h[i] <= top or near[i] != 0 or w.cost[i] == INF or w.ocean[i] != 0 or w.lake[i] != 0: continue
-			top = w.h[i]
-			best = i
-			best_d = d
-	if best < 0 or best_d > (VIEW_MAX - 3) * (VIEW_MAX - 3):
-		return -1
-	return best
 
 
 ## 16.11.2026: замер поездок по основным связям (только отчёт, на мир не влияет; стенд settlement_look --roads).
@@ -1689,21 +1479,6 @@ static func _note_way(w: WorldData, what: String, added: Array) -> void:
 	w.generation_profile.second_ways = notes
 
 
-static func _nearest_path(w: WorldData, target: int, radius: int) -> int:
-	var best := -1
-	var distance := radius * radius + 1
-	var tx := target % w.W
-	var ty := target / w.W
-	for y in range(maxi(0, ty - radius), mini(w.H, ty + radius + 1)):
-		for x in range(maxi(0, tx - radius), mini(w.W, tx + radius + 1)):
-			var i := y * w.W + x
-			var d := (x - tx) * (x - tx) + (y - ty) * (y - ty)
-			if w.path_mask[i] >= 2 and w.cost[i] != INF and d < distance:
-				best = i
-				distance = d
-	return best
-
-
 ## Сеть уже нарисованных путей людей: реальный обход учитывает развилки вне поселений.
 static func _network_cost(w: WorldData) -> PackedFloat32Array:
 	var part_us := Time.get_ticks_usec()
@@ -1748,41 +1523,16 @@ static func _length(w: WorldData, p: PackedInt32Array) -> float:
 	return length
 
 
-## Не дублировать маршрут, уже проходящий по другой части сети.
-static func _new_ground(w: WorldData, p: PackedInt32Array) -> bool:
-	var fresh := 0
-	for i in p:
-		if w.path_mask[i] < 2:
-			fresh += 1
-	return fresh > p.size() * 0.5
-
-
 ## 11.11.2026: второй путь не повторяет готовую сеть сбоку. Доля его новых клеток (не на сети), которые идут ближе
 ## NEAR_NET клеток к сети на той же высоте (разница меньше LEVEL_GAP м: полка выше по склону — другой уровень, это
 ## годится), кроме первых и последних NODE_CELLS клеток (подход к узлу всегда рядом с сетью).
-## near — Grid.distance_field от клеток сети (_net_near).
+## near — Grid.distance_field от клеток сети.
 const NODE_CELLS := 8
 const NEAR_NET := 8.0       # 32 м
 const LEVEL_GAP := 12.0     # м: склон 30 % в 30 м по горизонтали — ещё тот же склон
 const PARALLEL_SHARE := 0.25
 const PARALLEL_RUN := 15     # клеток (60 м) подряд вдоль сети — уже второе полотно
 const REJOIN_GAP := 40      # клеток пути: второе касание того же участка ближе этого — путь петляет через дорогу
-const FAR_R := 10.0         # обход уходит от своей связи дальше этого (клеток, 40 м)
-const FAR_SHARE := 0.3      # хотя бы такой долей
-
-
-## Клетки сети (участки путей людей) и расстояние до них
-static func _net_cells(w: WorldData) -> PackedByteArray:
-	var net := PackedByteArray()
-	net.resize(w.N)
-	var owner := w.generation.road_owner
-	for i in w.N:
-		if owner[i] >= 0: net[i] = 1
-	return net
-
-
-static func _net_near(w: WorldData) -> PackedFloat32Array:
-	return Grid.distance_field(w.W, w.H, _net_cells(w))
 
 
 ## Вдоль сети: Vector2(доля, самый длинный подряд участок в клетках) новых клеток пути (net[i] == 0), которые идут
@@ -1818,60 +1568,6 @@ static func _parallel_stats(w: WorldData, p: PackedInt32Array, near: PackedFloat
 		else:
 			run = 0
 	return Vector2(float(side) / fresh if fresh > 0 else 0.0, longest)
-
-
-## Путь дважды касается одного участка сети (пересекает или примыкает) ближе REJOIN_GAP клеток друг от друга:
-## повторное пересечение, Z-образный заход на дорогу и обратно. Касания на концах пути (узлы) не считаются.
-static func _rejoins(w: WorldData, p: PackedInt32Array) -> bool:
-	var owner := w.generation.road_owner
-	var n := p.size()
-	var first := 0
-	while first < n and owner[p[first]] >= 0: first += 1
-	var last := n - 1
-	while last >= 0 and owner[p[last]] >= 0: last -= 1
-	var seen := {}
-	var previous := -1
-	for k in range(first, last + 1):
-		var o := owner[p[k]]
-		if o >= 0 and o != previous:
-			if seen.has(o) and k - int(seen[o]) < REJOIN_GAP: return true
-		# выход с участка записывается при любой смене участка, в том числе без свободной клетки между участками
-		if o != previous and previous >= 0: seen[previous] = k
-		previous = o
-	return false
-
-
-## Доля клеток пути p дальше FAR_R от клеток пути from
-static func _far_share(w: WorldData, p: PackedInt32Array, from: PackedInt32Array) -> float:
-	var src := PackedByteArray()
-	src.resize(w.N)
-	for i: int in from: src[i] = 1
-	var dist := Grid.distance_field(w.W, w.H, src)
-	var far := 0
-	for i: int in p:
-		if dist[i] > FAR_R: far += 1
-	return float(far) / maxi(1, p.size())
-
-
-## Годится ли новый путь как дополнение сети: не вдоль неё и без повторных пересечений
-static func _adds_network(w: WorldData, p: PackedInt32Array, near: PackedFloat32Array) -> bool:
-	var side := _parallel_stats(w, p, near, _net_cells(w))
-	return side.x <= PARALLEL_SHARE and side.y <= PARALLEL_RUN and not _rejoins(w, p)
-
-
-## Более низкий перевал или другой уровень долины/склона дают осмысленный выбор направления.
-static func _different_relief(w: WorldData, a: PackedInt32Array, b: PackedInt32Array) -> bool:
-	var top_a := -INF
-	var top_b := -INF
-	var mean_a := 0.0
-	var mean_b := 0.0
-	for i in a:
-		top_a = maxf(top_a, w.h[i])
-		mean_a += w.h[i]
-	for i in b:
-		top_b = maxf(top_b, w.h[i])
-		mean_b += w.h[i]
-	return top_a < top_b - RELIEF_CHOICE or absf(mean_a / a.size() - mean_b / b.size()) > RELIEF_CHOICE
 
 
 const MOUNTAIN_DETOUR := 1.15 # горная тропа: вход на перегоне не дальше от вершины, чем во столько раз (+4 клетки)
@@ -1912,34 +1608,6 @@ static func _shore_anchors(w: WorldData, paths: Array, settle_d: PackedFloat32Ar
 	return out
 
 
-## Расстояние (клеток) до моря или озера; не дальше 1,5 — то же, что _at_mouth (вода в восьми соседях или сама клетка)
-static func _water_dist(w: WorldData) -> PackedFloat32Array:
-	var water := PackedByteArray()
-	water.resize(w.N)
-	for i: int in w.N:
-		if w.ocean[i] != 0 or w.lake[i] != 0: water[i] = 1
-	return Grid.distance_field(w.W, w.H, water)
-
-
-## Ближайшая к клетке s клетка морского или озёрного берега от SHORE_MIN до SHORE_MAX клеток,
-## не в коридоре near прежних путей; -1, если такой нет
-static func _shore(w: WorldData, s: int, near: PackedByteArray, water_d: PackedFloat32Array) -> int:
-	var W := w.W
-	var sx := s % W
-	var sy := s / W
-	var best := -1
-	var bd := INF
-	for y in range(maxi(0, sy - SHORE_MAX), mini(w.H, sy + SHORE_MAX + 1)):
-		for x in range(maxi(0, sx - SHORE_MAX), mini(W, sx + SHORE_MAX + 1)):
-			var i := y * W + x
-			var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
-			if d < SHORE_MIN * SHORE_MIN or d >= bd or near[i] != 0 or w.cost[i] == INF or water_d[i] > 1.5:
-				continue
-			bd = d
-			best = i
-	return best
-
-
 ## 11.11.2026: у концов второй путь может идти по готовой сети — развилка в стороне от поселения, а не второе полотно
 ## рядом с первым от самого поселения (коридор избегания раньше отталкивал его сразу от общего конца).
 ## 17.11.2026: общий выезд длиннее (было 12 клеток, 48 м — развилки всё равно оставались у самого поселения), а новая
@@ -1947,149 +1615,6 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray, water_d: PackedF
 ## Мягко: если подходящего выезда нет, путь платит за новую землю, а не пропадает.
 const EXIT_R := 35.0   # клеток (140 м): предпочтение общему выезду из поселения
 const EXIT_MUL := 3.5
-
-
-## Коридор near без клеток в круге EXIT_R вокруг концов a и b (в нём путь идёт по прежней связи свободно)
-static func _open_ends(w: WorldData, near: PackedByteArray, a: int, b: int) -> PackedByteArray:
-	var out := near.duplicate()
-	for i: int in _exit_cells(w, [a, b]): out[i] = 0
-	return out
-
-
-## Клетки не на сети в круге EXIT_R вокруг поселений a и b — дорогая новая земля у выезда
-static func _exit_ring(w: WorldData, a: int, b: int) -> PackedByteArray:
-	var out := PackedByteArray()
-	out.resize(w.N)
-	for i: int in _exit_cells(w, [a, b]):
-		if w.path_mask[i] < 2: out[i] = 1
-	return out
-
-
-static func _exit_cells(w: WorldData, centres: Array) -> PackedInt32Array:
-	var out := PackedInt32Array()
-	var r := ceili(EXIT_R)
-	for c: int in centres:
-		var cx := c % w.W
-		var cy := c / w.W
-		for y in range(maxi(0, cy - r), mini(w.H, cy + r + 1)):
-			for x in range(maxi(0, cx - r), mini(w.W, cx + r + 1)):
-				if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= EXIT_R * EXIT_R: out.append(y * w.W + x)
-	return out
-
-
-## Стоимость второго пути между поселениями a и b: коридор прежней связи near дорогой (_avoiding), кроме общего
-## выезда; новая земля у самих поселений — в EXIT_MUL раз дороже (_exit_ring)
-static func _exit_cost(w: WorldData, near: PackedByteArray, a: int, b: int) -> PackedFloat32Array:
-	var cost := _avoiding(w, _open_ends(w, near, a, b))
-	var ring := _exit_ring(w, a, b)
-	var fast := Grid.fast_grid()
-	if fast != null:
-		return fast.ScaledCost(cost, ring, EXIT_MUL)
-	for i: int in w.N:
-		if ring[i] != 0 and cost[i] != INF: cost[i] *= EXIT_MUL
-	return cost
-
-
-## Второй путь между поселениями годится как дополнение сети: за выездами не вдоль сети и без повторных касаний
-## (_adds_network по _beyond_exits), а в самих выездах — без петель (_exit_loop)
-static func _exit_clean(w: WorldData, p: PackedInt32Array, near: PackedFloat32Array) -> bool:
-	return not _exit_loop(w, p, false) and not _exit_loop(w, p, true) and _adds_network(w, _beyond_exits(w, p), near)
-
-
-## 17.11.2026: петля в выезде — в круге EXIT_R вокруг конца пути он уже отошёл от сети (больше JITTER_RUN свободных
-## клеток подряд), а потом снова идёт по ней дольше CROSS_RUN клеток: «сошёл — вернулся — снова сошёл» у поселения.
-## Общий выезд по дороге и короткое пересечение другой дороги после схода — не петля. reverse — со стороны конца.
-static func _exit_loop(w: WorldData, p: PackedInt32Array, reverse: bool) -> bool:
-	var n := p.size()
-	if n < 2: return false
-	var o := p[n - 1] if reverse else p[0]
-	var ox := o % w.W
-	var oy := o / w.W
-	var left := false
-	var fresh := 0
-	var touch := 0
-	for k in n:
-		var c := p[n - 1 - k] if reverse else p[k]
-		var dx := c % w.W - ox
-		var dy := c / w.W - oy
-		if dx * dx + dy * dy > EXIT_R * EXIT_R: break
-		if w.path_mask[c] >= 2:
-			fresh = 0
-			if left:
-				touch += 1
-				if touch > CROSS_RUN: return true
-		else:
-			touch = 0
-			fresh += 1
-			if fresh > JITTER_RUN: left = true
-	return false
-
-
-## Путь между поселениями без концов внутри кругов EXIT_R вокруг его первой и последней клетки (общие выезды)
-static func _beyond_exits(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
-	var n := p.size()
-	if n < 2: return p
-	var a := Vector2(p[0] % w.W, p[0] / w.W)
-	var b := Vector2(p[-1] % w.W, p[-1] / w.W)
-	var first := 0
-	var last := n - 1
-	while first < n - 1 and Vector2(p[first] % w.W, p[first] / w.W).distance_to(a) <= EXIT_R: first += 1
-	while last > first and Vector2(p[last] % w.W, p[last] / w.W).distance_to(b) <= EXIT_R: last -= 1
-	return p.slice(first, last + 1)
-
-
-## Путь без начальных и конечных клеток готовой сети: та часть, которую он добавит (общий выезд не в счёт)
-static func _core(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
-	var first := 0
-	var last := p.size() - 1
-	while first < last and w.path_mask[p[first]] >= 2: first += 1
-	while last > first and w.path_mask[p[last]] >= 2: last -= 1
-	return p.slice(first, last + 1)
-
-
-## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в routing.avoid_cost раз дороже
-static func _avoiding(w: WorldData, near: PackedByteArray) -> PackedFloat32Array:
-	var part_us := Time.get_ticks_usec()
-	var avoid_cost := RoadTuning.current().routing.avoid_cost
-	var fast := Grid.fast_grid()
-	if fast != null:
-		var quick: PackedFloat32Array = fast.ScaledCost(w.cost, near, avoid_cost) # тот же цикл на C# (шаг 5 ревью)
-		_part("avoiding", part_us)
-		return quick
-	var c := w.cost.duplicate()
-	for i: int in w.N:
-		if near[i] != 0 and c[i] != INF:
-			c[i] *= avoid_cost
-	_part("avoiding", part_us)
-	return c
-
-
-## Клетки ближе AVOID_R к путям avoid (квадрат вокруг каждой клетки пути)
-static func _corridor(w: WorldData, avoid: Array) -> PackedByteArray:
-	var part_us := Time.get_ticks_usec()
-	var W := w.W
-	var near := PackedByteArray()
-	near.resize(w.N)
-	for path in avoid:
-		for i in (path as PackedInt32Array):
-			var cx := i % W
-			var cy := i / W
-			for y in range(maxi(0, cy - AVOID_R), mini(w.H, cy + AVOID_R + 1)):
-				for x in range(maxi(0, cx - AVOID_R), mini(W, cx + AVOID_R + 1)):
-					near[y * W + x] = 1
-	_part("corridor", part_us)
-	return near
-
-
-## Доля клеток пути p в коридоре near (_corridor) прежних путей; 0, если путь пуст
-static func _share(p: PackedInt32Array, near: PackedByteArray) -> float:
-	if p.is_empty():
-		return 0.0
-	var k := 0
-	for i: int in p:
-		if near[i] != 0:
-			k += 1
-	return float(k) / p.size()
 
 
 ## Дома, которые стоят на мосту, в туннеле или вплотную к ним, убираются: иначе в них упрётся дорога
@@ -2747,9 +2272,6 @@ static func _key(a: int, b: int) -> String:
 ## Возвращает клетки осей мостов и туннелей (их же берут природные маршруты, RideRoutes).
 static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfield = null) -> PackedByteArray:
 	var started_us := Time.get_ticks_usec()
-	var nearest_us := 0
-	var search_us := 0
-	var add_us := 0
 	var on_axis := PackedByteArray()
 	on_axis.resize(w.N)
 	for span: EntityRecord in w.bridges + w.tunnels:
@@ -2760,67 +2282,9 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	for i: int in _unsafe_fords(w, surface, on_axis):
 		w.cost[i] = INF
 	w.generation_profile.mountain_fords_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-	# Сеть V2: горные тропы — ответвления к вершинам по правилам узлов (RoadNetworkV2.plan_spurs)
-	if network_v2:
-		var spur_us := Time.get_ticks_usec()
-		RoadNetworkV2.plan_spurs(w, finder, [], PackedFloat32Array(), on_axis, surface, true)
-		w.generation_profile.mountain_search_ms = (Time.get_ticks_usec() - spur_us) / 1000.0
-		return on_axis
-	var fast := finder.fast() # 9.7: ближайший путь к вершине ищет C# (FastGrid.NearestPath), тот же перебор
-	var settle_d := _settle_dist(w)
-	var forks := RoadForks.new(w, on_axis)
-	for pk in w.peaks:
-		var detail_us := Time.get_ticks_usec()
-		var best := -1
-		var bd := INF
-		if w.path_mask[pk.i] >= 2:
-			continue
-		if fast != null:
-			var found: PackedFloat64Array = fast.NearestPath(w.path_mask, w.cost, w.W, pk.x, pk.y)
-			best = int(found[0])
-			bd = found[1]
-		else:
-			for i in w.N:
-				if w.path_mask[i] < 2 or w.cost[i] == INF:
-					continue
-				var d := Grid.hypot(i % w.W + 0.5 - pk.x, i / w.W + 0.5 - pk.y)
-				if d < bd:
-					bd = d
-					best = i
-		# 17.11.2026: ближайшая точка сети у самого поселения — тропа к вершине отходит от перегона, если там есть
-		# точка не намного дальше (MOUNTAIN_DETOUR): без крюка ради этого
-		if best >= 0 and settle_d[best] < EXIT_R:
-			var limit := bd * MOUNTAIN_DETOUR + 4.0
-			var alt := -1
-			var ad := INF
-			var r := ceili(limit)
-			for y in range(maxi(0, int(pk.y) - r), mini(w.H, int(pk.y) + r + 1)):
-				for x in range(maxi(0, int(pk.x) - r), mini(w.W, int(pk.x) + r + 1)):
-					var i := y * w.W + x
-					if w.path_mask[i] < 2 or w.cost[i] == INF or settle_d[i] < EXIT_R: continue
-					var d := Grid.hypot(x + 0.5 - pk.x, y + 0.5 - pk.y)
-					if d <= limit and d < ad:
-						ad = d
-						alt = i
-			if alt >= 0:
-				best = alt
-				bd = ad
-		nearest_us += Time.get_ticks_usec() - detail_us
-		if best >= 0 and bd < w.W * 0.4:
-			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
-			detail_us = Time.get_ticks_usec()
-			var p := _land_path(finder, w.cost, best, pk.i, "mountain", MOUNTAIN_GRADE)
-			var moved := _from_quieter_fork(w, finder, forks, best, pk.i, p, "mountain", MOUNTAIN_GRADE, on_axis, settle_d,
-				func(q: PackedInt32Array, _better: Callable) -> PackedInt32Array: return q)
-			if not moved.is_empty(): p = moved
-			search_us += Time.get_ticks_usec() - detail_us
-			detail_us = Time.get_ticks_usec()
-			if p.size() > 0:
-				_add_trail(w, p, "mountain", PackedFloat32Array(), on_axis, surface)
-			add_us += Time.get_ticks_usec() - detail_us
-	w.generation_profile.mountain_nearest_ms = nearest_us / 1000.0
-	w.generation_profile.mountain_search_ms = search_us / 1000.0
-	w.generation_profile.mountain_add_ms = add_us / 1000.0
+	var spur_us := Time.get_ticks_usec()
+	RoadNetworkV2.plan_spurs(w, finder, [], PackedFloat32Array(), on_axis, surface, true)
+	w.generation_profile.mountain_search_ms = (Time.get_ticks_usec() - spur_us) / 1000.0
 	return on_axis
 
 
