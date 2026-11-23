@@ -83,7 +83,7 @@ static func _part(key: String, since_us: int) -> void:
 static func run(w: WorldData, step: Callable) -> void:
 	parts = {}
 	var started_us := Time.get_ticks_usec()
-	var widths := RoadTuning.current().section.widths
+	var widths := RoadTuning.for_world(w).section.widths
 	_build_cost(w)
 	var detail_us := Time.get_ticks_usec()
 	w.generation_profile.cost_ms = (detail_us - started_us) / 1000.0
@@ -102,6 +102,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.generation_profile.finder_setup_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	detail_us = Time.get_ticks_usec()
 	var expedition := WorldTemplate.has_single_road(w.template_id)
+	var main_kind := WorldTemplate.expedition_route_kind(w.template_id) if expedition else "road"
 	if not expedition:
 		_animal_trails(w, finder)
 	w.generation_profile.animal_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
@@ -109,9 +110,9 @@ static func run(w: WorldData, step: Callable) -> void:
 		detail_us = Time.get_ticks_usec()
 		RoadNetworkV2.prepare_character(w, finder, surface)
 		_part("road_character_fields", detail_us)
-	_route_surface(finder, surface, widths.road, "corridor_road_ms")
+	_route_surface(finder, surface, widths[main_kind], "corridor_road_ms")
 	if expedition:
-		_run_expedition(w, finder, surface, step, started_us)
+		_run_expedition(w, finder, surface, step, started_us, main_kind)
 		return
 	step.call(0.66, "Прокладка троп между поселениями")
 	var primary_end := _settlement_trails(w, finder, surface, step)
@@ -151,23 +152,24 @@ static func run(w: WorldData, step: Callable) -> void:
 ## Тип 2 («Речная экспедиция»): одна непрерывная дорога по одному берегу без мостов и бродов.
 ## Сегментный поиск A* в скользящих окнах по цепочке якорей ValleyAxis → склейка без петель →
 ## единая публикация через _add_trail → reshape_axes (V2) → _fit_sections → раскладка домов.
-static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable, started_us: int) -> void:
+static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable, started_us: int,
+		route_kind := "") -> void:
+	if route_kind.is_empty():
+		route_kind = WorldTemplate.expedition_route_kind(w.template_id)
 	step.call(0.66, "Прокладка дороги вдоль долины")
 	w.bridges = []
 	w.tunnels = []
 	var on_axis := PackedByteArray()
 	on_axis.resize(w.N)
 	finder.links.resize(w.N)
-	var routing := RoadTuning.current().routing
-	var turns: Dictionary = routing_overrides.get("turn_costs", routing.turn_costs)
-	var bends: Dictionary = routing_overrides.get("bend_costs", routing.bend_costs)
-	var climb_road: float = float(routing.climb_costs.road)
-	var turn_road: float = float(turns.road)
-	var bend_road: float = float(bends.road)
+	var routing := RoadTuning.for_world(w).routing
+	var climb_cost := float(routing.climb_costs.get(route_kind, routing.climb_costs.road))
+	var turn_cost := float(routing.turn_costs.get(route_kind, routing.turn_costs.road))
+	var bend_cost := float(routing.bend_costs.get(route_kind, routing.bend_costs.road))
 	var search_cost := w.cost
 	var h_scale := 1.0
 	if network_v2 and finder.fast() != null:
-		var ch: Dictionary = finder.fast().CharacterCosts(w.cost, on_axis, "road")
+		var ch: Dictionary = finder.fast().CharacterCosts(w.cost, on_axis, route_kind)
 		search_cost = ch.cost
 		h_scale = float(ch.heuristic_scale)
 	var cost_v := finder.next_cost_version()
@@ -191,7 +193,12 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 			var is_first := k == 1
 			var is_last := k == waypoints.size() - 1
 			var seg := _expedition_segment(w, finder, search_cost, cost_v, w.cost, raw_v,
-				cur, target, climb_road, turn_road, bend_road, h_scale, is_first, is_last)
+				cur, target, climb_cost, turn_cost, bend_cost, h_scale, is_first, is_last)
+			if seg.size() < 2 and is_last and cur != start_i:
+				stitched = PackedInt32Array()
+				anchors_used = 0
+				seg = _expedition_segment(w, finder, search_cost, cost_v, w.cost, raw_v,
+					start_i, target, climb_cost, turn_cost, bend_cost, h_scale, true, true)
 			if seg.size() < 2:
 				if not is_last:
 					continue
@@ -205,7 +212,7 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 	w.generation_profile.expedition_anchors_total = anchors_total
 	w.generation_profile.expedition_anchors_used = anchors_used
 	if stitched.size() >= 2:
-		_add_trail(w, stitched, "road", PackedFloat32Array(), on_axis, surface)
+		_add_trail(w, stitched, route_kind, PackedFloat32Array(), on_axis, surface)
 	step.call(0.76, "Сглаживание и профиль дороги")
 	if network_v2 and not w.trails.is_empty():
 		RoadNetworkV2.reshape_axes(w, surface, on_axis, w.trails.size())
@@ -239,11 +246,25 @@ static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: Pac
 	var ay := a / W
 	var bx := b % W
 	var by := b / W
-	var x0 := maxi(0, mini(ax, bx) - cfg.segment_win_x)
-	var x1 := mini(W, maxi(ax, bx) + cfg.segment_win_x + 1)
+	var y_lo := mini(ay, by)
+	var y_hi := maxi(ay, by)
+	var min_x := mini(ax, bx)
+	var max_x := maxi(ax, bx)
+	var axis := ValleyAxis.for_world(w)
+	var sy := y_lo
+	while sy < y_hi:
+		var sx := roundi(axis.axis_x_at(float(sy)))
+		min_x = mini(min_x, sx)
+		max_x = maxi(max_x, sx)
+		sy += 16
+	var sx_end := roundi(axis.axis_x_at(float(y_hi)))
+	min_x = mini(min_x, sx_end)
+	max_x = maxi(max_x, sx_end)
+	var x0 := maxi(0, min_x - cfg.segment_win_x)
+	var x1 := mini(W, max_x + cfg.segment_win_x + 1)
 	# На выходе со старта не петляем вверх за лагерь, на заходе к финишу не уходим за базу в поворот.
-	var y0 := maxi(0, mini(ay, by) - (cfg.segment_end_y_cap if is_first else cfg.segment_win_y))
-	var y1 := mini(H, maxi(ay, by) + (cfg.segment_end_y_cap + 1 if must_connect else cfg.segment_win_y + 1))
+	var y0 := maxi(0, y_lo - (cfg.segment_end_y_cap if is_first else cfg.segment_win_y))
+	var y1 := mini(H, y_hi + (cfg.segment_end_y_cap + 1 if must_connect else cfg.segment_win_y + 1))
 	finder.window = Rect2i(x0, y0, x1 - x0, y1 - y0)
 	# Сначала держим дорожные уклоны; TRAIL_GRADE спасает цепочку на редких коротких перепадах рельефа.
 	for g: float in [ROAD_GRADE, ROAD_LIMIT, TRAIL_GRADE]:
@@ -262,8 +283,8 @@ static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: Pac
 			if seg.size() >= 2:
 				return seg
 	if must_connect:
-		var wy0 := maxi(0, mini(ay, by) - 72)
-		var wy1 := mini(H, maxi(ay, by) + 73)
+		var wy0 := maxi(0, y_lo - 72)
+		var wy1 := mini(H, y_hi + 73)
 		finder.window = Rect2i(0, wy0, W, wy1 - wy0)
 		for g: float in [ROAD_LIMIT, TRAIL_GRADE, MOUNTAIN_GRADE]:
 			var seg := finder.find_path(raw_cost, a, b, climb * 0.5, g, raw_v, turn * 0.5, 0.0, 1.0)
@@ -276,8 +297,8 @@ static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: Pac
 static func _stitch_expedition_cells(acc: PackedInt32Array, seg: PackedInt32Array) -> PackedInt32Array:
 	if acc.is_empty():
 		return seg.duplicate()
-	var tail_span := mini(acc.size(), 16)
-	var head_span := mini(seg.size(), 16)
+	var tail_span := mini(acc.size(), 48)
+	var head_span := mini(seg.size(), 48)
 	var cut_acc := acc.size()
 	var start_seg := 1 if seg[0] == acc[acc.size() - 1] else 0
 	var tail_start := acc.size() - tail_span
@@ -457,7 +478,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	var part_us := Time.get_ticks_usec()
 	_net_ready(w)
 	path = _explicit(w, path, on_axis)
-	var width: float = RoadTuning.current().section.widths[kind]
+	var width: float = RoadTuning.for_world(w).section.widths[kind]
 	var mark := 1 if kind == "animal" else (3 if kind == "road" else 2)
 	var added: Array = []
 	if kind == "animal":
@@ -584,7 +605,7 @@ static func _ride_station(w: WorldData, host: int, p: Vector2) -> float:
 ## Протоптанный путь дешевле: следующие маршруты идут по нему. Клетки рядом с участком сети (не на нём) один раз
 ## дорожают в routing.side_cost раз: соседняя клетка больше не тянет поиск идти вплотную параллельно.
 static func _trodden(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array) -> void:
-	var routing := RoadTuning.current().routing
+	var routing := RoadTuning.for_world(w).routing
 	var cost := w.cost
 	var cheaper := routing.animal_reuse if kind == "animal" else routing.human_reuse
 	var both := road_cost.size() > 0
@@ -742,7 +763,7 @@ static var v2_junctions := {}
 ## Развилка ближе join_same из RoadRoutingTuning к центру клетки c на оси одного из hosts: {host, point, tangent} или пусто.
 static func _v2_junction(w: WorldData, c: Vector2, hosts: Dictionary) -> Dictionary:
 	var best := {}
-	var best_d: float = RoadTuning.current().routing.network_rules.join_same
+	var best_d: float = RoadTuning.for_world(w).routing.network_rules.join_same
 	var keys := hosts.keys()
 	keys.sort()
 	for dy in range(-1, 2):
@@ -890,7 +911,7 @@ static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 			best = _nearest_water(cost, dist_water, W, H, sx, sy, R)
 		if best < 0:
 			continue
-		var p := finder.find_path(w.cost, s, best, RoadTuning.current().routing.climb_costs.trail)
+		var p := finder.find_path(w.cost, s, best, RoadTuning.for_world(w).routing.climb_costs.trail)
 		if p.size() > 6:
 			_add_trail(w, p, "animal")
 			k += 1
@@ -919,7 +940,7 @@ const SETTLEMENT_NEIGHBORS := 3
 const BRIDGE_RETRIES := 2
 
 static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable = Callable()) -> int:
-	var bridge_cost := RoadTuning.current().routing.bridge_cost
+	var bridge_cost := RoadTuning.for_world(w).routing.bridge_cost
 	var started := Time.get_ticks_msec()
 	var st := w.settlements
 	var n := st.size()
@@ -1045,7 +1066,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.upgraded_m = _upgrade_roles(w, paths)
 	var primary_end := w.trails.size()
 	finder.use_corridor = true
-	_route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_trail_ms")
+	_route_surface(finder, surface, RoadTuning.for_world(w).section.widths.trail, "corridor_trail_ms")
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
 	finder.search_budget = w.N * maxi(1, n)
 	var detail_us := Time.get_ticks_usec()
@@ -1198,7 +1219,7 @@ static func _prune_orphaned_trails(w: WorldData, keep: Array[SettlementData], ke
 	for i in mask.size():
 		if mask[i] >= 2:
 			mask[i] = 0
-	var widths := RoadTuning.current().section.widths
+	var widths := RoadTuning.for_world(w).section.widths
 	for tr: Dictionary in w.trails:
 		var kind: String = tr.get("kind", "")
 		if kind == "animal":
@@ -1370,7 +1391,7 @@ static func _promote(w: WorldData, e: int, c0: int, c1: int) -> void:
 			cuts.append(_locate(pts, Vector2(cells[k] % w.W + 0.5, cells[k] / w.W + 0.5)))
 	if cuts[0][2] > cuts[1][2]:
 		return # клетки и ось разошлись: не режем наугад
-	var widths := RoadTuning.current().section.widths
+	var widths := RoadTuning.for_world(w).section.widths
 	var road_pts: Array = [_point(cuts[0][1], widths.road)]
 	for j in range(cuts[0][0], cuts[1][0]):
 		road_pts.append(_point(Vector2(pts[j].x, pts[j].y), widths.road))
@@ -1502,7 +1523,7 @@ static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFl
 	# Следующая связь получает новый номер, в том числе после изменения стоимости.
 	var cost_version := finder.next_cost_version()
 	finder.use_corridor = true
-	var routing := RoadTuning.current().routing
+	var routing := RoadTuning.for_world(w).routing
 	var climb: float = routing.climb_costs.road
 	# Ревью дорожной сети 29.10: связь, которой нет даже при ROAD_LIMIT, отвергается без A*. Раньше такой
 	# поиск обходил всю доступную область и тратил запас места, и следующие пары того же места
@@ -1526,7 +1547,7 @@ static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFl
 				cost = _known_crossings(source, state)
 				cost_version = finder.next_cost_version()
 			finder.window = windows[level]
-			var p := _road_path(finder, cost, a, b, true, limit, cost_version)
+			var p := _road_path(finder, cost, a, b, true, limit, cost_version, routing)
 			if p.is_empty():
 				if state.get("failure", "").is_empty():
 					state.failure = "budget" if finder.search_budget == 0 else "no_path"
@@ -1626,6 +1647,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	var pairs := _gabriel_pairs(w, paths)
 	w.generation_profile.second_ways = []
 	var network := _network_cost(w)
+	var routing := RoadTuning.for_world(w).routing
 	for index in pairs.size():
 		if finder.search_budget == 0: break
 		var e: Array = pairs[index]
@@ -1634,7 +1656,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		var a: int = st[e[0]].i
 		var b: int = st[e[1]].i
 		if finder.can_reach(network, a, b): continue
-		var link := _land_path(finder, w.cost, a, b, "trail")
+		var link := _land_path(finder, w.cost, a, b, "trail", TRAIL_GRADE, routing)
 		var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
 		if joint.is_empty(): continue
 		joint = RoadNetworkV2.shape_land(w, finder, w.cost, joint, state.on_axis, "trail", TRAIL_GRADE)
@@ -1687,9 +1709,10 @@ static func _rescue_disconnected_components(w: WorldData, finder: Pathfinder, pa
 	var kind := "mountain" if mountain else "trail"
 	var limit := MOUNTAIN_GRADE if mountain else TRAIL_GRADE
 	var way := "bridge_gap_mountain" if mountain else "bridge_gap"
-	var widths := RoadTuning.current().section.widths
+	var widths := RoadTuning.for_world(w).section.widths
 	if mountain:
 		_route_surface(finder, state.surface, widths.mountain)
+	var routing := RoadTuning.for_world(w).routing
 	var pair_tries := {}
 	for cand: Array in rescue_pairs:
 		if comp_count <= 1 or finder.search_budget == 0:
@@ -1704,11 +1727,11 @@ static func _rescue_disconnected_components(w: WorldData, finder: Pathfinder, pa
 		if int(pair_tries.get(key, 0)) >= SETTLEMENT_NEIGHBORS:
 			continue
 		var use_cost := w.cost
-		var link := _land_path(finder, use_cost, st[a].i, st[b].i, kind, limit)
+		var link := _land_path(finder, use_cost, st[a].i, st[b].i, kind, limit, routing)
 		var joint := _structures(w, link, false, finder, use_cost, state, 0, limit) if not link.is_empty() else link
 		if joint.is_empty():
 			use_cost = _known_crossings(road_cost, state)
-			link = _land_path(finder, use_cost, st[a].i, st[b].i, kind, limit)
+			link = _land_path(finder, use_cost, st[a].i, st[b].i, kind, limit, routing)
 			joint = _structures(w, link, false, finder, use_cost, state, 0, limit) if not link.is_empty() else link
 		if joint.is_empty():
 			pair_tries[key] = int(pair_tries.get(key, 0)) + 1
@@ -1744,9 +1767,10 @@ static func _prefer_dry_connection(w: WorldData, finder: Pathfinder, forks: RefC
 	var limit := _fork_length_limit(w, path)
 	var better := func(q: PackedInt32Array) -> bool:
 		return w.bridges.size() + w.tunnels.size() == structures and _length(w, q) <= limit and forks.pressure(q) + 0.05 < crowd and dry.call(q)
+	var routing := RoadTuning.for_world(w).routing
 	var available := finder.search_budget
 	var moved := _fork_search(finder, func() -> PackedInt32Array:
-		var q := _explicit(w, _road_path(finder, preferred, path[0], path[-1]), state.on_axis)
+		var q := _explicit(w, _road_path(finder, preferred, path[0], path[-1], true, ROAD_GRADE, -1, routing), state.on_axis)
 		return _structures(w, q, true, finder, preferred, state, 0, ROAD_GRADE, better) if not q.is_empty() and better.call(q) else PackedInt32Array())
 	# This link already succeeded. The spare alignment trial cannot consume the
 	# budget reserved for later settlement connections.
@@ -1843,8 +1867,9 @@ static func _network_cost(w: WorldData) -> PackedFloat32Array:
 
 
 ## У троп свой предел: короткий технический подъём конкурирует с длинным обходом по цене A*.
-static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, kind: String, limit := TRAIL_GRADE) -> PackedInt32Array:
-	var routing := RoadTuning.current().routing
+static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, kind: String, limit := TRAIL_GRADE,
+		routing_override: RoadTuning.Routing = null) -> PackedInt32Array:
+	var routing := routing_override if routing_override != null else RoadTuning.current().routing
 	var climb: float = routing.climb_costs[kind]
 	if finder.search_budget != 0 and not finder.can_reach(cost, a, b, climb, limit):
 		return PackedInt32Array()
@@ -1855,9 +1880,10 @@ static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: 
 
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
 ## Вода доступна для сооружений; на суше полная ширина проверяется во всех попытках.
-static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE, cost_version: int = -1) -> PackedInt32Array:
+static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE,
+		cost_version: int = -1, routing_override: RoadTuning.Routing = null) -> PackedInt32Array:
 	finder.use_corridor = wide
-	var routing := RoadTuning.current().routing
+	var routing := routing_override if routing_override != null else RoadTuning.current().routing
 	var turns: Dictionary = routing_overrides.get("turn_costs", routing.turn_costs)
 	var bends: Dictionary = routing_overrides.get("bend_costs", routing.bend_costs)
 	return finder.find_path(cost, a, b, routing.climb_costs.road, limit, cost_version, turns.road, bends.road)
@@ -2046,7 +2072,7 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 		var build_us := Time.get_ticks_usec()
 		state.surface.build_structures()
 		if changed_ground:
-			_route_surface(finder, state.surface, finder.get_meta("route_width", RoadTuning.current().section.widths.road))
+			_route_surface(finder, state.surface, finder.get_meta("route_width", RoadTuning.for_world(w).section.widths.road))
 		_part("build_structures", build_us)
 	_part("restore", part_us)
 
@@ -2143,7 +2169,8 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					# Новый переход ищется от начала связи: фиксированный крутой берег
 					# не должен заставлять объезд карабкаться вверх сразу от воды.
 					_restore_structures(w, finder, state, ctx)
-					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor, limit) if road else _land_path(finder, bypass, p[0], p[-1], "trail")
+					var routing := RoadTuning.for_world(w).routing
+					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor, limit, -1, routing) if road else _land_path(finder, bypass, p[0], p[-1], "trail", TRAIL_GRADE, routing)
 					if not q.is_empty():
 						return _build_structures(w, q, road, finder, bypass, state, retries + 1, ctx, limit)
 					state.failure = "budget" if finder.search_budget == 0 else "bridge_site"
@@ -2211,7 +2238,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					finder.terrain_changed()
 					for c: int in changed:
 						if state.on_axis[c] == 0: finder.heights[c] = state.surface.hv[c] / GameConfig.TILE
-					_route_surface(finder, state.surface, finder.get_meta("route_width", RoadTuning.current().section.widths.road))
+					_route_surface(finder, state.surface, finder.get_meta("route_width", RoadTuning.for_world(w).section.widths.road))
 				_part("build_structures", build_us)
 			ends = [a, b]
 		# дорога, слившаяся с прежней, проходит по уже построенному
@@ -2397,7 +2424,7 @@ static func _no_backtrack(p: PackedInt32Array) -> PackedInt32Array:
 static func _link(w: WorldData, finder: Pathfinder, a: int, b: int) -> PackedInt32Array:
 	if a == b:
 		return PackedInt32Array()
-	var q := finder.find_path(w.cost, a, b, RoadTuning.current().routing.climb_costs.road, ROAD_GRADE)
+	var q := finder.find_path(w.cost, a, b, RoadTuning.for_world(w).routing.climb_costs.road, ROAD_GRADE)
 	if q.size() == 0 or q.size() > REUSE_R * 3.0:
 		return PackedInt32Array()
 	return q.slice(1)
@@ -2444,7 +2471,7 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 			var k := y * W + x
 			if w.h[k] <= top and not _wet(w, k):
 				c[k] = cost[k]
-	var q := _land_path(finder, c, a, b, kind, limit)
+	var q := _land_path(finder, c, a, b, kind, limit, RoadTuning.for_world(w).routing)
 	if _length(w, q) > d * DETOUR:
 		return PackedInt32Array()
 	return q

@@ -41,9 +41,10 @@ static func choose(w: WorldData, h: Heightfield, rng: RandomNumberGenerator) -> 
 
 ## Тип 2 («Речная экспедиция»): старт на дороге у лагеря верховья, лицом вниз по долине (+y).
 static func _expedition_start(w: WorldData, h: Heightfield) -> Dictionary:
+	var route_kind := WorldTemplate.expedition_route_kind(w.template_id)
 	var road_pts: Array = []
 	for t: Dictionary in w.trails:
-		if t.kind == "road" and t.pts.size() >= 2:
+		if t.kind == route_kind and t.pts.size() >= 2:
 			road_pts = t.pts
 			break
 	if road_pts.size() < 2:

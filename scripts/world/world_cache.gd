@@ -95,7 +95,7 @@ func set_template(id: String) -> void:
 func layer_keys() -> PackedStringArray:
 	_lock.lock()
 	if _layer_keys.is_empty():
-		var suffixes := _road_layer_suffixes(RoadTuning.current(), QuickTrails.network() and WorldTemplate.is_default(template_id))
+		var suffixes := _road_layer_suffixes(RoadTuning.for_template(template_id), QuickTrails.network() and WorldTemplate.is_default(template_id))
 		if not WorldTemplate.is_default(template_id):
 			suffixes["geo"] = WorldTemplate.geo_cache_suffix(template_id)
 			suffixes["places"] = str(suffixes.get("places", "")) + WorldTemplate.places_cache_suffix(template_id)
@@ -174,7 +174,7 @@ func artifact_key(seed_text: String, size: int, artifact: String) -> String:
 		RoadBump.PATCH_VERSION if layer == 2 else 0, RoadRefinement.code_version() if layer == 2 else 0]
 	if layer == 0:
 		return key
-	var tuning := RoadTuning.current()
+	var tuning := RoadTuning.for_template(template_id)
 	return key + "|" + tuning.digest() + tuning.tread_cache_suffix()
 
 

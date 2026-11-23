@@ -51,7 +51,7 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray, only := {}) -> Variant:
 	var w := heights.world
 	var names: Array = KINDS.keys()
-	var tuning := RoadTuning.current()
+	var tuning := RoadTuning.for_world(w)
 	var params := PackedFloat64Array()
 	for name: String in names:
 		params.append_array(tuning.kind(name).bed_params())

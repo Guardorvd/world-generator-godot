@@ -32,22 +32,24 @@ static func soil_moisture(rain: float, dw: float, sl: float, t: float, condition
 
 
 ## Правило выбора биома для клетки суши. e — высота, t — температура, m — влажность (0..1)
-static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: float, dist_water := INF) -> int:
+static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: float, dist_water := INF,
+		peak_elev := 0.65, peak_cold_elev := 0.46, snow_temp := 0.12,
+		rock_elev := 0.45, rock_slope := 0.48, treeline_elev := 0.45) -> int:
 	if dist_water <= 1.0 and dist_ocean > 2.5 and slope > 0.55 and e < 0.62:
 		return Biomes.STONESHORE
-	if e > 0.65 or (e > 0.46 and t < 0.2):
+	if e > peak_elev or (e > peak_cold_elev and t < 0.2):
 		# Sheltered summit basins and shoulders retain soil; a high surface
 		# does not become bare bedrock solely by crossing a contour line.
-		if slope < 0.30 and m > 0.50 and t > 0.12:
+		if slope < 0.30 and m > 0.50 and t > snow_temp:
 			return Biomes.TUNDRA
 		return Biomes.PEAK
-	if slope > 1.3 or (e > 0.45 and (slope > 0.48 or m < 0.40)):
+	if slope > 1.3 or (e > rock_elev and (slope > rock_slope or m < 0.40)):
 		return Biomes.ROCK
-	if e > 0.45:
+	if e > treeline_elev:
 		return Biomes.TUNDRA
 	if dist_ocean <= 2.5 and e < 0.03:
 		return Biomes.STONESHORE if t < 0.3 else Biomes.BEACH
-	if t < 0.12:
+	if t < snow_temp:
 		return Biomes.SNOW
 	if t < 0.24:
 		return Biomes.TAIGA if m > 0.6 else Biomes.TUNDRA
@@ -91,9 +93,11 @@ static func run(w: WorldData) -> void:
 	var temp_n := w.noise_field("temp")
 	var started := Time.get_ticks_usec()
 	var fast := Grid.fast_grid()
+	var cfg := WorldTemplate.config(w.template_id)
 	var lat_p := WorldTemplate.latitude_params(w.template_id, w.H)
 	var native: Variant = fast.ClimateFields(w.W, w.H, w.h, w.ocean, w.lake, w.rain,
-		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, lat_p.z, biome_ids(), lat_p.x, lat_p.y) if fast != null else null
+		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, lat_p.z, biome_ids(), lat_p.x, lat_p.y,
+		cfg.peak_elev, cfg.peak_cold_elev, cfg.snow_temp, cfg.rock_elev, cfg.rock_slope, cfg.treeline_elev) if fast != null else null
 	if fast != null and not native is Dictionary:
 		push_error("StageClimate: C# вернул null, климат считается на GDScript")
 	var fields: Dictionary = native if native is Dictionary else fields_reference(w, temp_n)
@@ -112,6 +116,7 @@ static func biome_ids() -> PackedByteArray:
 
 ## Исходные численные правила. light сохраняет ровно float32-компонент Vector2.
 static func fields_reference(w: WorldData, temp_n: PackedFloat64Array) -> Dictionary:
+	var cfg := WorldTemplate.config(w.template_id)
 	var W := w.W
 	var H := w.H
 	var N := w.N
@@ -152,6 +157,7 @@ static func fields_reference(w: WorldData, temp_n: PackedFloat64Array) -> Dictio
 				b = Biomes.LAKE
 			else:
 				# t и m в JS читаются из локальных переменных (double), а не из Float32Array
-				b = land_biome(e, t, m, slope[i], dist_ocean[i], dist_water[i])
+				b = land_biome(e, t, m, slope[i], dist_ocean[i], dist_water[i],
+					cfg.peak_elev, cfg.peak_cold_elev, cfg.snow_temp, cfg.rock_elev, cfg.rock_slope, cfg.treeline_elev)
 			biome[i] = b
 	return {temp = temp, moist = moist, biome = biome, light = light}

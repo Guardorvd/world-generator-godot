@@ -78,8 +78,9 @@ static func enabled() -> bool:
 ## finder — поиск этапа; on_axis — клетки осей мостов и туннелей
 static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray) -> void:
 	var started := Time.get_ticks_usec()
+	var tuning := RoadTuning.for_world(w)
 	# Подъём к виртуальной вершине использует профиль горной тропы.
-	var approach := {climb = RoadTuning.current().routing.climb_costs.mountain, grade = StageTrails.MOUNTAIN_GRADE}
+	var approach := {climb = tuning.routing.climb_costs.mountain, grade = StageTrails.MOUNTAIN_GRADE}
 	var stats := {anchors = 0, tops = 0, pairs = 0, searches = 0, found = 0, rejected = {}, accepted = 0,
 		from_mountain = 0, virtual_tops = 0, virtual_failed = [], climbs = 0, climb_km = 0.0, km = 0.0, styles = {},
 		by_search = {}, wood = {}, ms = 0.0} # by_search: стиль поиска → [попыток, линий, годных]
@@ -87,7 +88,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	if not enabled() or surface == null:
 		return
 	# Flow/forest publish a wider trail than mountain approaches. Search its full width.
-	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_rides_ms")
+	StageTrails._route_surface(finder, surface, tuning.section.widths.trail, "corridor_rides_ms")
 	var W := w.W
 	var hv := surface.hv
 	# Расстояние до готовой сети (дороги, тропы, горные тропы) — одна проходка C#
@@ -127,7 +128,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var pairs := _pairs(w, anchors, virtual, stats)
 	var budget := roundi(SEARCHES * w.scale)
 	if StageTrails.network_v2:
-		budget += roundi(budget * RoadTuning.current().routing.ride_search_reserve)
+		budget += roundi(budget * tuning.routing.ride_search_reserve)
 	var candidates: Array = []
 	var cost_version := finder.next_cost_version()
 	var wood_version := finder.next_cost_version()
@@ -408,7 +409,7 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 			pairs.append([s, t, e[1] * (1.25 if s.mountain else 1.0)])
 			if taken.size() >= ENDS_PER_TOP: break
 		if StageTrails.network_v2:
-			_add_reserve_ends(s, ends, taken, reserve)
+			_add_reserve_ends(s, ends, taken, reserve, RoadTuning.for_world(w))
 	_traverse_pairs(w, anchors, pairs)
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
 	reserve.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
@@ -418,8 +419,9 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 	return pairs
 
 
-static func _add_reserve_ends(start: Dictionary, ends: Array, chosen: Array, reserve: Array) -> void:
-	var node_sep: float = RoadTuning.current().routing.network_rules.ride_node_sep
+static func _add_reserve_ends(start: Dictionary, ends: Array, chosen: Array, reserve: Array, tuning: RoadTuning = null) -> void:
+	var use_tuning := tuning if tuning != null else RoadTuning.current()
+	var node_sep: float = use_tuning.routing.network_rules.ride_node_sep
 	var used := {}
 	for primary: Array in chosen: used[primary[0].i] = true
 	for primary: Array in chosen:
@@ -511,7 +513,7 @@ static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, 
 ## Убираем оба прохода до развилки до публикации полотна, если эта ветка короче 120 м.
 static func _short_turnback(w: WorldData, climb: PackedInt32Array, descent: PackedInt32Array) -> int:
 	if climb.size() < 2 or descent.size() < 2 or climb[-1] != descent[0]: return 0
-	var limit: float = RoadTuning.current().routing.character_field.short_turnback_m
+	var limit: float = RoadTuning.for_world(w).routing.character_field.short_turnback_m
 	var length := 0.0
 	var common := 0
 	for k in range(1, mini(climb.size(), descent.size())):

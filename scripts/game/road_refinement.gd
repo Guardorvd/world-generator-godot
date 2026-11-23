@@ -57,6 +57,7 @@ var _reach := NATURAL_REACH
 static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false) -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r._height = heights.world.H
+	r._section = RoadTuning.for_world(heights.world).section
 	var fast := Grid.native_grid()
 	if fast == null:
 		push_error("RoadRefinement: метровая сетка дорог считается только на C#: нужна сборка Godot .NET и dotnet build")
@@ -146,7 +147,7 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 	var ws := PackedFloat64Array()
 	var surf := PackedInt32Array()
 	var authored := PackedByteArray()
-	var tuning := RoadTuning.current()
+	var tuning := RoadTuning.for_world(w)
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
 		var is_authored := t.has("trail_id")
@@ -191,7 +192,8 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 	noise.seed = w.seed_num
 	noise.frequency = 1.0
 	noise.fractal_octaves = 2
-	var settings := corridor_params() if fit_road else {}
+	_section = tuning.section
+	var settings := corridor_params(w.template_id) if fit_road else {}
 	var input_ms := (Time.get_ticks_usec() - started_us) / 1000.0
 	var out: Variant = fast.BuildRoadRefinement(w.W, w.H, TILE, DIV, _reach, heights.hv, heights.hv_raw, heights.water_level,
 		w.dist_water, starts, xs, ys, ws, surf, kinds, scales, ids, authored, local_routes, noise, Vector2(w.world_origin) * TILE,
@@ -233,10 +235,11 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 
 
 ## Готовые патчи без пересчёта (сохранённый участок Trail Lab): height — число строк клеток мира.
-static func from_patches(ready: Dictionary, height: int) -> RoadRefinement:
+static func from_patches(ready: Dictionary, height: int, template_id := "") -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r.patches = ready
 	r._height = height
+	r._section = RoadTuning.for_template(template_id).section
 	return r
 
 static var _code_version := -1
@@ -258,8 +261,8 @@ static func code_version() -> int:
 ## fade, gap — включение форм и зазор между полотнами; stride — чисел на станцию; level_r — радиус выравнивания, rhythm_span —
 ## размах ритма. Без landscape_character — прежние характер и ритм (множители 1, ритм по шуму, выравнивания нет).
 ## 16.11.2026: числа форм, характера, выравнивания и зазоров — из файла параметров RoadTuning.
-static func corridor_params() -> Dictionary:
-	var tuning := RoadTuning.current()
+static func corridor_params(template_id := "") -> Dictionary:
+	var tuning := RoadTuning.for_template(template_id)
 	var kinds: Array = []
 	var level_kind := PackedFloat64Array()
 	for name: String in CORRIDOR_KINDS:
@@ -289,12 +292,12 @@ static func _bell(t: float) -> float:
 
 ## Visible wear lies inside the rideable/cleared corridor. This same alpha places grass,
 ## understory and obstacles; the shader adds texture, not another displaced boundary.
-static func tread_mask(half: float, d: float, slow: float, organic: float, _road: bool, authored := false, grain := 0.0) -> float:
+static func tread_mask(half: float, d: float, slow: float, organic: float, _road: bool, authored := false, grain := 0.0, template_id := "") -> float:
 	if authored:
 		var original_edge := (half + slow * 0.24 + grain * 0.10) * (1.0 - organic * 0.12)
 		var original_shoulder := (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5)
 		return (1.0 - smoothstep(original_edge * 0.55, original_edge + original_shoulder, d)) * (1.0 - organic * 0.35)
-	return RoadTuning.current().section.tread_alpha(half, d, slow, organic)
+	return RoadTuning.for_template(template_id).section.tread_alpha(half, d, slow, organic)
 
 
 ## Та же треугольная интерполяция, что у TerrainBuilder (без билинейного расхождения с мешем).

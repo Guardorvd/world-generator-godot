@@ -229,7 +229,9 @@ public partial class FastGrid
 	/// <summary>StageClimate.run. Preserve Vector2's float32 rounding before using light/retention.</summary>
 	public Godot.Collections.Dictionary ClimateFields(int w, int h, float[] heights, byte[] ocean, byte[] lake,
 		float[] rain, float[] distOcean, float[] distWater, float[] elev, float[] slope,
-		double[] tempNoise, double latCells, byte[] biomeIds, double latBase = 0.5, double latCenter = 383.5)
+		double[] tempNoise, double latCells, byte[] biomeIds, double latBase = 0.5, double latCenter = 383.5,
+		double peakElev = 0.65, double peakColdElev = 0.46, double snowTemp = 0.12,
+		double rockElev = 0.45, double rockSlope = 0.48, double treelineElev = 0.45)
 	{
 		int n = checked(w * h);
 		var temp = new float[n];
@@ -266,7 +268,7 @@ public partial class FastGrid
 				else if (lake[i] != 0) b = ClimateKind.Lake;
 				else
 				{
-					b = LandBiome(e, t, m, slope[i], distOcean[i]);
+					b = LandBiome(e, t, m, slope[i], distOcean[i], peakElev, peakColdElev, snowTemp, rockElev, rockSlope, treelineElev);
 					if (distWater[i] <= 1.0 && distOcean[i] > 2.5 && slope[i] > 0.55 && e < 0.62) b = ClimateKind.StoneShore;
 				}
 				biome[i] = biomeIds[(int)b];
@@ -275,14 +277,15 @@ public partial class FastGrid
 		return new Godot.Collections.Dictionary { ["temp"] = temp, ["moist"] = moist, ["biome"] = biome, ["light"] = light };
 	}
 
-	private static ClimateKind LandBiome(double e, double t, double m, double slope, double distOcean)
+	private static ClimateKind LandBiome(double e, double t, double m, double slope, double distOcean,
+		double peakElev, double peakColdElev, double snowTemp, double rockElev, double rockSlope, double treelineElev)
 	{
-		if (e > 0.65 || e > 0.46 && t < 0.2)
-			return slope < 0.30 && m > 0.50 && t > 0.12 ? ClimateKind.Tundra : ClimateKind.Peak;
-		if (slope > 1.3 || e > 0.45 && (slope > 0.48 || m < 0.40)) return ClimateKind.Rock;
-		if (e > 0.45) return ClimateKind.Tundra;
+		if (e > peakElev || e > peakColdElev && t < 0.2)
+			return slope < 0.30 && m > 0.50 && t > snowTemp ? ClimateKind.Tundra : ClimateKind.Peak;
+		if (slope > 1.3 || e > rockElev && (slope > rockSlope || m < 0.40)) return ClimateKind.Rock;
+		if (e > treelineElev) return ClimateKind.Tundra;
 		if (distOcean <= 2.5 && e < 0.03) return t < 0.3 ? ClimateKind.StoneShore : ClimateKind.Beach;
-		if (t < 0.12) return ClimateKind.Snow;
+		if (t < snowTemp) return ClimateKind.Snow;
 		if (t < 0.24) return m > 0.6 ? ClimateKind.Taiga : ClimateKind.Tundra;
 		if (t < 0.42) return m < 0.3 ? ClimateKind.Steppe : ClimateKind.Taiga;
 		if (t < 0.7)

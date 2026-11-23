@@ -137,7 +137,8 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 			else:
 				t = clampf(t + (light - 0.5) * 0.08, 0.0, 1.0)
 				m = StageClimate.soil_moisture(rain, dw, slope, t, Vector2(light, hollow))
-				b = StageClimate.land_biome(e, t, m, slope, d, dw)
+				b = StageClimate.land_biome(e, t, m, slope, d, dw,
+					cfg.peak_elev, cfg.peak_cold_elev, cfg.snow_temp, cfg.rock_elev, cfg.rock_slope, cfg.treeline_elev)
 			out.h[o] = hh
 			out.biome[o] = b
 			out.temp[o] = t

@@ -54,7 +54,7 @@ var _revision := 0
 
 func _init(w: WorldData) -> void:
 	world = w
-	_tuning = RoadTuning.current().obstacles.duplicate(true) as RoadTuning.Obstacles
+	_tuning = RoadTuning.for_world(w).obstacles.duplicate(true) as RoadTuning.Obstacles
 	_trails = w.trails.duplicate()
 	if w.trail_plan.get("state") == "found":
 		for d: TrailDefinition in StageTrailPlan._kit(w.trail_plan):

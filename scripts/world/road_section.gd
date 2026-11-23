@@ -10,7 +10,7 @@ const WIDTH_RATE := 0.10 # metres of full width per metre along the ground axis
 
 ## Fit published natural roads once the full network and its structures are known.
 static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
-	var tuning := RoadTuning.current().section
+	var tuning := RoadTuning.for_world(w).section
 	var routes: Array = []
 	var junctions := {}
 	for t: Dictionary in w.trails:

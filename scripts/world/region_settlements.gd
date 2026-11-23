@@ -251,6 +251,7 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 		if f.fixed[i] != 0:
 			if f.has("elev"): w.elev[i] = f.elev[i]
 			if f.has("slope"): w.slope[i] = f.slope[i]
+	var cfg := WorldTemplate.config(w.template_id)
 	for i in w.N:
 		if f.fixed[i] != 0: continue
 		var conditions := StageClimate.natural_conditions(w, i % w.W, i / w.W)
@@ -263,5 +264,6 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 			w.moist[i] = StageClimate.soil_moisture(f.rain[i], w.dist_water[i], w.slope[i], t, conditions) if land \
 				else clampf(f.rain[i] + 0.22 * exp(-w.dist_water[i] / 4.0), 0.0, 1.0)
 		if land:
-			w.biome[i] = StageClimate.land_biome(w.elev[i], w.temp[i], w.moist[i], w.slope[i], w.dist_ocean[i], w.dist_water[i])
+			w.biome[i] = StageClimate.land_biome(w.elev[i], w.temp[i], w.moist[i], w.slope[i], w.dist_ocean[i], w.dist_water[i],
+				cfg.peak_elev, cfg.peak_cold_elev, cfg.snow_temp, cfg.rock_elev, cfg.rock_slope, cfg.treeline_elev)
 	return w

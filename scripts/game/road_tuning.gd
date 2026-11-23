@@ -46,19 +46,66 @@ const BASELINE_TREAD_DIGEST := "8bc1a25b1f49"
 @export var prepared_scale := 0.0
 
 static var _current: RoadTuning
+static var _by_path := {}
 static var _lock := Mutex.new()
 
 
 ## Параметры игры (resources/road_tuning.tres), загружаются один раз; вызов идёт и из потоков.
 static func current() -> RoadTuning:
 	_lock.lock()
+	var cached := _current
+	_lock.unlock()
+	if cached != null:
+		return cached
+	var loaded := load(PATH) as RoadTuning
+	if loaded == null or not loaded.valid():
+		push_error("RoadTuning: %s не загружен или неполон — дороги не строятся с ним" % PATH)
+	_lock.lock()
 	if _current == null:
-		_current = load(PATH) as RoadTuning
-		if _current == null or not _current.valid():
-			push_error("RoadTuning: %s не загружен или неполон — дороги не строятся с ним" % PATH)
+		_current = loaded
 	var t := _current
 	_lock.unlock()
 	return t
+
+
+## Настройки дорог для типа мира (потокобезопасно, без удержания мьютекса на загрузке .tres).
+static func for_template(template_id: String) -> RoadTuning:
+	if template_id.is_empty() or WorldTemplate.is_default(template_id):
+		return current()
+	var path := WorldTemplate.road_tuning_path(template_id)
+	if path.is_empty() or path == PATH:
+		return current()
+	_lock.lock()
+	var cached: RoadTuning = _by_path.get(path)
+	_lock.unlock()
+	if cached != null:
+		return cached
+	var loaded := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE) as RoadTuning
+	if loaded == null or not loaded.valid():
+		push_error("RoadTuning: %s не загружен или неполон — используется %s" % [path, PATH])
+		return current()
+	_lock.lock()
+	if not _by_path.has(path):
+		_by_path[path] = loaded
+	var t: RoadTuning = _by_path[path]
+	_lock.unlock()
+	return t
+
+
+## Настройки дорог по WorldData (при null или отсутствии template_id — общий RoadTuning.current()).
+static func for_world(w: Variant) -> RoadTuning:
+	if w != null and w is Object:
+		var tid: Variant = w.get("template_id")
+		if tid is String:
+			return for_template(tid)
+	return current()
+
+
+## Сбрасывает кэш профилей шаблонов при WorldTemplate.reload() (настройки Типа 1 _current не трогаются).
+static func clear_template_cache() -> void:
+	_lock.lock()
+	_by_path.clear()
+	_lock.unlock()
 
 
 ## Все группы и таблицы по восьми покрытиям на месте.

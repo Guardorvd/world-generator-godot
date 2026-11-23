@@ -27,11 +27,21 @@ var world: WorldData
 var heights: Heightfield
 var land: OuterLand
 var _mat: ShaderMaterial
+var _far_mat: ShaderMaterial
+var _far_radius := 0.0
+var _far_drop := 0.0
+var _far_chunk_cells := 128
+var _far_step := 4
+var _far_sink_m := 3.0
 var _palette := PackedColorArray()
 var _nodes := {}         # номер куска -> MeshInstance3D (или null, если в куске нечего рисовать)
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
 var _evict_pending: Array[Vector2i] = []
+var _far_nodes := {}     # номер дальнего куска -> MeshInstance3D (или null)
+var _far_tasks := {}     # номер дальнего куска -> {id, out}
+var _far_queue: Array[Vector2i] = []
+var _far_evict: Array[Vector2i] = []
 var _crown_wait := {}
 var _checked_at := Vector2.INF
 var _redo: Array[Vector2i] = []   # 13.9: загруженные куски закреплённой области, пересчитать поверх старых
@@ -50,7 +60,16 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
 	land = w.outer
-	_mat = terrain_builder.outer_material()
+	_mat = terrain_builder.outer_material(w.template_id)
+	var cfg := WorldTemplate.config(w.template_id)
+	_far_radius = cfg.outer_far_radius
+	_far_drop = maxf(cfg.outer_far_drop, _far_radius + 200.0) if _far_radius > 0.0 else 0.0
+	_far_step = maxi(2, cfg.outer_far_step)
+	_far_chunk_cells = maxi(_far_step * 4, (maxi(32, cfg.outer_far_chunk_cells) / _far_step) * _far_step)
+	_far_sink_m = cfg.outer_far_sink_m
+	_far_mat = terrain_builder.far_material(_mat) if _far_radius > 0.0 else null
+	if _far_mat == null:
+		_far_mat = _mat
 	_palette.clear()
 	for bd: Dictionary in Biomes.LIST:
 		_palette.append(Color8(bd.color[0], bd.color[1], bd.color[2]))
@@ -62,21 +81,38 @@ func preload_around(x: float, z: float, radius: float = RADIUS) -> void:
 	for key: Vector2i in _wanted(x, z, radius):
 		if not _nodes.has(key) and not _tasks.has(key):
 			keys.append(key)
-	if keys.is_empty():
-		_checked_at = Vector2.INF
-		return # группу задач без элементов не создаём
-	var outs: Array = []
-	outs.resize(keys.size())
-	var lock := Mutex.new()
-	var task := func(k: int) -> void:
-		var r := _build(keys[k])
-		lock.lock()
-		outs[k] = r
-		lock.unlock()
-	var id := WorkerThreadPool.add_group_task(task, keys.size(), -1, true)
-	WorkerThreadPool.wait_for_group_task_completion(id)
-	for k in keys.size():
-		_add(keys[k], outs[k])
+	if not keys.is_empty():
+		var outs: Array = []
+		outs.resize(keys.size())
+		var lock := Mutex.new()
+		var task := func(k: int) -> void:
+			var r := _build(keys[k])
+			lock.lock()
+			outs[k] = r
+			lock.unlock()
+		var id := WorkerThreadPool.add_group_task(task, keys.size(), -1, true)
+		WorkerThreadPool.wait_for_group_task_completion(id)
+		for k in keys.size():
+			_add(keys[k], outs[k])
+	if _far_radius > 0.0:
+		var far_r := minf(_far_radius, _far_radius * (radius / RADIUS))
+		var far_keys: Array[Vector2i] = []
+		for key: Vector2i in _wanted_far(x, z, far_r):
+			if not _far_nodes.has(key) and not _far_tasks.has(key):
+				far_keys.append(key)
+		if not far_keys.is_empty():
+			var far_outs: Array = []
+			far_outs.resize(far_keys.size())
+			var flock := Mutex.new()
+			var ftask := func(k: int) -> void:
+				var r := _compute_far(far_keys[k])
+				flock.lock()
+				far_outs[k] = r
+				flock.unlock()
+			var fid := WorkerThreadPool.add_group_task(ftask, far_keys.size(), -1, true)
+			WorkerThreadPool.wait_for_group_task_completion(fid)
+			for k in far_keys.size():
+				_add_far(far_keys[k], far_outs[k])
 	_checked_at = Vector2.INF # дальние куски догрузит update
 
 
@@ -110,6 +146,22 @@ func update(x: float, z: float, allow_apply: bool = true, keep_current := false)
 				_redo.append(done)
 			else:
 				_checked_at = Vector2.INF
+	if _far_radius > 0.0 and not applied and allow_apply and _within_frame_budget():
+		var fdone: Variant = null
+		var fcompleted := {}
+		for key: Vector2i in _far_tasks:
+			var t: Dictionary = _far_tasks[key]
+			if WorkerThreadPool.is_task_completed(t.id):
+				WorkerThreadPool.wait_for_task_completion(t.id)
+				fdone = key
+				if _far_center(key).distance_to(Vector2(x, z)) <= _far_drop:
+					fcompleted = t.out.r
+				break
+		if fdone != null:
+			_far_tasks.erase(fdone)
+			if not fcompleted.is_empty():
+				_add_far(fdone, fcompleted)
+				applied = true
 	# Пересчёт очереди и запуск задач тоже работают на главном потоке.
 	if not _within_frame_budget():
 		return applied
@@ -125,6 +177,17 @@ func update(x: float, z: float, allow_apply: bool = true, keep_current := false)
 			if not _nodes.has(key) and not _tasks.has(key):
 				_queue.append(key)
 		_queue.reverse()
+		if _far_radius > 0.0:
+			if not keep_current:
+				_far_evict.clear()
+				for key: Vector2i in _far_nodes:
+					if _far_center(key).distance_to(Vector2(x, z)) > _far_drop:
+						_far_evict.append(key)
+			_far_queue.clear()
+			for key: Vector2i in _wanted_far(x, z, _far_radius):
+				if not _far_nodes.has(key) and not _far_tasks.has(key):
+					_far_queue.append(key)
+			_far_queue.reverse()
 	while _tasks.size() < _task_limit and not _redo.is_empty() and _within_frame_budget():
 		var key: Vector2i = _redo.pop_back()
 		if not _nodes.has(key) or _tasks.has(key):
@@ -140,6 +203,13 @@ func update(x: float, z: float, allow_apply: bool = true, keep_current := false)
 		# низкий приоритет: растительность и кадр важнее дальнего рельефа
 		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
 		_tasks[key] = {id = id, out = out}
+	while _far_radius > 0.0 and _tasks.size() + _far_tasks.size() < _task_limit and not _far_queue.is_empty() and _within_frame_budget():
+		var key: Vector2i = _far_queue.pop_back()
+		if _far_nodes.has(key) or _far_tasks.has(key):
+			continue
+		var out := {}
+		var id := WorkerThreadPool.add_task(func() -> void: out.r = _compute_far(key), false)
+		_far_tasks[key] = {id = id, out = out}
 	if not keep_current and allow_apply and not applied and not _crown_wait.is_empty() and _within_frame_budget():
 		var key: Vector2i = _crown_wait.keys()[0]
 		var crowns: Dictionary = _crown_wait[key]
@@ -154,6 +224,13 @@ func update(x: float, z: float, allow_apply: bool = true, keep_current := false)
 			_nodes.erase(key)
 			_crown_wait.erase(key)
 			land.chunks.erase(key)
+			applied = true
+	if _far_radius > 0.0 and not keep_current and allow_apply and not applied and not _far_evict.is_empty() and _within_frame_budget():
+		var key: Vector2i = _far_evict.pop_back()
+		if _far_nodes.has(key) and _far_center(key).distance_to(Vector2(x, z)) > _far_drop:
+			if _far_nodes[key] != null:
+				_release_mesh_node(_far_nodes[key])
+			_far_nodes.erase(key)
 			applied = true
 	return applied
 
@@ -199,6 +276,9 @@ func finish() -> void:
 	for key: Vector2i in _tasks:
 		WorkerThreadPool.wait_for_task_completion(_tasks[key].id)
 	_tasks.clear()
+	for key: Vector2i in _far_tasks:
+		WorkerThreadPool.wait_for_task_completion(_far_tasks[key].id)
+	_far_tasks.clear()
 
 
 func _exit_tree() -> void:
@@ -499,3 +579,168 @@ static func _lod(pos: PackedVector3Array) -> Dictionary:
 				idx.append_array([p + V + 1, ring[k], ring[(k + 1) % ring.size()]])
 	# Запас на смену диагоналей у края. На резком рельефе LOD включается дальше.
 	return {maxf(0.5, error * 2.0): idx}
+
+
+func _far_center(key: Vector2i) -> Vector2:
+	return (Vector2(key) + Vector2(0.5, 0.5)) * float(_far_chunk_cells) * TILE
+
+
+func _on_map_far(key: Vector2i) -> bool:
+	var i0 := key.x * _far_chunk_cells
+	var j0 := key.y * _far_chunk_cells
+	return i0 >= 0 and j0 >= 0 and i0 + _far_chunk_cells <= world.W - 1 and j0 + _far_chunk_cells <= world.H - 1
+
+
+func _wanted_far(x: float, z: float, radius: float) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if _far_radius <= 0.0 or radius <= 0.0:
+		return out
+	var side := float(_far_chunk_cells) * TILE
+	var r := ceili(radius / side)
+	var ck := Vector2i(floori(x / side), floori(z / side))
+	var inner_skip := maxf(0.0, RADIUS - 96.0)
+	var dist := {}
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var key := ck + Vector2i(dx, dy)
+			if _on_map_far(key):
+				continue
+			var x0 := float(key.x) * side
+			var x1 := float(key.x + 1) * side
+			var z0 := float(key.y) * side
+			var z1 := float(key.y + 1) * side
+			var px := clampf(x, x0, x1)
+			var pz := clampf(z, z0, z1)
+			var d_min := Vector2(px - x, pz - z).length()
+			if d_min > radius:
+				continue
+			var fx := x0 if absf(x - x0) > absf(x - x1) else x1
+			var fz := z0 if absf(z - z0) > absf(z - z1) else z1
+			if Vector2(fx - x, fz - z).length() < inner_skip:
+				continue
+			out.append(key)
+			dist[key] = d_min
+	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return dist[a] < dist[b])
+	return out
+
+
+func _add_far(key: Vector2i, built: Dictionary) -> void:
+	var node := stage_far_chunk(key, built)
+	if _far_nodes.get(key) != null:
+		_release_mesh_node(_far_nodes[key])
+	_far_nodes[key] = node
+	if node != null:
+		node.visible = true
+
+
+func stage_far_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
+	var mi: MeshInstance3D = null
+	if not built.get("arrays", []).is_empty():
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, built.arrays)
+		mi = _acquire_mesh_node()
+		mi.mesh = mesh
+		var center := _far_center(key)
+		mi.position = Vector3(center.x, 0.0, center.y)
+		mi.material_override = _far_mat
+		mi.lod_bias = 0.25
+		mi.visibility_range_end = _far_radius + float(_far_chunk_cells) * TILE * sqrt(2.0) * 0.5
+		mi.visibility_range_end_margin = RECHECK
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visible = false
+	return mi
+
+
+## Крупная геометрия дальних гольцов (без BFS/FarForest и с лёгким дальним материалом).
+func _compute_far(key: Vector2i) -> Dictionary:
+	var FC := _far_chunk_cells
+	var step := _far_step
+	var n_steps := FC / step
+	var V := n_steps + 1
+	var S := V + 2
+	var i0 := key.x * FC
+	var j0 := key.y * FC
+	var W := world.W
+	var H := world.H
+	var cfg := WorldTemplate.config(world.template_id)
+	var axis: ValleyAxis = ValleyAxis.for_world(world) if cfg.valley_relief else null
+	var hs_raw := StageRelief.valley_coarse_rect(world, i0 - step, j0 - step, S, S, step, false) \
+		if cfg.valley_relief else PackedFloat32Array()
+	if hs_raw.is_empty():
+		return {arrays = []}
+	var temp_n: Simplex = world.noise.temp.clone()
+	var moist_n: Simplex = world.noise.moist.clone()
+	var tp0 := float(WorldData.NOISE_FIELDS.temp[0])
+	var tp1 := int(WorldData.NOISE_FIELDS.temp[1])
+	var mp0 := float(WorldData.NOISE_FIELDS.moist[0])
+	var mp1 := int(WorldData.NOISE_FIELDS.moist[1])
+	var rock_tint := Color8(int(MapBaker.ROCKC[0]), int(MapBaker.ROCKC[1]), int(MapBaker.ROCKC[2]))
+	var temp_lapse := cfg.outer_temp_lapse
+	var exp_surf := preload("res://scripts/world/mountain_surface.gd")
+
+	var pos := PackedVector3Array()
+	var nor := PackedVector3Array()
+	var vc := PackedColorArray()
+	var uv := PackedVector2Array()
+	pos.resize(V * V)
+	nor.resize(V * V)
+	vc.resize(V * V)
+	uv.resize(V * V)
+	var step_tile := float(step) * TILE
+	for b in V:
+		var wy := j0 + b * step
+		var lat := StageClimate.latitude(world, wy)
+		for a in V:
+			var wx := i0 + a * step
+			var k := (b + 1) * S + a + 1
+			var hh := hs_raw[k]
+			var v := b * V + a
+			var hm := Heightfield.outer_meters(hh, true) - _far_sink_m
+			pos[v] = Vector3((float(a * step) + 0.5 - float(FC) * 0.5) * TILE, hm, (float(b * step) + 0.5 - float(FC) * 0.5) * TILE)
+			var hl := hs_raw[k - 1] * HS
+			var hr := hs_raw[k + 1] * HS
+			var hu := hs_raw[k - S] * HS
+			var hd := hs_raw[k + S] * HS
+			nor[v] = Vector3(hl - hr, 2.0 * step_tile, hu - hd).normalized()
+			var e := axis.eco_elev(wy, hh) if axis != null else maxf(0.0, hh)
+			var el := axis.eco_elev(wy, hs_raw[k - 1]) if axis != null else maxf(0.0, hs_raw[k - 1])
+			var er := axis.eco_elev(wy, hs_raw[k + 1]) if axis != null else maxf(0.0, hs_raw[k + 1])
+			var eu := axis.eco_elev(wy - step, hs_raw[k - S]) if axis != null else maxf(0.0, hs_raw[k - S])
+			var ed := axis.eco_elev(wy + step, hs_raw[k + S]) if axis != null else maxf(0.0, hs_raw[k + S])
+			var gx := (er - el) / float(step)
+			var gy := (ed - eu) / float(step)
+			var slope := sqrt(gx * gx + gy * gy) * 0.5 * 60.0
+			var light := clampf(0.5 - 0.5 * (gy * 30.0) / sqrt(1.0 + gx * gx * 900.0 + gy * gy * 900.0), 0.0, 1.0)
+			var t := clampf(0.43 + lat * 0.32 + temp_n.fbm(float(wx) / tp0, float(wy) / tp0, tp1) * 0.18 - e * temp_lapse + (light - 0.5) * 0.08, 0.0, 1.0)
+			var rain := clampf(0.66 + 0.48 * moist_n.fbm(float(wx) / mp0, float(wy) / mp0, mp1), 0.12, 1.0)
+			var m := StageClimate.soil_moisture(rain, 1e9, slope, t, Vector2(light, 0.0))
+			var bi := StageClimate.land_biome(e, t, m, slope, 1e9, 1e9,
+				cfg.peak_elev, cfg.peak_cold_elev, cfg.snow_temp, cfg.rock_elev, cfg.rock_slope, cfg.treeline_elev)
+			var c := _palette[bi] if (bi == Biomes.SNOW or bi == Biomes.PEAK) else _palette[bi].lerp(rock_tint, 0.45 * smoothstep(0.3, 0.6, e))
+			c.a = exp_surf.exposure(e, slope, m)
+			vc[v] = c
+			uv[v] = Vector2(Floor.ground_moisture(m, 1e9), 0.0)
+	var idx := PackedInt32Array()
+	for qb in n_steps:
+		var j := j0 + qb * step
+		for qa in n_steps:
+			var i := i0 + qa * step
+			if i >= 0 and j >= 0 and i + step <= W - 1 and j + step <= H - 1:
+				continue
+			var p := qb * V + qa
+			idx.append(p)
+			idx.append(p + 1)
+			idx.append(p + V)
+			idx.append(p + 1)
+			idx.append(p + V + 1)
+			idx.append(p + V)
+	if idx.is_empty():
+		return {arrays = []}
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = pos
+	arrays[Mesh.ARRAY_NORMAL] = nor
+	arrays[Mesh.ARRAY_COLOR] = vc
+	arrays[Mesh.ARRAY_TEX_UV] = uv
+	arrays[Mesh.ARRAY_INDEX] = idx
+	return {arrays = arrays}

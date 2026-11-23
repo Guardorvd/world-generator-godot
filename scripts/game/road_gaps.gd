@@ -19,6 +19,8 @@ static func apply(h: Heightfield, r: RoadRefinement, gap_clear: Callable) -> voi
 	var w := h.world
 	if w.biome.size() != w.N or w.dist_water.size() != w.N:
 		return
+	if WorldTemplate.has_single_road(w.template_id) and not WorldTemplate.allow_road_gaps(w.template_id):
+		return
 	var world_cells := Rect2i(0, 0, w.W, w.H)
 	var seed := WGRandom.derive(w.seed_num, "road_gaps")
 	var candidates: Array[Vector3i] = []
@@ -93,7 +95,7 @@ static func _place(h: Heightfield, r: RoadRefinement, route: int, points: Packed
 	var shape := {center = center, axis = axis, side = side, base = (y0 + y1) * 0.5, grade = grade,
 		lip = lip, rise = rise, depth = depth, ramp = 2.0 * rise / (TrailElement.GAP_LIP + 0.20),
 		bend = lerpf(-0.85, 0.85, rng.next_float()), taper = lerpf(-0.55, 0.55, rng.next_float()),
-		material = material, bypass = bypass}
+		material = material, bypass = bypass, template_id = h.world.template_id}
 	_bake(h, r, shape, _cells(area, 1))
 	var line: Array = []
 	var offsets: PackedFloat32Array = bypass.offsets
@@ -235,7 +237,7 @@ static func _vertex(at: Vector2, value: Array, s: Dictionary, tint: Color, organ
 	var fade := 1.0 - smoothstep(HALF_LENGTH - 2.5, HALF_LENGTH, distance)
 	var bench := (1.0 - smoothstep(BYPASS_HALF * 0.7, BYPASS_HALF + 0.8, absf(across))) * fade
 	height = lerpf(height, lerpf(profile[n], profile[n + 1], t), bench)
-	var tread := RoadRefinement.tread_mask(BYPASS_HALF, absf(across), 0.0, organic, false) * fade
+	var tread := RoadRefinement.tread_mask(BYPASS_HALF, absf(across), 0.0, organic, false, false, 0.0, str(s.get("template_id", ""))) * fade
 	if tread > color.a and tread > 0.03:
 		color = Color(tint.r, tint.g, tint.b, tread)
 		uv = Vector2(across / BYPASS_HALF, float(s.material) + 0.25)

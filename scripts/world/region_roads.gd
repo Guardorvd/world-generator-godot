@@ -95,7 +95,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	w.cost.resize(w.N)
 	var edge_dist := _unprepared_distance(bounds, regions, ledger, plan)
 	var span_reach := StageTrails._bridge_reach(w) # вода дальше любого возможного моста — непроходима
-	var bridge_cost := RoadTuning.current().routing.bridge_cost
+	var bridge_cost := RoadTuning.for_world(w).routing.bridge_cost
 	for i in w.N:
 		var wet := w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
 		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
@@ -176,7 +176,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		if nodes[k].net != "" and nodes[k].net != label: merged_nets[nodes[k].net] = label
 	# 13.9: поля для растительности закреплённой области — как у плана в StageVegetation.
 	# 15.0: просвет до кромки полотна — по линиям путей области в её клетках, до сдвига в мировые координаты
-	var dist_path := StageVegetation.path_clearance(w.W, w.H, w.trails, w.tunnels)
+	var dist_path := StageVegetation.path_clearance(w.W, w.H, w.trails, w.tunnels, w.template_id)
 	var village := PackedByteArray()
 	village.resize(w.N)
 	var reach := StageVegetation.VILLAGE_R
@@ -267,7 +267,7 @@ static func _search(w: WorldData, ground: Variant, state: Dictionary, open: Pack
 		heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	finder.eager_fallback = eager_fallback
-	StageTrails._route_surface(finder, ground, RoadTuning.current().section.widths.road)
+	StageTrails._route_surface(finder, ground, RoadTuning.for_world(w).section.widths.road)
 	# Один суммарный бюджет на группу, включая неудачные направления.
 	finder.search_budget = w.N * 4
 	# Пара со старой сетью идёт к ближайшей клетке её дороги в полосе подхода.

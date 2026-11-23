@@ -21,7 +21,8 @@ const GROUP_RETRIES := [Vector4(1, 1, 1.30, 1), Vector4(1, 1, 1, 1.30)]
 
 static func build(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield,
 		kind := "road", joins := {}, corridor := Callable(), smooth_kind := "") -> Array:
-	var relaxation: Dictionary = StageTrails.routing_overrides.get("line_relax", RoadTuning.current().routing.line_relax)
+	var routing := RoadTuning.for_world(w).routing
+	var relaxation: Dictionary = StageTrails.routing_overrides.get("line_relax", routing.line_relax)
 	var relax: float = relaxation.get(kind if smooth_kind.is_empty() else smooth_kind, 0.0)
 	if relax <= 1.0 or pts.size() < 3:
 		return _build_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, 0.0)
@@ -66,7 +67,7 @@ static func _build_with(w: WorldData, pts: Array, on_axis: PackedByteArray, surf
 		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
 		probe = surface.fast_water(), axis = on_axis, corridor = corridor, relax = relax,
 	}
-	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", RoadTuning.current().routing.straighten)
+	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", RoadTuning.for_world(w).routing.straighten)
 	var tolerance: float = straightening.get(design_kind, 0.0)
 	if tolerance > 0.0 and pts.size() > 2:
 		var pulled := straighten(surface, pts, fixed, rules, tolerance)

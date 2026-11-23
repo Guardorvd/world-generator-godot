@@ -58,8 +58,9 @@ public partial class FastGrid
 	/// </summary>
 	public float[] ValleyReliefField(int[] warpX, int[] warpY, int[] ridge, int[] hill,
 		int x0, int y0, int W, int H, int roadSide,
-		double[] axisX, double[] floorH, double[] riverHw, double[] bedDepth,
-		double[] spurH, double[] spurReach, double[] channelFade, double[] endWall,
+		double[] axisX, double[] axisCos, double[] floorH, double[] riverHw, double[] bedDepth,
+		double[] spurH, double[] spurReach, double[] oppSpurH, double[] oppSpurReach,
+		double[] wallShiftR, double[] wallShiftL, double[] channelFade, double[] endWall,
 		double[] rp, double mountainScale, double mountainHeight, bool parallel, bool detail,
 		double heightScale, double tile, int[] microNoise, int microPad)
 	{
@@ -75,13 +76,14 @@ public partial class FastGrid
 		var baseRaw = new float[bw * bh];
 		void BaseRow(int j)
 		{
-			double ax = axisX[j], fh = floorH[j], rhw = riverHw[j], bd = bedDepth[j];
-			double sh = spurH[j], sr = spurReach[j], cf = channelFade[j], ew = endWall[j];
+			double ax = axisX[j], ac = axisCos[j], fh = floorH[j], rhw = riverHw[j], bd = bedDepth[j];
+			double sh = spurH[j], sr = spurReach[j], osh = oppSpurH[j], osr = oppSpurReach[j];
+			double wsr = wallShiftR[j], wsl = wallShiftL[j], cf = channelFade[j], ew = endWall[j];
 			int wy = by0 + j;
 			for (int i = 0; i < bw; i++)
 			{
 				double hv = ValleyBaseAt(warpX, warpY, ridge, hill, bx0 + i, wy, roadSide,
-					ax, fh, rhw, bd, sh, sr, cf, ew, rp, mountainHeight, wide);
+					ax, ac, fh, rhw, bd, sh, sr, osh, osr, wsr, wsl, cf, ew, rp, mountainHeight, wide);
 				baseRaw[j * bw + i] = (float)(SeaRaw + Math.Pow(Math.Max(1e-6, hv), 0.8) * (TopRaw - SeaRaw));
 			}
 		}
@@ -93,7 +95,7 @@ public partial class FastGrid
 		void DetailNormRow(int j)
 		{
 			int rj = j + dPad;
-			double ax = axisX[rj], rhw = riverHw[rj], cf = channelFade[rj];
+			double ax = axisX[rj], ac = axisCos[rj], rhw = riverHw[rj], cf = channelFade[rj];
 			int wy = y0 - microPad + j;
 			for (int i = 0; i < stride; i++)
 			{
@@ -103,7 +105,7 @@ public partial class FastGrid
 				if (detail)
 				{
 					double detV = Detail(ridge, hill, baseRaw, bw, bk, wx, wy, heightScale, tile);
-					double damp = 1.0 - (1.0 - ReliefSmooth(rhw + dampStart, rhw + dampEnd, Math.Abs(wx - ax))) * cf;
+					double damp = 1.0 - (1.0 - ReliefSmooth(rhw + dampStart, rhw + dampEnd, Math.Abs(wx - ax) * ac)) * cf;
 					rawV += (detV - rawV) * damp;
 				}
 				double q = Math.Max(0.0, (rawV - SeaRaw) / (TopRaw - SeaRaw));
@@ -117,14 +119,14 @@ public partial class FastGrid
 		if (microPad == 0)
 			return norm;
 		var withMicro = ReliefMicro(norm, microNoise, x0, y0, W, H, microPad, heightScale, tile, parallel);
-		// Гасим мелкую рябь внутри русла и на кромке берега.
+		// Гасим мелкую рябь внутри русла и на кромке берега (по нормали к руслу).
 		void DampMicroRow(int j)
 		{
 			int rj = j + totalPad;
-			double ax = axisX[rj], rhw = riverHw[rj], cf = channelFade[rj];
+			double ax = axisX[rj], ac = axisCos[rj], rhw = riverHw[rj], cf = channelFade[rj];
 			for (int i = 0; i < W; i++)
 			{
-				double damp = 1.0 - (1.0 - ReliefSmooth(rhw + dampStart, rhw + dampEnd, Math.Abs((x0 + i) - ax))) * cf;
+				double damp = 1.0 - (1.0 - ReliefSmooth(rhw + dampStart, rhw + dampEnd, Math.Abs((x0 + i) - ax) * ac)) * cf;
 				if (damp < 1.0)
 				{
 					int nk = (j + microPad) * stride + i + microPad;
@@ -137,15 +139,53 @@ public partial class FastGrid
 		return withMicro;
 	}
 
+	/// <summary>Разрежённый макрорельеф долины (шаг step клеток) для лёгкого дальнего пояса OuterTerrain.</summary>
+	public float[] ValleyReliefCoarse(int[] warpX, int[] warpY, int[] ridge, int[] hill,
+		int x0, int y0, int cols, int rows, int step, int roadSide,
+		double[] axisX, double[] axisCos, double[] floorH, double[] riverHw, double[] bedDepth,
+		double[] spurH, double[] spurReach, double[] oppSpurH, double[] oppSpurReach,
+		double[] wallShiftR, double[] wallShiftL, double[] channelFade, double[] endWall,
+		double[] rp, double mountainScale, double mountainHeight, bool parallel)
+	{
+		if (cols <= 0 || rows <= 0) return Array.Empty<float>();
+		double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
+		double knee = rp[32], soft = rp[33];
+		var outH = new float[cols * rows];
+		void CoarseRow(int j)
+		{
+			double ax = axisX[j], ac = axisCos[j], fh = floorH[j], rhw = riverHw[j], bd = bedDepth[j];
+			double sh = spurH[j], sr = spurReach[j], osh = oppSpurH[j], osr = oppSpurReach[j];
+			double wsr = wallShiftR[j], wsl = wallShiftL[j], cf = channelFade[j], ew = endWall[j];
+			int wy = y0 + j * step;
+			for (int i = 0; i < cols; i++)
+			{
+				double hv = ValleyBaseAt(warpX, warpY, ridge, hill, x0 + i * step, wy, roadSide,
+					ax, ac, fh, rhw, bd, sh, sr, osh, osr, wsr, wsl, cf, ew, rp, mountainHeight, wide);
+				float rawV = (float)(SeaRaw + Math.Pow(Math.Max(1e-6, hv), 0.8) * (TopRaw - SeaRaw));
+				double q = Math.Max(0.0, (rawV - SeaRaw) / (TopRaw - SeaRaw));
+				double h = Math.Pow(q, 1.25);
+				if (h > knee)
+					h = knee + (h - knee) / (1.0 + (h - knee) / soft);
+				outH[j * cols + i] = (float)h;
+			}
+		}
+		RunRows(rows, parallel, CoarseRow);
+		return outH;
+	}
+
 	private static double ValleyBaseAt(int[] warpX, int[] warpY, int[] ridge, int[] hill,
-		double x, double y, int roadSide, double ax, double fh, double rhw, double bd,
-		double sh, double sr, double cf, double ew, double[] rp, double mountainHeight, double wide)
+		double x, double y, int roadSide, double ax, double ac, double fh, double rhw, double bd,
+		double sh, double sr, double osh, double osr, double wsr, double wsl,
+		double cf, double ew, double[] rp, double mountainHeight, double wide)
 	{
 		double wx = Fbm(warpX, x / rp[0], y / rp[0], 3) * rp[1];
 		double wy = Fbm(warpY, x / rp[0] + 13.1, y / rp[0] - 7.7, 3) * rp[1];
 		double X = x + wx;
 		double Y = y + wy;
-		double sd = (x - ax) * roadSide;
+		double rawSd = (x - ax) * roadSide;
+		double rawAd = Math.Abs(rawSd);
+		double cosEff = ac + (1.0 - ac) * ReliefSmooth(28.0, 92.0, rawAd);
+		double sd = rawSd * cosEff;
 		double ad = Math.Abs(sd);
 		double dChan;
 		if (ad < rhw)
@@ -171,22 +211,58 @@ public partial class FastGrid
 			double saddle = (sd - (sr + rp[14])) / rp[15];
 			spurLift = sh * sm * (1.0 - rp[16] * Math.Exp(-saddle * saddle));
 		}
-		double wallR = ReliefSmooth(rp[17], rp[18], sd);
-		double wallBaseR = ReliefSmooth(rp[19], rp[20], sd) * rp[21];
-		double wallL = ReliefSmooth(rp[22], rp[23], -sd);
-		double wallBaseL = ReliefSmooth(rp[24], rp[25], -sd) * rp[26];
+		double oppSpurLift = 0.0;
+		if (osh > 0.0 && -sd > rhw + rp[54])
+		{
+			oppSpurLift = osh * ReliefSmooth(rhw + rp[54], osr, -sd);
+		}
+		double sdR = sd - wsr;
+		double sdL = -sd - wsl;
+		double wallR = ReliefSmooth(rp[17], rp[18], sdR);
+		double wallBaseR = ReliefSmooth(rp[19], rp[20], sdR) * rp[21];
+		double wallL = ReliefSmooth(rp[22], rp[23], sdL);
+		double wallBaseL = ReliefSmooth(rp[24], rp[25], sdL) * rp[26];
 		double wall = Math.Max(wallR, wallL);
-		double wallBase = Math.Max(wallBaseR, wallBaseL) + ew;
+		double outerSpan = Math.Max(1.0, rp[51]);
+		double outerWall = (rp[52] > 0.0 || rp[53] > 0.0)
+			? Math.Max(ReliefSmooth(rp[49], rp[49] + outerSpan, sd), ReliefSmooth(rp[50], rp[50] + outerSpan, -sd))
+			: 0.0;
+		double wallBase = Math.Max(wallBaseR, wallBaseL) + outerWall * rp[52] + ew;
 		double wallTerm = wallBase;
 		double mStrength = Math.Max(wall, ew * rp[27]);
-		if (mStrength > 0.0)
+		double mGain = mStrength * rp[28] + outerWall * rp[53];
+		if (mGain > 0.0)
 		{
 			double mRelief = Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, 1.0);
-			wallTerm += mRelief * mStrength * rp[28] * mountainHeight;
+			wallTerm += mRelief * mGain * mountainHeight;
 		}
-		double h = fh + dChan * cf + rp[30] * (1.0 - cf) + landDamp * (benchRise + folds * (1.0 - rp[29] * wall) + spurLift + wallTerm);
+		if (rp[37] > 0.0 && wall > rp[38])
+		{
+			double gwMask = ReliefSmooth(rp[38], rp[39], wall);
+			double gWarp = Fbm(warpY, X / 95.0 - 5.2, Y / 95.0 + 11.4, 2) * 38.0;
+			double gu = (ad + Fbm(warpX, X / 140.0 + 9.1, Y / 140.0 - 4.3, 2) * 24.0) / rp[34];
+			double gv = (Y - 0.28 * ad + gWarp) / rp[35];
+			double gn = Math.Abs(Fbm(ridge, gu + 19.3, gv - 7.1, 2));
+			double gT = Clamp01(1.0 - gn / Math.Max(1e-4, rp[36]));
+			wallTerm -= gwMask * rp[37] * (1.0 - 0.55 * outerWall) * (gT * gT * (3.0 - 2.0 * gT));
+		}
+		if (rp[43] > 0.0 && wall > rp[47])
+		{
+			double cwMask = ReliefSmooth(rp[47], rp[48], wall);
+			double cPatch = ReliefSmooth(rp[45], rp[46], Fbm(hill, X / rp[44] - 27.4, Y / rp[44] + 19.2, 2));
+			if (cPatch > 0.0)
+			{
+				double cWarp = Fbm(warpX, X / 55.0 + 31.2, Y / 55.0 - 14.8, 2) * 18.0;
+				double cu = ad / rp[40];
+				double cv = (Y - 0.18 * ad + cWarp) / rp[41];
+				double cn = Math.Abs(Noise(ridge, cu - 11.7, cv + 23.5));
+				double cT = Clamp01(1.0 - cn / Math.Max(1e-4, rp[42]));
+				wallTerm -= cwMask * cPatch * rp[43] * (cT * cT * (3.0 - 2.0 * cT));
+			}
+		}
+		if (wallTerm < 0.0) wallTerm = 0.0;
+		double h = fh + dChan * cf + rp[30] * (1.0 - cf) + landDamp * (benchRise + folds * (1.0 - rp[29] * wall) + spurLift + oppSpurLift + wallTerm);
 		if (h < rp[31]) h = rp[31];
-		if (h > rp[32]) h = rp[32] + (h - rp[32]) / (1.0 + (h - rp[32]) / rp[33]);
 		return h;
 	}
 

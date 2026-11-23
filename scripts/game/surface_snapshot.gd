@@ -25,7 +25,7 @@ static func restore(w: WorldData, data: Dictionary, stage: String) -> Heightfiel
 	h.index_ribbons()
 	h.index_structures()
 	if stage == "final":
-		h.road_refinement = RoadRefinement.from_patches(data.patches, w.H)
+		h.road_refinement = RoadRefinement.from_patches(data.patches, w.H, w.template_id)
 		h.road_refinement.gaps.assign(data.get("gaps", []))
 		h.road_refinement.trail_shaping = data.shaping
 		h.road_refinement.trail_elements_baked = data.baked

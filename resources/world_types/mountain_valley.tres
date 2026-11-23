@@ -23,4 +23,3 @@ lat_base = 0.5
 lat_center = 383.5
 lat_cells = 3072.0
 outer_temp_lapse = 0.6
-routing_overrides = {}

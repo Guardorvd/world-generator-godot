@@ -14,6 +14,7 @@ extends SceneTree
 ##   -- --maple           клён на лесной дороге и влажной террасе в GameWorld
 ##   -- --shots-p3         3D-снимки фазы 3: старт, берег, лесной отрог, финиш с причалом (нужно окно)
 ##   -- --verify-phase4    проверка меню, большой карты M (масштаб вокруг игрока), доски заданий/альбома и сохранения Типа 2 (нужно окно)
+##   -- --verify-phase5    проверка изоляции per-template RoadTuning, 16-поточности, ключей кэша, SurfaceSnapshot и шейдеров
 ## Лимит 240 с.
 
 const CONTROL := ["Север-1234", "Туман-4821"]
@@ -71,7 +72,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -105,6 +106,9 @@ func _run() -> void:
 
 	if args.has("--verify-phase4"):
 		ok = await _verify_phase4(seeds[0], tag) and ok
+
+	if args.has("--verify-phase5"):
+		ok = _verify_phase5() and ok
 
 	quit(0 if ok else 1)
 
@@ -194,7 +198,7 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	if max_step_m > 10.0:
 		failures.append("plan/OuterLand edge jump too large: %.2f m" % max_step_m)
 
-	# 7. C# == GDScript паритет рельефа долины на полосе 64×64
+	# 7. C# == GDScript паритет рельефа долины (ближний 64×64 и разрежённый 35×35 с шагом 4)
 	var fast_patch := StageRelief.height_rect(w, 64, w.H / 3, 64, 64, false, true)
 	StageRelief.allow_fast_valley = false
 	var gd_patch := StageRelief.height_rect(w, 64, w.H / 3, 64, 64, false, true)
@@ -205,7 +209,41 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	if max_diff > 1e-4:
 		failures.append("C# vs GDScript valley relief max diff = %.6f" % max_diff)
 
-	# 8. Проверка доли биомов в полосе дороги (лес в предгорьях, без болот и тундры на дне)
+	var coarse_fast := StageRelief.valley_coarse_rect(w, -16, w.H / 3, 35, 35, 4, false)
+	StageRelief.allow_fast_valley = false
+	var coarse_gd := StageRelief.valley_coarse_rect(w, -16, w.H / 3, 35, 35, 4, false)
+	StageRelief.allow_fast_valley = true
+	var coarse_diff := 0.0
+	for k in coarse_fast.size():
+		coarse_diff = maxf(coarse_diff, absf(coarse_fast[k] - coarse_gd[k]))
+	if coarse_diff > 1e-4:
+		failures.append("C# vs GDScript valley_coarse_rect max diff = %.6f" % coarse_diff)
+
+	# 7b. Метрики извилистости реки (Фаза 6)
+	var curv := _river_curvature_metrics(axis)
+	if float(curv.sinuosity) < 1.04:
+		failures.append("river sinuosity too low: %.3f (< 1.04)" % float(curv.sinuosity))
+	if w.W >= 384 and float(curv.x_span) < 80.0:
+		failures.append("river x_span too narrow: %.1f (< 80.0)" % float(curv.x_span))
+
+	# 7c. Тест лёгкого дальнего пояса OuterTerrain (гольцы за краем плана)
+	var ot := OuterTerrain.new()
+	ot.setup(w, surf)
+	if ot._far_radius <= 0.0:
+		failures.append("OuterTerrain._far_radius <= 0.0 for Type 2")
+	else:
+		var fkeys := ot._wanted_far(float(w.W) * 2.0, float(w.H) * 2.0, ot._far_radius)
+		if fkeys.is_empty():
+			failures.append("OuterTerrain._wanted_far returned empty")
+		else:
+			var fb := ot._compute_far(fkeys[0])
+			var arr: Array = fb.get("arrays", [])
+			if arr.is_empty() or arr[Mesh.ARRAY_VERTEX].is_empty() or arr[Mesh.ARRAY_INDEX].is_empty():
+				failures.append("OuterTerrain._compute_far produced empty mesh arrays")
+	ot.finish()
+	ot.free()
+
+	# 8. Проверка доли биомов в полосе дороги (по нормали к руслу)
 	var cor_n := 0
 	var cor_forest := 0
 	var cor_swamp := 0
@@ -213,8 +251,9 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	for y in range(20, w.H - 20, 2):
 		var ax := axis.axis_x_at(float(y))
 		var rhw := axis.river_hw_at(y)
+		var cos_t := maxf(axis.axis_cos_at(y), 0.25)
 		for sd_i in range(ceili(rhw + 4.0), 75, 2):
-			var x := roundi(ax + float(sd_i * axis.road_side))
+			var x := roundi(ax + (float(sd_i) / cos_t) * float(axis.road_side))
 			if x < 0 or x >= w.W:
 				continue
 			var bi := w.biome[y * w.W + x]
@@ -228,9 +267,10 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	var f_pct := 100.0 * float(cor_forest) / float(maxi(1, cor_n))
 	var s_pct := 100.0 * float(cor_swamp) / float(maxi(1, cor_n))
 	var rt_pct := 100.0 * float(cor_rock_tundra) / float(maxi(1, cor_n))
-	print("PHASE2_METRICS seed=%s %dx%d drop=%.1fm spurs=%d edge_step=%.2fm cs_gd_diff=%.6f corridor(forest=%.1f%% swamp=%.1f%% rock+tundra=%.1f%%)" % [
-		seed_text, w.W, w.H, (axis.top_h - axis.bot_h) * GameConfig.HS, axis.spurs.size(),
-		max_step_m, max_diff, f_pct, s_pct, rt_pct])
+	print("PHASE2_METRICS seed=%s %dx%d drop=%.1fm spurs=%d opp_spurs=%d edge_step=%.2fm cs_gd_diff=%.6f coarse_diff=%.6f sinuosity=%.3f x_span=%.1f bends20=%d sight=%.0fm corridor(forest=%.1f%% swamp=%.1f%% rock+tundra=%.1f%%)" % [
+		seed_text, w.W, w.H, (axis.top_h - axis.bot_h) * GameConfig.HS, axis.spurs.size(), axis.opp_spurs.size(),
+		max_step_m, max_diff, coarse_diff, float(curv.sinuosity), float(curv.x_span), int(curv.bends_20), float(curv.max_sight_m),
+		f_pct, s_pct, rt_pct])
 
 	w.clear_noise_fields()
 	w.base_heights = null
@@ -240,6 +280,72 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	for msg: String in failures:
 		push_error("PHASE2_VERIFY FAIL: " + msg)
 	return false
+
+
+static func _river_curvature_metrics(axis: ValleyAxis) -> Dictionary:
+	var y_start := 20
+	var y_end := maxi(y_start + 40, axis.H - 20)
+	var prev_x := axis.axis_x_at(float(y_start))
+	var prev_y := float(y_start)
+	var min_x := prev_x
+	var max_x := prev_x
+	var arc_len := 0.0
+	var y := y_start + 2
+	while y <= y_end:
+		var ax := axis.axis_x_at(float(y))
+		arc_len += Vector2(ax - prev_x, float(y) - prev_y).length()
+		min_x = minf(min_x, ax)
+		max_x = maxf(max_x, ax)
+		prev_x = ax
+		prev_y = float(y)
+		y += 2
+	var straight_len := Vector2(axis.axis_x_at(float(y_end)) - axis.axis_x_at(float(y_start)), float(y_end - y_start)).length()
+	var sinuosity := arc_len / maxf(1.0, straight_len)
+
+	var bends_20 := 0
+	var prev_dir := Vector2.ZERO
+	var cy := y_start + 40
+	var cy_prev := y_start
+	while cy <= y_end:
+		var p0 := Vector2(axis.axis_x_at(float(cy_prev)), float(cy_prev))
+		var p1 := Vector2(axis.axis_x_at(float(cy)), float(cy))
+		var dir := (p1 - p0).normalized()
+		if prev_dir != Vector2.ZERO and absf(prev_dir.angle_to(dir)) >= deg_to_rad(20.0):
+			bends_20 += 1
+		prev_dir = dir
+		cy_prev = cy
+		cy += 40
+
+	var max_sight_cells := 0.0
+	var s0 := y_start
+	while s0 < y_end - 20:
+		var x0 := axis.axis_x_at(float(s0))
+		var s1 := s0 + 20
+		while s1 <= y_end:
+			var x1 := axis.axis_x_at(float(s1))
+			var occluded := false
+			var probe := s0 + 4
+			while probe < s1:
+				var t := float(probe - s0) / float(s1 - s0)
+				var line_x := lerpf(x0, x1, t)
+				var ax := axis.axis_x_at(float(probe))
+				var half_corr := (axis.river_hw_at(probe) + 8.0) / maxf(axis.axis_cos_at(probe), 0.25)
+				if absf(line_x - ax) > half_corr:
+					occluded = true
+					break
+				probe += 4
+			if occluded:
+				break
+			max_sight_cells = maxf(max_sight_cells, Vector2(x1 - x0, float(s1 - s0)).length())
+			s1 += 10
+		s0 += 10
+
+	return {
+		sinuosity = sinuosity,
+		x_span = max_x - min_x,
+		bends_20 = bends_20,
+		max_sight_m = max_sight_cells * GameConfig.TILE,
+	}
 
 
 func _capture_3d_shots(seed_text: String, tag: String) -> bool:
@@ -282,18 +388,32 @@ func _capture_3d_shots(seed_text: String, tag: String) -> bool:
 	var axis := ValleyAxis.for_world(w)
 	var T := GameConfig.TILE
 
+	var bend_y := float(w.H) * 0.42
+	var best_k := -1.0
+	for sy in range(maxi(60, w.H / 4), mini(w.H - 120, w.H * 3 / 4), 6):
+		var k := absf(axis.axis_x_at(float(sy + 18)) - 2.0 * axis.axis_x_at(float(sy)) + axis.axis_x_at(float(sy - 18)))
+		if k > best_k:
+			best_k = k
+			bend_y = float(sy)
+	var wall_y := clampf(bend_y + 70.0, 90.0, float(w.H) - 140.0)
+	var view_y := float(w.H) * 0.54
+	var bank_y := float(w.H) * 0.64
 	var views := [
-		{name = "headwaters", y = 55.0, sd = 24.0, lift = 18.0, look_dy = 105.0, look_sd = -6.0, look_lift = -4.0},
-		{name = "valley_mid", y = float(w.H) * 0.44, sd = 42.0, lift = 28.0, look_dy = 135.0, look_sd = -14.0, look_lift = -6.0},
-		{name = "river_bank", y = float(w.H) * 0.62, sd = axis.river_hw_at(int(w.H * 0.62)) + 2.2, lift = 5.2, look_dy = 75.0, look_sd = 0.0, look_lift = -0.8},
-		{name = "finish_bend", y = float(w.H) - 108.0, sd = 22.0, lift = 18.0, look_dy = 98.0, look_sd = -28.0, look_lift = -2.0},
+		{name = "river_bend", y = maxf(24.0, bend_y - 34.0), sd = 26.0, lift = 34.0, look_dy = 115.0, look_sd = -8.0, look_lift = -2.0},
+		{name = "gully_couloir", y = wall_y, sd = 22.0, lift = 38.0, look_dy = 35.0, look_sd = -85.0, look_lift = -10.0},
+		{name = "valley_golets", y = view_y, sd = 52.0, lift = 68.0, look_dy = 220.0, look_sd = -55.0, look_lift = -5.0},
+		{name = "river_bank", y = bank_y, sd = axis.river_hw_at(int(bank_y)) + 2.5, lift = 4.5, look_dy = 95.0, look_sd = 0.0, look_lift = -0.5},
 	]
 	for v: Dictionary in views:
-		var cx := (axis.axis_x_at(v.y) + float(v.sd) * float(axis.road_side) + 0.5) * T
+		var c_cos := maxf(axis.axis_cos_at(roundi(v.y)), 0.25)
+		var cx_cell := clampf(axis.axis_x_at(v.y) + (float(v.sd) / c_cos) * float(axis.road_side), 12.0, float(w.W - 12))
+		var cx := (cx_cell + 0.5) * T
 		var cz := (float(v.y) + 0.5) * T
 		var cy := h.ground_at(cx, cz) + float(v.lift)
 		var ly := minf(float(w.H - 4), float(v.y) + float(v.look_dy))
-		var lx := (axis.axis_x_at(ly) + float(v.look_sd) * float(axis.road_side) + 0.5) * T
+		var l_cos := maxf(axis.axis_cos_at(roundi(ly)), 0.25)
+		var lx_cell := clampf(axis.axis_x_at(ly) + (float(v.look_sd) / l_cos) * float(axis.road_side), 12.0, float(w.W - 12))
+		var lx := (lx_cell + 0.5) * T
 		var lz := (ly + 0.5) * T
 		var lgy := maxf(h.ground_at(lx, lz), axis.floor_h_at(int(ly)) * GameConfig.HS) + float(v.look_lift)
 		var pos := Vector3(cx, cy, cz)
@@ -303,7 +423,7 @@ func _capture_3d_shots(seed_text: String, tag: String) -> bool:
 		gw.player.feet = h.ground_at(pos.x, pos.z)
 		gw.stream_coordinator.force_terrain(pos, GameWorld.NEAR)
 		if gw.outer != null:
-			gw.outer.preload_around(pos.x, pos.z, OuterTerrain.RADIUS * 0.7)
+			gw.outer.preload_around(pos.x, pos.z, OuterTerrain.RADIUS)
 		gw.stream_coordinator.force_vegetation(pos)
 		gw.camera.look_at_from_position(pos, target, Vector3.UP)
 		for _f in 18:
@@ -344,9 +464,10 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 			failures.append("%s: expected 2 settlements, got %d" % [seed_text, w.settlements.size()])
 		if not w.bridges.is_empty() or not w.tunnels.is_empty():
 			failures.append("%s: expected 0 bridges/tunnels, got %d/%d" % [seed_text, w.bridges.size(), w.tunnels.size()])
-		var roads: Array = w.trails.filter(func(t: Dictionary) -> bool: return t.kind == "road")
+		var route_kind := WorldTemplate.expedition_route_kind(w.template_id)
+		var roads: Array = w.trails.filter(func(t: Dictionary) -> bool: return t.kind == route_kind)
 		if roads.size() != 1 or w.trails.size() != 1:
-			failures.append("%s: expected single road trail, got roads=%d total=%d" % [seed_text, roads.size(), w.trails.size()])
+			failures.append("%s: expected single %s trail, got matches=%d total=%d" % [seed_text, route_kind, roads.size(), w.trails.size()])
 			w.clear_noise_fields()
 			w.base_heights = null
 			continue
@@ -380,7 +501,7 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 			var mz := 0.5 * (prev_p.y + p.y)
 			var cy := clampf(mz / T - 0.5, 0.0, float(w.H - 1))
 			var cx := mx / T - 0.5
-			var sd := (cx - axis.axis_x_at(cy)) * float(axis.road_side)
+			var sd := (cx - axis.axis_x_at(cy)) * axis.axis_cos_at(roundi(cy)) * float(axis.road_side)
 			var rhw := axis.river_hw_at(roundi(cy))
 			if sd <= rhw + 14.0: near_river_m += seg
 			if sd >= 26.0: deep_forest_m += seg
@@ -434,6 +555,30 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 					pier_ok = true
 		if not pier_ok:
 			failures.append("%s: missing valid river pier fishing site (sites=%s)" % [seed_text, str(site_counts)])
+		var surf_keys := ["none", "gravel", "dirt", "packed", "stone", "sand", "forest", "meadow"]
+		var surf_counts := {}
+		var route_surf: PackedByteArray = roads[0].get("surf", PackedByteArray())
+		for sv: int in route_surf:
+			var sname: String = surf_keys[sv] if sv >= 0 and sv < surf_keys.size() else str(sv)
+			surf_counts[sname] = int(surf_counts.get(sname, 0)) + 1
+		var surf_pct := {}
+		for sname: String in surf_counts:
+			surf_pct[sname] = snappedf(100.0 * float(surf_counts[sname]) / maxf(1.0, float(route_surf.size())), 0.1)
+		if route_kind == "trail" and int(surf_counts.get("forest", 0)) <= 0:
+			failures.append("%s: expected RoadSurface.FOREST points on %s route, got surfaces=%s" % [seed_text, route_kind, str(surf_counts)])
+		var forest_img := preload("res://scripts/render/forest_floor.gd").surface_image(w)
+		var placement := preload("res://scripts/render/vegetation_placement.gd").new(w, surf)
+		var centre := Vector2(w.W, w.H) * T * 0.5
+		placement.prepare(centre.x, centre.y, maxf(centre.x, centre.y))
+		var obstacles := preload("res://scripts/game/road_obstacles.gd").new(w)
+		obstacles.sync_regions({}, placement)
+		var obs := obstacles.measure_candidates(surf, forest_img, 0)
+		var gaps_count: int = surf.road_refinement.gaps.size() if surf.road_refinement != null else 0
+		if route_kind == "trail":
+			if int(obs.get("occupied", 0)) <= 0:
+				failures.append("%s: expected RoadObstacles occupied > 0 on %s (obs=%s)" % [seed_text, route_kind, str(obs)])
+			if int(obs.get("parts", {}).get("root", 0)) <= 0:
+				failures.append("%s: expected RoadObstacles root parts > 0 on %s (obs=%s)" % [seed_text, route_kind, str(obs)])
 		var stages: Dictionary = w.generation_profile.get("stages_ms", {})
 		var row := {
 			seed = seed_text, size = "%dx%d" % [w.W, w.H], total_ms = snappedf(total_ms, 1.0),
@@ -448,12 +593,18 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 			anchors = "%d/%d" % [int(w.generation_profile.get("expedition_anchors_used", 0)), int(w.generation_profile.get("expedition_anchors_total", 0))],
 			sites = site_counts,
 			homes = [w.settlements[0].huts.size(), w.settlements[1].huts.size()],
+			surfaces = surf_pct,
+			obstacles_occupied = int(obs.get("occupied", 0)),
+			obstacles_parts = obs.get("parts", {}),
+			gaps = gaps_count,
 		}
 		rows.append(row)
 		print("PHASE3_ROAD %-11s %s  %.2fkm  river=%.1f%% forest=%.1f%%  +%3.0fm/-%3.0fm  maxG=%.1f%%  bend=%.1f%% maxStr=%.0fm  anc=%s  trails=%.0fms total=%.0fms  sites=%s" % [
 			row.seed, row.size, row.len_km, row.near_river_pct, row.deep_forest_pct,
 			row.climb_m, row.descent_m, row.max_grade_pct, row.bend_pct, row.max_straight_m,
 			row.anchors, row.trails_ms, row.total_ms, str(row.sites)])
+		print("  PHASE5_OBS %-11s kind=%s gaps=%d occupied=%d parts=%s surf=%s" % [
+			seed_text, route_kind, gaps_count, int(obs.get("occupied", 0)), str(obs.get("parts", {})), str(surf_pct)])
 		maps.append(_render_road_strip(w, surf))
 		w.clear_noise_fields()
 		w.base_heights = null
@@ -484,8 +635,9 @@ func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
 	var road_col := Color(0.95, 0.78, 0.34)
 	var road_edge := Color(0.28, 0.19, 0.08)
 	var road_y_h := {}
+	var route_kind := WorldTemplate.expedition_route_kind(w.template_id)
 	for t: Dictionary in w.trails:
-		if t.kind != "road": continue
+		if t.kind != route_kind: continue
 		for p: Dictionary in t.pts:
 			var px := clampi(roundi(float(p.x) / step), 1, iw - 2)
 			var py := clampi(roundi(float(p.y) / step), 1, ih - 2)
@@ -1081,12 +1233,13 @@ func _verify_phase1(short_dev: bool) -> bool:
 	Saves.dir = tmp.path_join("saves_t1")
 	var cfg_path := tmp.path_join("settings.cfg")
 
+	var exp_cfg := WorldTemplate.config(WorldTemplate.EXPEDITION_ID)
 	for seed_text: String in ["Север-1234", "Туман-4821", "Янтарь-5150", "b2"]:
 		var sz := WorldTemplate.plan_size(WorldTemplate.EXPEDITION_ID, WGRandom.hash_string(seed_text), false)
 		var px := WorldLoader.px_for(maxi(sz.x, sz.y))
 		var map_px := mini(2, px)
-		if sz.x != 256 or sz.y > 4096 or sz.y % 64 != 0:
-			failures.append("invalid full size for %s: %s" % [seed_text, sz])
+		if sz.x != exp_cfg.plan_width or not (sz.y in Array(exp_cfg.plan_heights)) or sz.y > 4096 or sz.y % 64 != 0:
+			failures.append("invalid full size for %s: %s (expected W=%d H in %s)" % [seed_text, sz, exp_cfg.plan_width, str(exp_cfg.plan_heights)])
 		if sz.y * px > 4096 or sz.y * map_px > 4096:
 			failures.append("texture exceeds 4096 for %s: %s px=%d map_px=%d" % [seed_text, sz, px, map_px])
 
@@ -1137,12 +1290,15 @@ func _verify_phase1(short_dev: bool) -> bool:
 	if w == null:
 		failures.append("failed to generate short Type 2 world")
 	else:
-		if w.W != 256 or w.H != 768 or w.template_id != WorldTemplate.EXPEDITION_ID:
-			failures.append("unexpected Type 2 dimensions: %dx%d tpl=%s" % [w.W, w.H, w.template_id])
+		var want_sz := WorldTemplate.plan_size(WorldTemplate.EXPEDITION_ID, w.seed_num, true)
+		if w.W != want_sz.x or w.H != want_sz.y or w.template_id != WorldTemplate.EXPEDITION_ID:
+			failures.append("unexpected Type 2 dimensions: %dx%d tpl=%s (expected %s)" % [w.W, w.H, w.template_id, want_sz])
 		if w.available_rect != Rect2i(0, 0, w.W, w.H):
 			failures.append("available_rect is not full plan: %s" % w.available_rect)
-		if not w.accessible(128.0, 20.0, 1.0) or not w.accessible(128.0, float(w.H) - 20.0, 1.0):
+		if not w.accessible(float(w.W) * 0.5, 20.0, 1.0) or not w.accessible(float(w.W) * 0.5, float(w.H) - 20.0, 1.0):
 			failures.append("invisible wall inside Type 2 plan")
+		if w.trails.size() != 1:
+			failures.append("expected connected expedition road on Тест-Эксп, got %d trails" % w.trails.size())
 		w.expand_territory(w.W)
 		if w.available_rect != Rect2i(0, 0, w.W, w.H):
 			failures.append("expand_territory(W) shrank Type 2 available_rect to %s" % w.available_rect)
@@ -1291,3 +1447,138 @@ func _sheet(maps: Array[Image]) -> Image:
 		out.blit_rect(m, Rect2i(Vector2i.ZERO, m.get_size()), Vector2i(x, gap))
 		x += m.get_width() + gap
 	return out
+
+
+func _verify_phase5() -> bool:
+	var failures: Array[String] = []
+	var t1 := RoadTuning.for_template(WorldTemplate.DEFAULT_ID)
+	var t2 := RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
+	if t1 != RoadTuning.current():
+		failures.append("for_template(DEFAULT_ID) did not return RoadTuning.current()")
+	if t2 == null or not t2.valid():
+		failures.append("for_template(EXPEDITION_ID) returned null or invalid RoadTuning")
+	if t2 == t1:
+		failures.append("for_template(EXPEDITION_ID) aliased Type 1 RoadTuning.current()")
+	var wd1 := WorldData.new()
+	wd1.template_id = WorldTemplate.DEFAULT_ID
+	var wd2 := WorldData.new()
+	wd2.template_id = WorldTemplate.EXPEDITION_ID
+	if RoadTuning.for_world(wd1) != t1:
+		failures.append("for_world(Type 1) != current()")
+	if RoadTuning.for_world(wd2) != t2:
+		failures.append("for_world(Type 2) != EXPEDITION RoadTuning")
+	if RoadTuning.for_world(null) != t1:
+		failures.append("for_world(null) != current()")
+	if WorldTemplate.expedition_route_kind(WorldTemplate.EXPEDITION_ID) != "trail":
+		failures.append("expedition_route_kind != trail")
+
+	# 16-worker concurrent cache cold-load check.
+	RoadTuning.clear_template_cache()
+	var res_t1: Array = []
+	var res_t2: Array = []
+	res_t1.resize(32)
+	res_t2.resize(32)
+	var gid := WorkerThreadPool.add_group_task(func(idx: int) -> void:
+		res_t2[idx] = RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
+		res_t1[idx] = RoadTuning.for_template(WorldTemplate.DEFAULT_ID)
+	, 32, -1, true)
+	WorkerThreadPool.wait_for_group_task_completion(gid)
+	var first_t2: Variant = res_t2[0]
+	if first_t2 == null or not (first_t2 as RoadTuning).valid() or first_t2 == t1:
+		failures.append("concurrent first Type 2 RoadTuning invalid or aliased")
+	for idx in 32:
+		if res_t2[idx] != first_t2:
+			failures.append("concurrent Type 2 RoadTuning instance mismatch at idx %d" % idx)
+			break
+		if res_t1[idx] != t1:
+			failures.append("concurrent Type 1 RoadTuning mismatch at idx %d" % idx)
+			break
+
+	# Cache key invalidation and Type 1 invariance across RoadTuning fields.
+	t2 = RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
+	var cache_snapshot := func(tid: String) -> Dictionary:
+		var c := WorldCache.new()
+		c.set_template(tid)
+		return {layers = c.layer_keys(), surf = c.artifact_key("Север-1234", 512, "surface")}
+	var base1: Dictionary = cache_snapshot.call(WorldTemplate.DEFAULT_ID)
+	var base2: Dictionary = cache_snapshot.call(WorldTemplate.EXPEDITION_ID)
+	var old_climb := float(t2.routing.climb_costs.trail)
+	var old_clear := float(t2.section.clearance.trail)
+	var old_dish := t2.trail.dish
+	var old_edge := t2.section.edge
+
+	t2.routing.climb_costs.trail = old_climb + 1.0
+	var s1: Dictionary = cache_snapshot.call(WorldTemplate.DEFAULT_ID)
+	var s2: Dictionary = cache_snapshot.call(WorldTemplate.EXPEDITION_ID)
+	if s2.layers[1] == base2.layers[1]:
+		failures.append("Type 2 places key unchanged after routing.climb_costs.trail edit")
+	if s1.layers != base1.layers or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 routing edit")
+	t2.routing.climb_costs.trail = old_climb
+
+	t2.section.clearance.trail = old_clear + 0.25
+	s1 = cache_snapshot.call(WorldTemplate.DEFAULT_ID)
+	s2 = cache_snapshot.call(WorldTemplate.EXPEDITION_ID)
+	if s2.layers[2] == base2.layers[2]:
+		failures.append("Type 2 nature key unchanged after section.clearance.trail edit")
+	if s1.layers != base1.layers or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 clearance edit")
+	t2.section.clearance.trail = old_clear
+
+	t2.trail.dish = old_dish - 0.02
+	s1 = cache_snapshot.call(WorldTemplate.DEFAULT_ID)
+	s2 = cache_snapshot.call(WorldTemplate.EXPEDITION_ID)
+	if s2.layers[2] == base2.layers[2] or s2.surf == base2.surf:
+		failures.append("Type 2 nature/surface key unchanged after trail.dish edit")
+	if s1.layers != base1.layers or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 trail.dish edit")
+	t2.trail.dish = old_dish
+
+	t2.section.edge = old_edge + 0.05
+	s1 = cache_snapshot.call(WorldTemplate.DEFAULT_ID)
+	s2 = cache_snapshot.call(WorldTemplate.EXPEDITION_ID)
+	if s2.surf == base2.surf:
+		failures.append("Type 2 surface artifact key unchanged after section.edge edit")
+	if s1.layers != base1.layers or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 section.edge edit")
+
+	# RoadRefinement.from_patches warm restore section affinity.
+	var r2 := RoadRefinement.from_patches({}, 768, WorldTemplate.EXPEDITION_ID)
+	var r1 := RoadRefinement.from_patches({}, 768, WorldTemplate.DEFAULT_ID)
+	if r2._section != t2.section:
+		failures.append("from_patches(EXPEDITION_ID)._section did not match Type 2 section")
+	if r1._section != t1.section or r2._section == r1._section:
+		failures.append("from_patches(DEFAULT_ID)._section mismatched or aliased")
+
+	# TerrainBuilder shader isolation when Type 2 has tuned edge and Type 1 keeps default SHADER.
+	var tb := TerrainBuilder.new()
+	var mat_t2 := tb.outer_material(WorldTemplate.EXPEDITION_ID)
+	var far_t2 := tb.far_material(mat_t2)
+	var mat_t1 := tb.outer_material(WorldTemplate.DEFAULT_ID)
+	var far_t1 := tb.far_material(mat_t1)
+	if mat_t2.shader == TerrainBuilder.SHADER:
+		failures.append("Type 2 material used un-tuned SHADER despite modified section.edge")
+	if far_t2 == null or far_t2.shader == TerrainBuilder._far_shader:
+		failures.append("Type 2 far_material missed or reused Type 1 _far_shader")
+	if mat_t1.shader != TerrainBuilder.SHADER:
+		failures.append("Type 1 material did not keep TerrainBuilder.SHADER")
+	if far_t1 == null or far_t1.shader != TerrainBuilder._far_shader or far_t1.shader == far_t2.shader:
+		failures.append("Type 1 far_material mismatched or aliased Type 2 far shader")
+
+	t2.section.edge = old_edge
+	WorldTemplate.reload()
+	var t2_reloaded := RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
+	if t2_reloaded == null or not t2_reloaded.valid():
+		failures.append("reloaded Type 2 RoadTuning invalid")
+	elif (not is_equal_approx(float(t2_reloaded.routing.climb_costs.trail), old_climb)
+			or not is_equal_approx(float(t2_reloaded.section.clearance.trail), old_clear)
+			or not is_equal_approx(t2_reloaded.trail.dish, old_dish)
+			or not is_equal_approx(t2_reloaded.section.edge, old_edge)):
+		failures.append("reloaded Type 2 RoadTuning did not restore original .tres values")
+
+	if failures.is_empty():
+		print("PHASE5_VERIFY: PASS")
+		return true
+	for msg: String in failures:
+		push_error("PHASE5_VERIFY FAIL: " + msg)
+	return false

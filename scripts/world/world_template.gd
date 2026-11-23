@@ -25,16 +25,17 @@ static var _cache := {}
 static var _cache_lock := Mutex.new()
 
 
-static func _load_all() -> void:
+static func _load_all(fresh := false) -> void:
 	_cache_lock.lock()
 	if not _cache.is_empty():
 		_cache_lock.unlock()
 		return
+	var mode := ResourceLoader.CACHE_MODE_IGNORE if fresh else ResourceLoader.CACHE_MODE_REUSE
 	for item: Dictionary in _CATALOG:
 		var path := str(item.get("path", ""))
 		if path.is_empty():
 			continue
-		var res := ResourceLoader.load(path)
+		var res := ResourceLoader.load(path, "", mode)
 		if res is WorldTypeConfig:
 			var cfg := res as WorldTypeConfig
 			_cache[str(item.id)] = cfg
@@ -49,7 +50,8 @@ static func reload() -> void:
 	_cache_lock.lock()
 	_cache.clear()
 	_cache_lock.unlock()
-	_load_all()
+	RoadTuning.clear_template_cache()
+	_load_all(true)
 
 
 static func config(id: String) -> WorldTypeConfig:
@@ -131,8 +133,17 @@ static func has_single_road(id: String) -> bool:
 	return config(id).single_road
 
 
-static func routing_overrides(id: String) -> Dictionary:
-	return config(id).routing_overrides
+static func road_tuning_path(id: String) -> String:
+	return config(id).road_tuning_path
+
+
+static func expedition_route_kind(id: String) -> String:
+	var kind := config(id).expedition_route_kind
+	return kind if not kind.is_empty() else "road"
+
+
+static func allow_road_gaps(id: String) -> bool:
+	return config(id).allow_road_gaps
 
 
 ## Суффиксы ключа кэша по .tres настроек типа (пусто для Типа 1 — его ключи не меняются).

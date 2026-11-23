@@ -267,7 +267,7 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 	var stony := w.noise_field("cost") # тот же шум, что и у стоимости троп: россыпи валунов пятнами
 	var lines := w.trails if bypasses.is_empty() else w.trails + bypasses
 	var clear_us := Time.get_ticks_usec()
-	var dist_path := path_clearance(W, H, lines, w.tunnels)
+	var dist_path := path_clearance(W, H, lines, w.tunnels, w.template_id)
 	w.generation_profile.veg_clearance_ms = (Time.get_ticks_usec() - clear_us) / 1000.0
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
@@ -321,8 +321,8 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 
 ## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и RoadSection. Тот же расчёт у плана
 ## и у закреплённых областей (RegionRoads), поэтому на границе областей не бывает внезапной просеки.
-static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -> PackedFloat32Array:
-	var clearing := RoadTuning.current().section.clearance
+static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = [], template_id := "") -> PackedFloat32Array:
+	var clearing := RoadTuning.for_template(template_id).section.clearance
 	var starts := PackedInt32Array()
 	var px := PackedFloat64Array()
 	var py := PackedFloat64Array()

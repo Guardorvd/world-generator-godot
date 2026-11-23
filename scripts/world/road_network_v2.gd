@@ -32,7 +32,7 @@ static func meander_settings(routing: RoadTuning.Routing, kind: String) -> Dicti
 
 ## Вход C# объединяет правила прохода StageTrails и параметры RoadRoutingTuning.
 static func params(w: WorldData) -> Dictionary:
-	var tuning := RoadTuning.current()
+	var tuning := RoadTuning.for_world(w)
 	var routing := tuning.routing
 	var turns: Dictionary = StageTrails.routing_overrides.get("turn_costs", routing.turn_costs)
 	var bends: Dictionary = StageTrails.routing_overrides.get("bend_costs", routing.bend_costs)
@@ -52,7 +52,7 @@ static func params(w: WorldData) -> Dictionary:
 		shore_reach = StageTrails.SHORE_MAX, view_reach = StageTrails.VIEW_MAX,
 		mountain_detour = StageTrails.MOUNTAIN_DETOUR,
 		profile_base = StageTrails.RoadLine.PROFILE_BASE, line_relax = relax.trail, reach = RoadRefinement.REACH
-	}.merged(routing.network_rules).merged(routing.character_field).merged(WorldTemplate.routing_overrides(w.template_id), true).merged(overrides, true)
+	}.merged(routing.network_rules).merged(routing.character_field).merged(overrides, true)
 
 
 ## Вход C#: поля мира (ссылки на массивы), оси путей людей, поселения. unsafe — клетки небезопасных бродов
@@ -111,7 +111,7 @@ static func prepare_character(w: WorldData, finder: Pathfinder, surface: Heightf
 ## Сначала V1 подтверждает связь и переправу, затем поиск по цене суши меняет форму её перегонов.
 static func shape_land(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, path: PackedInt32Array,
 		axis: PackedByteArray, kind: String, grade: float) -> PackedInt32Array:
-	var routing := RoadTuning.current().routing
+	var routing := RoadTuning.for_world(w).routing
 	var turns: Dictionary = StageTrails.routing_overrides.get("turn_costs", routing.turn_costs)
 	var bends: Dictionary = StageTrails.routing_overrides.get("bend_costs", routing.bend_costs)
 	var t0 := Time.get_ticks_usec()
@@ -266,8 +266,9 @@ static func plan_inland_connections(w: WorldData, finder: Pathfinder, surface: H
 	var data := input(w, finder, surface, on_axis, known)
 	data.mode = "connectors"
 	data.session = _session
-	data.inland_connector = RoadTuning.current().routing.inland_connector
-	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_trail_ms")
+	var tuning := RoadTuning.for_world(w)
+	data.inland_connector = tuning.routing.inland_connector
+	StageTrails._route_surface(finder, surface, tuning.section.widths.trail, "corridor_trail_ms")
 	var out := call_core(finder, surface, data)
 	if out.is_empty(): return
 	var publish := Time.get_ticks_usec()
@@ -306,7 +307,7 @@ static func spur_targets(w: WorldData, finder: Pathfinder, paths: Array, mountai
 	var shore_anchors := StageTrails._shore_anchors(w, paths, settle_d, water_d)
 	var shore_found: PackedInt32Array = finder.fast().ShoreTargets(w.W, w.H, shore_anchors, corr, w.cost, water_d,
 		StageTrails.SHORE_MIN, StageTrails.SHORE_MAX)
-	var target_limit: int = RoadTuning.current().routing.network_rules.shore_target_factor * max_shores
+	var target_limit: int = RoadTuning.for_world(w).routing.network_rules.shore_target_factor * max_shores
 	for k in shore_anchors.size():
 		if spaced.size() >= target_limit: break
 		var t := shore_found[k]
@@ -348,7 +349,7 @@ static func plan_spurs(w: WorldData, finder: Pathfinder, paths: Array, road_cost
 	var data := input(w, finder, surface, on_axis, unsafe)
 	prep.input = (Time.get_ticks_usec() - t0) / 1000.0
 	t0 = Time.get_ticks_usec()
-	var rules := RoadTuning.current().routing.network_rules
+	var rules := RoadTuning.for_world(w).routing.network_rules
 	var max_shores := maxi(int(rules.shore_min_count), w.settlements.size() / int(rules.shore_settlement_divisor))
 	var goals := spur_targets(w, finder, paths, mountain, max_shores, prep)
 	prep.targets = (Time.get_ticks_usec() - t0) / 1000.0
@@ -430,7 +431,7 @@ static func _touches_approach(w: WorldData, path: PackedInt32Array, approach: Pa
 
 ## Точки примыкания маршрута nodes не ближе ride_node_sep к точкам уже принятых маршрутов (совпадающие — общий узел).
 static func ride_nodes_spaced(w: WorldData, nodes: PackedInt32Array, chosen: Array) -> bool:
-	var rules := RoadTuning.current().routing.network_rules
+	var rules := RoadTuning.for_world(w).routing.network_rules
 	for other: PackedInt32Array in chosen:
 		for a: int in nodes:
 			for b: int in other:
@@ -503,7 +504,7 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 	if water == null:
 		push_error("Сеть V2: линия на C# требует земли и воды на C# (Heightfield.fast_water)")
 		return StageTrails.RoadLine.build(w, pts, on_axis, surface, kind, joins, Callable(), smooth_kind)
-	var routing := RoadTuning.current().routing
+	var routing := RoadTuning.for_world(w).routing
 	var design := kind if smooth_kind.is_empty() else smooth_kind
 	var relaxation: Dictionary = StageTrails.routing_overrides.get("line_relax", routing.line_relax)
 	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", routing.straighten)
@@ -556,7 +557,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 	for p: Dictionary in pts:
 		width = maxf(width, p.w)
 	# Запас на сглаживание оси хозяина и новой линии, плюс диагональ клетки.
-	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + float(RoadTuning.current().routing.network_rules.near_axis_search_pad))
+	var radius := ceili(width + (2.0 * RoadRefinement.REACH + 2.0) / GameConfig.TILE + float(RoadTuning.for_world(w).routing.network_rules.near_axis_search_pad))
 	var hosts := {}
 	for p: Dictionary in pts:
 		var px := floori(p.x)
@@ -585,7 +586,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 
 ## Форма оси после публикации развилок, до профилирования ширины и штампа полотна.
 static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByteArray, primary_end: int) -> void:
-	var routing := RoadTuning.current().routing
+	var routing := RoadTuning.for_world(w).routing
 	if not routing.arc_bends_enabled and not routing.axis_meander_enabled: return
 	var water: Object = surface.fast_water()
 	if water == null:
@@ -612,7 +613,7 @@ static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByte
 
 static func _align_sections(w: WorldData, water: Object, input: Dictionary, anchors: Dictionary, legs: Dictionary,
 		primary_end: int, meander: bool) -> void:
-	var routing := RoadTuning.current().routing
+	var routing := RoadTuning.for_world(w).routing
 	var world_noise := w.noise_field("cost") if meander else PackedFloat64Array()
 	var dist_water := w.dist_water if meander else PackedFloat32Array()
 	var options := {road = meander_settings(routing, "road"), trail = meander_settings(routing, "trail")} if meander else {}

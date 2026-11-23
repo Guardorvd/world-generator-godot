@@ -234,7 +234,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		_defs = Models.tree_defs()
 		_grass_mesh = Models.grass_mesh()
 	t = _mark("start_models_ms", t)
-	$Terrain.material_override = services.terrain.material(loaded.terrain_image, loaded.forest_surface)
+	$Terrain.material_override = services.terrain.material(loaded.terrain_image, loaded.forest_surface, world.template_id)
 	TerrainBuilder.set_cavity($Terrain.material_override, heights)
 	TerrainBuilder.set_community_noise($Terrain.material_override, world)
 	terrain_stream = PlanTerrain.new()
@@ -476,6 +476,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		day.terrain_mats.append(terrain_stream.far_material)
 	if outer != null and outer._mat != null:
 		day.terrain_mats.append(outer._mat)
+		if outer._far_mat != null and outer._far_mat != outer._mat:
+			day.terrain_mats.append(outer._far_mat)
 	day.camera = camera
 	day.world_seed = world.seed_num
 	_restore_clock(saved)

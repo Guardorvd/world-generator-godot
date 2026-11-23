@@ -39,7 +39,28 @@ const RP_CLOSED_LIFT := 30
 const RP_HEIGHT_FLOOR := 31
 const RP_HEIGHT_KNEE := 32
 const RP_HEIGHT_SOFT := 33
-const RP_COUNT := 34
+const RP_GULLY_SCALE_X := 34
+const RP_GULLY_SCALE_Y := 35
+const RP_GULLY_WIDTH := 36
+const RP_GULLY_DEPTH := 37
+const RP_GULLY_WALL_MIN := 38
+const RP_GULLY_WALL_MAX := 39
+const RP_COULOIR_SCALE_X := 40
+const RP_COULOIR_SCALE_Y := 41
+const RP_COULOIR_WIDTH := 42
+const RP_COULOIR_DEPTH := 43
+const RP_COULOIR_PATCH_SCALE := 44
+const RP_COULOIR_PATCH_MIN := 45
+const RP_COULOIR_PATCH_MAX := 46
+const RP_COULOIR_WALL_MIN := 47
+const RP_COULOIR_WALL_MAX := 48
+const RP_OUTER_RIDGE_ROAD_START := 49
+const RP_OUTER_RIDGE_OPP_START := 50
+const RP_OUTER_RIDGE_SPAN := 51
+const RP_OUTER_RIDGE_BASE_H := 52
+const RP_OUTER_RIDGE_MTN_AMP := 53
+const RP_OPP_SPUR_START_PAD := 54
+const RP_COUNT := 55
 
 @export_group("Тип мира и размеры")
 ## Уникальный id типа мира (задаёт папки кэша, сохранений и истории).
@@ -134,6 +155,70 @@ const RP_COUNT := 34
 @export var height_knee := 1.26
 ## Мягкость сжатия пиков выше порога; увеличение даёт более высокие вершины над порогом.
 @export var height_soft := 0.16
+## Продольный масштаб смены котловин и теснин (клеток); увеличение делает расширения долины длиннее.
+@export var basin_scale := 310.0
+## Сужение дна в теснинах (клеток на сторону); увеличение делает ущелья теснее.
+@export var basin_narrow := 14.0
+## Расширение дна в пойменных котловинах (клеток на сторону); увеличение делает котловины шире.
+@export var basin_wide := 28.0
+## Чувствительность асимметрии стен к кривизне излучины; увеличение сильнее проявляет прижимы и внутренние террасы.
+@export var bend_asym_gain := 160.0
+## Приближение стены к внешнему берегу излучины (клеток); увеличение делает склон-прижим круче и ближе.
+@export var bend_wall_pull := 16.0
+## Отодвигание стены на внутреннем берегу излучины (клеток); увеличение расширяет пологую пойменную террасу.
+@export var bend_terrace_push := 22.0
+## Минимальная гарантированная ширина дорожного коридора от оси реки (клеток); увеличение расширяет проход в теснинах.
+@export var min_road_corridor := 48.0
+## Поперечный масштаб боковых ложбин-распадков (клеток); увеличение делает распадки длиннее.
+@export var gully_scale_x := 240.0
+## Продольный шаг боковых ложбин-распадков (клеток); увеличение делает распадки реже вдоль долины.
+@export var gully_scale_y := 95.0
+## Относительная ширина вреза боковых распадков; увеличение расширяет ложбины.
+@export var gully_width := 0.24
+## Максимальная глубина вреза боковых распадков (ед. h); увеличение углубляет ложбины в склонах.
+@export var gully_depth := 0.13
+## Начало проявления распадков по маске стены; увеличение сдвигает врез выше по склону.
+@export var gully_wall_min := 0.06
+## Полное проявление распадков на стене; увеличение задерживает полный врез ближе к гребню.
+@export var gully_wall_max := 0.42
+## Поперечный масштаб осыпных кулуаров (клеток); увеличение удлиняет желоба.
+@export var couloir_scale_x := 135.0
+## Продольный шаг осыпных кулуаров (клеток); увеличение делает кулуары реже.
+@export var couloir_scale_y := 30.0
+## Относительная ширина осыпных кулуаров; увеличение расширяет скальные желоба.
+@export var couloir_width := 0.18
+## Глубина осыпных кулуаров (ед. h); увеличение делает жёлобы резче и обнажает больше осыпи.
+@export var couloir_depth := 0.070
+## Масштаб пятен концентрации кулуаров (клеток); увеличение укрупняет скальные участки стен.
+@export var couloir_patch_scale := 160.0
+## Нижний порог шума пятен кулуаров; увеличение сужает долю склонов с кулуарами.
+@export var couloir_patch_min := -0.05
+## Верхний порог шума пятен кулуаров; увеличение растягивает плавный переход частоты кулуаров.
+@export var couloir_patch_max := 0.40
+## Нижняя граница кулуаров по маске стены; увеличение поднимает желоба выше над лесом.
+@export var couloir_wall_min := 0.15
+## Полная глубина кулуаров по маске стены; увеличение задерживает максимум ближе к верху стены.
+@export var couloir_wall_max := 0.62
+## Начало второго эшелона дальних гольцов со стороны дороги (клеток); увеличение отодвигает гольцы глубже.
+@export var outer_ridge_road_start := 185.0
+## Начало второго эшелона дальних гольцов со стороны противоположного берега (клеток); увеличение отодвигает дальний хребет.
+@export var outer_ridge_opp_start := 130.0
+## Ширина подъёма второго эшелона гольцов (клеток); увеличение делает дальний подъём положе.
+@export var outer_ridge_span := 195.0
+## Базовая высота второго эшелона гольцов (ед. h); увеличение поднимает дальние гольцы.
+@export var outer_ridge_base_h := 0.48
+## Сила горного рельефа на втором эшелоне гольцов; увеличение делает дальние хребты острее и выше.
+@export var outer_ridge_mtn_amp := 0.85
+## Внешний радиус лёгкого дальнего пояса OuterTerrain (м, 0 отключает пояс); увеличение расширяет обзор дальних гольцов.
+@export var outer_far_radius := 0.0
+## Радиус выгрузки дальних чанков OuterTerrain (м); увеличение уменьшает пересборки при разворотах.
+@export var outer_far_drop := 0.0
+## Сторона дальнего чанка OuterTerrain в клетках; увеличение уменьшает число мешей за счёт детализации.
+@export var outer_far_chunk_cells := 128
+## Шаг сетки дальнего чанка в клетках; увеличение облегчает геометрию дальнего пояса.
+@export var outer_far_step := 4
+## Понижение дальнего пояса под ближними чанками (м); увеличение защищает от наложений на стыке.
+@export var outer_far_sink_m := 3.0
 
 @export_group("Поперечные отроги")
 ## Минимальный отступ первого отрога от старта (клеток); увеличение отодвигает первый подъём дальше от старта.
@@ -166,6 +251,18 @@ const RP_COUNT := 34
 @export var spur_saddle_width := 14.0
 ## Глубина понижения седловины (доля высоты отрога); увеличение углубляет перевал для дороги.
 @export var spur_saddle_dip := 0.25
+## Минимальная высота отрога противоположного берега (м); увеличение поднимает встречные мысы-кулисы.
+@export var opp_spur_height_min_m := 55.0
+## Случайная добавка высоты противоположных отрогов (м); увеличение делает кулисы разнообразнее.
+@export var opp_spur_height_span_m := 37.0
+## Минимальный вылет отрогов противоположного берега (клеток); увеличение отодвигает склон за рекой.
+@export var opp_spur_reach_min := 24.0
+## Разброс вылета противоположных отрогов (клеток); увеличение меняет ширину противоположного склона.
+@export var opp_spur_reach_span := 22.0
+## Отступ противоположных отрогов от кромки реки (клеток); увеличение бережёт пойменную бровку.
+@export var opp_spur_start_pad := 1.5
+## Сила отталкивания оси реки от поперечных отрогов (клеток); увеличение усиливает излучины вокруг мысов.
+@export var bend_push_amp := 14.0
 
 @export_group("Река и торцы")
 ## Средний продольный уклон долины и реки (доля); увеличение ускоряет спуск и поднимает верховье.
@@ -184,6 +281,14 @@ const RP_COUNT := 34
 @export var slope_shelf_min := 0.24
 ## Размах ускорения уклона на сливах; увеличение усиливает контраст полок и спусков.
 @export var slope_drop_span := 1.56
+## Длина волны крупных S-образных колен долины (клеток); увеличение делает повороты длиннее.
+@export var valley_swing_wave := 500.0
+## Амплитуда крупных S-образных колен долины (клеток); увеличение делает долину извилистее.
+@export var valley_swing_amp := 0.0
+## Фазовое искривление S-колен шумом (рад); увеличение нарушает регулярность синусоиды.
+@export var valley_swing_warp := 1.6
+## Масштаб шумового сдвига фазы S-колен (клеток); увеличение делает смены ритма реже.
+@export var valley_swing_warp_scale := 340.0
 ## Длина крупных излучин реки (клеток); увеличение делает повороты долины шире.
 @export var meander_slow_scale := 360.0
 ## Длина средних изгибов реки (клеток); увеличение делает русло плавнее.
@@ -204,8 +309,14 @@ const RP_COUNT := 34
 @export var finish_bend_shift := 44.0
 ## Минимальный отступ оси реки от боковых краёв плана (клеток); увеличение держит реку ближе к центру.
 @export var axis_margin_normal := 42.0
+## Минимальный отступ оси реки со стороны дороги (клеток); увеличение оставляет шире лесной коридор.
+@export var axis_margin_road := 84.0
+## Минимальный отступ оси реки со стороны противоположного берега (клеток); увеличение даёт запас до края плана.
+@export var axis_margin_opp := 68.0
 ## Минимальный отступ оси от края на финишном повороте (клеток); увеличение ограничивает уход за мыс.
 @export var axis_margin_bend := 28.0
+## Ширина мягкого скругления у границ допустимого коридора оси (клеток); увеличение сглаживает крайние излучины.
+@export var axis_soft_margin := 26.0
 ## Полуширина реки в верховье (клеток); увеличение делает реку у старта шире.
 @export var river_hw_start := 1.65
 ## Полуширина реки в низовье (клеток); увеличение делает реку у финиша шире.
@@ -262,10 +373,26 @@ const RP_COUNT := 34
 @export var eco_residual := 0.12
 ## Падение температуры с высотой в OuterLand; увеличение опускает границу снега и тундры на дальних горах ниже.
 @export var outer_temp_lapse := 0.6
+## Высотный порог заснеженных пиков (PEAK); увеличение превращает высокие вершины в серые гольцы без белой шапки.
+@export var peak_elev := 0.65
+## Порог перехода холодных вершин в PEAK; увеличение поднимает границу вечной мерзлоты вверх.
+@export var peak_cold_elev := 0.46
+## Температурный порог перехода тайги/тундры в снег (SNOW); уменьшение оставляет гольцы бесснежными при низком холоде.
+@export var snow_temp := 0.12
+## Порог голых скал и курумов (ROCK); изменение сдвигает высоту обнажения скальных поясов.
+@export var rock_elev := 0.45
+## Порог крутизны обнажения скал выше rock_elev; уменьшение расширяет каменистые осыпи на склонах.
+@export var rock_slope := 0.48
+## Верхняя граница леса / переход к горной тундре и гольцам; увеличение поднимает лес выше на склоны.
+@export var treeline_elev := 0.45
 
 @export_group("Дорога и якоря")
-## Переопределения поля характера дорог V2 поверх road_tuning.tres (например, shore_mul и meander_amp_road).
-@export var routing_overrides := {}
+## Путь к собственному ресурсу настроек дорог (RoadTuning); пустая строка использует resources/road_tuning.tres.
+@export var road_tuning_path := ""
+## Вид маршрута экспедиции из RoadTuning ("road", "trail", "mountain").
+@export var expedition_route_kind := "road"
+## Разрешить разрежённые неровности и выбоины RoadGaps на маршруте экспедиции.
+@export var allow_road_gaps := true
 ## Отступ первых и последних якорей от старта и финиша (клеток); увеличение удлиняет спокойные концы маршрута.
 @export var anchor_end_margin := 46.0
 ## Минимальный просвет между отрогами для вставки берегового узла (клеток); увеличение сокращает выходы к воде.
@@ -395,6 +522,27 @@ func relief_params() -> PackedFloat64Array:
 	p[RP_HEIGHT_FLOOR] = height_floor
 	p[RP_HEIGHT_KNEE] = height_knee
 	p[RP_HEIGHT_SOFT] = height_soft
+	p[RP_GULLY_SCALE_X] = gully_scale_x
+	p[RP_GULLY_SCALE_Y] = gully_scale_y
+	p[RP_GULLY_WIDTH] = gully_width
+	p[RP_GULLY_DEPTH] = gully_depth
+	p[RP_GULLY_WALL_MIN] = gully_wall_min
+	p[RP_GULLY_WALL_MAX] = gully_wall_max
+	p[RP_COULOIR_SCALE_X] = couloir_scale_x
+	p[RP_COULOIR_SCALE_Y] = couloir_scale_y
+	p[RP_COULOIR_WIDTH] = couloir_width
+	p[RP_COULOIR_DEPTH] = couloir_depth
+	p[RP_COULOIR_PATCH_SCALE] = couloir_patch_scale
+	p[RP_COULOIR_PATCH_MIN] = couloir_patch_min
+	p[RP_COULOIR_PATCH_MAX] = couloir_patch_max
+	p[RP_COULOIR_WALL_MIN] = couloir_wall_min
+	p[RP_COULOIR_WALL_MAX] = couloir_wall_max
+	p[RP_OUTER_RIDGE_ROAD_START] = outer_ridge_road_start
+	p[RP_OUTER_RIDGE_OPP_START] = outer_ridge_opp_start
+	p[RP_OUTER_RIDGE_SPAN] = outer_ridge_span
+	p[RP_OUTER_RIDGE_BASE_H] = outer_ridge_base_h
+	p[RP_OUTER_RIDGE_MTN_AMP] = outer_ridge_mtn_amp
+	p[RP_OPP_SPUR_START_PAD] = opp_spur_start_pad
 	return p
 
 
@@ -416,32 +564,31 @@ func geo_cache_digest() -> String:
 	var values: Array = [
 		id, plan_width, Array(plan_heights), dev_height, full_plan_territory, pick_start,
 		valley_relief, valley_river, corridor_shift, Array(relief_params()),
+		basin_scale, basin_narrow, basin_wide, bend_asym_gain, bend_wall_pull, bend_terrace_push, min_road_corridor,
 		spur_first_y_min, spur_first_y_span, spur_end_margin, spur_gap_min, spur_gap_span,
 		spur_half_len_min, spur_half_len_span, spur_height_min_m, spur_height_span_m,
 		spur_reach_min, spur_reach_span,
+		opp_spur_height_min_m, opp_spur_height_span_m, opp_spur_reach_min, opp_spur_reach_span, opp_spur_start_pad, bend_push_amp,
 		river_target_grade, river_drop_min, river_drop_max, river_bot_h,
 		slope_slow_scale, slope_med_scale, slope_shelf_min, slope_drop_span,
+		valley_swing_wave, valley_swing_amp, valley_swing_warp, valley_swing_warp_scale,
 		meander_slow_scale, meander_med_scale, meander_amp_max, meander_amp_width_frac,
 		head_bend_y, head_bend_span, head_bend_shift, finish_bend_len, finish_bend_shift,
-		axis_margin_normal, axis_margin_bend,
+		axis_margin_normal, axis_margin_road, axis_margin_opp, axis_margin_bend, axis_soft_margin,
 		river_hw_start, river_hw_end, river_hw_power, river_hw_mod, river_hw_min, river_hw_max,
 		river_depth_base_m, river_depth_per_hw_m, river_ribbon_step, river_ribbon_margin_m,
 		river_mask_pad, lake_exclude_margin,
 		cirque_start, cirque_end, cirque_height, finish_ridge_start, finish_ridge_end, finish_ridge_height,
 		lat_mode, lat_start, lat_end, lat_base, lat_center, lat_cells, eco_base, eco_residual, outer_temp_lapse,
+		peak_elev, peak_cold_elev, snow_temp, rock_elev, rock_slope, treeline_elev,
 	]
 	return var_to_str(values).sha256_text().left(16)
 
 
 ## Детерминированный хеш всех параметров дороги, якорей, поселений и редких мест: правка перестраивает кэш с places.
 func places_cache_digest() -> String:
-	var ov_keys := routing_overrides.keys().map(func(k: Variant) -> String: return str(k))
-	ov_keys.sort()
-	var ov_pairs := []
-	for k: String in ov_keys:
-		ov_pairs.append([k, routing_overrides[k]])
 	var values: Array = [
-		single_road, ov_pairs, home_is_first_settlement,
+		single_road, road_tuning_path, expedition_route_kind, allow_road_gaps, home_is_first_settlement,
 		anchor_end_margin, anchor_basin_gap, anchor_min_dy, anchor_diag_ratio,
 		anchor_river_pad_min, anchor_river_pad_max, anchor_inland_min, anchor_inland_max,
 		anchor_inland_start_chance, anchor_inland_streak_chance, anchor_river_streak_chance,

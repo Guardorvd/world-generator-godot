@@ -129,8 +129,8 @@ static func store_dir(w: WorldData) -> String:
 		ctx.update(("region-basis-v2|%s|%d|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, WorldCache.SCHEMA_GEO_VERSION, FORMAT, StageTrailPlan.VERSION, REGION_TRAILS]).to_utf8_buffer())
 		ctx.update(w.h.to_byte_array())
 		ctx.update(w.path_mask)
-		var tuning := RoadTuning.current()
-		var roads: String = WorldCache._road_layer_suffixes(tuning, QuickTrails.network()).places + tuning.clearance_cache_suffix()
+		var tuning := RoadTuning.for_world(w)
+		var roads: String = WorldCache._road_layer_suffixes(tuning, QuickTrails.network() and WorldTemplate.is_default(w.template_id)).places + tuning.clearance_cache_suffix()
 		if not roads.is_empty():
 			ctx.update(roads.to_utf8_buffer())
 		w.region_basis_id = ctx.finish().hex_encode().left(24)
@@ -901,7 +901,7 @@ static func _cell_m(w: WorldData, heights: Heightfield, regions: Dictionary, i: 
 ## Прозрачность края — общая tread_mask в цвете вершины; UV.x — поперечная доля, UV.y — singletrack.
 ## Участки по клеткам, где у плана уже есть дорога (path_mask ≥ 2), пропускаются: её рисует план.
 static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
-	var section := RoadTuning.current().section
+	var section := RoadTuning.for_world(w).section
 	var noise := FastNoiseLite.new()
 	noise.seed = w.seed_num
 	noise.frequency = 1.0
