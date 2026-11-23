@@ -3,8 +3,10 @@ extends RefCounted
 ## 8.2: мелкие цветы, высокая трава, молодые деревья и характеры леса.
 ## UV2.x — ранг удаления отдельного листа вдали; жилки, стебли и сплошные лапы имеют ранг 0.
 
-enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE, STIPA, FIREWEED, HAZEL, HAZEL_TALL }
-const COUNT := 19
+enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE, STIPA, FIREWEED, HAZEL, HAZEL_TALL,
+	SWORD_FERN, ALPINE_SHRUB, BERRY_SHRUB, BROADLEAF_HERB, MOSS_MOUND,
+	SWORD_FERN_TALL, ALPINE_SHRUB_CREEPING, BERRY_SHRUB_SPREAD, BROADLEAF_HERB_TALL, COUNT }
+const EXPEDITION_FIRST := SWORD_FERN
 ## 16.0: групповые формы открытых мест. Одна куртина — десятки травинок на 1,5–2 м: густой массив
 ## получается из сотен экземпляров, а не из тысяч мелких пучков. Видны дальше травы (как кусты).
 ## MEADOW — высокотравье с колосьями (0,9–1,5 м), FORBS — цветущее разнотравье, SEDGE — осока с рогозом.
@@ -134,7 +136,9 @@ static func build_meshes() -> Array[Mesh]:
 	var hazel := _hazel(0, false)
 	var hazel_tall := _hazel(1, false)
 
-	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed, hazel, hazel_tall]
+	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed, hazel, hazel_tall,
+		_sword_fern(false, false), _low_shrub(false, false, false), _low_shrub(true, false, false), _broadleaf_herb(false, false), _moss_mound(false),
+		_sword_fern(false, true), _low_shrub(false, false, true), _low_shrub(true, false, true), _broadleaf_herb(false, true)]
 
 
 ## 15.0: упрощённые формы для дальнего подлеска (дальше FAR_FORM_R от игрока), ключ - номер формы.
@@ -160,7 +164,148 @@ static func build_far_meshes() -> Dictionary:
 	var sapling := _crowned(1, bark, Vector3(0.04, 1.12, 0.0), Vector3(0.46, 0.56, 0.44), 14, 1.6, false)
 	var young := _crowned(2, Color(0.60, 0.58, 0.52), Vector3(0.0, 2.32, 0.0), Vector3(0.86, 1.06, 0.86), 22, 1.65, false)
 	return {FERN: fern, MOSS: moss, MEADOW: meadow, FORBS: _forb_patch(true), SEDGE: _sedge(true), BUSH: bush, SAPLING: sapling, YOUNG: young,
-		STIPA: _stipa(true), FIREWEED: _fireweed(true), HAZEL: _hazel(0, true), HAZEL_TALL: _hazel(1, true)}
+		STIPA: _stipa(true), FIREWEED: _fireweed(true), HAZEL: _hazel(0, true), HAZEL_TALL: _hazel(1, true),
+		SWORD_FERN: _sword_fern(true, false), ALPINE_SHRUB: _low_shrub(false, true, false), BERRY_SHRUB: _low_shrub(true, true, false),
+		BROADLEAF_HERB: _broadleaf_herb(true, false), MOSS_MOUND: _moss_mound(true),
+		SWORD_FERN_TALL: _sword_fern(true, true), ALPINE_SHRUB_CREEPING: _low_shrub(false, true, true),
+		BERRY_SHRUB_SPREAD: _low_shrub(true, true, true), BROADLEAF_HERB_TALL: _broadleaf_herb(true, true)}
+
+
+## Две розетки: широкая дуга внешних вай и тесный пучок поднятых внутренних.
+static func _sword_fern(far: bool, upright: bool) -> ArrayMesh:
+	var blades: Array = []
+	var ribs: Array = []
+	var count := 7 if upright else 9
+	for arm in count:
+		var a := arm * TAU / count + 0.23 * sin(arm * 2.399)
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-dir.z, 0, dir.x)
+		var inner := arm >= count - 3
+		var reach := (0.72 if inner else (1.0 if upright else 1.32)) * (0.86 + 0.18 * sin(arm * 1.9))
+		var lift := (1.68 if inner or upright else 1.47) * (0.91 + 0.14 * cos(arm * 1.7))
+		if far:
+			for segment in 3:
+				var t0 := segment / 3.0
+				var t1 := (segment + 1) / 3.0
+				var p0 := _fern_point(t0, dir * reach, lift)
+				var p1 := _fern_point(t1, dir * reach, lift)
+				var w0 := sin(PI * t0) * 0.16 + 0.014
+				var w1 := sin(PI * t1) * 0.16 + 0.008
+				ribs.append([p0 - side * w0, p0 + side * w0, p1 + side * w1, p1 - side * w1])
+			continue
+		for segment in 3:
+			var p0 := _fern_point(segment / 3.0, dir * reach, lift)
+			var p1 := _fern_point((segment + 1) / 3.0, dir * reach, lift)
+			ribs.append([p0 - side * 0.011, p0 + side * 0.011, p1 + side * 0.009, p1 - side * 0.009])
+		for n in 9:
+			var t := 0.19 + n * 0.084
+			var p := _fern_point(t, dir * reach, lift)
+			var end := _fern_point(t + 0.095, dir * reach, lift)
+			var width := (0.12 if inner else 0.22) * sin(PI * pow(t, 0.86))
+			for sign_side: float in [-1.0, 1.0]:
+				var tip := p.lerp(end, 0.55) + side * sign_side * width + dir * width * 0.35
+				var shape := [p, tip - dir * width * 0.16 + Vector3.UP * 0.012, tip + dir * width * 0.19, end]
+				if n in [0, 7, 8]:
+					blades.append(shape)
+				else:
+					ribs.append(shape)
+	var persistent := blades.size()
+	blades.append_array(ribs)
+	return _leaves(blades, Color("46773a"), persistent)
+
+
+static func _broadleaf_herb(far: bool, upright: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var blades: Array = []
+	var count := 6 if upright else 8
+	for n in count:
+		var a := n * 2.399 + 0.4
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-dir.z, 0, dir.x)
+		var long := n % 3 != 0
+		var root := dir * (0.08 if upright else 0.16)
+		var end := dir * ((0.33 if long else 0.53) if upright else (0.65 if long else 0.47)) + Vector3.UP * ((0.76 if long else 0.49) if upright else (0.48 if long else 0.79))
+		var tip := end + dir * (0.27 if long else 0.18) + Vector3.UP * (-0.14 if long else 0.065)
+		var shoulder := end.lerp(tip, 0.34) + Vector3.UP * 0.052
+		var width := (0.23 if long else 0.18) * (1.0 + 0.15 * sin(n * 1.84))
+		_add_open_branch(st, root, end, 0.022, 0.012, 3, Color("637d39"))
+		for sign_side: float in [-1.0, 1.0]:
+			var wing := shoulder + side * sign_side * width - Vector3.UP * 0.055
+			if far:
+				blades.append([end, wing, tip, shoulder])
+			else:
+				blades.append([shoulder, end, wing - dir * 0.11, wing + dir * 0.035, wing * 0.24 + tip * 0.76 + side * sign_side * width * 0.35, tip])
+	st.index()
+	var mesh := _leaves(blades, Color("59873c"), 0)
+	st.append_from(mesh, 0, Transform3D.IDENTITY)
+	st.index()
+	return st.commit()
+
+
+## Карликовая берёза: низкие колена ветвей. Ягодник: короткие побеги из разнесённых куртин.
+static func _low_shrub(berry: bool, far: bool, spreading: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var dots: Array = []
+	var leaves: Array = []
+	var count := 7 if berry or spreading else 5
+	var bark := Color("6b6850") if berry else Color("665340")
+	for n in count:
+		var a := n * 2.399
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-dir.z, 0, dir.x)
+		var root := dir * (0.10 + 0.045 * n if spreading else 0.085)
+		var reach := (0.23 if berry else 0.56) * (1.0 + 0.24 * sin(n * 1.8))
+		var height := (0.34 if berry else (0.57 if spreading else 0.81)) * (0.8 + 0.22 * cos(n * 2.6))
+		var knee := root + dir * reach * 0.65 + side * reach * 0.18 + Vector3.UP * height * 0.50
+		var tip := root + dir * reach + Vector3.UP * height
+		if not far:
+			_add_open_branch(st, root, knee, 0.016 if berry else 0.046, 0.009 if berry else 0.028, 4, bark)
+			_add_open_branch(st, knee, tip, 0.009 if berry else 0.028, 0.005 if berry else 0.011, 4, bark)
+		else:
+			_add_open_branch(st, root, tip, 0.020 if berry else 0.039, 0.006, 3, bark)
+		for k in (3 if far else (6 if berry else 8)):
+			var t := float(k) / (2.0 if far else (5.0 if berry else 7.0))
+			var at := knee.lerp(tip, 0.18 + 0.82 * t)
+			var phi := a + k * 2.399
+			var leaf_dir := Vector3(cos(phi), 0.28 + 0.55 * (k % 2), sin(phi))
+			var across := Vector3(-leaf_dir.z, 0.1, leaf_dir.x)
+			var blade := (0.163 if berry else 0.31) * (1.21 if far else 1.0) * (1.0 - 0.28 * t)
+			var end := at + leaf_dir * blade
+			var mid := at.lerp(end, 0.45) + Vector3.UP * blade * 0.20
+			leaves.append([at, mid + across * blade * 0.42, end, mid - across * blade * 0.42])
+		if berry and not far and n in [1, 4]:
+			var at := tip + side * 0.065
+			dots.append([at - side * 0.026, at + Vector3.UP * 0.042, at + side * 0.021, at + dir * 0.021])
+			dots.append([at - dir * 0.021, at + Vector3.UP * 0.042, at + dir * 0.021])
+	st.index()
+	st.append_from(_leaves(leaves, Color("456643") if berry else Color("647b3c"), leaves.size() / 2), 0, Transform3D.IDENTITY)
+	if not dots.is_empty():
+		st.append_from(_leaves(dots, Color("47506c")), 0, Transform3D.IDENTITY)
+	st.index()
+	return st.commit()
+
+
+static func _moss_mound(far: bool) -> ArrayMesh:
+	# Те же открытые снизу мягкие купола MOSS, с более крупной общей массой.
+	var pads := [
+		[Vector3(-0.15, 0, 0.02), Vector3(0.70, 0.29, 0.49), Color("526c32"), 8 if far else 13],
+		[Vector3(0.37, 0, 0.15), Vector3(0.50, 0.16, 0.39), Color("5b7336"), 6 if far else 9],
+	]
+	if not far:
+		pads.append([Vector3(0.14, 0, -0.35), Vector3(0.31, 0.12, 0.28), Color("4d6530"), 7])
+	return _dome_mesh(pads)
+
+
+static func expedition_variant(kind: int, roll: float) -> int:
+	if roll > 0.55:
+		match kind:
+			SWORD_FERN: return SWORD_FERN_TALL
+			ALPINE_SHRUB: return ALPINE_SHRUB_CREEPING
+			BERRY_SHRUB: return BERRY_SHRUB_SPREAD
+			BROADLEAF_HERB: return BROADLEAF_HERB_TALL
+	return kind
 
 
 ## Третий LOD куртин открытых мест и отдельные дерновины. Экземпляр изображает группу: несколько непрозрачных кочек
@@ -1231,11 +1376,11 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 	# Характер меняет состав, а не долю растений рядом с подстилкой: её задаёт DENSITY.
 	var before := 0.0
 	var after := 0.0
-	for k in COUNT:
+	for k in out.size():
 		before += out[k]
 		out[k] *= TEMPLATE[0][k] * ch[0] + TEMPLATE[1][k] * ch[1] + TEMPLATE[2][k] * ch[2] + TEMPLATE[3][k] * ch[3]
 		after += out[k]
-	for k in COUNT:
+	for k in out.size():
 		out[k] *= before / maxf(after, 0.0001)
 	# Чаща не ждёт просветов: подрост и кусты стоят стеной и под пологом.
 	var thicket := ch[THICKET]
@@ -1246,6 +1391,7 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 	out[YOUNG_PINE] += thicket * (0.14 if conifer else 0.04)
 	out[HAZEL] += thicket * (0.02 if conifer else 0.1)
 	out[HAZEL_TALL] += thicket * (0.01 if conifer else 0.06)
+	out.resize(COUNT)
 	return out
 
 

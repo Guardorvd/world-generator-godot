@@ -5,10 +5,11 @@ extends SceneTree
 ## Было — прежняя версия ForestModels, подставленная файлом (--before, по умолчанию .godot/tree_age/forest_models_before.gd,
 ## в нём убрана строка class_name). Нужно окно. Печатает высоту, радиус кроны и ствола каждой формы.
 ##   godot --path . --script tools/tree_age_look.gd [-- --only <вид> --before <файл>]
+##   --expedition: новые породы рядом с ближайшим аналогом, плюс косой ракурс и LOD1/2 на низком солнце.
 
 const OUT := "res://.godot/tree_age"
-const NEW_CROWN := {Biomes.T_PINE: 0.65, Biomes.T_BIRCH: 0.55, Biomes.T_OAK: 1.05, Biomes.T_SNOWPINE: 0.60, Biomes.T_ROWAN: 0.68, Biomes.T_MUGO: 0.52}
-const NEW_TRUNK := {Biomes.T_PINE: 0.29, Biomes.T_BIRCH: 0.20, Biomes.T_OAK: 0.50, Biomes.T_SNOWPINE: 0.29, Biomes.T_ROWAN: 0.15, Biomes.T_MUGO: 0.24}
+const EXPEDITION_NAMES := {Biomes.T_SPRUCE: "spruce", Biomes.T_LARCH: "larch", Biomes.T_ALDER: "alder",
+	Biomes.T_WESTERN_REDCEDAR: "western_redcedar", Biomes.T_SIBERIAN_CEDAR: "siberian_cedar"}
 const NAMES := {Biomes.T_PINE: "pine", Biomes.T_BIRCH: "birch", Biomes.T_OAK: "oak", Biomes.T_SNOWPINE: "snowpine", Biomes.T_ROWAN: "rowan", Biomes.T_MUGO: "mugo"}
 var camera: Camera3D
 var stand: Node3D
@@ -63,23 +64,31 @@ func run() -> void:
 	camera = Camera3D.new()
 	root.add_child(camera)
 	camera.current = true
-	for kind: int in [Biomes.T_PINE, Biomes.T_BIRCH, Biomes.T_OAK, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO]:
-		if only != "" and NAMES[kind] != only:
+	var expedition := args.has("--expedition")
+	var kinds := Biomes.EXPEDITION_TREES if expedition else NAMES.keys()
+	var names := EXPEDITION_NAMES if expedition else NAMES
+	for kind: int in kinds:
+		if only != "" and names[kind] != only:
 			continue
 		_clear()
 		# [определение, подпись]
 		var row: Array = []
-		if before != null:
+		if expedition:
+			var analog := Biomes.T_ROWAN if kind == Biomes.T_ALDER else Biomes.T_PINE
+			row.append([ForestModels.definition(analog, 0), "рябина" if kind == Biomes.T_ALDER else "сосна", analog])
+		elif before != null:
 			for v in [0, 2]:
 				row.append([before.definition(kind, v), "было %d" % v])
 		for v: int in ([4, 5, 0, 1, 2, 3, 6, 7] if ForestModels.has_ages(kind) else [0, 1, 2, 3]):
 			var age := ForestModels.age_of(v) if ForestModels.has_ages(kind) else 0
 			row.append([ForestModels.definition(kind, v), ["взрослая", "молодая", "старая"][age] + " %d" % v])
+		var lead := 1 if expedition else (2 if before != null else 0)
 		var x := 0.0
 		var prev_r := 0.0
 		var spots: Array[float] = []
 		var top := 0.0
 		for item: Array in row:
+			var item_kind: int = item[2] if item.size() > 2 else kind
 			var def: Dictionary = item[0]
 			var stats := _stats(def)
 			var r: float = stats.crown_r
@@ -87,24 +96,36 @@ func run() -> void:
 			spots.append(x)
 			prev_r = r
 			top = maxf(top, stats.height)
-			_place(def, kind, x, item[1])
+			_place(def, item_kind, x, item[1])
 			var table_s: float = def.get("ref", 1.0) if not str(item[1]).begins_with("было") else 1.0
 			print("%s %-12s высота %5.1f м  ref %.2f  крона R %.2f м (таблица×s %.2f)  ствол %.2f м (таблица×s %.2f)  треугольников %d" % [
-				NAMES[kind], item[1], stats.height, def.get("ref", 1.0), r, NEW_CROWN[kind] * GameConfig.TILE * table_s,
-				stats.trunk_r, NEW_TRUNK[kind] * table_s, stats.triangles])
+				names[kind], item[1], stats.height, def.get("ref", 1.0), r, Biomes.CROWN_RADIUS[item_kind] * GameConfig.TILE * table_s,
+				stats.trunk_r, StageVegetation.TRUNK[item_kind] * table_s, stats.triangles])
 		var width := spots[-1] - spots[0] + 12.0
 		var center := (spots[0] + spots[-1]) * 0.5
 		camera.fov = 34.0
 		var aspect := 1600.0 / 900.0
 		var dist := maxf(width * 0.5 / (tan(deg_to_rad(camera.fov * 0.5)) * aspect), (top + 4.0) * 0.5 / tan(deg_to_rad(camera.fov * 0.5))) * 1.05
 		camera.look_at_from_position(Vector3(center, top * 0.42, dist), Vector3(center, top * 0.42, 0))
-		await _shot("%s_side" % NAMES[kind])
+		await _shot("%s_side" % names[kind])
 		# С седла: 1,6 м, в нескольких метрах перед взрослой формой и прежней, взгляд вверх.
-		var adult_at := spots[(2 if before != null else 0) + (1 if ForestModels.has_ages(kind) else 0) + (AGE_FORMS_OFFSET if ForestModels.has_ages(kind) else 0)]
+		var adult_at := spots[lead + (1 if ForestModels.has_ages(kind) else 0) + (AGE_FORMS_OFFSET if ForestModels.has_ages(kind) else 0)]
 		camera.fov = 75.0
 		camera.look_at_from_position(Vector3(adult_at - 3.0, 1.6, 7.0), Vector3(adult_at, minf(8.0, top * 0.72), -1.0))
-		await _shot("%s_eye" % NAMES[kind])
-		if before != null:
+		await _shot("%s_eye" % names[kind])
+		if expedition:
+			camera.fov = 49.0
+			camera.look_at_from_position(Vector3(center - dist * 0.42, top * 0.62, dist * 0.74), Vector3(center, top * 0.45, 0))
+			await _shot("%s_angle" % names[kind])
+			sun.rotation_degrees = Vector3(-11, -61, 0)
+			for level in [1, 2]:
+				_clear()
+				for idx in row.size():
+					var item: Array = row[idx]
+					_place(item[0], item[2] if item.size() > 2 else kind, spots[idx], item[1], level)
+				await _shot("%s_low_lod%d" % [names[kind], level])
+			sun.rotation_degrees = Vector3(-48, -30, 0)
+		elif before != null:
 			camera.look_at_from_position(Vector3(spots[0] - 3.0, 1.6, 7.0), Vector3(spots[0], 8.0, -1.0))
 			await _shot("%s_eye_before" % NAMES[kind])
 	ForestModels.baking = false
@@ -136,7 +157,7 @@ func _stats(def: Dictionary) -> Dictionary:
 	return {height = height, crown_r = crown_r, trunk_r = trunk_r, triangles = triangles}
 
 
-func _place(def: Dictionary, kind: int, x: float, label: String) -> void:
+func _place(def: Dictionary, kind: int, x: float, label: String, level := 0) -> void:
 	var height := 0.3
 	for part: String in ["trunk", "crown"]:
 		if def.has(part):
@@ -145,7 +166,7 @@ func _place(def: Dictionary, kind: int, x: float, label: String) -> void:
 		if not def.has(part):
 			continue
 		var node := MeshInstance3D.new()
-		node.mesh = def[part]
+		node.mesh = ForestModels.lod_meshes(def[part])[level]
 		node.position.x = x
 		var shader := VegetationLayer.CUTOUT_SHADER if part == "crown" else VegetationLayer.TRUNK_SHADER
 		var mat := VegetationLayer._wind_mat(shader, VegetationLayer.WIND.get(kind, VegetationLayer.CALM), part == "crown")
@@ -153,6 +174,7 @@ func _place(def: Dictionary, kind: int, x: float, label: String) -> void:
 		mat.set_shader_parameter("albedo_color", def.leaves[0] if part == "crown" else def.bark)
 		mat.set_shader_parameter("use_vertex_color", def.get("colored_bark", false))
 		mat.set_shader_parameter("height", height)
+		mat.set_shader_parameter("bark_detail", VegetationLayer.bark_detail(kind))
 		mat.set_shader_parameter("lod_level", -1)
 		if part == "crown":
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED

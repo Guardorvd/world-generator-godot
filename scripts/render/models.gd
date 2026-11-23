@@ -52,7 +52,7 @@ static func build_tree_defs() -> Dictionary:
 	var defs := {
 		Biomes.T_CACTUS: {trunk = merge([_cyl(0.26, 0.32, 2.6, 7, true, false), _moved(_cyl(0.16, 0.19, 0.95, 6), Vector3(0.46, 1.0, 0)), _moved(_cyl(0.15, 0.18, 0.85, 6), Vector3(-0.46, 1.3, 0))]), bark = _c(79, 138, 60)},
 	}
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH] + Biomes.EXPEDITION_TREES:
 		for variant in ForestModels.form_count(kind):
 			defs[kind + variant * ForestModels.MODEL_STRIDE] = ForestModels.definition(kind, variant)
 	# Камыш — четыре силуэта, камни — шесть форм с общими LOD.

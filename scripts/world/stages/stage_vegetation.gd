@@ -44,6 +44,8 @@ const CLEAR_CAP := 12.0  # дальше этого от пути (м) просв
 const TRUNK := {
 	Biomes.T_BIRCH: 0.20, Biomes.T_PINE: 0.29, Biomes.T_SNOWPINE: 0.29, Biomes.T_OAK: 0.50,
 	Biomes.T_ROWAN: 0.15, Biomes.T_MUGO: 0.24,
+	Biomes.T_SPRUCE: 0.40, Biomes.T_LARCH: 0.32, Biomes.T_ALDER: 0.33,
+	Biomes.T_WESTERN_REDCEDAR: 0.98, Biomes.T_SIBERIAN_CEDAR: 0.56,
 	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
 }
 ## Снежная ель и молодые деревья (крона до земли) опускают ветви к земле: эта доля кроны тоже не над полотном.
@@ -219,7 +221,7 @@ static func _plan_native(w: WorldData, f: Dictionary, massifs: Array[PackedFloat
 		f.river, f.dist_path, f.village, f.light, f.age_n, f.wood, f.stand, f.glade, f.rock, w.path_mask,
 		_TABLES.water, _TABLES.trees, kinds_start, kinds, _TABLES.tree, PackedFloat64Array(Biomes.CROWN_RADIUS), trunk,
 		world_cover(w.seed_num), GameConfig.TILE, GameConfig.HS, massif_start, massif_data, massif_tor, core_start, core_data,
-		huts, trig)
+		huts, trig, f.get("expedition", false))
 	if not (got is Dictionary and got.has("items")):
 		push_error("FastGrid.VegetationPlan не вернул раскладку — растительность плана на GDScript")
 		return false
@@ -309,6 +311,7 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
 	# Скальные массивы всего плана — один раз, а не заново в каждом чанке (RockMassif.near).
 	var sites_us := Time.get_ticks_usec()
+	out.expedition = w.template_id == WorldTemplate.EXPEDITION_ID
 	out.massifs = RockMassif.sites(w.seed_num, 0, 0, W, H, out, 0, 0, W, w.path_mask)
 	w.generation_profile.veg_massif_sites_ms = (Time.get_ticks_usec() - sites_us) / 1000.0
 	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
@@ -361,7 +364,7 @@ static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -
 ## Хватает ли просвета объекту вида kind масштаба sc в точке (x, y): ствол (и нижние ветви ели и стланика) не на полотне
 static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float, age := ForestModels.ADULT_AGE) -> bool:
 	var need: float = TRUNK.get(kind, 0.0) * sc
-	if kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
+	if kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO or kind == Biomes.T_ALDER or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
 		need += LOW_CROWN * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
 	elif not TRUNK.has(kind):
 		need = 0.5 * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE # куст и камыш — краем к кромке
@@ -438,6 +441,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 		massifs = RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, RockScatter.path_mask_of(f, store))
 	var cores := RockMassif.cores(massifs)
 	var has_cores := not cores.is_empty()
+	var expedition: bool = f.get("expedition", false)
 	for y in range(y0, y1):
 		for x in range(x0, x1):
 			var i := (y - oy) * stride + x - ox
@@ -534,6 +538,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
 					var r_kind := rng.next_float()
 					var kind := Biomes.T_MUGO if roll >= mugo_from else _kind(bi, b_kinds[bi], r_kind, e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
+					if expedition:
+						kind = expedition_kind(kind, bi, WGRandom.hash2(x, y, seed_num ^ (8179 + k)), e, community_moist, dw, light, stand)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
 					var tree_age := ForestModels.ADULT_AGE
@@ -717,6 +723,35 @@ static func _reedy(bi: int) -> bool:
 
 ## Вид объекта по местности. r — случайное число 0..1, e — высота, m — влажность, sl — крутизна,
 ## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
+static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist: float, water: float, light: float, stand: float) -> int:
+	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.GRASS, Biomes.SWAMP]:
+		return kind
+	if kind == Biomes.T_ROCK or kind == Biomes.T_MUGO or kind == Biomes.T_REED:
+		return kind
+	var alder := (1.0 - _ss(1.0, 7.0, water)) * _ss(0.30, 0.67, moist) * (0.38 + 0.43 * stand)
+	if roll < alder:
+		return Biomes.T_ALDER
+	if kind != Biomes.T_PINE and kind != Biomes.T_BIRCH and kind != Biomes.T_OAK:
+		return kind
+	roll -= alder
+	var wet := _ss(0.39, 0.76, moist)
+	var cool := _ss(0.055, 0.22, elev)
+	var cedar := 0.22 * wet * wet * (1.0 - 0.65 * cool) * (0.55 + 0.45 * stand)
+	if roll < cedar:
+		return Biomes.T_WESTERN_REDCEDAR
+	roll -= cedar
+	var spruce := (0.07 + 0.53 * wet) * (0.73 + 0.27 * stand) * (1.13 - 0.55 * light)
+	if roll < spruce:
+		return Biomes.T_SPRUCE
+	roll -= spruce
+	var larch := (0.08 + 0.48 * cool) * (0.5 + 0.5 * light) * (1.0 - 0.68 * wet) * (1.32 - 0.65 * stand)
+	if roll < larch:
+		return Biomes.T_LARCH
+	roll -= larch
+	var siberian := (0.07 + 0.42 * cool) * (0.65 + 0.35 * wet) * (0.48 + 0.52 * stand)
+	return Biomes.T_SIBERIAN_CEDAR if roll < siberian else kind
+
+
 static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float, t: float, light: float,
 		interior: float, stand := 0.5, exposed := 0.0) -> int:
 	var shore := dw < SHORE

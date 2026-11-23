@@ -9,6 +9,8 @@ extends SceneTree
 ##   -- --verify-phase2    проверка монотонности реки, краёв ленты, глубины/течения, стыков OuterLand и C# == GDScript
 ##   -- --roads            фаза 3: одна дорога, метрики (длина, берег/лес, набор/сброс, прямые, валидация) и лист-карта
 ##   -- --shots            3D-снимки долины в настоящей сцене GameWorld (нужно окно; короткий мир 256×768)
+##   -- --phase8          кадры растительности из GameWorld; --short-expedition для короткого плана
+##   -- --phase8-drive    отдельный проезд с замером кадров на том же сохранённом плане
 ##   -- --shots-p3         3D-снимки фазы 3: старт, берег, лесной отрог, финиш с причалом (нужно окно)
 ##   -- --verify-phase4    проверка меню, большой карты M (масштаб вокруг игрока), доски заданий/альбома и сохранения Типа 2 (нужно окно)
 ## Лимит 240 с.
@@ -67,7 +69,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--verify-phase4") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--phase8") and not args.has("--phase8-drive") and not args.has("--verify-phase4") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -95,6 +97,9 @@ func _run() -> void:
 
 	if args.has("--shots-p3"):
 		ok = await _capture_phase3_shots(seeds[0], tag) and ok
+
+	if args.has("--phase8") or args.has("--phase8-drive"):
+		ok = await _capture_phase3_shots(seeds[0], tag, true, args.has("--phase8-drive")) and ok
 
 	if args.has("--verify-phase4"):
 		ok = await _verify_phase4(seeds[0], tag) and ok
@@ -511,7 +516,7 @@ func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
 	return img
 
 
-func _capture_phase3_shots(seed_text: String, tag: String) -> bool:
+func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, drive_only := false) -> bool:
 	if DisplayServer.get_name() == "headless":
 		push_error("PHASE3_SHOTS: window required (do not pass --headless)")
 		return false
@@ -522,13 +527,16 @@ func _capture_phase3_shots(seed_text: String, tag: String) -> bool:
 	root.add_child(main)
 	for _i in 20:
 		await process_frame
-	GameContext.scope.cache.enabled = false
+	GameContext.scope.cache.enabled = phase8
+	if phase8:
+		StageVegetation.verify = true
+		StageVegetation.verify_report.clear()
 	main.start_game(seed_text, WorldGenerator.START_SIZE, "", false, WorldTemplate.EXPEDITION_ID)
 	var wait_frames := 0
-	while (main.busy or main.game == null or main.game.player == null) and wait_frames < 12000:
+	while main.busy and wait_frames < 12000:
 		await process_frame
 		wait_frames += 1
-	if main.game == null or main.game.player == null:
+	if main.busy or main.game == null or main.game.player == null:
 		push_error("PHASE3_SHOTS: GameWorld failed to start")
 		main.queue_free()
 		return false
@@ -551,6 +559,20 @@ func _capture_phase3_shots(seed_text: String, tag: String) -> bool:
 	var axis := ValleyAxis.for_world(w)
 	var T := GameConfig.TILE
 	var road_pts: Array = w.trails[0].pts if not w.trails.is_empty() else []
+	if phase8:
+		StageVegetation.verify = false
+		var counts := {}
+		for kind: int in w.obj_k:
+			counts[kind] = counts.get(kind, 0) + 1
+		print("PHASE8 OBJECTS ", counts)
+		print("PHASE8 PARITY ", StageVegetation.verify_report)
+		var report_ok: bool = StageVegetation.verify_report.is_empty() or StageVegetation.verify_report[0].same
+		var captured := await _phase8_capture(gw, road_pts, tag, drive_only)
+		GameContext.scope.cache.wait_writes()
+		main._free_game()
+		main.queue_free()
+		await process_frame
+		return report_ok and captured
 	var shots: Array[Dictionary] = []
 
 	# 1. Старт в лагере верховья — взгляд прямо вниз по дороге
@@ -621,6 +643,120 @@ func _capture_phase3_shots(seed_text: String, tag: String) -> bool:
 	main._free_game()
 	main.queue_free()
 	await process_frame
+	return true
+
+
+func _phase8_capture(gw: GameWorld, road: Array, tag: String, drive_only: bool) -> bool:
+	if road.size() < 60:
+		push_error("PHASE8: требуется сформированная дорога")
+		return false
+	var w := gw.world
+	var h := gw.heights
+	var axis := ValleyAxis.for_world(w)
+	var tile := GameConfig.TILE
+	var sites := {}
+	var scores := {}
+	# Ракурсы выбираются по географии и дороге, одинаково для старой и новой растительности.
+	for k in range(24, road.size() - 24, 3):
+		var p: Dictionary = road[k]
+		var at := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
+		var cross := absf(p.x - axis.axis_x_at(p.y)) - axis.river_hw_at(p.y)
+		var forest := 0.0
+		for row in range(-3, 4, 3):
+			for col in range(-3, 4, 3):
+				var sample := clampi(floori(p.y) + row, 0, w.H - 1) * w.W + clampi(floori(p.x) + col, 0, w.W - 1)
+				forest += float(w.biome[sample] in [Biomes.FOREST, Biomes.TAIGA])
+		forest /= 9.0
+		var candidates := {
+			bank = -cross - w.slope[at] * 7.0,
+			wet_forest = forest * (0.30 + 0.70 * w.moist[at]) + minf(cross, 18.0) * 0.01,
+			old_forest = forest * (0.80 + 0.50 * StageVegetation.age_at(w, p.x, p.y)) + w.elev[at] * 0.35,
+			transition = 1.0 - absf(forest - 0.55) + w.slope[at] * 0.2 + minf(cross, 45.0) * 0.006,
+			slope = w.elev[at] * 2.5 + w.slope[at] * 0.35 + forest * 0.15,
+		}
+		for name: String in candidates:
+			if candidates[name] > scores.get(name, -INF):
+				sites[name] = k
+				scores[name] = candidates[name]
+	if drive_only:
+		return await _phase8_drive(gw, road, sites.wet_forest)
+	var ok := true
+	for name: String in sites:
+		var k: int = sites[name]
+		var p := Vector2(road[k].x, road[k].y) * tile
+		var forward := (Vector2(road[k + 6].x, road[k + 6].y) * tile - p).normalized()
+		var direction := forward
+		var cam_height := 1.65
+		if name == "bank" or name == "slope":
+			var river := Vector2(axis.axis_x_at(p.y / tile) * tile, p.y)
+			direction = forward.lerp((river - p).normalized(), 0.67 if name == "bank" else 0.48).normalized()
+		if name == "slope":
+			cam_height = 8.0
+		var eye := Vector3(p.x, h.ground_at(p.x, p.y) + cam_height, p.y)
+		var look := p + direction * 24.0
+		look = look.clamp(Vector2.ONE, Vector2(w.W - 1, w.H - 1) * tile)
+		var target := Vector3(look.x, h.ground_at(look.x, look.y) + 1.15, look.y)
+		gw.player.x = p.x
+		gw.player.z = p.y
+		gw.player.feet = h.ground_at(p.x, p.y)
+		gw.stream_coordinator.force_terrain(eye, GameWorld.NEAR)
+		gw.stream_coordinator.force_vegetation(eye)
+		gw.camera.look_at_from_position(eye, target, Vector3.UP)
+		for _f in 15:
+			await process_frame
+		await RenderingServer.frame_post_draw
+		var out := OUT.path_join("expedition_phase8_%s%s.jpg" % [name, tag])
+		ok = root.get_texture().get_image().save_jpg(ProjectSettings.globalize_path(out), 0.91) == OK and ok
+		print("PHASE8 SHOT ", out, " k=", k, " at=", p)
+	return ok
+
+
+func _phase8_drive(gw: GameWorld, road: Array, start: int) -> bool:
+	var tile := GameConfig.TILE
+	var path := Curve2D.new()
+	for k in range(start, mini(start + 150, road.size())):
+		path.add_point(Vector2(road[k].x, road[k].y) * tile)
+	var length := minf(path.get_baked_length() - 3.0, 210.0)
+	if length < 60.0:
+		return false
+	var p := path.sample_baked(0.0)
+	var eye := Vector3(p.x, gw.heights.ground_at(p.x, p.y) + 1.65, p.y)
+	gw.stream_coordinator.force_terrain(eye, GameWorld.NEAR)
+	gw.stream_coordinator.force_vegetation(eye)
+	var intervals := PackedFloat64Array()
+	var calls := 0.0
+	var primitives := 0.0
+	var lag := 0.0
+	var start_us := Time.get_ticks_usec()
+	var began := start_us
+	var distance := 0.0
+	while distance < length:
+		p = path.sample_baked(distance)
+		var next := path.sample_baked(distance + 3.0)
+		var dir := (next - p).normalized()
+		eye = Vector3(p.x, gw.heights.ground_at(p.x, p.y) + 1.65, p.y)
+		gw.player.x = p.x
+		gw.player.z = p.y
+		gw.player.feet = eye.y - 1.65
+		gw.camera.look_at_from_position(eye, eye + Vector3(dir.x, -0.04, dir.y), Vector3.UP)
+		gw.stream_coordinator.update(eye)
+		await process_frame
+		var now := Time.get_ticks_usec()
+		if distance >= 15.0:
+			intervals.append((now - began) / 1000.0)
+			calls += RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
+			primitives += RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
+			lag = maxf(lag, gw.vegetation.coverage_lag(p))
+		began = now
+		distance = (now - start_us) * 0.000014 # 14 м/с
+	intervals.sort()
+	if intervals.is_empty():
+		return false
+	var n := intervals.size()
+	print("PHASE8 DRIVE ", {frames = n, p50_ms = intervals[n / 2], p95_ms = intervals[ceili(n * 0.95) - 1],
+		p99_ms = intervals[ceili(n * 0.99) - 1], max_ms = intervals[-1], max_coverage_lag_m = lag,
+		draw_calls = calls / n, primitives = primitives / n, memory_mib = OS.get_static_memory_usage() / 1048576.0,
+		stream_groups_max_us = gw.stream_coordinator.stats.group_max_us})
 	return true
 
 

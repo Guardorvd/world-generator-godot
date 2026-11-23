@@ -10,10 +10,12 @@ func _initialize() -> void:
 	catalog.floor_meshes = preload("res://scripts/render/forest_floor.gd").build_meshes()
 	var Plants := preload("res://scripts/render/understory_models.gd")
 	var Floor := preload("res://scripts/render/forest_floor.gd")
-	for k: int in Plants.build_far_meshes():
-		catalog.far_forms[k] = Plants.build_far_meshes()[k]
-	for k: int in Floor.build_far_meshes():
-		catalog.far_forms[Floor.FIRST + k] = Floor.build_far_meshes()[k]
+	var plant_far: Dictionary = Plants.build_far_meshes()
+	var floor_far: Dictionary = Floor.build_far_meshes()
+	for k: int in plant_far:
+		catalog.far_forms[k] = plant_far[k]
+	for k: int in floor_far:
+		catalog.far_forms[Floor.FIRST + k] = floor_far[k]
 	for id: int in catalog.trees:
 		for part: String in ["trunk", "crown"]:
 			if catalog.trees[id].has(part):

@@ -39,11 +39,21 @@ const T_REED := 10
 const T_ACACIA := 11
 const T_ROWAN := 12
 const T_MUGO := 13
+const T_SPRUCE := 14
+const T_LARCH := 15
+const T_ALDER := 16
+const T_WESTERN_REDCEDAR := 17
+const T_SIBERIAN_CEDAR := 18
+const EXPEDITION_TREES := [T_SPRUCE, T_LARCH, T_ALDER, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR]
+const EXPEDITION_CROWN := {
+	T_SPRUCE: Color("426e48"), T_LARCH: Color("88a451"), T_ALDER: Color("689343"),
+	T_WESTERN_REDCEDAR: Color("416e46"), T_SIBERIAN_CEDAR: Color("4b7952"),
+}
 
 # Приблизительный радиус кроны/объекта в клетках (клетка 4 м), по Models.
 # Общий для размещения и оценки полога; масштаб экземпляра применяется отдельно.
 # 11.11.2026: высокий лес — дуб, сосна, снежная ель и берёза в номинальном размере (ForestModels.NOMINAL).
-const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.68, 0.52]
+const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.68, 0.52, 0.85, 0.73, 0.74, 1.07, 1.10]
 # Поля записи биома (индекс в массиве = номер биома):
 #   name       — название для интерфейса
 #   color      — цвет на карте и в текстуре рельефа, [r, g, b]
@@ -91,7 +101,11 @@ const LIST: Array[Dictionary] = [
 
 
 static func is_tree(kind: int) -> bool:
-	return kind == T_OAK or kind == T_PINE or kind == T_PALM or kind == T_JUNGLE or kind == T_SNOWPINE or kind == T_BIRCH or kind == T_ACACIA or kind == T_ROWAN or kind == T_MUGO
+	return kind == T_OAK or kind == T_PINE or kind == T_PALM or kind == T_JUNGLE or kind == T_SNOWPINE or kind == T_BIRCH or kind == T_ACACIA or kind == T_ROWAN or kind == T_MUGO or kind in EXPEDITION_TREES
+
+
+static func is_conifer(kind: int) -> bool:
+	return kind in [T_PINE, T_SNOWPINE, T_MUGO, T_SPRUCE, T_LARCH, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR]
 
 
 ## 12.11.2026: конец лета. Тон кроны одного дерева — общий для ближних моделей и дальних крон (DistantForest):

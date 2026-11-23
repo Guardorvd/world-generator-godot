@@ -4,8 +4,9 @@ extends RefCounted
 const Plants := preload("res://scripts/render/understory_models.gd")
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH, ROOT_SPAN,
-	ROOT_SPAN_B, ROOT_SPAN_C, STONE_SINGLE, STONES_PAIR, LOG_BROKEN, MOSS_LOG_BROKEN, COUNT }
-const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
+	ROOT_SPAN_B, ROOT_SPAN_C, STONE_SINGLE, STONES_PAIR, LOG_BROKEN, MOSS_LOG_BROKEN,
+	NURSE_LOG, NURSE_LOG_SPLIT, ROOT_STUMP, ROOT_PLATE, ROOT_UPTURNED, MOSS_BOULDER, MOSS_BOULDER_LOW, COUNT }
+const FIRST := Plants.COUNT # смещение групп MultiMesh и запечённых far_forms, вне сохранений
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
 static var _shared_meshes: Array[Mesh] = []
@@ -17,7 +18,9 @@ static func base_kind(kind: int) -> int:
 	if kind in [ROOT_SPAN_B, ROOT_SPAN_C]: return ROOT_SPAN
 	if kind in [STONE_SINGLE, STONES_PAIR]: return STONES
 	if kind == LOG_BROKEN: return LOG
-	if kind == MOSS_LOG_BROKEN: return MOSS_LOG
+	if kind in [MOSS_LOG_BROKEN, NURSE_LOG, NURSE_LOG_SPLIT]: return MOSS_LOG
+	if kind in [ROOT_STUMP, ROOT_PLATE, ROOT_UPTURNED]: return STUMP
+	if kind in [MOSS_BOULDER, MOSS_BOULDER_LOW]: return BOULDER
 	return kind
 
 
@@ -30,6 +33,8 @@ static func variant_kind(kind: int, variant: int) -> int:
 
 
 static func log_span(kind: int) -> Vector2:
+	if kind in [NURSE_LOG, NURSE_LOG_SPLIT]:
+		return Vector2(-2.65, 1.63 if kind == NURSE_LOG_SPLIT else 2.87)
 	return Vector2(-2.2, 0.9 if kind in [LOG_BROKEN, MOSS_LOG_BROKEN] else 2.1)
 
 
@@ -81,7 +86,7 @@ static func surface_image(w: WorldData) -> Image:
 		var trees := PackedByteArray()
 		var water := PackedByteArray()
 		for kind in Biomes.CROWN_RADIUS.size():
-			trees.append(2 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO else int(Biomes.is_tree(kind)))
+			trees.append(2 if Biomes.is_conifer(kind) else int(Biomes.is_tree(kind)))
 		for biome: Dictionary in Biomes.LIST:
 			water.append(int(biome.get("water", false)))
 		var pixels: PackedByteArray = native.ForestSurface(w.W, w.H, w.obj_count, w.obj_x, w.obj_y, w.obj_k, w.obj_s,
@@ -103,7 +108,7 @@ static func surface_image(w: WorldData) -> Image:
 				var k := j * w.W + i
 				var weight := maxf(0.0, 1.0 - Vector2(i + 0.5 - ox, j + 0.5 - oy).length() / r)
 				cover[k] += weight
-				if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO:
+				if Biomes.is_conifer(kind):
 					needles[k] += weight
 	var bytes := PackedByteArray()
 	bytes.resize(w.N * 4)
@@ -165,6 +170,83 @@ static func _log(moss: bool, broken := false) -> Mesh:
 			if broken and n > 2: continue
 			var z_m := 0.04 if n in [1, 2] else -0.01
 			parts.append([Models._moved(Plants._mound(0.32, 0.40, 1.45, 0.16, 0.56), Vector3(-1.35 + n * 0.82, 0, z_m)), Color(0.26 + n * 0.018, 0.38, 0.16)])
+	return Plants._colored(parts)
+
+
+static func expedition_variant(kind: int, roll: float, wet: float, old: float, rocky: float) -> int:
+	if kind == MOSS_LOG and roll < wet * (0.45 + old * 0.5):
+		return NURSE_LOG_SPLIT if roll < 0.29 else NURSE_LOG
+	if kind == STUMP and roll < old * (0.40 + wet * 0.55):
+		return ROOT_STUMP if roll < 0.20 else (ROOT_PLATE if roll < 0.39 else ROOT_UPTURNED)
+	if kind == BOULDER and roll < wet * (0.42 + rocky * 0.52):
+		return MOSS_BOULDER_LOW if roll < 0.25 else MOSS_BOULDER
+	return kind
+
+
+static func _nurse_log(split: bool, far: bool) -> Mesh:
+	var a := Vector3(-2.65, 0.25, -0.02)
+	var b := Vector3(1.63 if split else 2.87, 0.16, -0.05)
+	var axis: Array[Vector3] = [a, Vector3(-1.94, 0.29, 0.04), Vector3(-0.18, 0.26, 0.13), b]
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var trunk := [axis, 0.37, 0.21 if split else 0.14, BARK, false]
+	ForestModels._tube(tool, trunk, 7 if far else 9, 0, 0)
+	var parts: Array = [
+		[[tool.commit(), Transform3D.IDENTITY], BARK.darkened(0.13)],
+		[_beam(a - Vector3(0.035, 0, 0), a, 0.28, 7, true), WOOD.darkened(0.17)],
+		[_beam(b - Vector3(0.18, 0.028, 0), b + Vector3(0.07, 0.014, 0), 0.16 if split else 0.10, 5, true), WOOD],
+	]
+	for n in (3 if far else 5):
+		var t := (n + 0.65) / 5.7
+		var at := a.lerp(b, t)
+		at.z += 0.12
+		var side := 1.0 if n % 2 == 0 else -1.0
+		var tip := at + Vector3(-0.11 + n * 0.13, 0.28 - 0.025 * n, side * (0.53 + 0.09 * sin(n * 3.1)))
+		parts.append([_beam(at, tip, 0.105 - 0.009 * n, 4), BARK])
+	if split:
+		for n in 3:
+			var at := b + Vector3(-0.31, 0.11 * (n - 1), 0.12 * sin(n * 2.1))
+			parts.append([_beam(at, at + Vector3(0.37 + 0.14 * n, 0.16, 0.035 * (n - 1)), 0.067 - 0.012 * n, 4), WOOD])
+	var pads: Array = []
+	for n in (3 if far else 6):
+		var t := (n + 0.5) / (3.25 if far else 6.35)
+		var p := a.lerp(b, t)
+		p.y += lerpf(0.33, 0.14, t)
+		p.z += 0.07 + sin(n * 2.6) * 0.09
+		pads.append([p, Vector3(0.81 if far else 0.51, 0.085, lerpf(0.31, 0.16, t)), Color("536b2f"), 5 if far else 7])
+	parts.append([[Plants._dome_mesh(pads), Transform3D.IDENTITY], Color("526a30")])
+	return Plants._colored(parts)
+
+
+static func _root_stump(variant: int, far: bool) -> Mesh:
+	var upright := variant == 0
+	var base := Vector3(0, -0.045, 0)
+	var head := Vector3(0.15, 0.98, -0.045) if upright else Vector3(0.55 if variant == 1 else 0.9, 0.43, 0.12)
+	var center := Vector3(0, 0.31 if upright else (0.71 if variant == 1 else 0.59), 0)
+	var parts: Array = [
+		[_beam(base if upright else center, head, 0.48 if upright else 0.43, 7), BARK],
+		[_beam(head - Vector3(0.018, 0.07, 0), head + Vector3(0.03, 0.02, 0), 0.29, 6, true), WOOD.darkened(0.16)],
+	]
+	var count := 6 if far else 8
+	for n in count:
+		var a := n * TAU / count + 0.24 * cos(n * 2.3)
+		var span := (0.65 + 0.36 * sin(n * 2.6) ** 2.0) * (1.0 if upright else 1.24)
+		var dir := Vector3(cos(a), 0.0, sin(a)) if upright else Vector3(0.19 * sin(a + 0.6), 0.74 * cos(a), sin(a))
+		var end := center + dir * span
+		end.y = maxf(end.y, -0.045)
+		var knee := center.lerp(end, 0.56) + Vector3(-0.13 if not upright else 0.0, 0.13, 0.06)
+		var thick := 0.17 - (n % 4) * 0.018
+		parts.append([_beam(center, knee, thick, 5), BARK])
+		parts.append([_beam(knee, end, thick * 0.57, 4), BARK.darkened(0.15)])
+		if not far and n % 2 == 0:
+			parts.append([_beam(knee, knee.lerp(end, 0.58) + Vector3(-0.25, -0.11, 0.23), thick * 0.44, 4), BARK])
+	var soil: Mesh = Models.boulder(Vector3(0.32, 0.38 if upright else 0.62, 0.57), 709 + variant, 0.42)
+	if far:
+		soil = soil.get_meta("lod_meshes")[1]
+	parts.append([[soil, Transform3D(Basis(), center + Vector3(-0.10, -0.16, 0.02))], Color("504a34")])
+	var moss := Plants._dome_mesh([[center + Vector3(-0.21, 0.12 if upright else 0.34, 0.09),
+		Vector3(0.32, 0.08, 0.44), Color("536731"), 5 if far else 9]])
+	parts.append([[moss, Transform3D.IDENTITY], Color("536731")])
 	return Plants._colored(parts)
 
 
@@ -245,7 +327,16 @@ static func build_far_meshes() -> Dictionary:
 		var a := n * TAU / 5.0 + 0.3 + sin(n * 1.9) * 0.12
 		var f := Vector3(cos(a), 0, sin(a))
 		roots.append([_beam(f * 0.10 + Vector3.UP * 0.20, f * 1.05, 0.042, 4, false), BARK])
-	return {ROOTS: Plants._colored(roots), STONES: stone_mesh(0, true), STONE_SINGLE: stone_mesh(1, true), STONES_PAIR: stone_mesh(2, true)}
+	return {ROOTS: Plants._colored(roots), STONES: stone_mesh(0, true), STONE_SINGLE: stone_mesh(1, true), STONES_PAIR: stone_mesh(2, true),
+		NURSE_LOG: _nurse_log(false, true), NURSE_LOG_SPLIT: _nurse_log(true, true),
+		ROOT_STUMP: _root_stump(0, true), ROOT_PLATE: _root_stump(1, true), ROOT_UPTURNED: _root_stump(2, true),
+		MOSS_BOULDER: _moss_boulder(false).get_meta("lod_meshes")[1],
+		MOSS_BOULDER_LOW: _moss_boulder(true).get_meta("lod_meshes")[1]}
+
+
+static func _moss_boulder(low: bool) -> Mesh:
+	return Models.boulder(Vector3(1.44, 0.72, 1.13) if low else Vector3(1.06, 1.20, 0.91),
+		824 if low else 1163, 0.83 if low else 0.69, 0.54)
 
 
 static func build_meshes() -> Array[Mesh]:
@@ -318,6 +409,8 @@ static func build_meshes() -> Array[Mesh]:
 		Plants._colored(branch),
 		root_span(),
 		root_span(1), root_span(2), stone_mesh(1), stone_mesh(2), _log(false, true), _log(true, true),
+		_nurse_log(false, false), _nurse_log(true, false), _root_stump(0, false), _root_stump(1, false), _root_stump(2, false),
+		_moss_boulder(false), _moss_boulder(true),
 	]
 
 
@@ -339,7 +432,7 @@ static func canopy_image(rect: Rect2i, batches: Array) -> Image:
 					var k := (y - rect.position.y) * rect.size.x + x - rect.position.x
 					var weight := maxf(0.0, 1.0 - Vector2(x + 0.5 - ox, y + 0.5 - oy).length() / r)
 					cover[k] += weight
-					if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO: needles[k] += weight
+					if Biomes.is_conifer(kind): needles[k] += weight
 	var bytes := PackedByteArray()
 	bytes.resize(rect.get_area() * 4)
 	for k in cover.size():

@@ -25,14 +25,16 @@ func run() -> void:
 	var defs := Models.tree_defs()
 	var total := Vector3i.ZERO
 	var previous_total := Vector3i.ZERO
+	var compared_total := Vector3i.ZERO
 	var stored_bytes := 0
 	var previous_bytes := 0
+	var compared_bytes := 0
 	var baseline: GDScript
 	var args := OS.get_cmdline_user_args()
 	var baseline_at := args.find("--baseline")
 	if baseline_at >= 0 and baseline_at + 1 < args.size():
 		baseline = load(args[baseline_at + 1])
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH] + Biomes.EXPEDITION_TREES:
 		var silhouettes := []
 		for variant in ForestModels.form_count(kind):
 			var def: Dictionary = defs[kind + variant * ForestModels.MODEL_STRIDE]
@@ -41,10 +43,12 @@ func run() -> void:
 			total += cost
 			stored_bytes += _stored_bytes(def)
 			check(cost.x > cost.y and cost.y > cost.z, "Каждый следующий LOD дерева должен уменьшать суммарную геометрию")
-			if baseline != null:
+			if baseline != null and kind not in Biomes.EXPEDITION_TREES:
 				var previous: Dictionary = baseline.definition(kind, variant)
 				previous_total += _cost(previous)
 				previous_bytes += _stored_bytes(previous)
+				compared_total += cost
+				compared_bytes += _stored_bytes(def)
 			for part in ["trunk", "crown"]:
 				if not def.has(part):
 					continue
@@ -88,8 +92,8 @@ func run() -> void:
 	if baseline != null:
 		print("Baseline triangles LOD0/1/2: ", previous_total)
 		print("Baseline stored geometry arrays: ", previous_bytes, " bytes")
-		check(stored_bytes < previous_bytes, "Хранимые массивы геометрии занимают меньше места")
-		check(total.x <= previous_total.x and total.y <= previous_total.y, "Бюджет ближней и средней геометрии не увеличился")
+		check(compared_bytes < previous_bytes, "Хранимые массивы геометрии занимают меньше места")
+		check(compared_total.x <= previous_total.x and compared_total.y <= previous_total.y, "Бюджет ближней и средней геометрии не увеличился")
 	print("tree_models_test: %d ошибок" % fails)
 	if DisplayServer.get_name() == "headless" or fails > 0:
 		quit(1 if fails else 0)

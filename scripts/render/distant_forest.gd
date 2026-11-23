@@ -20,7 +20,7 @@ const OUTER_SCRUB_END := 720.0
 const PLANT_SHARE := 0.8
 const TURF_SHARE := 1.0 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальними дерновинами
 enum { FINE, COARSE, SCRUB, PLANT }
-enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS }
+enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS, SPRUCE, LARCH, ALDER, REDCEDAR, SIBERIAN_CEDAR }
 const PARTS := ["f", "c", "s", "p"]
 static var _meshes: Array[ArrayMesh] = []
 static var _materials: Array[ShaderMaterial] = []
@@ -110,6 +110,11 @@ static func _form(kind: int) -> int:
 	match kind:
 		Biomes.T_BUSH, Biomes.T_MUGO: return Form.BUSH
 		Biomes.T_PINE, Biomes.T_SNOWPINE: return Form.CONIFER
+		Biomes.T_SPRUCE: return Form.SPRUCE
+		Biomes.T_LARCH: return Form.LARCH
+		Biomes.T_ALDER: return Form.ALDER
+		Biomes.T_WESTERN_REDCEDAR: return Form.REDCEDAR
+		Biomes.T_SIBERIAN_CEDAR: return Form.SIBERIAN_CEDAR
 		Biomes.T_ACACIA: return Form.UMBRELLA
 		Biomes.T_PALM: return Form.PALM
 		_: return Form.BROADLEAF
@@ -184,7 +189,7 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 	for c in Understory.COMMUNITIES:
 		density += com[c] * Understory.COMMUNITY_DENSITY[c]
 		var row: Array = Understory.COMMUNITY[c]
-		for f in Understory.COUNT:
+		for f in row.size():
 			total += com[c] * row[f]
 		# 17.11.2026: лещина — прибавка к густоте (VegetationLayer._fill_open_cell): доли считаются без её весов
 		total -= com[c] * (row[Understory.HAZEL] + row[Understory.HAZEL_TALL])
@@ -264,7 +269,8 @@ static func _add_scrub(proxies: Array, plants: Dictionary, site: Dictionary, p: 
 ## Instance colour: rgb is the leaf tint, alpha is the conifer share (the shader narrows conifers into cones).
 static func tint(kind: int, variant: int, x: float, y: float) -> Color:
 	var color := Color("7ca94e")
-	if kind == Biomes.T_PINE: color = Color("568758")
+	if Biomes.EXPEDITION_CROWN.has(kind): color = Biomes.EXPEDITION_CROWN[kind]
+	elif kind == Biomes.T_PINE: color = Color("568758")
 	elif kind == Biomes.T_SNOWPINE: color = Color("a1b6aa")
 	elif kind == Biomes.T_ROWAN: color = Color("55863a")
 	elif kind == Biomes.T_MUGO: color = Color("355e3a")
@@ -274,7 +280,7 @@ static func tint(kind: int, variant: int, x: float, y: float) -> Color:
 	elif kind == Biomes.T_PALM: color = Color("589943")
 	elif kind == Biomes.T_ACACIA: color = Color("91a852")
 	color = Biomes.leaf_tone(kind, color * (0.92 + (variant % 3) * 0.06), x, y) # тот же тон, что у ближней модели
-	color.a = 1.0 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE else 0.0
+	color.a = 1.0 if Biomes.is_conifer(kind) and kind != Biomes.T_MUGO else 0.0
 	return color
 
 ## A crown keeps its anchor at both distances. Merging centres across slopes and shorelines
@@ -424,6 +430,23 @@ static func _plant_mesh(form: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	match form:
+		Form.SPRUCE, Form.LARCH, Form.REDCEDAR, Form.SIBERIAN_CEDAR:
+			var siberian := form == Form.SIBERIAN_CEDAR
+			var larch := form == Form.LARCH
+			var cedar := form == Form.REDCEDAR
+			_stem(st, 0.91, 0.085 if cedar else (0.062 if siberian else 0.044))
+			for i in 3:
+				var angle := i * PI / 3.0
+				var low := 0.58 if siberian else (0.46 if larch else 0.39)
+				_card(st, Vector3(0, low, 0), angle, Vector2(0.99, 0.22 if larch else 0.29), 0.57 if cedar else 0.43, 2.0)
+				_card(st, Vector3(0, 0.79, 0), angle + 0.38, Vector2(0.79 if siberian else 0.56, 0.23), 0.65 if siberian else 0.37, 2.0)
+		Form.ALDER:
+			_stem(st, 0.67, 0.071, 0.36)
+			_stem(st, 0.58, 0.056, -0.42)
+			for i in 3:
+				var angle := i * PI / 3.0
+				_card(st, Vector3(-0.22, 0.65, 0), angle, Vector2(0.73, 0.30), 0.67, 1.0)
+				_card(st, Vector3(0.29, 0.78, 0.05), angle + 0.26, Vector2(0.66, 0.27), 0.68, 1.0)
 		Form.CONIFER, Form.SCRUB_PINE:
 			_stem(st, 0.82, 0.055)
 			for i in 3:
@@ -572,6 +595,10 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 					Biomes.TAIGA: kind = Biomes.T_PINE
 					Biomes.JUNGLE: kind = Biomes.T_JUNGLE
 					Biomes.GRASS: kind = Biomes.T_BIRCH
+				if w.template_id == WorldTemplate.EXPEDITION_ID:
+					var stand := smoothstep(0.0, 1.0, site_cover)
+					var sun := clampf(0.5 - (f.elev[index + side] - f.elev[index - side]) * 15.0, 0.0, 1.0)
+					kind = StageVegetation.expedition_kind(kind, f.biome[index], v, f.elev[index], f.moist[index], f.dw[index], sun, stand)
 				var scale := lerpf(0.65, 1.2, site_cover) * lerpf(0.84, 1.13, u)
 				var radius: float = Biomes.CROWN_RADIUS[kind] * TILE * scale
 				var height := _nominal_height(kind) * scale

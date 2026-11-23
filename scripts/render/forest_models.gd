@@ -16,7 +16,9 @@ const YOUNG_AGE := 1
 const OLD_AGE := 2
 ## Номинальная высота взрослого дерева породы при масштабе 1, м. Поле ref формы — её высота в долях номинала:
 ## масштаб экземпляра = obj_s / ref, поэтому obj_s — линейный размер дерева независимо от возрастной формы.
-const NOMINAL := {Biomes.T_PINE: 19.0, Biomes.T_BIRCH: 16.0, Biomes.T_OAK: 14.5, Biomes.T_SNOWPINE: 12.0, Biomes.T_ROWAN: 9.5, Biomes.T_MUGO: 2.2}
+const NOMINAL := {Biomes.T_PINE: 19.0, Biomes.T_BIRCH: 16.0, Biomes.T_OAK: 14.5, Biomes.T_SNOWPINE: 12.0, Biomes.T_ROWAN: 9.5, Biomes.T_MUGO: 2.2,
+	Biomes.T_SPRUCE: 26.0, Biomes.T_LARCH: 22.0, Biomes.T_ALDER: 8.0,
+	Biomes.T_WESTERN_REDCEDAR: 30.0, Biomes.T_SIBERIAN_CEDAR: 24.0}
 static var _leaf_texture: Texture2D
 static var _pinnate_texture: Texture2D
 static var _bark_texture: Texture2D
@@ -26,7 +28,7 @@ static var baking := false # authoring tool only
 
 ## Есть ли у вида молодые и старые формы.
 static func has_ages(kind: int) -> bool:
-	return kind == Biomes.T_PINE or kind == Biomes.T_BIRCH or kind == Biomes.T_OAK or kind == Biomes.T_ROWAN
+	return kind == Biomes.T_PINE or kind == Biomes.T_BIRCH or kind == Biomes.T_OAK or kind == Biomes.T_ROWAN or kind in Biomes.EXPEDITION_TREES
 
 
 ## Сколько форм вида запекается.
@@ -58,7 +60,127 @@ static func definition(kind: int, variant: int) -> Dictionary:
 		return _rowan(variant)
 	if kind == Biomes.T_MUGO:
 		return _mugo(variant)
+	if kind == Biomes.T_ALDER:
+		return _alder(variant)
+	if kind in Biomes.EXPEDITION_TREES:
+		return _expedition_conifer(kind, variant)
 	return _conifer(kind, variant)
+
+
+## Породы экспедиции используют общие трубы, хвойный атлас, затенение крон и три LOD.
+static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = kind * 1877 + variant * 397
+	var age := age_of(variant)
+	var form := variant % VARIANTS if age == ADULT_AGE else variant % AGE_FORMS
+	var western := kind == Biomes.T_WESTERN_REDCEDAR
+	var siberian := kind == Biomes.T_SIBERIAN_CEDAR
+	var larch := kind == Biomes.T_LARCH
+	var nominal: float = NOMINAL[kind]
+	var adult_shape := [0.94, 1.07, 0.93, 1.02]
+	var height: float = nominal * ([0.32, 0.39][form] if age == YOUNG_AGE else ([1.25, 1.16][form] if age == OLD_AGE else adult_shape[form]))
+	var radius := height * (0.023 if western else (0.017 if siberian else (0.012 if larch else 0.014)))
+	var angle := rng.randf() * TAU
+	var bend: Vector3 = Vector3(cos(angle), 0, sin(angle)) * height * [0.014, 0.024, 0.048, 0.031][form]
+	var bark := Color("765043") if western else (Color("655449") if larch else Color("59483a"))
+	var path: Array[Vector3] = []
+	for t: float in [0.0, 0.063, 0.18, 0.36, 0.55, 0.78, 1.0]:
+		# _path_at интерполирует по индексу, поэтому ярусы привязываются к фактической высоте ниже.
+		path.append(Vector3.UP * height * t + bend * t * t + bend.cross(Vector3.UP) * sin(t * TAU) * 0.22)
+	var branches: Array = [[path, radius, radius * 0.07, bark, false]]
+	var root_width := radius * (2.9 if western else 1.65)
+	_roots(branches, rng, 6 if western else 4, Vector2(root_width, root_width * 1.35),
+		radius * (2.9 if western else 1.15), radius * 0.20, radius * 0.46, bark)
+	var foliage: Array = []
+	var base := 0.20 if not larch and not siberian else (0.30 if larch else 0.35)
+	if age == YOUNG_AGE:
+		base *= 0.62
+	elif age == OLD_AGE:
+		base += 0.10 if not siberian else 0.16
+	base += [0.02, 0.08, -0.03, 0.04][form]
+	var span_max: float = height * (0.159 if siberian else (0.125 if western else (0.11 if larch else 0.106))) * [1.0, 0.86, 1.12, 1.05][form]
+	var tiers := 7 if siberian else (9 if larch else 11)
+	for tier in tiers:
+		var t := float(tier) / tiers
+		var crown_y := lerpf(base, 0.985, t)
+		var profile := pow(1.0 - t, 0.51 if siberian else (0.58 if western else (0.72 if larch else 0.68)))
+		if siberian:
+			profile *= lerpf(0.76, 1.29, sin(t * PI))
+		var arms := 3 if larch or tier >= tiers - 2 else 4
+		for arm in arms:
+			var a := angle + tier * 2.399 + arm * TAU / arms + rng.randf_range(-0.26, 0.26)
+			var dir := Vector3(cos(a), 0.0, sin(a))
+			var y := height * crown_y + rng.randf_range(-0.022, 0.022) * height
+			var start := path[0]
+			for ring in range(1, path.size()):
+				if path[ring].y >= y:
+					start = path[ring - 1].lerp(path[ring], inverse_lerp(path[ring - 1].y, path[ring].y, y))
+					break
+			var span := span_max * profile * rng.randf_range(0.75, 1.18) * (1.0 + 0.24 * maxf(0.0, dir.dot(bend.normalized())) * float(form == 2))
+			var tip_slope := -0.31 if western else (0.27 if siberian else (-0.17 if not larch and tier < 3 else 0.13))
+			var elbow := start + dir * span * 0.48 + Vector3.UP * span * (0.20 if western or siberian else -0.085)
+			var tip := start + dir * span + Vector3.UP * span * tip_slope
+			if tier < tiers - 2:
+				var thick := radius * (0.25 if siberian or western else 0.22) * (1.0 - t * 0.74)
+				branches.append([[start, elbow, tip], thick, thick * 0.16, bark, false, true])
+			var center := elbow.lerp(tip, 0.36 if larch or western else 0.26)
+			if western:
+				foliage.append([center, Vector3(span * 0.62, span * 0.24, span * 0.43), a, rng.randf() * TAU, _frame(tip - elbow), 1.12])
+			else:
+				var depth := maxf(span * (0.39 if siberian else (0.23 if larch else 0.44)), height * (0.026 if larch else 0.027))
+				foliage.append([center, Vector3(span * (0.57 if larch or siberian else 0.69), depth, span * 0.55), a, rng.randf() * TAU])
+				if siberian and tier < 5:
+					var fork := dir.rotated(Vector3.UP, 0.48 if arm % 2 == 0 else -0.48)
+					foliage.append([elbow + fork * span * 0.42 + Vector3.UP * depth * 0.7,
+						Vector3(span * 0.43, depth * 0.8, span * 0.41), atan2(fork.z, fork.x), rng.randf() * TAU])
+		# Внутренние пучки связывают верхние ярусы с осью, оставляя просветы у концов ветвей.
+		if not siberian and (not larch or tier % 2 == 0 or t > 0.64):
+			var core := path[5].lerp(path[6], clampf((crown_y - 0.78) / 0.22, 0.0, 1.0)) if crown_y > 0.78 else Vector3.UP * height * crown_y + bend * crown_y * crown_y
+			var width := span_max * profile * (0.52 if larch else (0.57 if western else 0.65))
+			var vertical := height * (0.045 if larch else 0.053)
+			foliage.append([core + Vector3.UP * vertical * 0.47, Vector3(width, vertical, width * 0.9), angle + tier * 2.399, rng.randf() * TAU, true])
+	var apex := height * (0.055 if siberian else 0.047)
+	foliage.append([path[-1] - Vector3.UP * apex * 0.90, Vector3(apex * (1.05 if siberian else 0.49), apex * 0.9, apex * 0.64), angle, 2.0, true])
+	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, true), bark = Color.WHITE,
+		leaves = _expedition_colors(kind), colored_bark = true, cutout = true, trunk_texture = _texture(false),
+		crown_texture = _texture(true, true), ref = _ref(kind, age, height)}
+
+
+static func _alder(variant: int) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 81379 + variant * 439
+	var age := age_of(variant)
+	var form := variant % VARIANTS if age == ADULT_AGE else variant % AGE_FORMS
+	var height: float = NOMINAL[Biomes.T_ALDER] * ([0.43, 0.52][form] if age == YOUNG_AGE else ([1.12, 1.22][form] if age == OLD_AGE else [0.89, 1.04, 0.80, 0.97][form]))
+	var stems: int = [3, 2, 4, 3][form]
+	var branches: Array = []
+	var foliage: Array = []
+	var angle := rng.randf() * TAU
+	var bark := Color("726b59")
+	for n in stems:
+		var a := angle + n * TAU / stems + rng.randf_range(-0.32, 0.32)
+		var dir := Vector3(cos(a), 0, sin(a))
+		var h := height * (0.98 if n == 0 else rng.randf_range(0.56, 0.87))
+		var spread: float = h * ([0.29, 0.18, 0.39, 0.27][form] + n * 0.028)
+		var path := _rowan_trunk(dir * h * 0.015, dir, h, spread, h * 0.035, a, 6)
+		var r := h * (0.028 if n == 0 else 0.024)
+		branches.append([path, r, r * 0.16, bark, false])
+		for limb in 3:
+			var phi := a + (limb - 1) * 0.92
+			var forward := Vector3(cos(phi), 0, sin(phi))
+			var origin := _path_at(path, 0.46 + limb * 0.19)
+			var end := origin + forward * h * (0.24 - limb * 0.045) + Vector3.UP * h * (0.24 - limb * 0.07)
+			branches.append([[origin, origin.lerp(end, 0.54) + Vector3.UP * h * 0.06, end], r * 0.46, r * 0.1, bark, false, true])
+			foliage.append([end, Vector3(0.16, 0.106, 0.14) * h, phi, rng.randf() * TAU])
+			foliage.append([origin.lerp(end, 0.63) + Vector3.UP * h * 0.085,
+				Vector3(0.14, 0.122, 0.12) * h, phi + 0.8, rng.randf() * TAU])
+		foliage.append([path[-1] - Vector3.UP * h * 0.09, Vector3(0.14, 0.115, 0.12) * h, a, rng.randf() * TAU, true])
+	return _leafy(branches, foliage, _expedition_colors(Biomes.T_ALDER), false, _ref(Biomes.T_ALDER, age, height))
+
+
+static func _expedition_colors(kind: int) -> Array:
+	var color: Color = Biomes.EXPEDITION_CROWN[kind]
+	return [color * 0.94, color, color * 1.06]
 
 
 ## Хвойные. Взрослая сосна — четыре узнаваемых характера (высокий свод, строевая, густая коническая, ветровая)

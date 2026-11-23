@@ -350,6 +350,7 @@ static func vegetation(w: WorldData, key: Vector2i, surface: Heightfield = null)
 	p = WorldData.NOISE_FIELDS.cost
 	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - pad, y0 - pad, side, side, p[0], p[1])
 	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - pad, y0 - pad, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
+	f.expedition = w.template_id == WorldTemplate.EXPEDITION_ID
 	f.merge(StageVegetation.structure_rect(w, x0 - pad, y0 - pad, side, side))
 	var candidates := RockMassif.sites(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - pad, y0 - pad, side, f.path)
 	var snapshot := {h = f.h, water = f.water, path = f.path, x0 = x0 - pad, y0 = y0 - pad, side = side,

@@ -54,6 +54,10 @@ func run() -> void:
 	ui.add_child(title)
 	var plants := Plants.meshes()
 	var floor_meshes := Floor.meshes()
+	if "--expedition" in OS.get_cmdline_user_args():
+		await expedition_gallery(plants, floor_meshes, sun)
+		quit()
+		return
 	var low := [Plants.FERN, Plants.HERB, Plants.FLOWERS, Plants.MUSHROOM, Plants.MOSS]
 	for i in low.size():
 		add(plants[low[i]], low[i], (i - 2) * 1.2)
@@ -89,6 +93,56 @@ func run() -> void:
 	print("understory_look: снимки в ", out)
 	quit()
 
+func expedition_gallery(plants: Array[Mesh], floor_meshes: Array[Mesh], sun: DirectionalLight3D) -> void:
+	var catalog := preload("res://scripts/render/asset_catalog.gd").get_catalog()
+	var rows := [
+		["Папоротник и мечевидные вайи", "fern", [Plants.FERN, Plants.SWORD_FERN, Plants.SWORD_FERN_TALL], 2.35, 4.8],
+		["Куст и горные формы", "alpine", [Plants.BUSH, Plants.ALPINE_SHRUB, Plants.ALPINE_SHRUB_CREEPING], 2.35, 4.8],
+		["Трава и таёжный ягодник", "berry", [Plants.GRASS, Plants.BERRY_SHRUB, Plants.BERRY_SHRUB_SPREAD], 1.60, 3.4],
+		["Лесная розетка и крупнолистник", "herb", [Plants.HERB, Plants.BROADLEAF_HERB, Plants.BROADLEAF_HERB_TALL], 2.15, 4.6],
+		["Мох и моховые подушки", "moss", [Plants.MOSS, Plants.MOSS_MOUND], 1.85, 3.3],
+		["Тонкий валежник и старые стволы", "log", [Floor.FIRST + Floor.MOSS_LOG, Floor.FIRST + Floor.NURSE_LOG, Floor.FIRST + Floor.NURSE_LOG_SPLIT], 6.1, 12.0],
+		["Пень, корневая плита и выворотень", "root", [Floor.FIRST + Floor.STUMP, Floor.FIRST + Floor.ROOT_STUMP,
+			Floor.FIRST + Floor.ROOT_PLATE, Floor.FIRST + Floor.ROOT_UPTURNED], 3.35, 8.0],
+		["Валуны", "stone", [Floor.FIRST + Floor.BOULDER, Floor.FIRST + Floor.MOSS_BOULDER, Floor.FIRST + Floor.MOSS_BOULDER_LOW], 3.3, 7.1],
+	]
+	for row: Array in rows:
+		var forms: Array = row[2]
+		var spacing: float = row[3]
+		var size: float = row[4]
+		var name: String = row[1]
+		var counts: Array = []
+		for level in 2:
+			clear()
+			for i in forms.size():
+				var kind: int = forms[i]
+				var mesh := plants[kind] if kind < Floor.FIRST else floor_meshes[kind - Floor.FIRST]
+				if level == 1:
+					mesh = catalog.far_forms.get(kind, mesh)
+				var pos := (i - (forms.size() - 1) * 0.5) * spacing
+				add(mesh, kind, pos)
+				counts.append(_triangles(mesh))
+			var meter := MeshInstance3D.new()
+			var ruler := BoxMesh.new()
+			ruler.size = Vector3(0.045, 1.0, 0.045)
+			meter.mesh = ruler
+			meter.position = Vector3(-(forms.size() - 1) * 0.5 * spacing, 0.5, -0.8)
+			stand.add_child(meter)
+			title.text = "%s · %s · стойка 1 м" % [row[0], "ближний вид" if level == 0 else "дальний меш"]
+			sun.rotation_degrees = Vector3(-45, -30, 0) if level == 0 else Vector3(-12, -67, 0)
+			view(Vector3(0, size * 0.31, size * 1.3), Vector3(0, 0.35, 0), size)
+			await shot("phase8_%s_%s" % [name, "near" if level == 0 else "far"])
+			if level == 0:
+				view(Vector3(size * 0.63, size * 0.49, size * 1.16), Vector3(0, 0.35, 0), size)
+				await shot("phase8_%s_angle" % name)
+		print("phase8 %s triangles (near, far): %s" % [name, counts])
+
+
+func _triangles(mesh: Mesh) -> int:
+	var arrays := mesh.surface_get_arrays(0)
+	return (arrays[Mesh.ARRAY_INDEX].size() if arrays[Mesh.ARRAY_INDEX] != null else arrays[Mesh.ARRAY_VERTEX].size()) / 3
+
+
 func view(from: Vector3, target: Vector3, size: float) -> void:
 	camera.size = size
 	camera.look_at_from_position(from, target)
@@ -108,7 +162,7 @@ func add(mesh: Mesh, kind: int, x: float, count := 1, tint := Color.WHITE) -> vo
 	var node := MultiMeshInstance3D.new()
 	node.multimesh = mm
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
-	var still := kind >= Plants.COUNT or kind in [Plants.MOSS, Plants.MUSHROOM]
+	var still := kind >= Plants.COUNT or kind in [Plants.MOSS, Plants.MUSHROOM, Plants.MOSS_MOUND]
 	var wind: Array = VegetationLayer.GRASS_WIND if kind == -1 else (VegetationLayer.CALM if still else VegetationLayer._plant_wind(kind))
 	var mat := VegetationLayer._wind_mat(VegetationLayer.SHADER, wind, true)
 	mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
