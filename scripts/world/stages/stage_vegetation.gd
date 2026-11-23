@@ -46,6 +46,7 @@ const TRUNK := {
 	Biomes.T_ROWAN: 0.15, Biomes.T_MUGO: 0.24,
 	Biomes.T_SPRUCE: 0.40, Biomes.T_LARCH: 0.32, Biomes.T_ALDER: 0.33,
 	Biomes.T_WESTERN_REDCEDAR: 0.98, Biomes.T_SIBERIAN_CEDAR: 0.56,
+	Biomes.T_MAPLE: 0.77,
 	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
 }
 ## Снежная ель и молодые деревья (крона до земли) опускают ветви к земле: эта доля кроны тоже не над полотном.
@@ -365,7 +366,7 @@ static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -
 static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float, age := ForestModels.ADULT_AGE) -> bool:
 	var need: float = TRUNK.get(kind, 0.0) * sc
 	if kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO or kind == Biomes.T_ALDER or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
-		need += LOW_CROWN * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
+		need += (0.55 if kind == Biomes.T_MAPLE else LOW_CROWN) * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
 	elif not TRUNK.has(kind):
 		need = 0.5 * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE # куст и камыш — краем к кромке
 	return Grid.clearance_at(field, ox, oy, stride, x, y, GameConfig.TILE) >= need
@@ -539,13 +540,13 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var r_kind := rng.next_float()
 					var kind := Biomes.T_MUGO if roll >= mugo_from else _kind(bi, b_kinds[bi], r_kind, e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
 					if expedition:
-						kind = expedition_kind(kind, bi, WGRandom.hash2(x, y, seed_num ^ (8179 + k)), e, community_moist, dw, light, stand)
+						kind = expedition_kind(kind, bi, WGRandom.hash2(x, y, seed_num ^ (8179 + k)), e, community_moist, dw, light, stand, sl, exposed)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
 					var tree_age := ForestModels.ADULT_AGE
 					if b_tree[kind] != 0:
 						# 11.11.2026: размер и возрастной класс древостоя; класс пишется в вариант: v = оттенок + 3 * класс
-						var form := tree_form(age, interior, line, moist[i], exposed, rng.next_float())
+						var form := tree_form(age, interior, line, moist[i], exposed, rng.next_float(), kind == Biomes.T_MAPLE)
 						sc = form.x
 						if kind == Biomes.T_MUGO:
 							sc = lerpf(0.74, 1.30, fposmod(form.x * 7.13, 1.0)) * lerpf(1.0, 0.76, _ss(0.28, 0.44, e))
@@ -669,11 +670,13 @@ static func cover_at(w: WorldData, x: int, y: int) -> Vector2:
 ## На опушках и у полян молодых больше, полог поднимается вглубь массива. Граница леса и скалы: дерево мельчает
 ## до 0,5 и становится молодым (компактная крона до земли), карликов взрослой формы нет.
 ## Одно случайное число r на дерево, как прежде (расход чисел rng на объект не меняется).
-static func tree_form(age: float, interior: float, line: float, moist: float, exposed: float, r: float) -> Vector2:
+static func tree_form(age: float, interior: float, line: float, moist: float, exposed: float, r: float, maple := false) -> Vector2:
 	var r2 := fposmod(r * 9.73, 1.0)
 	var r3 := fposmod(r * 31.7 + 0.37, 1.0)
 	var young_stand := 1.0 - _ss(0.08, 0.24, age)  # 1 — молодняк
 	var p_old := (1.0 - young_stand) * 0.032 * _ss(0.4, 0.85, age)
+	if maple:
+		p_old += 0.18 * _ss(0.24, 0.66, age)
 	var p_young := young_stand * 0.9 + (1.0 - young_stand) * (0.095 + 0.15 * (1.0 - interior))
 	var p_second := (1.0 - young_stand) * 0.14
 	var canopy := lerpf(0.86, 1.06, age) * (0.82 + 0.18 * interior) * (0.85 + 0.15 * moist)
@@ -723,7 +726,8 @@ static func _reedy(bi: int) -> bool:
 
 ## Вид объекта по местности. r — случайное число 0..1, e — высота, m — влажность, sl — крутизна,
 ## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
-static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist: float, water: float, light: float, stand: float) -> int:
+static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist: float, water: float, light: float, stand: float,
+		slope: float, exposed: float) -> int:
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.GRASS, Biomes.SWAMP]:
 		return kind
 	if kind == Biomes.T_ROCK or kind == Biomes.T_MUGO or kind == Biomes.T_REED:
@@ -742,6 +746,15 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 	roll -= cedar
 	var spruce := (0.07 + 0.53 * wet) * (0.73 + 0.27 * stand) * (1.13 - 0.55 * light)
 	if roll < spruce:
+		# Часть мест ели на сырых защищённых террасах занимает клён. Древостой уже влияет на moist.
+		if bi == Biomes.FOREST or bi == Biomes.TAIGA:
+			var terrace := _ss(1.5, 4.0, water) * lerpf(1.0, 0.55, _ss(8.0, 28.0, water))
+			var lowland := 1.0 - _ss(0.085, 0.19, elev)
+			var shelter := (1.0 - _ss(0.38, 0.82, slope)) * (1.0 - _ss(0.13, 0.50, exposed))
+			var patch := _ss(0.28, 0.66, stand) * (0.65 + 0.35 * light)
+			var maple := 0.37 * terrace * lowland * shelter * patch * _ss(0.50, 0.79, moist)
+			if roll < spruce * maple:
+				return Biomes.T_MAPLE
 		return Biomes.T_SPRUCE
 	roll -= spruce
 	var larch := (0.08 + 0.48 * cool) * (0.5 + 0.5 * light) * (1.0 - 0.68 * wet) * (1.32 - 0.65 * stand)

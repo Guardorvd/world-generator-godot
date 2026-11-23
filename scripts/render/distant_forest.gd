@@ -20,7 +20,7 @@ const OUTER_SCRUB_END := 720.0
 const PLANT_SHARE := 0.8
 const TURF_SHARE := 1.0 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальними дерновинами
 enum { FINE, COARSE, SCRUB, PLANT }
-enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS, SPRUCE, LARCH, ALDER, REDCEDAR, SIBERIAN_CEDAR }
+enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS, SPRUCE, LARCH, ALDER, REDCEDAR, SIBERIAN_CEDAR, MAPLE }
 ## INSTANCE_CUSTOM.x в distant_plant.gdshader. Номер формы остаётся ключом меша.
 enum PlantClass { TREE, BUSH, SCRUB, GRASS }
 const PARTS := ["f", "c", "s", "p"]
@@ -126,6 +126,7 @@ static func _form(kind: int) -> int:
 		Biomes.T_ALDER: return Form.ALDER
 		Biomes.T_WESTERN_REDCEDAR: return Form.REDCEDAR
 		Biomes.T_SIBERIAN_CEDAR: return Form.SIBERIAN_CEDAR
+		Biomes.T_MAPLE: return Form.MAPLE
 		Biomes.T_ACACIA: return Form.UMBRELLA
 		Biomes.T_PALM: return Form.PALM
 		_: return Form.BROADLEAF
@@ -140,6 +141,9 @@ static func _add_woody(raw: Array, plants: Dictionary, kind: int, variant: int, 
 	var color := tint(kind, variant, at.x / TILE, at.z / TILE)
 	var is_bush := kind == Biomes.T_BUSH or kind == Biomes.T_MUGO
 	var r := radius * (1.15 if kind == Biomes.T_MUGO else 1.0)
+	if kind == Biomes.T_MAPLE:
+		# The planting radius measures spacing, while the horizontal limbs overhang it.
+		r *= 1.65
 	if _plant_hash(at, 461) < PLANT_SHARE:
 		# Open up the outline on the last LOD. Cards carry the gaps in the leaves.
 		var age := variant / 3 if ForestModels.has_ages(kind) else ForestModels.ADULT_AGE
@@ -460,6 +464,15 @@ static func _plant_mesh(form: int) -> ArrayMesh:
 				var angle := i * PI / 3.0
 				_card(st, Vector3(-0.22, 0.65, 0), angle, Vector2(0.73, 0.30), 0.67, 1.0)
 				_card(st, Vector3(0.29, 0.78, 0.05), angle + 0.26, Vector2(0.66, 0.27), 0.68, 1.0)
+		Form.MAPLE:
+			_stem(st, 0.71, 0.081, 0.33)
+			for side: float in [-1.0, 1.0]:
+				_card(st, Vector3(0.13 * side, 0.58, 0), 0.1, Vector2(0.045, 0.21), 0.35, 0.0, 0.0, Vector3(side * 0.48, 0, side * 0.17))
+				for i in 2:
+					var y := 0.70 + side * 0.06
+					_card(st, Vector3(side * 0.46, y, side * 0.16), 0.29 + i * 1.56, Vector2(0.71, 0.21), 0.64, 1.0, 0.42)
+			for i in 3:
+				_card(st, Vector3(-0.04, 0.87, -0.04), float(i) * PI / 3.0, Vector2(0.69, 0.155), 0.72, 1.0, 0.52)
 		Form.CONIFER, Form.SCRUB_PINE:
 			_stem(st, 0.82, 0.055)
 			for i in 3:
@@ -611,7 +624,8 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 				if w.template_id == WorldTemplate.EXPEDITION_ID:
 					var stand := smoothstep(0.0, 1.0, site_cover)
 					var sun := clampf(0.5 - (f.elev[index + side] - f.elev[index - side]) * 15.0, 0.0, 1.0)
-					kind = StageVegetation.expedition_kind(kind, f.biome[index], v, f.elev[index], f.moist[index], f.dw[index], sun, stand)
+					kind = StageVegetation.expedition_kind(kind, f.biome[index], v, f.elev[index], f.moist[index], f.dw[index], sun, stand,
+						f.slope[index], float(f.rock[index]) / 255.0)
 				var scale := lerpf(0.65, 1.2, site_cover) * lerpf(0.84, 1.13, u)
 				var radius: float = Biomes.CROWN_RADIUS[kind] * TILE * scale
 				var height := _nominal_height(kind) * scale

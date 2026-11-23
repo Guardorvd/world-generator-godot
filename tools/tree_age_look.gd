@@ -9,7 +9,7 @@ extends SceneTree
 
 const OUT := "res://.godot/tree_age"
 const EXPEDITION_NAMES := {Biomes.T_SPRUCE: "spruce", Biomes.T_LARCH: "larch", Biomes.T_ALDER: "alder",
-	Biomes.T_WESTERN_REDCEDAR: "western_redcedar", Biomes.T_SIBERIAN_CEDAR: "siberian_cedar"}
+	Biomes.T_WESTERN_REDCEDAR: "western_redcedar", Biomes.T_SIBERIAN_CEDAR: "siberian_cedar", Biomes.T_MAPLE: "maple"}
 const NAMES := {Biomes.T_PINE: "pine", Biomes.T_BIRCH: "birch", Biomes.T_OAK: "oak", Biomes.T_SNOWPINE: "snowpine", Biomes.T_ROWAN: "rowan", Biomes.T_MUGO: "mugo"}
 var camera: Camera3D
 var stand: Node3D
@@ -73,16 +73,19 @@ func run() -> void:
 		_clear()
 		# [определение, подпись]
 		var row: Array = []
-		if expedition:
+		if kind == Biomes.T_MAPLE:
+			row.append([ForestModels.definition(Biomes.T_OAK, 0), "дуб", Biomes.T_OAK])
+			row.append([ForestModels.definition(Biomes.T_WESTERN_REDCEDAR, 0), "западный кедр", Biomes.T_WESTERN_REDCEDAR])
+		elif expedition:
 			var analog := Biomes.T_ROWAN if kind == Biomes.T_ALDER else Biomes.T_PINE
 			row.append([ForestModels.definition(analog, 0), "рябина" if kind == Biomes.T_ALDER else "сосна", analog])
 		elif before != null:
 			for v in [0, 2]:
 				row.append([before.definition(kind, v), "было %d" % v])
+		var lead := row.size()
 		for v: int in ([4, 5, 0, 1, 2, 3, 6, 7] if ForestModels.has_ages(kind) else [0, 1, 2, 3]):
 			var age := ForestModels.age_of(v) if ForestModels.has_ages(kind) else 0
 			row.append([ForestModels.definition(kind, v), ["взрослая", "молодая", "старая"][age] + " %d" % v])
-		var lead := 1 if expedition else (2 if before != null else 0)
 		var x := 0.0
 		var prev_r := 0.0
 		var spots: Array[float] = []
@@ -113,11 +116,21 @@ func run() -> void:
 		camera.fov = 75.0
 		camera.look_at_from_position(Vector3(adult_at - 3.0, 1.6, 7.0), Vector3(adult_at, minf(8.0, top * 0.72), -1.0))
 		await _shot("%s_eye" % names[kind])
+		if kind == Biomes.T_MAPLE:
+			var old_at := spots[-1]
+			camera.fov = 65.0
+			camera.look_at_from_position(Vector3(old_at - 2.0, 2.3, 6.5), Vector3(old_at + 1.2, 4.3, 0))
+			await _shot("maple_bark")
+			camera.fov = 55.0
+			camera.look_at_from_position(Vector3(adult_at - 4.0, 10.0, 10.0), Vector3(adult_at, 12.7, 0))
+			await _shot("maple_leaves")
 		if expedition:
 			camera.fov = 49.0
 			camera.look_at_from_position(Vector3(center - dist * 0.42, top * 0.62, dist * 0.74), Vector3(center, top * 0.45, 0))
 			await _shot("%s_angle" % names[kind])
 			sun.rotation_degrees = Vector3(-11, -61, 0)
+			if kind == Biomes.T_MAPLE:
+				await _shot("maple_low_lod0")
 			for level in [1, 2]:
 				_clear()
 				for idx in row.size():

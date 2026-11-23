@@ -44,16 +44,18 @@ const T_LARCH := 15
 const T_ALDER := 16
 const T_WESTERN_REDCEDAR := 17
 const T_SIBERIAN_CEDAR := 18
-const EXPEDITION_TREES := [T_SPRUCE, T_LARCH, T_ALDER, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR]
+const T_MAPLE := 19
+const EXPEDITION_TREES := [T_SPRUCE, T_LARCH, T_ALDER, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_MAPLE]
 const EXPEDITION_CROWN := {
 	T_SPRUCE: Color("426e48"), T_LARCH: Color("88a451"), T_ALDER: Color("689343"),
 	T_WESTERN_REDCEDAR: Color("416e46"), T_SIBERIAN_CEDAR: Color("4b7952"),
+	T_MAPLE: Color("6b963f"),
 }
 
 # Приблизительный радиус кроны/объекта в клетках (клетка 4 м), по Models.
 # Общий для размещения и оценки полога; масштаб экземпляра применяется отдельно.
 # 11.11.2026: высокий лес — дуб, сосна, снежная ель и берёза в номинальном размере (ForestModels.NOMINAL).
-const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.68, 0.52, 0.85, 0.73, 0.74, 1.07, 1.10]
+const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.68, 0.52, 0.85, 0.73, 0.74, 1.07, 1.10, 1.22]
 # Поля записи биома (индекс в массиве = номер биома):
 #   name       — название для интерфейса
 #   color      — цвет на карте и в текстуре рельефа, [r, g, b]

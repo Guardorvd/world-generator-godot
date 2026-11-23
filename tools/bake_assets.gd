@@ -36,6 +36,7 @@ func _initialize() -> void:
 	catalog.textures.append(ImageTexture.create_from_image(img))
 	catalog.textures.append(ImageTexture.create_from_image(nrm))
 	catalog.textures.append(ForestModels._texture(true, false, true))
+	catalog.textures.append(ForestModels.maple_texture())
 
 	# Проверка и сборка моделей поселений из .glb + общий атлас и мелкие детали.
 	if not _check_bad_glb_rejection():

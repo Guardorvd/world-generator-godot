@@ -17,7 +17,8 @@ const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска го�
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
 const ARRIVAL_TREE_RADIUS := 128.0
-const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO] + Biomes.EXPEDITION_TREES # виды без ствола на дальнем уровне
+const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO,
+	Biomes.T_SPRUCE, Biomes.T_LARCH, Biomes.T_ALDER, Biomes.T_WESTERN_REDCEDAR, Biomes.T_SIBERIAN_CEDAR]
 const FAR_FORM_R := 24.0 # м: дальше от центра раскладки мох, папоротник, корни и камни рисуются упрощённой формой
 ## 15.0: на самом дальнем уровне все силуэты вида одного чанка рисуются одним узлом с мешом первого силуэта
 ## (высота выровнена по ряду Y): у дерева за 160 м силуэт различим меньше, чем стоит лишний draw call.
@@ -122,6 +123,7 @@ const WIND := {
 	Biomes.T_ALDER: [0.13, 0.017, 0.88, 0.75, 0.25],
 	Biomes.T_WESTERN_REDCEDAR: [0.12, 0.013, 0.64, 0.73, 0.18],
 	Biomes.T_SIBERIAN_CEDAR: [0.12, 0.009, 0.67, 0.73, 0.13],
+	Biomes.T_MAPLE: [0.23, 0.044, 0.79, 0.74, 0.38],
 	Biomes.T_PALM: [0.3, 0.08, 0.7, 0.8, 0.35],
 	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.65, 0.25],
 	Biomes.T_ACACIA: [0.1, 0.03, 0.7, 0.7, 0.25],

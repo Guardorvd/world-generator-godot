@@ -18,11 +18,13 @@ const OLD_AGE := 2
 ## масштаб экземпляра = obj_s / ref, поэтому obj_s — линейный размер дерева независимо от возрастной формы.
 const NOMINAL := {Biomes.T_PINE: 19.0, Biomes.T_BIRCH: 16.0, Biomes.T_OAK: 14.5, Biomes.T_SNOWPINE: 12.0, Biomes.T_ROWAN: 9.5, Biomes.T_MUGO: 2.2,
 	Biomes.T_SPRUCE: 26.0, Biomes.T_LARCH: 22.0, Biomes.T_ALDER: 8.0,
-	Biomes.T_WESTERN_REDCEDAR: 30.0, Biomes.T_SIBERIAN_CEDAR: 24.0}
+	Biomes.T_WESTERN_REDCEDAR: 30.0, Biomes.T_SIBERIAN_CEDAR: 24.0, Biomes.T_MAPLE: 22.0}
+const MAPLE_TEXTURE := 6
 static var _leaf_texture: Texture2D
 static var _pinnate_texture: Texture2D
 static var _bark_texture: Texture2D
 static var _needle_texture: Texture2D
+static var _maple_leaf_texture: Texture2D
 static var baking := false # authoring tool only
 
 
@@ -62,6 +64,8 @@ static func definition(kind: int, variant: int) -> Dictionary:
 		return _mugo(variant)
 	if kind == Biomes.T_ALDER:
 		return _alder(variant)
+	if kind == Biomes.T_MAPLE:
+		return _maple(variant)
 	if kind in Biomes.EXPEDITION_TREES:
 		return _expedition_conifer(kind, variant)
 	return _conifer(kind, variant)
@@ -203,6 +207,71 @@ static func _alder(variant: int) -> Dictionary:
 static func _expedition_colors(kind: int) -> Array:
 	var color: Color = Biomes.EXPEDITION_CROWN[kind]
 	return [color * 0.94, color, color * 1.06]
+
+
+## Низкая неровная развилка и пологие рукава, вдоль которых лежат отдельные листовые веера.
+static func _maple(variant: int) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 19179 + variant * 431
+	var age := age_of(variant)
+	var old := age == OLD_AGE
+	var young := age == YOUNG_AGE
+	var form := variant if age == ADULT_AGE else variant % AGE_FORMS
+	var height: float = ([7.0, 8.8] if young else ([27.0, 25.2] if old else [19.2, 23.4, 20.5, 21.8]))[form]
+	var fork: float = ([0.48, 0.40] if young else ([0.34, 0.43] if old else [0.36, 0.57, 0.41, 0.33]))[form]
+	var reach: float = ([0.18, 0.22] if young else ([0.28, 0.31] if old else [0.31, 0.20, 0.29, 0.27]))[form]
+	var radius: float = ([0.16, 0.20] if young else ([0.96, 0.87] if old else [0.64, 0.55, 0.67, 0.62]))[form]
+	var angle := rng.randf() * TAU
+	var lean := Vector3(cos(angle), 0, sin(angle))
+	var bow: float = height * [0.052, 0.037, 0.142, 0.067][form] * (1.2 if old else 1.0)
+	var bark := Color("746656") if not old else Color("625748")
+	var trunk := _rowan_trunk(Vector3(0, -0.04, 0), lean, height * fork, bow, height * 0.037, angle, 7)
+	var spine := trunk.duplicate()
+	var moss := (0.80 if form == 0 else 0.58) if old else 0.0
+	var branches: Array = [[spine, radius, radius * 0.12, bark, false, false, moss]]
+	_roots(branches, rng, 6 if old else (3 if young else 5), Vector2(radius * 1.7, radius * 3.35),
+		radius * (1.9 if old else 1.5), radius * 0.14, radius * 0.45, bark.lerp(Color("53603d"), moss * 0.43))
+	var foliage: Array = []
+	var arms := 4 if old or form == 3 else 3
+	for arm in arms:
+		var a := angle + arm * 2.18 + rng.randf_range(-0.22, 0.22)
+		var outward := Vector3(cos(a), 0, sin(a))
+		var side := outward.cross(Vector3.UP)
+		var start: Vector3 = _path_at(trunk, 1.0 - 0.085 * arm)
+		var lateral := rng.randf_range(0.89, 1.14)
+		if form == 2:
+			lateral *= 1.3 if arm % 2 == 0 else 0.68
+		var span := reach * height * lateral * (0.48 if arm == 0 else 1.0)
+		var finish_y := height * (0.92 if arm == 0 else rng.randf_range(0.65, 0.83))
+		var rise := finish_y - start.y
+		var elbow := start + outward * span * 0.48 + Vector3.UP * rise * (0.50 if arm == 0 else 0.18)
+		var shoulder := start + outward * span * 0.78 + side * span * 0.14 + Vector3.UP * rise * 0.58
+		var tip := start + outward * span + side * span * 0.06 + Vector3.UP * rise
+		var path: Array[Vector3] = [start, elbow, shoulder, tip]
+		if arm == 0:
+			# One continuous trunk through the fork, with no open rings at the joint.
+			spine.append_array([elbow, shoulder, tip])
+		else:
+			branches.append([path, radius * 0.39, radius * 0.12, bark, false, false, moss * 0.73])
+		var forks := 3 if young else 5
+		for j in forks:
+			var t := lerpf(0.38, 0.92, float(j) / (forks - 1))
+			var origin := _path_at(path, t)
+			var lean_side := -1.0 if j % 2 == 0 else 1.0
+			var branch_dir := (side * lean_side + outward * 0.48).normalized()
+			var length := height * rng.randf_range(0.065, 0.126) * (1.12 if old else 1.0)
+			var end := origin + branch_dir * length + Vector3.UP * length * (0.53 if arm == 0 else 0.28)
+			var join := origin.lerp(end, 0.50) - Vector3.UP * length * 0.09
+			var width := radius * (0.34 - t * 0.13)
+			branches.append([[origin, join, end], width, radius * 0.041, bark, false, j > 1, moss * 0.58])
+			var spray_size := Vector3(0.105, 0.050, 0.091) * height * rng.randf_range(0.82, 1.15)
+			var offset := Vector3.UP * spray_size.y * 0.63
+			foliage.append([end + offset, spray_size, atan2(branch_dir.z, branch_dir.x), rng.randf() * TAU])
+			foliage.append([join + offset * 1.23 + outward * length * 0.24,
+				spray_size * Vector3(0.78, 0.83, 0.73), a + lean_side * 0.67, rng.randf() * TAU])
+		foliage.append([tip + Vector3.UP * height * 0.03, Vector3(0.106, 0.061, 0.092) * height, a, rng.randf() * TAU, true])
+	return _leafy(branches, foliage, _expedition_colors(Biomes.T_MAPLE), false,
+		_ref(Biomes.T_MAPLE, age, height), maple_texture())
 
 
 ## Хвойные. Взрослая сосна — четыре узнаваемых характера (высокий свод, строевая, густая коническая, ветровая)
@@ -1055,6 +1124,48 @@ static func _texture(leaves: bool, needles: bool = false, pinnate: bool = false)
 	return cached
 
 
+## Один атлас групп пятилопастных листьев для всех форм и уровней клёна.
+static func maple_texture() -> Texture2D:
+	if not baking:
+		return preload("res://scripts/render/asset_catalog.gd").get_catalog().textures[MAPLE_TEXTURE]
+	if _maple_leaf_texture != null:
+		return _maple_leaf_texture
+	var outline := PackedVector2Array([
+		Vector2(0, 0.68), Vector2(-0.24, 0.49), Vector2(-0.65, 0.54), Vector2(-0.79, 0.27),
+		Vector2(-0.58, 0.15), Vector2(-0.91, -0.01), Vector2(-1.03, -0.44), Vector2(-0.62, -0.39),
+		Vector2(-0.38, -0.22), Vector2(-0.45, -0.52), Vector2(-0.20, -0.68), Vector2(0, -1.0),
+		Vector2(0.22, -0.70), Vector2(0.41, -0.50), Vector2(0.36, -0.21), Vector2(0.63, -0.40),
+		Vector2(0.99, -0.46), Vector2(0.82, -0.03), Vector2(0.56, 0.18), Vector2(0.78, 0.28),
+		Vector2(0.61, 0.51), Vector2(0.22, 0.48)])
+	var image := Image.create(128, 128, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.84, 0.84, 0.81, 0))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 71143
+	for leaf in 48:
+		var theta := float(leaf % 7) * TAU / 7.0
+		var orbit := 26.0 + (leaf % 4) * 3.0
+		var center := Vector2(64, 64) + Vector2.from_angle(theta) * orbit
+		center += Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(1.0, 18.0)
+		if leaf % 7 == 0:
+			center = Vector2(64, 64).lerp(center, 0.32)
+		var angle := rng.randf() * TAU
+		var size := rng.randf_range(11.3, 17.3)
+		var radius := ceili(size * 1.08)
+		var tone := rng.randf_range(0.69, 0.93)
+		for y in range(maxi(0, floori(center.y) - radius), mini(128, ceili(center.y) + radius)):
+			for x in range(maxi(0, floori(center.x) - radius), mini(128, ceili(center.x) + radius)):
+				var p := (Vector2(x + 0.5, y + 0.5) - center).rotated(angle) / size
+				if not Geometry2D.is_point_in_polygon(p, outline):
+					continue
+				var vein := (Vector2(0, 0.53) - p).angle()
+				var rib := pow(absf(cos((vein + PI * 0.5) * 5.0)), 17.0)
+				var shade := clampf(tone + 0.10 * rib - 0.10 * p.y + 0.045 * WGRandom.hash2(x, y, 931), 0.63, 1.0)
+				image.set_pixel(x, y, Color(shade, shade, shade * 0.97, 1.0))
+	image.generate_mipmaps()
+	_maple_leaf_texture = ImageTexture.create_from_image(image)
+	return _maple_leaf_texture
+
+
 ## Явные LOD для растворения в VegetationLayer. Каждый уровень хранится только один раз.
 ## Ближний меш владеет двумя дальними, обратных ссылок и циклов ресурсов нет.
 static func _mesh(branches: Array, foliage: Array, conifer: bool, berries: Array = [], crown_lods: Array = []) -> ArrayMesh:
@@ -1204,7 +1315,7 @@ static func _tube(st: SurfaceTool, data: Array, segments: int, level: int, first
 		if (path.size() - 1) % 2 != 0:
 			mid_path.append(path[-1])
 		path = mid_path
-	elif level == 2 and first > 0 and path.size() > 2:
+	elif level == 2 and first > 0 and path.size() > 2 and data.size() <= 6:
 		path = [path[0], path[-1]]
 	elif level == 2 and path.size() > 3:
 		path = [path[0], path[path.size() / 2], path[-1]]
@@ -1228,6 +1339,12 @@ static func _tube(st: SurfaceTool, data: Array, segments: int, level: int, first
 					color = Color("524d45")
 				elif sin(p.y * 19.0 + (j % segments) * 4.3) > 0.68:
 					color = Color("4d4942")
+			if data.size() > 6 and float(data[6]) > 0.0:
+				var patch := smoothstep(-0.45, 0.8, sin(p.y * 1.48 + p.x * 1.21) * cos(p.z * 1.8 - a * 2.0))
+				var low := 1.0 - smoothstep(0.15, 3.1, p.y)
+				var shoulder := smoothstep(0.1, 0.82, normal.y)
+				var cover := float(data[6]) * patch * maxf(low, shoulder)
+				color = color.lerp(Color("435a32"), cover)
 			color.a = 1.0
 			# Кора толстого ствола повторяется по окружности чаще, чтобы рисунок не растягивался.
 			st.set_uv(Vector2(a / TAU * maxf(2.0, roundf(TAU * data[1] / 1.4)), p.y * 0.65))

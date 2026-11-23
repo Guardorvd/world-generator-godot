@@ -11,6 +11,7 @@ extends SceneTree
 ##   -- --shots            3D-снимки долины в настоящей сцене GameWorld (нужно окно; короткий мир 256×768)
 ##   -- --phase8          кадры растительности из GameWorld; --short-expedition для короткого плана
 ##   -- --phase8-drive    отдельный проезд с замером кадров на том же сохранённом плане
+##   -- --maple           клён на лесной дороге и влажной террасе в GameWorld
 ##   -- --shots-p3         3D-снимки фазы 3: старт, берег, лесной отрог, финиш с причалом (нужно окно)
 ##   -- --verify-phase4    проверка меню, большой карты M (масштаб вокруг игрока), доски заданий/альбома и сохранения Типа 2 (нужно окно)
 ## Лимит 240 с.
@@ -48,6 +49,7 @@ func _arg(name: String, fallback: String = "") -> String:
 
 func _run() -> void:
 	var args := OS.get_cmdline_user_args()
+	var maple := args.has("--maple")
 	var tag := _arg("--tag", "")
 	var short_dev := args.has("--short")
 	var explicit_h := int(_arg("--height", "0"))
@@ -69,7 +71,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--phase8") and not args.has("--phase8-drive") and not args.has("--verify-phase4") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -98,8 +100,8 @@ func _run() -> void:
 	if args.has("--shots-p3"):
 		ok = await _capture_phase3_shots(seeds[0], tag) and ok
 
-	if args.has("--phase8") or args.has("--phase8-drive"):
-		ok = await _capture_phase3_shots(seeds[0], tag, true, args.has("--phase8-drive")) and ok
+	if args.has("--phase8") or args.has("--phase8-drive") or maple:
+		ok = await _capture_phase3_shots(seeds[0], tag, true, args.has("--phase8-drive"), maple) and ok
 
 	if args.has("--verify-phase4"):
 		ok = await _verify_phase4(seeds[0], tag) and ok
@@ -516,7 +518,7 @@ func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
 	return img
 
 
-func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, drive_only := false) -> bool:
+func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, drive_only := false, maple := false) -> bool:
 	if DisplayServer.get_name() == "headless":
 		push_error("PHASE3_SHOTS: window required (do not pass --headless)")
 		return false
@@ -567,7 +569,11 @@ func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, driv
 		print("PHASE8 OBJECTS ", counts)
 		print("PHASE8 PARITY ", StageVegetation.verify_report)
 		var report_ok: bool = StageVegetation.verify_report.is_empty() or StageVegetation.verify_report[0].same
-		var captured := await _phase8_capture(gw, road_pts, tag, drive_only)
+		var captured: bool
+		if maple:
+			captured = await _maple_capture(gw, road_pts, tag)
+		else:
+			captured = await _phase8_capture(gw, road_pts, tag, drive_only)
 		GameContext.scope.cache.wait_writes()
 		main._free_game()
 		main.queue_free()
@@ -644,6 +650,106 @@ func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, driv
 	main.queue_free()
 	await process_frame
 	return true
+
+
+func _maple_capture(gw: GameWorld, road: Array, tag: String) -> bool:
+	var w := gw.world
+	var maples: Array[int] = []
+	var ages := [0, 0, 0]
+	var max_elev := 0.0
+	var min_water := INF
+	for o in w.obj_count:
+		if w.obj_k[o] != Biomes.T_MAPLE:
+			continue
+		maples.append(o)
+		ages[w.obj_v[o] / 3] += 1
+		var cell := floori(w.obj_y[o]) * w.W + floori(w.obj_x[o])
+		max_elev = maxf(max_elev, w.elev[cell])
+		min_water = minf(min_water, w.dist_water[cell])
+	print("MAPLE SITES count=", maples.size(), " ages=", ages, " max_elev=", max_elev, " min_water_cells=", min_water)
+	if maples.is_empty() or road.size() < 16:
+		push_error("MAPLE: the seed needs maples and a generated road")
+		return false
+	var tile := GameConfig.TILE
+	var road_line := PackedVector2Array()
+	for p: Dictionary in road:
+		road_line.append(Vector2(p.x, p.y) * tile)
+	var scores := {road = -INF, grove = -INF, old = -INF}
+	var sites := {}
+	var near_road := 0
+	for o: int in maples:
+		var at := Vector2(w.obj_x[o], w.obj_y[o]) * tile
+		var road_index := 0
+		var distance := INF
+		for k in range(4, road_line.size() - 4):
+			var d := at.distance_squared_to(road_line[k])
+			if d < distance:
+				distance = d
+				road_index = k
+		distance = sqrt(distance)
+		var cluster := 0.0
+		for neighbor: int in maples:
+			var delta := (Vector2(w.obj_x[neighbor], w.obj_y[neighbor]) * tile).distance_to(at)
+			if delta > 0.0 and delta < 28.0:
+				cluster += 1.0 - delta / 32.0
+		var size := float(w.obj_s[o])
+		var age: int = w.obj_v[o] / 3
+		if distance < 12.0 and age != ForestModels.YOUNG_AGE:
+			near_road += 1
+		var candidates := {
+			road = size * 2.2 - absf(distance - 6.5) * 0.57,
+			grove = cluster + size * 0.3 - maxf(0.0, distance - 32.0) * 0.015,
+		}
+		if age == ForestModels.OLD_AGE:
+			candidates.old = size - distance * 0.006
+		for name: String in candidates:
+			if candidates[name] > scores[name]:
+				sites[name] = [o, at, road_index, distance]
+				scores[name] = candidates[name]
+	print("MAPLE ROAD mature_within_12m=", near_road, " selected=", sites)
+	var ok := true
+	for name: String in sites:
+		var site: Array = sites[name]
+		var o: int = site[0]
+		var at: Vector2 = site[1]
+		var k: int = site[2]
+		var p := road_line[k]
+		var dir := (at - p).normalized()
+		var road_dir := (road_line[k + 3] - road_line[k - 3]).normalized()
+		if name == "road":
+			var eye := p - road_dir * 8.0
+			ok = await _maple_shot(gw, "road", tag, eye, 1.65, at + road_dir * 6.0, 4.5, 69.0, true) and ok
+			ok = await _maple_shot(gw, "adult", tag, p - road_dir * 21.0, 3.0, at, 10.0, 58.0, false) and ok
+			ok = await _maple_shot(gw, "middle", tag, p - dir * 67.0, 22.0, at, 11.0, 43.0, true) and ok
+			ok = await _maple_shot(gw, "distant", tag, p - dir * 350.0, 132.0, at, 15.0, 25.0, true) and ok
+		elif name == "old":
+			ok = await _maple_shot(gw, "old", tag, at - dir * 6.5, 1.8, at, 3.5, 67.0, true) and ok
+		else:
+			ok = await _maple_shot(gw, "grove", tag, at - dir * 23.0 + road_dir * 7.0, 4.0, at, 7.0, 73.0, true) and ok
+		print("MAPLE CAMERA ", name, " age=", w.obj_v[o] / 3, " scale=", w.obj_s[o], " road_m=", site[3])
+	return ok
+
+
+func _maple_shot(gw: GameWorld, name: String, tag: String, pos: Vector2, height: float, focus: Vector2,
+		focus_height: float, fov: float, stream: bool) -> bool:
+	var h := gw.heights
+	var eye := Vector3(pos.x, h.ground_at(pos.x, pos.y) + height, pos.y)
+	var target := Vector3(focus.x, h.ground_at(focus.x, focus.y) + focus_height, focus.y)
+	if stream:
+		gw.player.x = pos.x
+		gw.player.z = pos.y
+		gw.player.feet = h.ground_at(pos.x, pos.y)
+		gw.stream_coordinator.force_terrain(eye, GameWorld.NEAR)
+		gw.stream_coordinator.force_vegetation(eye)
+	gw.camera.fov = fov
+	gw.camera.look_at_from_position(eye, target, Vector3.UP)
+	for _f in 12:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var out := OUT.path_join("expedition_maple_%s%s.jpg" % [name, tag])
+	var saved := root.get_texture().get_image().save_jpg(ProjectSettings.globalize_path(out), 0.92) == OK
+	print("MAPLE SHOT ", out, " eye=", eye, " target=", target)
+	return saved
 
 
 func _phase8_capture(gw: GameWorld, road: Array, tag: String, drive_only: bool) -> bool:

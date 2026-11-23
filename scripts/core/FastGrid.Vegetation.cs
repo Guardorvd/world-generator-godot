@@ -13,7 +13,7 @@ public partial class FastGrid
 	private const int BBeach = 4, BDesert = 5, BSavanna = 6, BSteppe = 7, BGrass = 8, BForest = 9, BJungle = 10,
 		BSwamp = 11, BTaiga = 12, BTundra = 13, BSnow = 14, BRock = 15, BPeak = 16;
 	private const int TOak = 0, TPine = 1, TPalm = 2, TBush = 4, TRock = 6, TSnowpine = 7, TBirch = 8, TReed = 10,
-		TRowan = 12, TMugo = 13, TSpruce = 14, TLarch = 15, TAlder = 16, TWesternRedcedar = 17, TSiberianCedar = 18;
+		TRowan = 12, TMugo = 13, TSpruce = 14, TLarch = 15, TAlder = 16, TWesternRedcedar = 17, TSiberianCedar = 18, TMaple = 19;
 	// ForestModels ages
 	private const int AdultAge = 0, YoungAge = 1, OldAge = 2;
 	// StageVegetation
@@ -330,7 +330,7 @@ public partial class FastGrid
 		return best;
 	}
 
-	private static bool HasAges(int kind) => kind == TPine || kind == TBirch || kind == TOak || kind == TRowan || kind is >= TSpruce and <= TSiberianCedar;
+	private static bool HasAges(int kind) => kind is TPine or TBirch or TOak or TRowan or TSpruce or TLarch or TAlder or TWesternRedcedar or TSiberianCedar or TMaple;
 
 	/// <summary>StageVegetation.clear_of_path</summary>
 	private static bool VegClearOfPath(VegInput f, double x, double y, int kind, double sc, int age)
@@ -339,7 +339,7 @@ public partial class FastGrid
 		bool hasTrunk = !double.IsNaN(trunk);
 		double need = (hasTrunk ? trunk : 0.0) * sc;
 		if (kind == TSnowpine || kind == TMugo || kind == TAlder || (age == YoungAge && HasAges(kind)))
-			need += VegLowCrown * f.Crown[kind] * sc * f.Tile;
+			need += (kind == TMaple ? 0.55 : VegLowCrown) * f.Crown[kind] * sc * f.Tile;
 		else if (!hasTrunk)
 			need = 0.5 * f.Crown[kind] * sc * f.Tile;
 		return VegClearanceAt(f.DistPath, f.W, x, y, f.Tile) >= need;
@@ -379,12 +379,13 @@ public partial class FastGrid
 	private static bool VegReedy(int bi) => bi == BGrass || bi == BForest || bi == BSwamp || bi == BTaiga || bi == BSteppe || bi == BSavanna;
 
 	/// <summary>StageVegetation.tree_form: (размер как float32 из Vector2, возрастной класс)</summary>
-	private static (float Size, int Cls) VegTreeForm(double age, double interior, double line, double moist, double exposed, double r)
+	private static (float Size, int Cls) VegTreeForm(double age, double interior, double line, double moist, double exposed, double r, bool maple)
 	{
 		double r2 = VegPosMod(r * 9.73, 1.0);
 		double r3 = VegPosMod(r * 31.7 + 0.37, 1.0);
 		double youngStand = 1.0 - VegSs(0.08, 0.24, age);
 		double pOld = (1.0 - youngStand) * 0.032 * VegSs(0.4, 0.85, age);
+		if (maple) pOld += 0.18 * VegSs(0.24, 0.66, age);
 		double pYoung = youngStand * 0.9 + (1.0 - youngStand) * (0.095 + 0.15 * (1.0 - interior));
 		double pSecond = (1.0 - youngStand) * 0.14;
 		double canopy = VegLerp(0.86, 1.06, age) * (0.82 + 0.18 * interior) * (0.85 + 0.15 * moist);
@@ -415,7 +416,8 @@ public partial class FastGrid
 
 	/// <summary>StageVegetation._kind</summary>
 	// StageVegetation.expedition_kind. Shares one roll across the eligible species.
-	private static int VegExpeditionKind(int kind, int bi, double roll, double elev, double moist, double water, double light, double stand)
+	private static int VegExpeditionKind(int kind, int bi, double roll, double elev, double moist, double water, double light, double stand,
+		double slope, double exposed)
 	{
 		if (bi is not (BForest or BTaiga or BGrass or BSwamp) || kind is TRock or TMugo or TReed)
 			return kind;
@@ -429,7 +431,19 @@ public partial class FastGrid
 		if (roll < cedar) return TWesternRedcedar;
 		roll -= cedar;
 		double spruce = (0.07 + 0.53 * wet) * (0.73 + 0.27 * stand) * (1.13 - 0.55 * light);
-		if (roll < spruce) return TSpruce;
+		if (roll < spruce)
+		{
+			if (bi is BForest or BTaiga)
+			{
+				double terrace = VegSs(1.5, 4.0, water) * VegLerp(1.0, 0.55, VegSs(8.0, 28.0, water));
+				double lowland = 1.0 - VegSs(0.085, 0.19, elev);
+				double shelter = (1.0 - VegSs(0.38, 0.82, slope)) * (1.0 - VegSs(0.13, 0.50, exposed));
+				double patch = VegSs(0.28, 0.66, stand) * (0.65 + 0.35 * light);
+				double maple = 0.37 * terrace * lowland * shelter * patch * VegSs(0.50, 0.79, moist);
+				if (roll < spruce * maple) return TMaple;
+			}
+			return TSpruce;
+		}
 		roll -= spruce;
 		double larch = (0.08 + 0.48 * cool) * (0.5 + 0.5 * light) * (1.0 - 0.68 * wet) * (1.32 - 0.65 * stand);
 		if (roll < larch) return TLarch;
@@ -609,13 +623,13 @@ public partial class FastGrid
 						double rKind = rng.Next();
 						int kind = roll >= mugoFrom ? TMugo : VegKind(f, bi, rKind, e, communityMoist, sl, dw, f.Temp[i], light, interior, stand, exposed);
 						if (f.Expedition)
-							kind = VegExpeditionKind(kind, bi, VegHash2(x, y, seed ^ (8179 + k)), e, communityMoist, dw, light, stand);
+							kind = VegExpeditionKind(kind, bi, VegHash2(x, y, seed ^ (8179 + k)), e, communityMoist, dw, light, stand, sl, exposed);
 						int v = (int)Math.Floor(rng.Next() * 3);
 						double sc;
 						int treeAge = AdultAge;
 						if (f.BTree[kind] != 0)
 						{
-							var form = VegTreeForm(age, interior, line, moistI, exposed, rng.Next());
+							var form = VegTreeForm(age, interior, line, moistI, exposed, rng.Next(), kind == TMaple);
 							sc = form.Size;
 							if (kind == TMugo)
 								sc = VegLerp(0.74, 1.30, VegPosMod(form.Size * 7.13, 1.0)) * VegLerp(1.0, 0.76, VegSs(0.28, 0.44, e));
