@@ -27,6 +27,7 @@ extends RefCounted
 
 const StreamPolicy := preload("res://scripts/render/vegetation_stream_policy.gd")
 const Snapshots := preload("res://scripts/render/vegetation_snapshots.gd")
+const ByteLru := preload("res://scripts/core/byte_lru.gd")
 const TILE := GameConfig.TILE
 const STRIDE := 20          # преобразование (12), цвет (4), custom (4) — как у травы
 const SUB := 9              # ячеек на сторону плитки: 4 м / 9 = 0,44 м
@@ -115,9 +116,11 @@ var job_parts_max := {}
 var present_us := 0          # замер: время выкладки квадратов на GPU и их число с запуска
 var present_sectors := 0
 
-var _tiles := {}             # Vector2i -> { id, full, rear }
+var _tiles := {}             # Vector2i -> { id, full, rear, bytes }
 var _tile_y := {}            # Vector2i -> Vector2(мин. и макс. высота)
 var _tile_id := 0
+var _tile_bytes := 0
+var cpu_budget: RefCounted
 var _shown := {}             # квадрат и вид -> опубликованные плитки и история обеих форм
 var _cleanup_at := INF
 var _task := -1
@@ -133,6 +136,9 @@ var _road_revision := -1
 var _job_started := 0
 var _incomplete := false     # прошлая склейка отложила часть новых плиток: следующая — сразу, без ожидания шага
 var _enabled := true
+var use_native_tiles := true
+var _ride: Object = null
+var _ride_rev := -1
 
 
 func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image) -> void:
@@ -248,8 +254,34 @@ func finish() -> void:
 	_out.clear()
 
 
+func _account_tile_bytes(delta: int) -> void:
+	if delta == 0:
+		return
+	_tile_bytes = maxi(0, _tile_bytes + delta)
+	if cpu_budget == null:
+		return
+	if delta > 0:
+		cpu_budget.reserve(delta)
+	else:
+		cpu_budget.release(-delta)
+
+
+func _clear_tiles() -> void:
+	_tiles.clear()
+	_tile_y.clear()
+	_account_tile_bytes(-_tile_bytes)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and _tile_bytes > 0:
+		_account_tile_bytes(-_tile_bytes)
+
+
 func release() -> void:
 	finish()
+	_clear_tiles()
+	_ride = null
+	_ride_rev = -1
 	RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(0.0, 1.0))
 	_publish_forward(Vector2.ZERO, true)
 
@@ -263,8 +295,9 @@ func invalidate(rect: Rect2i) -> void:
 ## Сброс на паузе (смена мира, дальности): без задачи.
 func clear() -> void:
 	finish()
-	_tiles.clear()
-	_tile_y.clear()
+	_clear_tiles()
+	_ride = null
+	_ride_rev = -1
 	_shown.clear()
 	_cleanup_at = INF
 	_reset = false
@@ -400,23 +433,28 @@ func _begin(p: Vector2, lead: Vector2, road_revision: int) -> void:
 	# A committed region already supplies its exact changed rectangle. A revision
 	# without a rectangle still invalidates everything.
 	if _reset or (road_revision != _road_revision and _cuts.is_empty()):
-		_tiles.clear()
-		_tile_y.clear()
+		_clear_tiles()
 		_reset = false
 	_road_revision = road_revision
 	if not _cuts.is_empty():
+		var freed_bytes := 0
 		for key: Vector2i in _tiles.keys():
 			var box := Rect2(Vector2(key) * TILE, Vector2.ONE * TILE)
 			for cut: Rect2 in _cuts:
 				if cut.intersects(box):
+					freed_bytes += int(_tiles[key].get("bytes", 0))
 					_tiles.erase(key)
 					_tile_y.erase(key)
 					break
+		_account_tile_bytes(-freed_bytes)
 		_cuts.clear()
 	_last = p
 	_last_lead = lead
 	_started_clock = stream.clock
 	_job_started = Time.get_ticks_usec()
+	if use_native_tiles and heights != null and (_ride == null or _ride_rev != heights._ground_rev):
+		_ride = heights.ride_snapshot()
+		_ride_rev = heights._ground_rev
 
 
 ## Фоновая задача: плитки капсулы, недостающие досчитываются, буферы склеиваются из кусков.
@@ -464,12 +502,16 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 		var group := WorkerThreadPool.add_group_task(func(index: int) -> void:
 			built[index] = _build_tile(missing[index].x, missing[index].y), missing.size(), BUILD_THREADS, true, "Дернина: плитки")
 		WorkerThreadPool.wait_for_group_task_completion(group)
+		var added_bytes := 0
 		for index in missing.size():
 			var result: Dictionary = built[index]
+			var tile_bytes := ByteLru.size_of(result.parts)
 			_tile_id += 1
-			_tiles[missing[index]] = {id = _tile_id, full = result.parts, rear = []}
+			_tiles[missing[index]] = {id = _tile_id, full = result.parts, rear = [], bytes = tile_bytes}
 			_tile_y[missing[index]] = result.y
 			tiles_built += 1
+			added_bytes += tile_bytes
+		_account_tile_bytes(added_bytes)
 		build_us += Time.get_ticks_usec() - build_began
 	var outs: Array = []        # слой -> квадрат -> набор плиток
 	for n in KINDS * 2:
@@ -513,12 +555,15 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 		capped += 1
 	# Кэш: плитки далеко за капсулой уходят (запас на возврат назад)
 	var keep_d := reach_all + TILE * 0.72 + 28.0
+	var evicted_bytes := 0
 	for key: Vector2i in _tiles.keys():
 		if used.has(key):
 			continue
 		if StreamPolicy.distance_to_coverage(Vector2(key.x + 0.5, key.y + 0.5) * TILE, p, lead) > keep_d:
+			evicted_bytes += int(_tiles[key].get("bytes", 0))
 			_tiles.erase(key)
 			_tile_y.erase(key)
+	_account_tile_bytes(-evicted_bytes)
 	var publish_began := Time.get_ticks_usec()
 	_prepare_publication(outs, p, lead, fade_clock, immediate)
 	var ended := Time.get_ticks_usec()
@@ -533,14 +578,19 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 func _cached_tile(key: Vector2i, rear: bool) -> Dictionary:
 	if not _tiles.has(key):
 		var result := _build_tile(key.x, key.y)
+		var tile_bytes := ByteLru.size_of(result.parts)
 		_tile_id += 1
-		_tiles[key] = {id = _tile_id, full = result.parts, rear = []}
+		_tiles[key] = {id = _tile_id, full = result.parts, rear = [], bytes = tile_bytes}
 		_tile_y[key] = result.y
 		tiles_built += 1
+		_account_tile_bytes(tile_bytes)
 	var tile: Dictionary = _tiles[key]
 	if rear and tile.rear.is_empty():
 		for part: PackedFloat32Array in tile.full:
 			tile.rear.append(_thin_rear(part))
+		var rear_bytes := ByteLru.size_of(tile.rear)
+		tile.bytes = int(tile.get("bytes", 0)) + rear_bytes
+		_account_tile_bytes(rear_bytes)
 	return tile
 
 
@@ -814,6 +864,21 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var tall: float = clampf(0.6 + 0.45 * lush, 0.55, 1.15) * grow
 	var step := TILE / SUB
 	var refine = heights.road_refinement
+	var has_road_patch := false
+	if refine != null:
+		var w_w := w.W
+		var patches: Dictionary = refine.patches
+		has_road_patch = patches.has(k) or (i > 0 and patches.has(k - 1)) \
+			or (j > 0 and patches.has(k - w_w)) or (i > 0 and j > 0 and patches.has(k - w_w - 1))
+	if use_native_tiles and _ride != null and not has_road_patch and (refine != null or path < 2):
+		var fast: Variant = Grid.fast_grid()
+		if fast != null:
+			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r)
+			if res is Dictionary and res.get("ok", false):
+				if not res.get("any", false):
+					return []
+				ys[0] = res.y
+				return res.parts
 	var y_low := INF
 	var y_high := -INF
 	var parts: Array = []

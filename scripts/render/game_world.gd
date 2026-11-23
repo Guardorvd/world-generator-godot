@@ -236,6 +236,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	t = _mark("start_models_ms", t)
 	$Terrain.material_override = services.terrain.material(loaded.terrain_image, loaded.forest_surface)
 	TerrainBuilder.set_cavity($Terrain.material_override, heights)
+	TerrainBuilder.set_community_noise($Terrain.material_override, world)
 	terrain_stream = PlanTerrain.new()
 	terrain_stream.name = "PlanTerrain"
 	$Terrain.add_child(terrain_stream)
@@ -244,6 +245,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	stream_coordinator.terrain_update = terrain_stream.update
 	terrain_stream.frame_budget = stream_coordinator.frame_budget
 	vegetation.frame_budget = stream_coordinator.frame_budget
+	vegetation.cpu_budget = services.cpu_budget
 	stream_coordinator.vegetation_update = vegetation.update
 	stream_coordinator.vegetation_budgeted = vegetation.update_frame
 	# Чанки уже содержат все треугольники. Монолит больше не нужен ни CPU, ни GPU.

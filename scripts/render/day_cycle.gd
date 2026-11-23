@@ -38,6 +38,10 @@ const NIGHT_RATE := 6.0 / 3.15   # солнечных часов за час ц�
 const DAY_RATE := 6.0 / 8.85     # и днём
 const EDGE_RATE := 2.0 * NIGHT_RATE * DAY_RATE / (NIGHT_RATE + DAY_RATE)
 const SOLAR_RATES := [NIGHT_RATE, EDGE_RATE, DAY_RATE, EDGE_RATE, NIGHT_RATE]
+const CLOUD_SHADOW_TEX_SIZE := 256
+
+static var use_cloud_shadow_texture := true
+static var _cloud_shadow_tex: ImageTexture
 
 ## час, зенит, горизонт (= туман), цвет и сила солнца, цвет и сила окружения, выдержка, гало солнца, ночь (звёзды),
 ## цвет облаков; с 7.9 ещё покрытие неба кучевыми облаками, множитель тумана (утренняя дымка), насыщенность
@@ -215,6 +219,23 @@ func _publish_global(parameter: StringName, value: Variant) -> void:
 	RenderingServer.global_shader_parameter_set(parameter, value)
 
 
+static func ensure_cloud_shadow_texture() -> ImageTexture:
+	if not use_cloud_shadow_texture:
+		return null
+	if _cloud_shadow_tex != null:
+		return _cloud_shadow_tex
+	var fast := Grid.fast_grid()
+	if fast == null:
+		return null
+	var bytes: PackedByteArray = fast.BakeCloudShadowNoise(CLOUD_SHADOW_TEX_SIZE)
+	if bytes.size() != CLOUD_SHADOW_TEX_SIZE * CLOUD_SHADOW_TEX_SIZE * 2:
+		return null
+	var img := Image.create_from_data(CLOUD_SHADOW_TEX_SIZE, CLOUD_SHADOW_TEX_SIZE, false, Image.FORMAT_RG8, bytes)
+	_cloud_shadow_tex = ImageTexture.create_from_image(img)
+	RenderingServer.global_shader_parameter_set(&"cloud_shadow_tex", _cloud_shadow_tex)
+	return _cloud_shadow_tex
+
+
 ## В игре передаётся полный ход часов для выбора ночи. Инструменты могут задавать только час суток.
 func apply(hour: float, time: float, full_clock := false) -> void:
 	var s := state(hour)
@@ -292,6 +313,8 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	# Облегчённая проекция: общие ветер, покрытие и сид; силуэты облаков приближённые.
 	var shadow_ofs := Vector2(seed_phase * 0.37, seed_phase * 0.61) * 160.0
 	var shadow_strength := CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75)
+	if shadow_strength > 0.0:
+		ensure_cloud_shadow_texture()
 	_publish_global(&"cloud_shadow", Vector4.ZERO if shadow_strength == 0.0 else
 		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, shadow_strength, cover))
 	var zenith: Color = s[1]

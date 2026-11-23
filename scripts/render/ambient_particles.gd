@@ -106,8 +106,13 @@ func setup(world_data: WorldData, heightfield: Heightfield) -> void:
 	heights = heightfield
 
 
+static var _quad_mesh_cache := {}
+
 ## Меш слоя: count четырёхугольников в начале координат, у каждого своё зерно.
 static func _quads(count: int, salt: int) -> ArrayMesh:
+	var cache_key := "%d:%d" % [count, salt]
+	if _quad_mesh_cache.has(cache_key):
+		return _quad_mesh_cache[cache_key]
 	var rng := RandomNumberGenerator.new()
 	rng.seed = salt
 	var pos := PackedVector3Array()
@@ -133,6 +138,7 @@ static func _quads(count: int, salt: int) -> ArrayMesh:
 	arrays[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
+	_quad_mesh_cache[cache_key] = mesh
 	return mesh
 
 

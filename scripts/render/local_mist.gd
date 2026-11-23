@@ -8,14 +8,18 @@ const RADIUS := 218.0
 const FADE_BEGIN := 140.0
 const FADE_END := 190.0
 const LIMIT := 20
+const POOL_LIMIT := LIMIT
+const PLAN_CACHE_MAX := 1024
 const BUILD_BUDGET := 2
 const MATERIAL_INTERVAL := 0.1
 const OFFSETS := [Vector2.ZERO, Vector2(-28, 0), Vector2(28, 0), Vector2(0, -28), Vector2(0, 28)]
 enum Mode { OFF, ANALYTIC, VOLUMETRIC }
 
+var use_node_pool := true
 var world: WorldData
 var heights: Heightfield
 var patches := {}
+var _pool: Array[Node3D] = []
 var mode := Mode.OFF
 var _proxy_mesh: BoxMesh
 var _scan := 0.0
@@ -24,11 +28,12 @@ var _pending: Array[Vector2i] = []
 var _examined := {}
 var _last_at := Vector2.INF
 var _plan_sites := {} # Immutable plan geography only; regional fields may be replaced/unloaded.
-var stats := {evaluated = 0, sampled = 0, created = 0, material_updates = 0, cache_hits = 0}
+var stats := {evaluated = 0, sampled = 0, created = 0, material_updates = 0, cache_hits = 0, pooled = 0, reused = 0}
 
 func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
+	_plan_sites.clear()
 
 func set_quality(level: int, env: Environment) -> void:
 	var next := Mode.OFF
@@ -38,6 +43,7 @@ func set_quality(level: int, env: Environment) -> void:
 		return
 	for key: Vector2i in patches.keys():
 		_remove_patch(key)
+	_clear_pool()
 	_pending.clear()
 	_examined.clear()
 	_scan = 0.0
@@ -121,8 +127,15 @@ func _refresh(at: Vector2) -> void:
 	_pending = wanted
 	for key: Vector2i in _examined.keys():
 		if not cells.has_point(key): _examined.erase(key)
-	for key: Vector2i in _plan_sites.keys():
-		if not cells.has_point(key): _plan_sites.erase(key)
+
+func _exit_tree() -> void:
+	_clear_pool()
+
+func _clear_pool() -> void:
+	for node: Node3D in _pool:
+		if is_instance_valid(node):
+			node.queue_free()
+	_pool.clear()
 
 func _resident(point: Vector2) -> bool:
 	var cell := Vector2i((point / GameConfig.TILE).floor())
@@ -136,12 +149,28 @@ func _build_pending() -> void:
 		stats.evaluated += 1
 		var site := _cached_site(key)
 		if site.is_empty() or site.point.distance_to(_last_at) > RADIUS: continue
-		var node := _patch_node(site.size)
+		var node := _acquire_patch_node(site.size)
 		node.position = Vector3(site.point.x, site.height + 3.0, site.point.y)
-		node.hide()
-		add_child(node)
 		patches[key] = {node = node, point = site.point, strength = site.strength, fade = 0.0, density = 0.0, resident = true}
 		stats.created += 1
+
+
+func _acquire_patch_node(size: Vector3) -> Node3D:
+	if use_node_pool and not _pool.is_empty():
+		var reused: Node3D = _pool.pop_back()
+		if mode == Mode.VOLUMETRIC:
+			(reused as FogVolume).size = size
+			(reused as FogVolume).material.set_shader_parameter("density", 0.0)
+		else:
+			reused.scale = size * 0.5
+			(reused as GeometryInstance3D).set_instance_shader_parameter("density", 0.0)
+		reused.hide()
+		stats.reused += 1
+		return reused
+	var created := _patch_node(size)
+	created.hide()
+	add_child(created)
+	return created
 
 
 func _patch_node(size: Vector3) -> Node3D:
@@ -163,7 +192,15 @@ func _patch_node(size: Vector3) -> Node3D:
 func _remove_patch(key: Vector2i) -> void:
 	var node: Node3D = patches[key].node
 	node.hide()
-	node.queue_free()
+	if mode == Mode.VOLUMETRIC:
+		(node as FogVolume).material.set_shader_parameter("density", 0.0)
+	else:
+		(node as GeometryInstance3D).set_instance_shader_parameter("density", 0.0)
+	if use_node_pool and _pool.size() < POOL_LIMIT:
+		_pool.append(node)
+		stats.pooled += 1
+	else:
+		node.queue_free()
 	patches.erase(key)
 
 func _cached_site(key: Vector2i) -> Dictionary:
@@ -176,7 +213,10 @@ func _cached_site(key: Vector2i) -> Dictionary:
 	# a partial regional result or a missing field: it could arrive on the next scan.
 	var center := (Vector2(key) + Vector2.ONE * 0.5) * SPACING
 	var bounds := Rect2(Vector2.ZERO, Vector2(world.W, world.H) * GameConfig.TILE).grow(-60.0)
-	if bounds.has_point(center): _plan_sites[key] = site
+	if bounds.has_point(center):
+		if _plan_sites.size() >= PLAN_CACHE_MAX:
+			_plan_sites.erase(_plan_sites.keys()[0])
+		_plan_sites[key] = site
 	return site
 
 func _site(key: Vector2i) -> Dictionary:

@@ -4,6 +4,7 @@
 // xy — сдвиг ветром (м), z — сила тени (ночью и в сумерках ноль), w — покрытие неба облаками.
 
 global uniform vec4 cloud_shadow;
+global uniform sampler2D cloud_shadow_tex : filter_linear, repeat_enable;
 
 float cloud_shadow_hash(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -24,16 +25,25 @@ float cloud_light(vec2 xz) {
 	if (cloud_shadow.z <= 0.0) {
 		return 1.0;
 	}
-	vec2 p = (xz - cloud_shadow.xy) * (1.0 / 160.0);
-	float morph = dot(cloud_shadow.xy, vec2(-0.0016, -0.0006));
-	vec2 warp = vec2(
-		cloud_shadow_noise(p * 0.65 + vec2(1.7 + morph * 0.2, 4.3)),
-		cloud_shadow_noise(p * 0.65 + vec2(8.9, 2.1 - morph * 0.2))
-	) - 0.5;
-	vec2 q = p + warp * 0.42;
-	float n = cloud_shadow_noise(q) * 0.52
-		+ cloud_shadow_noise(mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * q * 2.13 + vec2(4.1 - morph * 0.35, 1.7)) * 0.31
-		+ cloud_shadow_noise(q * 4.35 + vec2(-2.7, 6.2 + morph * 0.5)) * 0.17;
+	float n;
+	if (textureSize(cloud_shadow_tex, 0).x >= 64) {
+		vec2 uv = (xz - cloud_shadow.xy) * (1.0 / 1280.0);
+		vec2 drift = vec2(cloud_shadow.x * -0.00018, cloud_shadow.y * -0.00011);
+		float n1 = textureLod(cloud_shadow_tex, uv + drift, 0.0).r;
+		float n2 = textureLod(cloud_shadow_tex, uv * 1.13 - drift * 1.35 + vec2(0.37, 0.61), 0.0).g;
+		n = clamp(0.5 + ((n1 * 0.58 + n2 * 0.42) - 0.5) * 1.396, 0.0, 1.0);
+	} else {
+		vec2 p = (xz - cloud_shadow.xy) * (1.0 / 160.0);
+		float morph = dot(cloud_shadow.xy, vec2(-0.0016, -0.0006));
+		vec2 warp = vec2(
+			cloud_shadow_noise(p * 0.65 + vec2(1.7 + morph * 0.2, 4.3)),
+			cloud_shadow_noise(p * 0.65 + vec2(8.9, 2.1 - morph * 0.2))
+		) - 0.5;
+		vec2 q = p + warp * 0.42;
+		n = cloud_shadow_noise(q) * 0.52
+			+ cloud_shadow_noise(mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * q * 2.13 + vec2(4.1 - morph * 0.35, 1.7)) * 0.31
+			+ cloud_shadow_noise(q * 4.35 + vec2(-2.7, 6.2 + morph * 0.5)) * 0.17;
+	}
 	float edge = 0.85 - cloud_shadow.w;
 	// Мягкая полутень на кудрявых краях и глубокая тень под плотным центром кучевого облака
 	float penumbra = smoothstep(edge - 0.08, edge + 0.08, n);

@@ -9,6 +9,7 @@ const TILE := GameConfig.TILE
 const SHADER := preload("res://resources/terrain.gdshader")
 const DETAIL_SIZE := 256   # сторона бесшовной текстуры шума для мелкой детали
 static var allow_fast_refine := true # false — метровая сетка меша на GDScript (эталон для tools/dod_verify.gd)
+static var use_community_texture := true
 
 var _detail: Array[ImageTexture] = []   # [шум, нормали из него]: одни на ServiceScope
 var _micro: Array[Texture2D] = []       # [высоты микроструктуры, нормали]: resources/ground/micro*.res
@@ -337,6 +338,22 @@ static func set_cavity(mat: ShaderMaterial, heights: Heightfield) -> void:
 	var img := cavity_image(heights.hv, heights.world.W, heights.world.H)
 	img.generate_mipmaps()
 	mat.set_shader_parameter("cavity_tex", ImageTexture.create_from_image(img))
+
+
+static func set_community_noise(mat: ShaderMaterial, w: WorldData) -> void:
+	if not use_community_texture or mat == null or w == null or w.W <= 0 or w.H <= 0:
+		return
+	var fast := Grid.fast_grid()
+	if fast == null:
+		return
+	var seeds := VegetationLayer.community_seeds(w.seed_num)
+	var bytes: PackedByteArray = fast.BakeCommunityNoise(w.W, w.H, seeds.x, seeds.y, seeds.w)
+	if bytes.size() != w.W * w.H * 3:
+		return
+	var img := Image.create_from_data(w.W, w.H, false, Image.FORMAT_RGB8, bytes)
+	img.generate_mipmaps()
+	mat.set_shader_parameter("community_tex", ImageTexture.create_from_image(img))
+	mat.set_shader_parameter("community_tex_enabled", true)
 
 
 ## 15.11.2026: дальний вариант материала рельефа — тот же resources/terrain.gdshader, где вес ближней детали

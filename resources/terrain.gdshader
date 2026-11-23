@@ -33,6 +33,8 @@ uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_
 uniform bool forest_enabled = false;
 // 16.11: затенение впадин для света неба (TerrainBuilder.set_cavity): 1 — открыто; без карты — белый, без затенения
 uniform sampler2D cavity_tex : hint_default_white, filter_linear_mipmap, repeat_disable;
+uniform sampler2D community_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
+uniform bool community_tex_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
 // 7.8: доля солнечного света (DayCycle): ночью и в сумерках солнечных просветов под пологом нет.
 uniform float sunlight = 1.0;
@@ -372,8 +374,11 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			float open_w = mix(0.35, 1.0, smoothstep(30.0, 160.0, view_d)) * (1.0 - (use_vertex_color ? UV.y : canopy)) * distant_vegetation.w;
 			if (open_w > 0.01) {
 				vec2 cell = p * 0.25;
-				float big = wg_vnoise(cell, 36.0, veg_seeds.x);
-				float mid = wg_vnoise(cell, 11.0, veg_seeds.y);
+				vec3 com_n = (community_tex_enabled && !use_vertex_color && dot(world_offset, world_offset) < 1e-6)
+					? texture(community_tex, UV).rgb
+					: vec3(wg_vnoise(cell, 36.0, veg_seeds.x), wg_vnoise(cell, 11.0, veg_seeds.y), wg_vnoise(cell, 6.0, veg_seeds.w));
+				float big = com_n.r;
+				float mid = com_n.g;
 				vec3 wn = normalize(wnormal);
 				float sl = sqrt(max(1.0 - wn.y * wn.y, 0.0)) / max(wn.y, 0.05) * 0.46; // уклон в единицах WorldData.slope
 				float alt = wpos.y / 260.0;
@@ -410,7 +415,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				float lum = dot(open_col, vec3(0.3, 0.55, 0.15));
 				open_col = mix(open_col, vec3(lum) * vec3(1.12, 1.08, 0.92), steppe * (ca.x + ca.y) * 0.45);
 				// иван-чай — своими пятнами (~24 м) на опушках, в разнотравье и кустарнике
-				float bloom = smoothstep(0.58, 0.82, wg_vnoise(cell, 6.0, veg_seeds.w)) * (1.0 - steppe) * clamp(ca.y * 0.3 + ca.z * 0.6 + cb.x * 1.2, 0.0, 1.0);
+				float bloom = smoothstep(0.58, 0.82, com_n.b) * (1.0 - steppe) * clamp(ca.y * 0.3 + ca.z * 0.6 + cb.x * 1.2, 0.0, 1.0);
 				open_col = mix(open_col, vec3(lum) * vec3(1.35, 0.78, 1.15), bloom * 0.42);
 				// Keep the ground visible between the sparser dry communities.
 				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));

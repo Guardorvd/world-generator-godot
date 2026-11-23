@@ -127,9 +127,9 @@ func stamp(frame: Dictionary, now: float) -> void:
 		frame.stamped = true
 		frame.stamped_at = now
 		return
-	# Interop copies the entire packed buffer. Write sparse changes in place and
-	# reserve the native batch for dense updates where the loop pays for the copy.
-	var use_batch := changes.size() / 3 >= 96 + result.size() / (STRIDE * 8)
+	# Interop copies the entire packed buffer; avoid LOH allocations (>= 85 KB) and
+	# reserve the native batch for medium dense updates where the loop pays for the copy.
+	var use_batch := result.size() < 20000 and changes.size() / 3 >= 96 + result.size() / (STRIDE * 8)
 	var fast := Grid.fast_grid() if allow_fast_stamps and use_batch else null
 	if fast != null:
 		var stamped: Variant = fast.StampVegetation(result, changes, deadline, now, DURATION)

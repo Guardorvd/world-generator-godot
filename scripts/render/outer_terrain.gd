@@ -17,6 +17,11 @@ const RADIUS := 1200.0   # куски ближе этого держатся з�
 const DROP := 1600.0     # куски дальше этого выгружаются
 const TASKS := 8         # сколько кусков считается одновременно, не больше (12.2: было 3 на любом ПК)
 const RECHECK := 32.0    # через сколько метров пути заново решать, какие куски нужны
+const MESH_POOL_LIMIT := 32
+
+var use_node_pool := true
+var _mesh_pool: Array[MeshInstance3D] = []
+var pool_stats := {reused = 0, created = 0, pooled = 0}
 
 var world: WorldData
 var heights: Heightfield
@@ -145,8 +150,7 @@ func update(x: float, z: float, allow_apply: bool = true, keep_current := false)
 		var key: Vector2i = _evict_pending.pop_back()
 		if _nodes.has(key) and _center(key).distance_to(Vector2(x, z)) > DROP:
 			if _nodes[key] != null:
-				_nodes[key].hide()
-				_nodes[key].queue_free()
+				_release_mesh_node(_nodes[key])
 			_nodes.erase(key)
 			_crown_wait.erase(key)
 			land.chunks.erase(key)
@@ -199,6 +203,38 @@ func finish() -> void:
 
 func _exit_tree() -> void:
 	finish()
+	_mesh_pool.clear()
+
+
+func _acquire_mesh_node() -> MeshInstance3D:
+	if use_node_pool and not _mesh_pool.is_empty():
+		var reused: MeshInstance3D = _mesh_pool.pop_back()
+		pool_stats.reused += 1
+		return reused
+	var created := MeshInstance3D.new()
+	add_child(created)
+	pool_stats.created += 1
+	return created
+
+
+func _release_mesh_node(node: MeshInstance3D) -> void:
+	if not is_instance_valid(node):
+		return
+	node.visible = false
+	for child: Node in node.get_children():
+		node.remove_child(child)
+		child.queue_free()
+	node.mesh = null
+	node.material_override = null
+	node.position = Vector3.ZERO
+	node.lod_bias = 1.0
+	node.visibility_range_end = 0.0
+	node.visibility_range_end_margin = 0.0
+	if use_node_pool and _mesh_pool.size() < MESH_POOL_LIMIT:
+		_mesh_pool.append(node)
+		pool_stats.pooled += 1
+	else:
+		node.queue_free()
 
 
 ## Куски, которые задевает круг radius вокруг (x, z), без лежащих целиком на карте; ближние первыми
@@ -246,8 +282,7 @@ func publish_chunks(chunks: Dictionary, nodes: Dictionary) -> void:
 	for key: Vector2i in chunks:
 		_crown_wait.erase(key)
 		if _nodes.get(key) != null:
-			_nodes[key].visible = false
-			_nodes[key].queue_free()
+			_release_mesh_node(_nodes[key])
 		land.chunks[key] = chunks[key].fields
 		_nodes[key] = nodes[key]
 		if nodes[key] != null: nodes[key].visible = true
@@ -259,7 +294,7 @@ func stage_chunk(key: Vector2i, built: Dictionary, attach_crowns := true) -> Mes
 	if not built.arrays.is_empty():
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, built.arrays, [], built.lods)
-		mi = MeshInstance3D.new()
+		mi = _acquire_mesh_node()
 		mi.mesh = mesh
 		var center := _center(key)
 		mi.position = Vector3(center.x, 0.0, center.y)
@@ -271,7 +306,6 @@ func stage_chunk(key: Vector2i, built: Dictionary, attach_crowns := true) -> Mes
 		# Terrain must occlude sunlight too; the directional shadow frustum culls distant chunks.
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		mi.visible = false
-		add_child(mi)
 		if attach_crowns:
 			FarForest.attach(mi, built.get("crowns", {}), Vector2.ZERO, true)
 	return mi

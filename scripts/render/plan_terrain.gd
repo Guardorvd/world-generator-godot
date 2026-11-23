@@ -10,11 +10,27 @@ const RADIUS := 1800.0 # за плотным туманом; дальний си
 const DROP := RADIUS + SIDE
 const RECHECK := 32.0
 const AHEAD := 600.0   # точка впереди по ходу, к которой тянется очередь
+const MESH_POOL_LIMIT := 32
+const ByteLru := preload("res://scripts/core/byte_lru.gd")
+const LOD1_STEP := 2
+const LOD2_STEP := 4
+const LOD1_DIST := SIDE * 1.5
+const LOD2_DIST := SIDE * 3.5
+const LOD_HYSTERESIS := RECHECK
+const LOD_RECHECK := 16.0
+const LOD_CACHE_LIMIT := 32 * 1024 * 1024
 
+var use_node_pool := true
+var use_terrain_lod := true
 var chunks := {}
 var nodes := {}
+var _node_lod := {}
+var _lod_at := Vector2.INF
+var _lod_cache := ByteLru.new()
 var pending: Array[Vector2i] = []
 var _evict_pending: Array[Vector2i] = []
+var _mesh_pool: Array[MeshInstance3D] = []
+var pool_stats := {reused = 0, created = 0, pooled = 0}
 var material: Material
 ## 15.11.2026: дальний вариант материала (TerrainBuilder.far_material) у частей, целиком лежащих дальше FAR_FROM.
 ## В шейдере ближняя деталь гаснет к DETAIL_FAR = 110 м; 40 м запаса — на камеру за игроком и путь между пересчётами
@@ -92,6 +108,12 @@ func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: Wor
 	_world = w
 	_heights = h
 	source = shared_source
+	_lod_cache.limit = LOD_CACHE_LIMIT
+	var src_cpu: Variant = source.get("_cpu") if source != null else null
+	if src_cpu != null:
+		_lod_cache.budget = src_cpu.budget
+		if _lod_cache.budget != null:
+			_lod_cache.budget.register_owner(_lod_cache._owner_id, "terrain_lod")
 
 
 func _read_arrays(key: Vector2i) -> Array:
@@ -115,6 +137,126 @@ func _exit_tree() -> void:
 	if _read_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
+	_lod_cache.clear()
+	_node_lod.clear()
+	_mesh_pool.clear()
+
+
+func _lod_enabled() -> bool:
+	return use_terrain_lod and water_layer < 0 and _world != null and _heights != null and _heights.hv.size() >= _world.W * _world.H and Grid.fast_grid() != null
+
+
+func _desired_lod(key: Vector2i, p: Vector2, current_lod: int) -> int:
+	var d := distance_to_chunk(key, p)
+	if current_lod == 0:
+		if d > LOD2_DIST + LOD_HYSTERESIS:
+			return 2
+		if d > LOD1_DIST + LOD_HYSTERESIS:
+			return 1
+		return 0
+	if current_lod == 1:
+		if d < LOD1_DIST - LOD_HYSTERESIS:
+			return 0
+		if d > LOD2_DIST + LOD_HYSTERESIS:
+			return 2
+		return 1
+	if d < LOD1_DIST - LOD_HYSTERESIS:
+		return 0
+	if d < LOD2_DIST - LOD_HYSTERESIS:
+		return 1
+	return 2
+
+
+func _lod_arrays(key: Vector2i, lod: int) -> Array:
+	var cache_key := Vector3i(key.x, key.y, lod)
+	var cached: Variant = _lod_cache.get_value(cache_key)
+	if cached is Array:
+		return cached
+	var fast := Grid.fast_grid()
+	if fast == null:
+		return []
+	var step := LOD1_STEP if lod == 1 else LOD2_STEP
+	var skirt := step * GameConfig.TILE * 0.5
+	var arrays: Array = fast.BuildTerrainLod(_world.W, _world.H, GameConfig.TILE, key.x, key.y, CELLS, step, _heights.hv, _world.path_mask, skirt)
+	if not arrays.is_empty():
+		_lod_cache.put(cache_key, arrays)
+	return arrays
+
+
+func _step_lod(p: Vector2) -> bool:
+	var waiting_io := false
+	for key: Vector2i in nodes:
+		var current: int = _node_lod.get(key, 0)
+		var wanted := _desired_lod(key, p, current)
+		if wanted == current:
+			continue
+		var node: MeshInstance3D = nodes[key]
+		if wanted > 0:
+			var lod_arrays := _lod_arrays(key, wanted)
+			if lod_arrays.is_empty():
+				continue
+			var mesh := ArrayMesh.new()
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, lod_arrays)
+			node.mesh = mesh
+			_node_lod[key] = wanted
+			return true
+		var arrays: Variant = _arrays(key)
+		if arrays == null:
+			waiting_io = true
+			if source != null:
+				source.request(water_layer, key, distance_to_chunk(key, p))
+			elif _read_task == -1:
+				_read_key = key
+				_read_out = {}
+				var out := _read_out
+				_read_task = WorkerThreadPool.add_task(func() -> void: out.arrays = _read_arrays(key), false, "Чанк рельефа")
+			continue
+		var started := Time.get_ticks_usec()
+		var full_mesh := ArrayMesh.new()
+		full_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		node.mesh = full_mesh
+		_node_lod[key] = 0
+		if source != null:
+			source.uploaded(water_layer, key, arrays, (Time.get_ticks_usec() - started) / 1000.0)
+		if _uncached_key == key:
+			_uncached_key = null
+			_uncached_arrays = []
+		return true
+	if not waiting_io:
+		_lod_at = p
+	return false
+
+
+func _acquire_mesh_node(mesh: ArrayMesh, mat: Material, shadow_mode: GeometryInstance3D.ShadowCastingSetting) -> MeshInstance3D:
+	var node: MeshInstance3D
+	if use_node_pool and not _mesh_pool.is_empty():
+		node = _mesh_pool.pop_back()
+		pool_stats.reused += 1
+	else:
+		node = MeshInstance3D.new()
+		add_child(node)
+		pool_stats.created += 1
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = shadow_mode
+	node.visible = true
+	return node
+
+
+func _release_mesh_node(node: MeshInstance3D) -> void:
+	if not is_instance_valid(node):
+		return
+	node.visible = false
+	for child: Node in node.get_children():
+		node.remove_child(child)
+		child.queue_free()
+	node.mesh = null
+	node.material_override = null
+	if use_node_pool and _mesh_pool.size() < MESH_POOL_LIMIT:
+		_mesh_pool.append(node)
+		pool_stats.pooled += 1
+	else:
+		node.queue_free()
 
 
 ## Far crown proxies join a terrain tile once their worker has finished; the tile itself never waits for them.
@@ -209,7 +351,16 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 	while _has_near_pending(p, near) and (force or allow_apply and not uploaded):
 		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		var key: Vector2i = pending.back()
-		var arrays: Variant = _arrays(key)
+		var wanted_lod := _desired_lod(key, p, 0) if _lod_enabled() else 0
+		var arrays: Variant = null
+		var used_lod := 0
+		if wanted_lod > 0:
+			var lod_arrays := _lod_arrays(key, wanted_lod)
+			if not lod_arrays.is_empty():
+				arrays = lod_arrays
+				used_lod = wanted_lod
+		if arrays == null:
+			arrays = _arrays(key)
 		if arrays == null:
 			if source != null:
 				source.request(water_layer, key, distance_to_chunk(key, p))
@@ -229,19 +380,18 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		var started := Time.get_ticks_usec()
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		var node := MeshInstance3D.new()
-		node.mesh = mesh
-		node.material_override = _material_for(key, p)
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(node)
+		var shadow_mode := GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var node := _acquire_mesh_node(mesh, _material_for(key, p), shadow_mode)
 		if water_layer < 0 and _world != null:
 			if source == null: FarForest.attach(node, FarForest.plan(_world, _heights, key))
 			else: _crown_wait[key] = node
 		nodes[key] = node
-		if source != null: source.uploaded(water_layer, key, arrays, (Time.get_ticks_usec() - started) / 1000.0)
-		if _uncached_key == key:
-			_uncached_key = null
-			_uncached_arrays = []
+		_node_lod[key] = used_lod
+		if used_lod == 0:
+			if source != null: source.uploaded(water_layer, key, arrays, (Time.get_ticks_usec() - started) / 1000.0)
+			if _uncached_key == key:
+				_uncached_key = null
+				_uncached_arrays = []
 		uploaded = true
 	if (force or near == INF) and far_material != null and (force or p.distance_to(_far_at) >= FAR_RECHECK):
 		_far_at = p
@@ -249,15 +399,18 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 			var wanted := _material_for(key, p)
 			if nodes[key].material_override != wanted:
 				nodes[key].material_override = wanted
+	if near == INF and allow_apply and not uploaded and _lod_enabled() and p.distance_to(_lod_at) >= LOD_RECHECK and (frame_budget == null or frame_budget.allows_work()):
+		if _step_lod(p):
+			uploaded = true
 	# Кроны — после рельефа: только в кадре без передачи чанка и в пределах общего бюджета.
 	if (force or near == INF) and _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
 		uploaded = true
 	if near == INF and allow_apply and not uploaded and not _evict_pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
 		var key: Vector2i = _evict_pending.pop_back()
 		if nodes.has(key) and distance_to_chunk(key, p) > DROP:
-			nodes[key].hide()
-			nodes[key].queue_free()
+			_release_mesh_node(nodes[key])
 			nodes.erase(key)
+			_node_lod.erase(key)
 			_crown_wait.erase(key)
 			uploaded = true
 	return uploaded

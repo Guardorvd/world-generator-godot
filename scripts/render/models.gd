@@ -166,11 +166,24 @@ const CARPET_SHAPES := [
 	[26, 30, 0.05, 0.13, 0.034, 0.062, 1.5, Color(0.42, 0.56, 0.34), Color(0.86, 1.28, 0.74), 0.0],
 ]
 
+static var _carpet_mesh_cache := {}
+
 static func build_carpet_mesh(kind := CARPET_MEADOW, far := false) -> ArrayMesh:
+	var cache_key := kind * 2 + (1 if far else 0)
+	if _carpet_mesh_cache.has(cache_key):
+		return _carpet_mesh_cache[cache_key]
+	var mesh: ArrayMesh
 	if kind == CARPET_FLOWERS:
-		return _carpet_flowers(far)
-	if kind == CARPET_STONES:
-		return _carpet_stones(far)
+		mesh = _carpet_flowers(far)
+	elif kind == CARPET_STONES:
+		mesh = _carpet_stones(far)
+	else:
+		mesh = _build_carpet_grass_mesh(kind, far)
+	_carpet_mesh_cache[cache_key] = mesh
+	return mesh
+
+
+static func _build_carpet_grass_mesh(kind: int, far: bool) -> ArrayMesh:
 	var shape: Array = CARPET_SHAPES[kind]
 	var tall_n: int = shape[0]
 	var pile_n: int = shape[1]

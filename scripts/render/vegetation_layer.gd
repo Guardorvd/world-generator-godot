@@ -26,6 +26,11 @@ const FAR_KEY := 1 << 20
 const ROOT_TRUNK := 0.2 # м: корневые лапы у стволов не тоньше этого радиуса
 const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
+const DETAIL_SECTOR_SIZE := 64.0
+const DETAIL_SECTOR_MIN_INSTANCES := 256
+const DETAIL_SECTOR_MIN_CAP := 16
+const DETAIL_SECTOR_POOL_LIMIT := 48
+const SHADOW_SECTOR_MARGIN := StreamPolicy.REFILL_STEP
 const Understory := preload("res://scripts/render/understory_models.gd")
 ## Модель первого скального выхода (RockModels.OUTCROP_V); без неё в каталоге выходы не рисуются.
 const OUTCROP_MODEL := Biomes.T_ROCK + RockModels.VARIANTS * ForestModels.MODEL_STRIDE
@@ -69,6 +74,7 @@ var mid_grass := 1.0 # множитель доли дерновин (GameSetting
 const HAZEL_CORE := 0.4 # 17.11.2026: доля ширины кроны лещины, которую занимает пучок стволов
 const FORM_BAND := 0.25 # 17.11.2026: полоса смены формы в долях границы (пиксели делятся сеткой порогов)
 static var form_twins := true # false — «было» (meadow_look --no-twins): форма по центру раскладки, без пар
+static var bounded_form_twins := true
 ## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
 ## до GRASS_R, крупного подлеска — до UNDERSTORY_FAR_R; дальше они редеют как (радиус / расстояние)²,
 ## поэтому их число растёт как логарифм дальности, а не как площадь круга (своя простая LOD-ступень).
@@ -133,6 +139,10 @@ var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 ## _veg_put/_veg_erase.
 var _veg_keys := {}
 var grass: MultiMesh
+var _grass_node: MultiMeshInstance3D
+var _grass_sectors := {nodes = {}, pool = []}
+var use_sector_details := true
+var use_split_understory_shadows := true
 var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
 var _grass_high := -Vector3.INF
 var grass_buf: PackedFloat32Array
@@ -156,6 +166,7 @@ var _appearing: Array = [] # узлы до конца проявления
 var _trash: Array[Node] = [] # скрытые узлы, удаляются по FREE_US за кадр
 var _tree_pool: Array[MultiMeshInstance3D] = []
 var frame_budget: RefCounted
+var cpu_budget: RefCounted
 var node_stats := {created = 0, reused = 0, pooled = 0}
 # 20.11.2026: «carpet» — GroundCarpet.update отдельно; прежде он входил в tree_poll (пик 76 мс в записи сессии не делился)
 var phase_stats := {names = ["cleanup", "tree_poll", "details", "tree_queue", "detail_schedule", "tree_upload", "carpet"],
@@ -292,12 +303,14 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	_set_radii(settings.draw)
 	_set_flora(settings.flora)
 	mid_grass = GameSettings.MID_GRASS[settings.mid_grass].scale
-	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
+	_grass_node = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true)
+	grass = _grass_node.multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb().grow(0.1) # запас на индивидуальный изгиб кончиков
 	grass_buf = _buffer(_grass_cap(), STRIDE)
 	if carpet_enabled:
 		carpet = GroundCarpet.new()
+		carpet.cpu_budget = cpu_budget
 		carpet.setup(self, world, heights, _forest_surface)
 		_configure_carpet()
 	var meshes := Understory.meshes()
@@ -359,6 +372,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			thin_leaves = thin_leaves, woody = woody,
 			group_height = maxf((groups[base] as Mesh).get_aabb().end.y, 0.2) if has_group_lod else 0.0,
 			shadows = shadows, near_cap = cap != _understory_cap(far), has_contacts = has_contacts, group = group,
+			sectors = {nodes = {}, pool = []},
 			margin = wind[0] * 1.2 + wind[1] * 2.0 + (0.18 if blades else 0.0) + (GROUP_SPREAD - 1.0 if group else 0.0)})
 	_grass_mat = grass_mat
 	_apply_fade()
@@ -477,8 +491,15 @@ func _apply_fade() -> void:
 			mat.set_shader_parameter("detail_full", detail_full)
 			mat.set_shader_parameter("detail_far", detail_far * flora.detail)
 		if entry.shadows:
-			entry.node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if not flora.shadows and entry.base < Floor.FIRST \
+			var shadow_mode := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if not flora.shadows and entry.base < Floor.FIRST \
 				else (GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if entry.base < Floor.FIRST else GeometryInstance3D.SHADOW_CASTING_SETTING_ON)
+			entry.node.cast_shadow = shadow_mode
+			var sectors: Variant = entry.get("sectors")
+			if sectors is Dictionary:
+				var split: bool = use_split_understory_shadows and entry.base < Floor.FIRST
+				for key: Vector3i in sectors.nodes:
+					var part: Dictionary = sectors.nodes[key]
+					part.node.cast_shadow = shadow_mode if (not split or key.z == 1) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 static func _fade(mat: ShaderMaterial, radius: float, ahead: float) -> void:
@@ -562,12 +583,16 @@ func set_draw(level: int) -> bool:
 	grass.instance_count = _grass_cap()
 	grass_buf = _buffer(grass.instance_count, STRIDE)
 	_grass_n = 0
+	_clear_sectors(_grass_sectors)
 	for entry: Dictionary in understory:
 		entry.cap = _understory_cap(entry.far and not entry.near_cap)
 		entry.mm.visible_instance_count = 0
 		entry.mm.instance_count = entry.cap
 		entry.buf = _buffer(entry.cap, STRIDE)
 		entry.count = 0
+		var sectors: Variant = entry.get("sectors")
+		if sectors is Dictionary:
+			_clear_sectors(sectors)
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
 			if node.get_meta("last_level", true):
@@ -854,6 +879,13 @@ func _exit_tree() -> void:
 	_finish()
 	if carpet != null:
 		carpet.release()
+	_grass_sectors.nodes.clear()
+	_grass_sectors.pool.clear()
+	for entry: Dictionary in understory:
+		var sectors: Variant = entry.get("sectors")
+		if sectors is Dictionary:
+			sectors.nodes.clear()
+			sectors.pool.clear()
 
 
 func _distance(chunk: Vector2i, p: Vector2) -> float:
@@ -1011,10 +1043,31 @@ func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float
 				var other: Dictionary = understory[peer]
 				other_form = snapshots.form_history(peer, other.buf, other.count)
 		frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate, entry.has_contacts, other_form)
+	var fast: Variant = Grid.fast_grid() if use_sector_details else null
 	for group: int in frames:
-		_fit_capacity(frames[group], _group_mm(group))
+		var frame: Dictionary = frames[group]
+		var params := _group_sector_params(group, frame.count)
+		var sectors: Variant = _grass_sectors if group < 0 and _grass_node != null else (understory[group].get("sectors") if group >= 0 and group < understory.size() else null)
+		if fast != null and params.enabled and sectors is Dictionary:
+			var radius: float = _grass_margin * 2.0 if group < 0 else _radius(understory[group].mm.mesh) + float(understory[group].margin)
+			frame.sectors_packed = fast.PartitionDetailSectors(frame.buffer, frame.count, STRIDE, params.sector_size,
+				px, pz, UNDERSTORY_SHADOW_FAR + SHADOW_SECTOR_MARGIN, params.split_shadows, radius, frame.changes)
+			frame.split_shadows = params.split_shadows
+			frame.fitted = true
+		else:
+			_fit_capacity(frame, _group_mm(group))
 	_detail_frames = frames
 	_detail_seconds = (Time.get_ticks_usec() - started) / 1000000.0
+
+
+func _group_sector_params(group: int, count: int) -> Dictionary:
+	var split_shadows: bool = group >= 0 and use_split_understory_shadows and understory[group].shadows and understory[group].base < Floor.FIRST
+	if not use_sector_details or count <= 0:
+		return {enabled = false, split_shadows = false}
+	if count < DETAIL_SECTOR_MIN_INSTANCES and not split_shadows:
+		return {enabled = false, split_shadows = false}
+	var size := DETAIL_SECTOR_SIZE if count >= DETAIL_SECTOR_MIN_INSTANCES else 0.0
+	return {enabled = true, sector_size = size, split_shadows = split_shadows}
 
 
 func _group_mm(group: int) -> MultiMesh:
@@ -1389,8 +1442,15 @@ func refresh(rect: Rect2i) -> void:
 	_history_cuts.append(box)
 	var meshes: Array[MultiMesh] = []
 	if grass != null: meshes.append(grass)
+	for part: Dictionary in _grass_sectors.nodes.values():
+		meshes.append(part.mm)
 	if carpet != null: carpet.invalidate(rect)
-	for e: Dictionary in understory: meshes.append(e.mm)
+	for e: Dictionary in understory:
+		meshes.append(e.mm)
+		var sectors: Variant = e.get("sectors")
+		if sectors is Dictionary:
+			for part: Dictionary in sectors.nodes.values():
+				meshes.append(part.mm)
 	for mm in meshes:
 		var bounds := mm.custom_aabb
 		if not Rect2(Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.size.x, bounds.size.z)).intersects(box): continue
@@ -1653,10 +1713,157 @@ func _present_group(group: int, immediate: bool) -> void:
 func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
 	var contact_rows: bool = group >= 0 and understory[group].has_contacts
 	var frame := snapshots.commit(group, _detail_frames[group], stream.clock) if _detail_frames.has(group) else snapshots.merge(group, source, count, bounds, radius, stream.clock, immediate, contact_rows)
+	var sectors: Variant = _grass_sectors if group < 0 and _grass_node != null else (understory[group].get("sectors") if group >= 0 and group < understory.size() else null)
+	var mono_node: MultiMeshInstance3D = _grass_node if group < 0 else (understory[group].get("node") as MultiMeshInstance3D if group >= 0 and group < understory.size() else null)
+	if not frame.has("sectors_packed") and use_sector_details and sectors is Dictionary and frame.count > 0:
+		var params := _group_sector_params(group, frame.count)
+		if params.enabled:
+			var fast: Variant = Grid.fast_grid()
+			if fast != null:
+				frame.sectors_packed = fast.PartitionDetailSectors(frame.buffer, frame.count, STRIDE, params.sector_size,
+					_fill_at.x, _fill_at.y, UNDERSTORY_SHADOW_FAR + SHADOW_SECTOR_MARGIN, params.split_shadows, radius, PackedFloat64Array())
+				frame.split_shadows = params.split_shadows
+	if frame.has("sectors_packed") and sectors is Dictionary:
+		if mono_node != null:
+			mono_node.visible = false
+		if mm != null:
+			mm.visible_instance_count = 0
+		_present_sectors(group, sectors, frame.sectors_packed, frame.get("split_shadows", false))
+		return
+	if sectors is Dictionary and not sectors.nodes.is_empty():
+		_clear_sectors(sectors)
+	if mono_node != null:
+		mono_node.visible = true
 	if not frame.has("fitted"):
 		_fit_capacity(frame, mm)
 	_upload_instances(mm, frame.buffer, frame.count)
 	mm.custom_aabb = frame.bounds
+
+
+func _sector_acquire(sectors: Dictionary, mesh: Mesh, mat: Material) -> Dictionary:
+	var pool: Array = sectors.pool
+	if not pool.is_empty():
+		var kept: Dictionary = pool.pop_back()
+		kept.mm.mesh = mesh
+		kept.node.material_override = mat
+		kept.node.visible = true
+		kept.hash = 0
+		kept.count = -1
+		return kept
+	var node := MultiMeshInstance3D.new()
+	var smm := MultiMesh.new()
+	smm.transform_format = MultiMesh.TRANSFORM_3D
+	smm.use_colors = true
+	smm.use_custom_data = true
+	smm.mesh = mesh
+	smm.instance_count = DETAIL_SECTOR_MIN_CAP
+	smm.visible_instance_count = 0
+	node.multimesh = smm
+	node.material_override = mat
+	node.lod_bias = 0.6
+	add_child(node)
+	return {node = node, mm = smm, hash = 0, count = -1}
+
+
+func _sector_release(sectors: Dictionary, part: Dictionary) -> void:
+	var node: MultiMeshInstance3D = part.node
+	var smm: MultiMesh = part.mm
+	part.hash = 0
+	part.count = -1
+	smm.visible_instance_count = 0
+	node.visible = false
+	var pool: Array = sectors.pool
+	if pool.size() < DETAIL_SECTOR_POOL_LIMIT:
+		pool.append(part)
+	else:
+		smm.instance_count = 0
+		smm.mesh = null
+		node.material_override = null
+		node.queue_free()
+
+
+func _clear_sectors(sectors: Dictionary) -> void:
+	for part: Dictionary in sectors.nodes.values():
+		_sector_release(sectors, part)
+	sectors.nodes.clear()
+
+
+func _present_sectors(group: int, sectors: Dictionary, packed: Dictionary, split_shadows: bool) -> void:
+	var mesh: Mesh
+	var mat: Material
+	var shadow_cast := false
+	var shadow_mode := GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if group < 0:
+		mesh = grass.mesh
+		mat = _grass_mat
+	else:
+		var entry: Dictionary = understory[group]
+		mesh = entry.mm.mesh
+		mat = entry.node.material_override
+		shadow_cast = entry.shadows and (flora.shadows or entry.base >= Floor.FIRST)
+		shadow_mode = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if entry.base < Floor.FIRST else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var active_nodes: Dictionary = sectors.nodes
+	var keys: PackedInt32Array = packed.keys
+	var counts: PackedInt32Array = packed.counts
+	if counts.is_empty():
+		if not active_nodes.is_empty():
+			_clear_sectors(sectors)
+		return
+	var bounds_arr: PackedFloat32Array = packed.bounds
+	var hashes: PackedInt64Array = packed.get("hashes", PackedInt64Array())
+	var buffers: Array = packed.buffers
+	var sector_changes: Array = packed.changes
+	var now := stream.clock
+	var next_nodes := {}
+	for i in counts.size():
+		var key := Vector3i(keys[i * 3], keys[i * 3 + 1], keys[i * 3 + 2])
+		var part: Dictionary
+		if active_nodes.has(key):
+			part = active_nodes[key]
+			active_nodes.erase(key)
+		else:
+			part = _sector_acquire(sectors, mesh, mat)
+		var node: MultiMeshInstance3D = part.node
+		var target_shadow := (shadow_mode if (key.z == 1 and shadow_cast) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF) if split_shadows \
+			else (shadow_mode if shadow_cast else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+		if node.material_override != mat:
+			node.material_override = mat
+		if node.cast_shadow != target_shadow:
+			node.cast_shadow = target_shadow
+		if not node.visible:
+			node.visible = true
+		var count_i := counts[i]
+		var hash_i := hashes[i] if i < hashes.size() else 0
+		var ch: PackedFloat64Array = sector_changes[i]
+		var smm: MultiMesh = part.mm
+		if ch.is_empty() and hash_i != 0 and part.get("count", -1) == count_i and part.get("hash", 0) == hash_i and smm.visible_instance_count == count_i:
+			next_nodes[key] = part
+			continue
+		var buf: PackedFloat32Array = buffers[i]
+		for c_at in range(0, ch.size(), 3):
+			var row_at := int(ch[c_at])
+			var mode := ch[c_at + 1]
+			var alpha := Snapshots.opacity(ch[c_at + 2], now)
+			buf[row_at + 19] = now if mode == 2 else (now - alpha * Snapshots.DURATION if mode == 1 else -(now - (1.0 - alpha) * Snapshots.DURATION))
+		var cap := buf.size() / STRIDE
+		if smm.instance_count != cap:
+			smm.visible_instance_count = 0
+			smm.instance_count = cap
+		smm.buffer = buf
+		smm.visible_instance_count = count_i
+		var b := i * 6
+		smm.custom_aabb = AABB(Vector3(bounds_arr[b], bounds_arr[b + 1], bounds_arr[b + 2]),
+			Vector3(bounds_arr[b + 3] - bounds_arr[b], bounds_arr[b + 4] - bounds_arr[b + 1], bounds_arr[b + 5] - bounds_arr[b + 2]))
+		if ch.is_empty():
+			part.hash = hash_i
+			part.count = count_i
+		else:
+			part.hash = 0
+			part.count = -1
+		next_nodes[key] = part
+	for old_key: Vector3i in active_nodes:
+		_sector_release(sectors, active_nodes[old_key])
+	sectors.nodes = next_nodes
 
 
 func _shared_tree_material(def: Dictionary, part: String, level: int, small: bool) -> ShaderMaterial:
@@ -2729,13 +2936,13 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	kind = entry.base
 	var twin := -1
 	if group == kind and _far_of.has(kind) and not (legacy_open and Placement.priority(kind) == 1):
-		if form_twins and kind < Floor.FIRST:
+		if form_twins and not bounded_form_twins and kind < Floor.FIRST:
 			# Оба LOD готовы для всего снимка: при задержке и повороте форму по-прежнему выбирает шейдер.
 			twin = _far_of[kind]
 		else:
 			var s := _form_switch(kind)
 			var at := Vector2(x, z)
-			var margin := s.y * 0.5 + StreamPolicy.REFILL_STEP
+			var margin := s.y * 0.5 + StreamPolicy.REFILL_STEP * (3.0 if kind < Floor.FIRST else 1.0)
 			var near_need := StreamPolicy.distance_to_coverage(at, _fill_at, _fill_lead) < s.x + margin if form_twins else at.distance_to(_fill_at) <= s.x
 			if not near_need:
 				group = _far_of[kind]
