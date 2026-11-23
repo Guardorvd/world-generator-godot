@@ -184,14 +184,23 @@ static func _sword_fern(far: bool, upright: bool) -> ArrayMesh:
 		var reach := (0.72 if inner else (1.0 if upright else 1.32)) * (0.86 + 0.18 * sin(arm * 1.9))
 		var lift := (1.68 if inner or upright else 1.47) * (0.91 + 0.14 * cos(arm * 1.7))
 		if far:
+			# Сохраняем черешок и редкие цельные пары перьев вместо широкой сплошной ленты.
 			for segment in 3:
-				var t0 := segment / 3.0
-				var t1 := (segment + 1) / 3.0
-				var p0 := _fern_point(t0, dir * reach, lift)
-				var p1 := _fern_point(t1, dir * reach, lift)
-				var w0 := sin(PI * t0) * 0.16 + 0.014
-				var w1 := sin(PI * t1) * 0.16 + 0.008
-				ribs.append([p0 - side * w0, p0 + side * w0, p1 + side * w1, p1 - side * w1])
+				var p0 := _fern_point(segment / 3.0, dir * reach, lift)
+				var p1 := _fern_point((segment + 1) / 3.0, dir * reach, lift)
+				var w0 := 0.027 - segment * 0.006
+				var w1 := w0 - 0.006
+				if segment == 2:
+					ribs.append([p0 - side * w0, p0 + side * w0, p1])
+				else:
+					ribs.append([p0 - side * w0, p0 + side * w0, p1 + side * w1, p1 - side * w1])
+			for t: float in [0.29, 0.45, 0.62, 0.79]:
+				var p0 := _fern_point(t, dir * reach, lift)
+				var p1 := _fern_point(t + 0.115, dir * reach, lift)
+				var width := (0.129 if inner else 0.218) * sin(PI * pow(t, 0.86))
+				var tip := p0.lerp(p1, 0.78) + dir * width * 0.24 + Vector3.UP * 0.018
+				ribs.append([p0, tip + side * width, p1])
+				ribs.append([p0, p1, tip - side * width])
 			continue
 		for segment in 3:
 			var p0 := _fern_point(segment / 3.0, dir * reach, lift)
@@ -288,14 +297,16 @@ static func _low_shrub(berry: bool, far: bool, spreading: bool) -> ArrayMesh:
 
 
 static func _moss_mound(far: bool) -> ArrayMesh:
-	# Те же открытые снизу мягкие купола MOSS, с более крупной общей массой.
-	var pads := [
-		[Vector3(-0.15, 0, 0.02), Vector3(0.70, 0.29, 0.49), Color("526c32"), 8 if far else 13],
-		[Vector3(0.37, 0, 0.15), Vector3(0.50, 0.16, 0.39), Color("5b7336"), 6 if far else 9],
+	# Несколько сросшихся куртин с неровным гребнем и низкими, расползающимися по земле краями.
+	var pads: Array = [
+		[Vector3(-0.25, 0.0, 0.01), Vector3(0.51, 0.25, 0.43), Color("577637"), 8 if far else 11],
+		[Vector3(0.15, 0.0, -0.13), Vector3(0.46, 0.20, 0.37), Color("657d3a"), 7 if far else 9],
+		[Vector3(0.42, 0.0, 0.19), Vector3(0.37, 0.12, 0.29), Color("597437"), 6 if far else 8],
 	]
 	if not far:
-		pads.append([Vector3(0.14, 0, -0.35), Vector3(0.31, 0.12, 0.28), Color("4d6530"), 7])
-	return _dome_mesh(pads)
+		pads.append([Vector3(-0.46, 0.0, -0.29), Vector3(0.25, 0.10, 0.21), Color("5d7636"), 6])
+		pads.append([Vector3(0.04, 0.0, 0.31), Vector3(0.29, 0.09, 0.24), Color("70833d"), 6])
+	return _dome_mesh(pads, true, 0 if far else 4)
 
 
 static func expedition_variant(kind: int, roll: float) -> int:
@@ -811,7 +822,7 @@ static func _grass_tuft(arched_count: int, spear_count: int, h_min: float, h_max
 
 
 ## Верхние купола мха без невидимого подземного дна.
-static func _dome_mesh(domes: Array) -> ArrayMesh:
+static func _dome_mesh(domes: Array, ruffled := false, sprays := 0) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for d_idx in domes.size():
@@ -821,13 +832,20 @@ static func _dome_mesh(domes: Array) -> ArrayMesh:
 		var col: Color = d[2]
 		var segs: int = d[3]
 		var apex := center + Vector3(0, scale.y, 0)
+		if ruffled:
+			apex += Vector3(scale.x * 0.14 * cos(d_idx * 2.4), 0, scale.z * 0.16 * sin(d_idx * 2.4))
 		var ring_mid: Array[Vector3] = []
 		var ring_low: Array[Vector3] = []
 		for i in segs:
 			var a := i * TAU / segs + d_idx * 0.55
 			var lobe := 1.0 + 0.12 * sin(a * 3.0 + d_idx * 1.7)
+			if ruffled:
+				lobe += 0.12 * sin(a * 5.0 - d_idx * 1.8)
 			var dir := Vector3(cos(a) * scale.x * lobe, 0, sin(a) * scale.z * lobe)
-			ring_mid.append(center + dir * 0.62 + Vector3(0, scale.y * 0.68, 0))
+			var shoulder := 0.68
+			if ruffled:
+				shoulder += 0.12 * cos(a * 3.0 + d_idx) + 0.045 * sin(a * 5.0)
+			ring_mid.append(center + dir * 0.62 + Vector3(0, scale.y * shoulder, 0))
 			ring_low.append(center + dir + Vector3(0, -0.01, 0))
 		for i in segs:
 			var next := (i + 1) % segs
@@ -837,9 +855,25 @@ static func _dome_mesh(domes: Array) -> ArrayMesh:
 					var normal := (Vector3(local.x, maxf(0.25, local.y), local.z)).normalized()
 					var h_t := clampf((p.y - center.y) / maxf(0.01, scale.y), 0.0, 1.0)
 					var shade := lerpf(0.76, 1.10, h_t)
+					if ruffled:
+						shade += 0.085 * sin(p.x * 22.0 + p.z * 17.0 + d_idx * 2.4)
 					st.set_normal(normal)
 					st.set_color(Color(col.r * shade, col.g * shade, col.b * shade))
 					st.add_vertex(p)
+		# Невысокие побеги лежат на гребне и плечах куртины, чтобы силуэт оставался мягким.
+		for n in sprays:
+			var i := (n * segs / sprays + d_idx) % segs
+			var at := ring_mid[i].lerp(apex, 0.14 + 0.58 * (0.5 + 0.5 * sin(n * 2.4 + d_idx)))
+			var outward := Vector3(at.x - center.x, 0, at.z - center.z).normalized()
+			var side := Vector3(-outward.z, 0, outward.x)
+			for leaf: float in [-1.0, 1.0]:
+				var span := 0.039 + 0.023 * (0.5 + 0.5 * cos(n * 1.6 + d_idx * 2.4 + leaf))
+				var tip := at + Vector3.UP * span * 0.83 + (outward + side * leaf * 0.80) * span
+				var tint := col.lerp(Color("9aa747"), 0.41 + 0.16 * leaf)
+				for vertex: Vector3 in [at - side * span * 0.44, tip, at + side * span * 0.44]:
+					st.set_normal((Vector3.UP + outward * 0.48).normalized())
+					st.set_color(tint * (1.08 if vertex == tip else 0.85))
+					st.add_vertex(vertex)
 	st.index()
 	return st.commit()
 

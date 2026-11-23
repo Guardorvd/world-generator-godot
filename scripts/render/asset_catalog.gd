@@ -1,8 +1,8 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 15 # 15: модели и смещения форм растительности речной экспедиции
+const VERSION := 16 # 16: полировка кедра, дальних вай папоротника и моховых подушек
 const PATH := "res://resources/catalog/standard.res"
-@export var version := VERSION
+@export var version := 0 # Запекание записывает версию явно; ResourceSaver пропускает значение по умолчанию.
 @export var trees: Dictionary = {}
 @export var grass: ArrayMesh
 @export var understory: Array[Mesh] = []

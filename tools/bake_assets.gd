@@ -3,6 +3,7 @@ extends SceneTree
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 180)
 	var catalog := preload("res://scripts/render/asset_catalog.gd").new()
+	catalog.version = catalog.VERSION
 	ForestModels.baking = true
 	catalog.trees = Models.build_tree_defs()
 	catalog.grass = Models.build_grass_mesh()
@@ -62,7 +63,7 @@ func _initialize() -> void:
 		return
 	# Reload uncached and compare serialized attributes, LOD, bounds and texture mipmaps.
 	var restored := ResourceLoader.load(catalog.PATH, "", ResourceLoader.CACHE_MODE_IGNORE)
-	var ok: bool = restored.trees.keys() == catalog.trees.keys() and restored.levels.keys() == catalog.levels.keys()
+	var ok: bool = restored.version == catalog.version and restored.trees.keys() == catalog.trees.keys() and restored.levels.keys() == catalog.levels.keys()
 	for key: String in catalog.levels:
 		var before: Array = catalog.levels[key]
 		var after: Array = restored.levels[key]

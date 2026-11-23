@@ -92,6 +92,7 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 	_roots(branches, rng, 6 if western else 4, Vector2(root_width, root_width * 1.35),
 		radius * (2.9 if western else 1.15), radius * 0.20, radius * 0.46, bark)
 	var foliage: Array = []
+	var cedar_lods: Array = [[], []] if western else []
 	var base := 0.20 if not larch and not siberian else (0.30 if larch else 0.35)
 	if age == YOUNG_AGE:
 		base *= 0.62
@@ -125,7 +126,16 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 				branches.append([[start, elbow, tip], thick, thick * 0.16, bark, false, true])
 			var center := elbow.lerp(tip, 0.36 if larch or western else 0.26)
 			if western:
-				foliage.append([center, Vector3(span * 0.62, span * 0.24, span * 0.43), a, rng.randf() * TAU, _frame(tip - elbow), 1.12])
+				var size := Vector3(span * 0.62, span * 0.24, span * 0.43)
+				var phase := rng.randf() * TAU
+				var frame := _frame(tip - elbow)
+				foliage.append([center, size, a, phase, frame, 1.12])
+				# Один веер на лапу даёт сплошной ярус в тех же пределах, что два сложенных веера вблизи.
+				cedar_lods[0].append([center, size * Vector3(1.0, 1.0, 1.12), a, phase, frame, 1.12])
+				if arms == 3 or arm != (tier + form) % arms:
+					# Пропуск поворачивается между ярусами. Сохраняем лапы с разных сторон ствола.
+					var tilt := Basis(Vector3.RIGHT, 0.22 * sin(phase + tier))
+					cedar_lods[1].append([center, size * Vector3(1.06, 1.0, 1.24), a, phase, frame * tilt, 1.12])
 			else:
 				var depth := maxf(span * (0.39 if siberian else (0.23 if larch else 0.44)), height * (0.026 if larch else 0.027))
 				foliage.append([center, Vector3(span * (0.57 if larch or siberian else 0.69), depth, span * 0.55), a, rng.randf() * TAU])
@@ -138,10 +148,22 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 			var core := path[5].lerp(path[6], clampf((crown_y - 0.78) / 0.22, 0.0, 1.0)) if crown_y > 0.78 else Vector3.UP * height * crown_y + bend * crown_y * crown_y
 			var width := span_max * profile * (0.52 if larch else (0.57 if western else 0.65))
 			var vertical := height * (0.045 if larch else 0.053)
-			foliage.append([core + Vector3.UP * vertical * 0.47, Vector3(width, vertical, width * 0.9), angle + tier * 2.399, rng.randf() * TAU, true])
+			var inner := [core + Vector3.UP * vertical * 0.47, Vector3(width, vertical, width * 0.9),
+				angle + tier * 2.399, rng.randf() * TAU, true]
+			foliage.append(inner)
+			if western:
+				cedar_lods[0].append(inner)
+				if tier % 2 == 0:
+					var joined := inner.duplicate()
+					joined[1] *= Vector3(1.10, 1.28, 1.10)
+					cedar_lods[1].append(joined)
 	var apex := height * (0.055 if siberian else 0.047)
-	foliage.append([path[-1] - Vector3.UP * apex * 0.90, Vector3(apex * (1.05 if siberian else 0.49), apex * 0.9, apex * 0.64), angle, 2.0, true])
-	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, true), bark = Color.WHITE,
+	var tip_spray := [path[-1] - Vector3.UP * apex * 0.90,
+		Vector3(apex * (1.05 if siberian else 0.49), apex * 0.9, apex * 0.64), angle, 2.0, true]
+	foliage.append(tip_spray)
+	for lod: Array in cedar_lods:
+		lod.append(tip_spray)
+	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, true, [], cedar_lods), bark = Color.WHITE,
 		leaves = _expedition_colors(kind), colored_bark = true, cutout = true, trunk_texture = _texture(false),
 		crown_texture = _texture(true, true), ref = _ref(kind, age, height)}
 
@@ -1035,7 +1057,7 @@ static func _texture(leaves: bool, needles: bool = false, pinnate: bool = false)
 
 ## Явные LOD для растворения в VegetationLayer. Каждый уровень хранится только один раз.
 ## Ближний меш владеет двумя дальними, обратных ссылок и циклов ресурсов нет.
-static func _mesh(branches: Array, foliage: Array, conifer: bool, berries: Array = []) -> ArrayMesh:
+static func _mesh(branches: Array, foliage: Array, conifer: bool, berries: Array = [], crown_lods: Array = []) -> ArrayMesh:
 	var levels: Array[Mesh] = []
 	var crown := [Vector3.ZERO, Vector3.ONE]
 	if not foliage.is_empty():
@@ -1060,9 +1082,18 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool, berries: Array
 				continue
 			var segments: int = ([7, 4, 3] if branch[1] > 0.4 else [6, 4, 3])[level] if branch == branches[0] else (([5, 3, 3] if branch[1] > 0.16 else [4, 3, 3])[level] if not is_minor else 3)
 			vertex_count += _tube(st, branch, segments, level, vertex_count)
-		var lod_foliage: Array = _far_foliage(_far_foliage(foliage, conifer, false), conifer, true) if level == 2 else (_far_foliage(foliage, conifer, false) if level == 1 else foliage)
+		var lod_foliage := foliage
+		var flat_planes := 2
+		if level > 0:
+			if not crown_lods.is_empty():
+				lod_foliage = crown_lods[level - 1]
+				flat_planes = 1
+			else:
+				lod_foliage = _far_foliage(foliage, conifer)
+				if level == 2:
+					lod_foliage = _far_foliage(lod_foliage, conifer, true)
 		for spray: Array in lod_foliage:
-			_spray(st, spray, level, conifer, crown)
+			_spray(st, spray, level, conifer, crown, flat_planes)
 		if level == 0 and not berries.is_empty():
 			for berry: Array in berries:
 				_berry_cluster(st, berry[0], berry[1], berry[2], crown)
@@ -1221,7 +1252,7 @@ static func _crown_light(p: Vector3, crown: Array) -> Array:
 	return [normal, Color(shade, shade, shade, 1)]
 
 
-static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crown: Array) -> void:
+static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crown: Array, flat_planes: int) -> void:
 	var center: Vector3 = data[0]
 	var size: Vector3 = data[1]
 	var rotation := Basis(Vector3.UP, data[2])
@@ -1229,7 +1260,7 @@ static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crow
 	var is_apex: bool = data.size() > 4 and data[4] is bool and data[4]
 	var planes := 3 if (level == 0 and is_apex) else 2
 	if data.size() > 4 and data[4] is Basis:
-		_flat_spray(st, data, 2, crown)
+		_flat_spray(st, data, flat_planes, crown)
 		return
 	var uv := [Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)]
 	if conifer and not is_apex:
