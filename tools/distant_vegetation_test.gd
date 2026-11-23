@@ -42,6 +42,9 @@ func run() -> void:
 	check(mesh != null, "The outer coast publishes a terrain mesh")
 	_check_outer(w, key, built)
 	_check_plan(w, heights)
+	_check_form_ranges(false, Vector2.ZERO)
+	_check_form_ranges(true, Vector2.ZERO)
+	_check_form_ranges(false, Vector2(320.0, 1100.0))
 	print("distant_vegetation_test: %d errors" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -101,7 +104,8 @@ func _check_outer(w: WorldData, key: Vector2i, built: Dictionary) -> void:
 					check(absf(base - expected) < 0.002, "Outer plant base matches the rendered surface")
 	var scrub_models := 0
 	for batch: Vector3i in built.crowns.p:
-		if batch.z >= Far.Form.SCRUB_BUSH: scrub_models += built.crowns.p[batch].count
+		if batch.z in [Far.Form.SCRUB_BUSH, Far.Form.SCRUB_PINE, Far.Form.SCRUB_GRASS]:
+			scrub_models += built.crowns.p[batch].count
 	check(counts.p > scrub_models and counts.f > 0 and counts.s + scrub_models > 0,
 		"The coast exercises trees, open-land plants and supplementary instances: %s, scrub models %d" % [counts, scrub_models])
 
@@ -146,6 +150,40 @@ func _check_plan(w: WorldData, heights: Heightfield) -> void:
 		check(world_pos.x >= 0.0 and world_pos.z >= 0.0 and world_pos.x < C * TILE and world_pos.z < C * TILE,
 			"LOD3 MultiMesh is positioned at its own cell")
 		check(not child.cast_shadow and child.visibility_range_end >= Far.far_end, "Tree LOD3 reaches the far limit without shadow casters")
+
+
+func _check_form_ranges(outer: bool, local_range: Vector2) -> void:
+	var plants := {}
+	for form in Far.Form.size():
+		Far._append_plant(plants, Vector3(form * 5.0, 0, 0), 1.0, 3.0, Color.WHITE,
+			form, outer, float(ForestModels.OLD_AGE))
+	var stand := Node3D.new()
+	root.add_child(stand)
+	Far.attach(stand, Far.pack([], [], plants, outer), local_range, outer)
+	check(stand.get_child_count() == Far.Form.size(), "Every distant form publishes its own batch")
+	var begin := local_range.x if local_range.y > 0.0 else Far.near_begin
+	var end := local_range.y if local_range.y > 0.0 else Far.far_end
+	for child: MultiMeshInstance3D in stand.get_children():
+		var form: int = child.get_meta("plant_form")
+		var scrub := form in [Far.Form.SCRUB_BUSH, Far.Form.SCRUB_PINE, Far.Form.SCRUB_GRASS]
+		var kind := Far.PlantClass.TREE
+		var cap := Far.OUTER_END if outer else INF
+		if scrub:
+			kind = Far.PlantClass.GRASS if form == Far.Form.SCRUB_GRASS else Far.PlantClass.SCRUB
+			cap = Far.OUTER_SCRUB_END if outer else Far.SCRUB_END
+		elif form == Far.Form.BUSH:
+			kind = Far.PlantClass.BUSH
+			cap = Far.BUSH_END
+		var expected_begin := Far.SCRUB_BEGIN - Far.NODE_MARGIN if scrub else begin
+		var label := "%s (outer=%s, range=%s)" % [Far.Form.keys()[form], outer, local_range]
+		check(is_equal_approx(child.visibility_range_begin, expected_begin), "Distant handover: " + label)
+		check(is_equal_approx(child.visibility_range_end, minf(end, cap) + Far.NODE_MARGIN), "Distant cutoff: " + label)
+		# Headless does not round-trip instance custom data through the rendering server.
+		var buffer: PackedFloat32Array = plants[Vector3i(0, 0, form)].buffer
+		var shape_age := float(ForestModels.OLD_AGE) if form in [Far.Form.BROADLEAF, Far.Form.CONIFER] else 0.0
+		check(buffer[16] == float(kind) and buffer[18] == float(outer) and buffer[19] == shape_age,
+			"Packed shader class, terrain flag and deformation: " + label)
+	stand.free()
 
 
 static func _count(clusters: Dictionary) -> int:

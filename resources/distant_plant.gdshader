@@ -16,15 +16,20 @@ varying flat float material_kind;
 varying flat float cloud;
 varying float plant_height;
 
+// DistantForest.PlantClass in INSTANCE_CUSTOM.x.
+const int BUSH = 1;
+const int SCRUB = 2;
+const int GRASS = 3;
+
 void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float dist = length(origin.xz - veg_center);
-	float form = INSTANCE_CUSTOM.x;
+	int kind = int(INSTANCE_CUSTOM.x);
 	float rank = INSTANCE_CUSTOM.y;
 	bool outer = INSTANCE_CUSTOM.z > 0.5;
-	bool scrub = form >= 4.5;
-	bool grass = form >= 6.5;
-	bool small = form >= 3.5;
+	bool grass = kind == GRASS;
+	bool scrub = kind == SCRUB || grass;
+	bool small = kind == BUSH || scrub;
 	keep_lo = distant_veg_near(dist, scrub, grass);
 	keep_hi = distant_veg_end(dist, outer, scrub, small);
 	float density = distant_veg_density(dist, small);
@@ -35,7 +40,7 @@ void vertex() {
 	if (keep_lo >= keep_hi || distant_vegetation.w < 0.5) {
 		VERTEX = vec3(0.0);
 	} else {
-		if (form < 1.5 && INSTANCE_CUSTOM.w > 0.5) {
+		if (INSTANCE_CUSTOM.w > 0.5) {
 			bool young = INSTANCE_CUSTOM.w < 1.5;
 			VERTEX.y = VERTEX.y * (young ? 1.13 : 0.88) + (young ? -0.13 : 0.12) * smoothstep(0.0, 0.3, VERTEX.y);
 		}

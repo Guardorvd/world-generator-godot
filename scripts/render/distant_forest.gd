@@ -21,12 +21,23 @@ const PLANT_SHARE := 0.8
 const TURF_SHARE := 1.0 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальними дерновинами
 enum { FINE, COARSE, SCRUB, PLANT }
 enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS, SPRUCE, LARCH, ALDER, REDCEDAR, SIBERIAN_CEDAR }
+## INSTANCE_CUSTOM.x в distant_plant.gdshader. Номер формы остаётся ключом меша.
+enum PlantClass { TREE, BUSH, SCRUB, GRASS }
 const PARTS := ["f", "c", "s", "p"]
 static var _meshes: Array[ArrayMesh] = []
 static var _materials: Array[ShaderMaterial] = []
 static var active := true
 static var far_end := 1400.0 # crown draw distance, m: set per quality level by VegetationLayer
 static var near_begin := 240.0 # cells nearer than this are fully covered by real trees
+
+
+static func plant_class(form: int) -> int:
+	match form:
+		Form.BUSH: return PlantClass.BUSH
+		Form.SCRUB_BUSH, Form.SCRUB_PINE: return PlantClass.SCRUB
+		Form.SCRUB_GRASS: return PlantClass.GRASS
+		_: return PlantClass.TREE
+
 
 ## Coarse node ranges complement frustum culling and the exact per-plant fade.
 static func apply_ranges(node: MultiMeshInstance3D, local_range := Vector2.ZERO) -> void:
@@ -46,11 +57,11 @@ static func apply_ranges(node: MultiMeshInstance3D, local_range := Vector2.ZERO)
 			node.visibility_range_begin = maxf(0.0, SCRUB_BEGIN - NODE_MARGIN)
 			node.visibility_range_end = scrub_end + NODE_MARGIN
 		PLANT:
-			var form: int = node.get_meta("plant_form")
-			var scrub := form >= Form.SCRUB_BUSH
+			var kind := plant_class(node.get_meta("plant_form"))
+			var scrub := kind == PlantClass.SCRUB or kind == PlantClass.GRASS
 			node.visibility_range_begin = maxf(0.0, SCRUB_BEGIN - NODE_MARGIN) if scrub else begin
 			if scrub: end = scrub_end
-			elif form == Form.BUSH: end = minf(end, BUSH_END)
+			elif kind == PlantClass.BUSH: end = minf(end, BUSH_END)
 			node.visibility_range_end = end + NODE_MARGIN
 		FINE:
 			node.visibility_range_begin = begin
@@ -316,8 +327,10 @@ static func _append_plant(out: Dictionary, at: Vector3, radius: float, height: f
 	var key := Vector3i(cell.x, cell.y, form)
 	var extent := radius * 1.55
 	var bounds := AABB(Vector3(-extent, -height * 0.25, -extent), Vector3(extent * 2.0, height * 1.65, extent * 2.0))
+	# Возрастное вытягивание карточек применяется только к исходным силуэтам дерева.
+	var shape_age := age if form == Form.BROADLEAF or form == Form.CONIFER else 0.0
 	_append(out, key, cell, at, Vector3(radius, height, radius), color,
-		Vector4(form, _plant_hash(at, 751), float(outer), age), bounds)
+		Vector4(plant_class(form), _plant_hash(at, 751), float(outer), shape_age), bounds)
 
 
 static func _append(out: Dictionary, key: Variant, cell: Vector2i, at: Vector3, size: Vector3, color: Color,
