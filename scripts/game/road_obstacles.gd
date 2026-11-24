@@ -484,7 +484,7 @@ func pick_verge(h: Heightfield, surface: Image, route: int, n: int) -> Dictionar
 	if protected(route, (_along[route][n - 1] + _along[route][n]) * 0.5):
 		return {}
 	var chance := _veg_cfg.verge_log_chance
-	if _roll(route, n, 71) >= chance or _roll(route, n - 1, 71) < chance or _roll(route, n - 2, 71) < chance:
+	if n % 3 != 0 or _roll(route, n, 71) >= chance:
 		return {}
 	var a := _point(t, samples[n - 1])
 	var b := _point(t, samples[n])
@@ -536,16 +536,6 @@ func pick_verge(h: Heightfield, surface: Image, route: int, n: int) -> Dictionar
 		return {}
 	var side_roll := _roll(route, n, 72)
 	var edge_side := (uphill if side_roll < 0.75 else -uphill) if uphill != 0.0 else (1.0 if side_roll < 0.5 else -1.0)
-	var lat_offset := half + TrailTechnical.CORRIDOR * 0.5 + lerpf(_veg_cfg.verge_shoulder_min, _veg_cfg.verge_shoulder_max, _roll(route, n, 73))
-	var at := mid + side * edge_side * lat_offset
-	var ai := floori(at.x / TILE)
-	var aj := floori(at.y / TILE)
-	if ai >= 0 and aj >= 0 and ai < world.W and aj < world.H:
-		if world.river[aj * world.W + ai] != 0 or h.depth_at(at.x, at.y) > 0.0:
-			return {}
-	var dy_mid := absf(support.ground_at(at.x, at.y) - support.ground_at(mid.x, mid.y))
-	if dy_mid > 1.8:
-		return {}
 	var type_roll := _roll(route, n, 74)
 	var var_roll := _roll(route, n, 75)
 	var rot_roll := _roll(route, n, 76)
@@ -556,6 +546,8 @@ func pick_verge(h: Heightfield, surface: Image, route: int, n: int) -> Dictionar
 	var stretch := 1.0
 	var sink := 0.0
 	var rot := rot_roll * TAU
+	var prop_radius: float
+	var inward_swing := 0.0
 	var is_log := type_roll < 0.50
 	if is_log:
 		floor_kind = Floor.NURSE_LOG if var_roll > 0.35 else Floor.NURSE_LOG_SPLIT
@@ -565,14 +557,28 @@ func pick_verge(h: Heightfield, surface: Image, route: int, n: int) -> Dictionar
 		var angle_off := lerpf(-0.45, 0.45, rot_roll) if _roll(route, n, 79) < _veg_cfg.verge_log_parallel_chance else lerpf(0.55, 1.15, rot_roll) * edge_side
 		var along_v := dir.rotated(angle_off)
 		rot = atan2(-along_v.y, along_v.x)
+		prop_radius = 0.42 * scale
+		inward_swing = 2.85 * scale * stretch * absf(sin(angle_off))
 	elif type_roll < 0.75:
 		floor_kind = Floor.ROOT_STUMP if var_roll < 0.45 else (Floor.ROOT_PLATE if var_roll < 0.75 else Floor.ROOT_UPTURNED)
 		scale = lerpf(0.95, 1.38, sc_roll)
 		sink = 0.08 * scale
+		prop_radius = 0.65 * scale
 	else:
 		floor_kind = Floor.MOSS_BOULDER if var_roll > 0.40 else Floor.MOSS_BOULDER_LOW
 		scale = lerpf(0.90, 1.45, sc_roll)
 		sink = 0.14 * scale
+		prop_radius = 0.95 * scale
+	var lat_offset := maxf(half, TrailTechnical.CORRIDOR) + prop_radius + inward_swing + lerpf(_veg_cfg.verge_shoulder_min, _veg_cfg.verge_shoulder_max, _roll(route, n, 73))
+	var at := mid + side * edge_side * lat_offset
+	var ai := floori(at.x / TILE)
+	var aj := floori(at.y / TILE)
+	if ai >= 0 and aj >= 0 and ai < world.W and aj < world.H:
+		if world.river[aj * world.W + ai] != 0 or h.depth_at(at.x, at.y) > 0.0:
+			return {}
+	var dy_mid := absf(support.ground_at(at.x, at.y) - support.ground_at(mid.x, mid.y))
+	if dy_mid > 2.6:
+		return {}
 	var out := {floor_kind = floor_kind, x = at.x, z = at.y, rot = rot, scale = scale, stretch = stretch, sink = sink}
 	if not _verge_solid_clear(out, t, samples, n):
 		return {}
@@ -588,7 +594,7 @@ func _verge_solid_clear(part: Dictionary, t: Dictionary, samples: PackedInt32Arr
 	var a: Vector2 = center - axis * half_span if is_log else center
 	var b: Vector2 = center + axis * half_span if is_log else center
 	var radius: float = (0.42 if is_log else (0.65 if fk in [Floor.ROOT_STUMP, Floor.ROOT_PLATE, Floor.ROOT_UPTURNED] else 0.95)) * part.scale
-	var min_clear := radius + TrailTechnical.CORRIDOR + 0.55
+	var min_clear := radius + TrailTechnical.CORRIDOR + 0.35
 	for j in range(maxi(0, n - 3), mini(samples.size(), n + 3)):
 		var p := _point(t, samples[j])
 		var q := _point(t, samples[j + 1]) if j + 1 < samples.size() else p

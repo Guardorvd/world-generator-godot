@@ -48,7 +48,11 @@ const VP_RIVER_ROCK_DIST := 41
 const VP_RIVER_ROCK_BOOST := 42
 const VP_VALLEY_BOT_H := 43
 const VP_VALLEY_TOP_H := 44
-const VP_COUNT := 45
+const VP_YOUNG_SHARE := 45
+const VP_INLAND_ALDER_SHARE := 46
+const VP_MUGO_SLOPE_SHARE := 47
+const VP_LARCH_BASE_SHARE := 48
+const VP_COUNT := 49
 
 @export_group("Крона и зонирование")
 ## Минимальный базовый покров глухого таёжного полога внутри леса, исключающий 300-метровые луга.
@@ -85,6 +89,8 @@ const VP_COUNT := 45
 @export_range(0.01, 0.15, 0.005) var water_alder_max_elev: float = 0.06
 ## Базовая доля нависающей ольхи у самой кромки воды.
 @export_range(0.0, 1.0, 0.01) var water_alder_share: float = 0.72
+## Доля кряжистой многоствольной ольхи во влажных лесных логах и распадках вдали от берега.
+@export_range(0.0, 1.0, 0.01) var inland_alder_share: float = 0.24
 ## Расстояние от воды dw для укрытых террас внутренних излучин, где гнездятся рощи клёна.
 @export_range(8.0, 60.0, 0.5) var terrace_maple_dist: float = 34.0
 ## Максимальное превышение над рекой (elev - river) для террасных кленовых рощ.
@@ -119,14 +125,20 @@ const VP_COUNT := 45
 @export_range(0.10, 0.80, 0.01) var larch_elev_hi: float = 0.42
 ## Доля лиственницы на сухих светлых отрогах верховий.
 @export_range(0.0, 1.0, 0.01) var larch_headwater_share: float = 0.36
+## Базовый вес осенней золотисто-бронзовой лиственницы в среднем ярусе долины.
+@export_range(0.0, 1.0, 0.01) var larch_base_share: float = 0.28
 ## Базовый вес тёмной ели/пихты, формирующей мрачный непролазный фон долины.
-@export_range(0.10, 1.00, 0.01) var spruce_base_share: float = 0.64
+@export_range(0.05, 1.00, 0.01) var spruce_base_share: float = 0.64
 ## Редкая примесь сосны обыкновенной на самых сухих скалистых солнечных гребнях.
 @export_range(0.0, 0.60, 0.01) var pine_dry_spur_share: float = 0.20
+## Доля кряжистого стланика (T_MUGO) на крутых каменистых склонах и скальных уступах ниже верхней границы леса.
+@export_range(0.0, 1.0, 0.01) var mugo_rocky_slope_share: float = 0.24
 
 @export_group("Формы и масштаб деревьев")
 ## Множитель высоты старых деревьев глухой долины.
 @export_range(0.80, 1.40, 0.01) var canopy_scale_boost: float = 1.12
+## Минимальная доля молодого 3–10 м яруса под старым пологом для загущения леса на уровне глаз.
+@export_range(0.0, 0.65, 0.01) var young_understory_share: float = 0.34
 ## Вероятность наклонённой/изогнутой над водой формы у деревьев кромки реки и крутых уступов.
 @export_range(0.0, 1.0, 0.01) var river_lean_chance: float = 0.62
 ## Вероятность корявой/раздвоенной древней кроны на верхних каменистых склонах.
@@ -155,14 +167,28 @@ const VP_COUNT := 45
 @export_range(0.0, 0.80, 0.01) var carpet_shade_boost: float = 0.28
 ## Множитель луговых цветов в дёрне GroundCarpet (0 отключает летние белые/жёлтые цветочки).
 @export_range(0.0, 1.0, 0.05) var carpet_flowers_mul: float = 0.0
+## Множитель покрытия зелёного дёрна GroundCarpet под лесным пологом (убирает парковый газон).
+@export_range(0.05, 1.0, 0.01) var carpet_forest_cover_mul: float = 0.18
+## Приглушение яркости альбедо дёрна GroundCarpet в лесу и на замшелых участках.
+@export_range(0.30, 1.0, 0.01) var carpet_darken_mul: float = 0.62
 
 @export_group("Папоротники, валежник и пни")
+## Количество попыток постановки крупного лесного подлеска на клетку 8 м в тёмной тайге.
+@export_range(4, 16, 1) var forest_understory_slots: int = 11
+## Множитель масштаба лесных папоротников, ягодников и травостоя до высоты по грудь/пояс.
+@export_range(0.80, 1.80, 0.02) var forest_understory_scale_mul: float = 1.24
 ## Множитель густоты меч-папоротников и лесных папоротников на террасах и вдоль тропы.
 @export_range(0.2, 5.0, 0.1) var forest_fern_boost: float = 2.6
 ## Множитель бруснично-черничного осеннего ягодника (вместо открытой луговой травы).
 @export_range(0.2, 5.0, 0.1) var forest_berry_boost: float = 2.1
+## Множитель крупнолистного лесного травостоя и белокопытника (BROADLEAF_HERB).
+@export_range(0.2, 6.0, 0.1) var forest_broadleaf_boost: float = 3.8
+## Множитель дикого подгольцового кустарника и багульника (ALPINE_SHRUB).
+@export_range(0.2, 6.0, 0.1) var forest_alpine_shrub_boost: float = 3.2
 ## Множитель моховых кочек на сырой подстилке хвойного леса.
 @export_range(0.2, 5.0, 0.1) var forest_moss_mound_boost: float = 2.2
+## Множитель густоты лещиновых, можжевеловых и еловых зарослей на уровне взгляда.
+@export_range(0.2, 5.0, 0.1) var forest_thicket_wall: float = 2.8
 ## Подавление светлых луговых цветов внутри лесного полога.
 @export_range(0.0, 1.5, 0.02) var forest_flower_mul: float = 0.12
 ## Подавление яркого розового иван-чая (убирает весёлый розовый ковёр старого шаблона).
@@ -242,6 +268,10 @@ func veg_params(eco_base: float, valley_bot_h := 0.07, valley_top_h := 0.22) -> 
 	p[VP_RIVER_ROCK_BOOST] = riverbank_rock_boost
 	p[VP_VALLEY_BOT_H] = valley_bot_h
 	p[VP_VALLEY_TOP_H] = valley_top_h
+	p[VP_YOUNG_SHARE] = young_understory_share
+	p[VP_INLAND_ALDER_SHARE] = inland_alder_share
+	p[VP_MUGO_SLOPE_SHARE] = mugo_rocky_slope_share
+	p[VP_LARCH_BASE_SHARE] = larch_base_share
 	return p
 
 

@@ -2281,8 +2281,8 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var buf: PackedFloat32Array = grass_buf if ctx == null else ctx.grass
 	var w := world
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
-	if _veg_cfg != null and surface.r > 0.45:
-		cnt = floori(float(cnt) * _veg_cfg.grass_forest_density_mul)
+	if _veg_cfg != null and surface.r > 0.15:
+		cnt = floori(float(cnt) * lerpf(0.75, _veg_cfg.grass_forest_density_mul, smoothstep(0.15, 0.50, surface.r)))
 	if cnt <= 0:
 		return n
 	var tc: Array = gr.tint
@@ -2510,15 +2510,28 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		if _veg_cfg != null:
 			weights[Understory.FLOWERS] *= _veg_cfg.forest_flower_mul
 			weights[Understory.MEADOW] *= _veg_cfg.forest_flower_mul
+			weights[Understory.FORBS] *= _veg_cfg.forest_flower_mul
 			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
-			var verge_boost := lerpf(1.0, 1.45, _verge(i, j)) if _in_plan(i, j) else 1.0
-			weights[Understory.SWORD_FERN] *= _veg_cfg.forest_fern_boost * verge_boost
-			weights[Understory.FERN] *= _veg_cfg.forest_fern_boost * verge_boost
-			weights[Understory.BERRY_SHRUB] *= _veg_cfg.forest_berry_boost
-			weights[Understory.MOSS_MOUND] *= _veg_cfg.forest_moss_mound_boost
-			floor_weights[Floor.MOSS_LOG] *= _veg_cfg.forest_nurse_log_mul
-			floor_weights[Floor.STUMP] *= _veg_cfg.forest_root_stump_mul
-			floor_weights[Floor.BOULDER] *= _veg_cfg.forest_boulder_mul
+			var verge_boost := lerpf(1.0, 1.65, _verge(i, j)) if _in_plan(i, j) else 1.0
+			var wet_dark := clampf(wet_patch * 0.65 + moisture * 0.35, 0.25, 1.0)
+			weights[Understory.SWORD_FERN] = weights[Understory.SWORD_FERN] * _veg_cfg.forest_fern_boost * verge_boost + 0.55 * wet_dark * verge_boost * _veg_cfg.forest_fern_boost
+			weights[Understory.FERN] *= _veg_cfg.forest_fern_boost * verge_boost * 0.45
+			weights[Understory.BROADLEAF_HERB] = weights[Understory.BROADLEAF_HERB] * _veg_cfg.forest_broadleaf_boost + 0.48 * wet_dark * (0.65 + 0.75 * bank) * _veg_cfg.forest_broadleaf_boost
+			weights[Understory.BERRY_SHRUB] = weights[Understory.BERRY_SHRUB] * _veg_cfg.forest_berry_boost + 0.50 * (1.0 - surface.a * 0.7) * _veg_cfg.forest_berry_boost
+			weights[Understory.ALPINE_SHRUB] += (0.28 * smoothstep(0.10, 0.55, slope) + 0.24 * (1.0 - ch[Understory.DARK] * 0.5) + 0.22 * verge_boost) * _veg_cfg.forest_alpine_shrub_boost
+			weights[Understory.MOSS_MOUND] = weights[Understory.MOSS_MOUND] * _veg_cfg.forest_moss_mound_boost + 0.42 * wet_dark * (1.0 - 0.4 * slope) * _veg_cfg.forest_moss_mound_boost
+			var tw := _veg_cfg.forest_thicket_wall
+			weights[Understory.BUSH] = (weights[Understory.BUSH] + 0.16 * ch[Understory.DARK] + 0.14 * verge_boost) * tw
+			weights[Understory.SAPLING] = (weights[Understory.SAPLING] + 0.12) * tw
+			weights[Understory.YOUNG_PINE] = (weights[Understory.YOUNG_PINE] + 0.14 * surface.g) * tw
+			weights[Understory.PINE] = (weights[Understory.PINE] + 0.14 * surface.g) * tw
+			weights[Understory.HAZEL] *= tw
+			weights[Understory.HAZEL_TALL] *= tw
+			floor_weights[Floor.MOSS_LOG] = floor_weights[Floor.MOSS_LOG] * _veg_cfg.forest_nurse_log_mul + 0.26 * wet_dark * _veg_cfg.forest_nurse_log_mul
+			floor_weights[Floor.STUMP] = floor_weights[Floor.STUMP] * _veg_cfg.forest_root_stump_mul + 0.20 * _veg_cfg.forest_root_stump_mul
+			floor_weights[Floor.BOULDER] = floor_weights[Floor.BOULDER] * _veg_cfg.forest_boulder_mul + 0.22 * (surface.a + 0.4 * slope) * _veg_cfg.forest_boulder_mul
+			floor_weights[Floor.TWIG] *= 0.30
+			floor_weights[Floor.LEAVES] *= 0.30
 	weights.append_array(floor_weights)
 	var total := 0.0
 	for weight in weights:
@@ -2531,13 +2544,20 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 	var cluster := smoothstep(0.32, 0.76, patch)
 	var woody_keep := minf(1.0, lerpf(0.55, 0.96, cluster) + ch[Understory.THICKET] * 0.12)
 	var ground_keep := lerpf(0.7, 0.96, cluster)
+	if _expedition and _veg_cfg != null:
+		density = maxf(density, lerpf(0.74, 1.0, patch) * (1.0 - 0.45 * surface.a))
+		woody_keep = minf(1.0, woody_keep + 0.20)
+		ground_keep = minf(1.0, ground_keep + 0.18)
 	var moss_keep := lerpf(0.25, 1.0, smoothstep(0.35, 0.78, moisture * (1.0 - light * 0.4))) * (1.0 - 0.55 * maxf(surface.a, smoothstep(0.2, 0.75, slope)))
 	# Общий бросок плотности позволяет проредить растения, сохраняя раскладку валежника и камней.
-	for m in 5 + roundi(3.0 * ch[Understory.THICKET]):
-		var roll := WGRandom.hash2(i * 8 + m, j, seed + 1)
+	var slots := _veg_cfg.forest_understory_slots if (_expedition and _veg_cfg != null) else (5 + roundi(3.0 * ch[Understory.THICKET]))
+	var hx_f := i * 16 if (_expedition and _veg_cfg != null) else i * 8
+	for m in slots:
+		var slot_x := hx_f + m
+		var roll := WGRandom.hash2(slot_x, j, seed + 1)
 		if roll > density:
 			continue
-		var pick := WGRandom.hash2(i * 8 + m, j, seed + 2) * total
+		var pick := WGRandom.hash2(slot_x, j, seed + 2) * total
 		var kind := 0
 		while kind < weights.size() - 1 and pick >= weights[kind]:
 			pick -= weights[kind]
@@ -2550,10 +2570,10 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 				keep = woody_keep
 			if roll > density * lerpf(keep, 1.0, bank):
 				continue
-		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
-		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
+		var x := (i + 0.1 + 0.8 * WGRandom.hash2(slot_x, j, seed + 3)) * TILE
+		var z := (j + 0.1 + 0.8 * WGRandom.hash2(slot_x, j, seed + 4)) * TILE
 		if _expedition and kind >= Understory.EXPEDITION_FIRST:
-			var variant_roll := WGRandom.hash2(i * 8 + m, j, seed + 13)
+			var variant_roll := WGRandom.hash2(slot_x, j, seed + 13)
 			if kind >= Floor.FIRST:
 				kind = Floor.FIRST + Floor.expedition_variant(kind - Floor.FIRST, variant_roll, wet_patch, old_patch, surface.a, _veg_cfg)
 			else:
@@ -2563,19 +2583,21 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		if d > _reach_r(kind, far):
 			continue
 		var full := _full_r(kind, far)
-		var rank := WGRandom.hash2(i * 8 + m, j, seed + 8)
+		var rank := WGRandom.hash2(slot_x, j, seed + 8)
 		if rank > _keep(d, full, _ahead(_reach_r(kind, far))) * _flora_keep(kind):
 			continue
-		var scale := (0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6) * _flora_grow(kind)
-		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
-		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
-		kind = Floor.FIRST + Floor.variant_kind(kind - Floor.FIRST, int(WGRandom.hash2(i * 8 + m, j, seed + 9) * 3.0)) if kind >= Floor.FIRST else kind
+		var scale := (0.7 + WGRandom.hash2(slot_x, j, seed + 5) * 0.6) * _flora_grow(kind)
+		if _expedition and _veg_cfg != null and kind >= Understory.EXPEDITION_FIRST and kind < Floor.FIRST:
+			scale *= _veg_cfg.forest_understory_scale_mul
+		var rot := WGRandom.hash2(slot_x, j, seed + 6) * TAU
+		var tint := 0.85 + WGRandom.hash2(slot_x, j, seed + 7) * 0.3
+		kind = Floor.FIRST + Floor.variant_kind(kind - Floor.FIRST, int(WGRandom.hash2(slot_x, j, seed + 9) * 3.0)) if kind >= Floor.FIRST else kind
 		if kind == Understory.HAZEL or kind == Understory.HAZEL_TALL:
 			var grow_hz := _flora_grow(kind)
-			var h_u := WGRandom.hash2(i * 8 + m, j, seed + 10)
+			var h_u := WGRandom.hash2(slot_x, j, seed + 10)
 			var hz_scale := (lerpf(0.68, 1.24, h_u) if kind == Understory.HAZEL else lerpf(0.92, 1.38, h_u)) * grow_hz
-			var hz_squash := lerpf(0.84, 1.06, WGRandom.hash2(i * 8 + m, j, seed + 11)) if kind == Understory.HAZEL else lerpf(0.94, 1.12, WGRandom.hash2(i * 8 + m, j, seed + 11))
-			var yellow := smoothstep(0.68, 0.96, patch * 0.4 + WGRandom.hash2(i * 8 + m, j, seed + 12) * 0.6)
+			var hz_squash := lerpf(0.84, 1.06, WGRandom.hash2(slot_x, j, seed + 11)) if kind == Understory.HAZEL else lerpf(0.94, 1.12, WGRandom.hash2(slot_x, j, seed + 11))
+			var yellow := smoothstep(0.68, 0.96, patch * 0.4 + WGRandom.hash2(slot_x, j, seed + 12) * 0.6)
 			var hz_hue := Color.WHITE.lerp(Color(1.16, 1.08, 0.72), yellow * 0.75)
 			_sites(ctx).append([kind, x, z, rot, hz_scale, tint, rank, hz_hue, -1, hz_squash])
 		else:
@@ -2708,12 +2730,16 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		if _veg_cfg != null:
 			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
 			var cool_shady := clampf(surface.r * 0.8 + surface.a * 0.6 + clampf((alt - 0.15) * 2.5, 0.0, 1.0), 0.0, 1.0)
-			var flower_keep := lerpf(maxf(_veg_cfg.forest_flower_mul, 0.25), _veg_cfg.forest_flower_mul, cool_shady)
+			var flower_keep := lerpf(maxf(_veg_cfg.forest_flower_mul, 0.08), _veg_cfg.forest_flower_mul, cool_shady)
 			weights[Understory.FLOWERS] *= flower_keep
+			weights[Understory.FORBS] *= flower_keep
 			weights[Understory.MEADOW] *= lerpf(1.0, 0.45, cool_shady)
 			weights[Understory.HIGH_GRASS] *= lerpf(1.0, 0.50, cool_shady)
-			if water < 5.0:
-				weights[Understory.SWORD_FERN] += com[Understory.C_WET] * 0.6 * _veg_cfg.forest_fern_boost * 0.35
+			if water < 8.0 or surface.b > 0.45:
+				weights[Understory.SWORD_FERN] += com[Understory.C_WET] * 0.65 * _veg_cfg.forest_fern_boost * 0.35
+				weights[Understory.BROADLEAF_HERB] += com[Understory.C_WET] * 0.55 * _veg_cfg.forest_broadleaf_boost * 0.32
+			weights[Understory.BERRY_SHRUB] += 0.28 * _veg_cfg.forest_berry_boost * (1.0 - surface.a * 0.6)
+			weights[Understory.ALPINE_SHRUB] += (0.26 * rock_edge + 0.16 * smoothstep(0.15, 0.55, surface.a)) * _veg_cfg.forest_alpine_shrub_boost
 	for weight in weights:
 		total += weight
 	# 17.11.2026: лещина дополняет кусты и травы открытого места (как в лесу): густота растёт на её долю
@@ -2771,6 +2797,8 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 			site_hue = Color.WHITE # серебро остей не желтим
 		elif kind == Understory.FIREWEED:
 			scale *= 0.85 + 0.3 * bloom
+		if _expedition and _veg_cfg != null and kind >= Understory.EXPEDITION_FIRST and kind < Floor.FIRST:
+			scale *= lerpf(1.0, _veg_cfg.forest_understory_scale_mul, 0.7)
 		var tint := 0.88 + WGRandom.hash2(hx + m, j, seed + 7) * 0.24
 		_sites(ctx).append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, site_hue,
 			(j * world.W + i) * 8 + m if inside else -1, squash])
@@ -3078,9 +3106,9 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 			elif form_twins and maxf(at.distance_to(_fill_at), at.distance_to(_fill_at + _fill_lead)) > s.x - margin:
 				twin = _far_of[kind]
 	if entry.count >= entry.cap:
-		if group == kind and _far_of.has(kind):
+		if (group == kind and _far_of.has(kind)) or (_expedition and entry.get("expedition_form", false) and entry.cap < 8192):
 			# Keep the detailed mesh when the wider reserve outgrows its initial buffer.
-			entry.cap *= 2
+			entry.cap = mini(entry.cap * 2, 8192)
 			entry.buf.resize(entry.cap * STRIDE)
 		else:
 			fill_capped += 1
@@ -3149,7 +3177,11 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		if xf == Transform3D.IDENTITY:
 			return RoadPlacement.TERRAIN
 	var box: AABB = xf * local_box
-	if not placement.details_clear(box):
+	var clear_box := box
+	if _expedition and _veg_cfg != null and Placement.priority(kind) == 2:
+		var core_xz := Vector3(maxf(0.24, box.size.x * 0.35), box.size.y, maxf(0.24, box.size.z * 0.35))
+		clear_box = AABB(Vector3(box.get_center().x - core_xz.x * 0.5, box.position.y, box.get_center().z - core_xz.z * 0.5), core_xz)
+	if not placement.details_clear(clear_box):
 		return RoadPlacement.DETAIL
 	_put_transform(entry.buf, offset, xf)
 	entry.buf[offset + 12] = tint * hue.r
@@ -3171,6 +3203,9 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		# трава и куртины, иначе каждый куст вычищал под собой луг
 		var core := Vector3(box.size.x * HAZEL_CORE, box.size.y, box.size.z * HAZEL_CORE)
 		placement.occupy(AABB(box.get_center() - core * 0.5, core))
+	elif _expedition and _veg_cfg != null and not on_road and Placement.priority(kind) == 1:
+		var occ_xz := Vector3(maxf(0.32, box.size.x * 0.35), box.size.y, maxf(0.32, box.size.z * 0.35))
+		placement.occupy(AABB(Vector3(box.get_center().x - occ_xz.x * 0.5, box.position.y, box.get_center().z - occ_xz.z * 0.5), occ_xz))
 	elif (on_road and floor_kind != Floor.ROOT_SPAN) or Placement.priority(kind) < 2:
 		placement.occupy(box.grow(0.03))
 	if StreamPolicy.distance_to_coverage(Vector2(x, z), _fill_at, _fill_lead) > OBSTACLE_R:

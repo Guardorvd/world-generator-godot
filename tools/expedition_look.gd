@@ -2134,6 +2134,9 @@ func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) 
 		if not parity_ok:
 			failures.append("%s: C# vs GDScript StageVegetation parity mismatch (%s)" % [seed_text, str(parity_entry)])
 		var oak_count := 0
+		var woodland_n := 0
+		var bespoke_n := 0
+		var young_n := 0
 		var trees := 0
 		var conifers := 0
 		var head_trees := 0
@@ -2153,9 +2156,16 @@ func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) 
 			counts[kind] = counts.get(kind, 0) + 1
 			if kind == Biomes.T_OAK:
 				oak_count += 1
-			if not Biomes.is_tree(kind) or kind == Biomes.T_MUGO:
+			if not Biomes.is_tree(kind):
+				continue
+			woodland_n += 1
+			if kind in [Biomes.T_WESTERN_REDCEDAR, Biomes.T_SIBERIAN_CEDAR, Biomes.T_LARCH, Biomes.T_ALDER, Biomes.T_MAPLE, Biomes.T_MUGO]:
+				bespoke_n += 1
+			if kind == Biomes.T_MUGO:
 				continue
 			trees += 1
+			if ForestModels.has_ages(kind) and floori(float(w.obj_v[o]) / 3.0) == ForestModels.YOUNG_AGE:
+				young_n += 1
 			if kind in [Biomes.T_SPRUCE, Biomes.T_WESTERN_REDCEDAR, Biomes.T_SIBERIAN_CEDAR, Biomes.T_LARCH]:
 				conifers += 1
 			var cx := clampi(floori(w.obj_x[o]), 0, w.W - 1)
@@ -2187,6 +2197,8 @@ func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) 
 			if w.river[ci] == 0 and (w.biome[ci] == Biomes.FOREST or w.biome[ci] == Biomes.TAIGA):
 				forest_cells += 1
 		var conifer_share := float(conifers) / maxf(1.0, float(trees))
+		var bespoke_share := float(bespoke_n) / maxf(1.0, float(woodland_n))
+		var young_share := float(young_n) / maxf(1.0, float(trees))
 		var head_alpine_share := float(head_alpine) / maxf(1.0, float(head_trees))
 		var low_alpine_share := float(low_alpine) / maxf(1.0, float(low_trees))
 		var head_broad_share := float(head_broad) / maxf(1.0, float(head_trees))
@@ -2198,6 +2210,10 @@ func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) 
 			failures.append("%s: found %d forbidden T_OAK in river_expedition" % [seed_text, oak_count])
 		if conifer_share < 0.60:
 			failures.append("%s: conifer canopy share too low (%.3f < 0.60)" % [seed_text, conifer_share])
+		if bespoke_share <= 0.85:
+			failures.append("%s: bespoke Phase 8/8.1 tree share too low (%.3f <= 0.85)" % [seed_text, bespoke_share])
+		if young_share < 0.24:
+			failures.append("%s: young eye-level canopy share too low (%.3f < 0.24)" % [seed_text, young_share])
 		if head_trees > 100 and low_trees > 100 and head_alpine_share <= low_alpine_share:
 			failures.append("%s: headwater alpine conifer share (%.3f) did not exceed lower valley (%.3f)" % [seed_text, head_alpine_share, low_alpine_share])
 		if head_trees > 100 and low_trees > 100 and low_broad_share <= head_broad_share:
@@ -2236,7 +2252,7 @@ func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) 
 			for j in range(0, ps.size(), 2):
 				best_d = minf(best_d, pt.distance_to(ps[j]))
 			verge_min_gap = minf(verge_min_gap, best_d)
-		if verge_total < 3:
+		if verge_total < 5:
 			failures.append("%s: too few roadside verge logs/stumps (%d)" % [seed_text, verge_total])
 		if verge_total > 0 and verge_min_gap < TrailTechnical.CORRIDOR:
 			failures.append("%s: verge prop infringed trail corridor (%.2fm < %.2fm)" % [seed_text, verge_min_gap, TrailTechnical.CORRIDOR])
@@ -2254,23 +2270,23 @@ func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) 
 				if h.road_refinement.weight_at(gx, gz, w.W) > veg_cfg.grass_verge_mask + 0.001:
 					tread_grass += 1
 			for entry: Dictionary in veg.understory:
-				if entry.base in [Understory.FERN, Understory.SWORD_FERN, Understory.SWORD_FERN_TALL, Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.MOSS_MOUND]:
+				if entry.base in [Understory.SWORD_FERN, Understory.SWORD_FERN_TALL, Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL, Understory.ALPINE_SHRUB, Understory.ALPINE_SHRUB_CREEPING, Understory.MOSS_MOUND]:
 					fern_count += int(entry.count)
 				elif entry.base in [Floor.FIRST + Floor.NURSE_LOG, Floor.FIRST + Floor.NURSE_LOG_SPLIT, Floor.FIRST + Floor.ROOT_STUMP, Floor.FIRST + Floor.ROOT_PLATE, Floor.FIRST + Floor.ROOT_UPTURNED]:
 					nurse_count += int(entry.count)
 		veg.free()
 		if tread_grass > 0:
 			failures.append("%s: %d grass blades spawned inside muddy center tread (weight > %.2f)" % [seed_text, tread_grass, veg_cfg.grass_verge_mask])
-		if fern_count < 10:
-			failures.append("%s: too few trail-side ferns/berries/moss mounds placed (%d)" % [seed_text, fern_count])
-		print("PHASE9_METRICS seed=%s obj=%d trees=%d parity=%s oak=%d conifer=%.3f head_alp=%.3f low_alp=%.3f head_broad=%.3f low_broad=%.3f alder_dw=%.2f spruce_dw=%.2f cell_fill=%.3f verge_props=%d(min_d=%.2fm) ferns=%d nurse=%d tread_grass=%d maple=%d redcedar=%d sib_cedar=%d spruce=%d larch=%d alder=%d birch=%d snag=%d" % [
-			seed_text, w.obj_count, trees, str(parity_ok), oak_count, conifer_share,
+		if fern_count < 30:
+			failures.append("%s: too few Phase 8/8.1 understory props placed (%d < 30)" % [seed_text, fern_count])
+		print("PHASE9_METRICS seed=%s obj=%d woodland=%d trees=%d bespoke=%.3f young=%.3f parity=%s oak=%d conifer=%.3f head_alp=%.3f low_alp=%.3f head_broad=%.3f low_broad=%.3f alder_dw=%.2f spruce_dw=%.2f cell_fill=%.3f verge_props=%d(min_d=%.2fm) phase8_under=%d nurse=%d tread_grass=%d maple=%d redcedar=%d sib_cedar=%d spruce=%d larch=%d alder=%d mugo=%d birch=%d snag=%d" % [
+			seed_text, w.obj_count, woodland_n, trees, bespoke_share, young_share, str(parity_ok), oak_count, conifer_share,
 			head_alpine_share, low_alpine_share, head_broad_share, low_broad_share, alder_dw, spruce_dw,
 			cell_fill, verge_total, verge_min_gap, fern_count, nurse_count, tread_grass,
 			int(counts.get(Biomes.T_MAPLE, 0)), int(counts.get(Biomes.T_WESTERN_REDCEDAR, 0)),
 			int(counts.get(Biomes.T_SIBERIAN_CEDAR, 0)), int(counts.get(Biomes.T_SPRUCE, 0)),
 			int(counts.get(Biomes.T_LARCH, 0)), int(counts.get(Biomes.T_ALDER, 0)),
-			int(counts.get(Biomes.T_BIRCH, 0)), int(counts.get(Biomes.T_DEAD, 0))])
+			int(counts.get(Biomes.T_MUGO, 0)), int(counts.get(Biomes.T_BIRCH, 0)), int(counts.get(Biomes.T_DEAD, 0))])
 		w.clear_noise_fields()
 		w.base_heights = null
 	StageVegetation.verify = prev_verify
@@ -2346,6 +2362,7 @@ func _capture_phase9_shots(seed_text: String, tag: String) -> bool:
 		var cy := floori(pt.y / GameConfig.TILE)
 		var maples := 0
 		var sum := Vector2.ZERO
+		var seen_chunks := {}
 		for dy in range(-5, 6):
 			for dx in range(-5, 6):
 				var ccx := cx + dx
@@ -2353,6 +2370,9 @@ func _capture_phase9_shots(seed_text: String, tag: String) -> bool:
 				if ccx < 0 or ccy < 0 or ccx >= w.W or ccy >= w.H:
 					continue
 				var chunk_idx := (ccy / w.CS) * w.CW + (ccx / w.CS)
+				if seen_chunks.has(chunk_idx):
+					continue
+				seen_chunks[chunk_idx] = true
 				for o: int in w.chunks[chunk_idx]:
 					if w.obj_k[o] == Biomes.T_MAPLE:
 						var op := Vector2(w.obj_x[o], w.obj_y[o]) * GameConfig.TILE

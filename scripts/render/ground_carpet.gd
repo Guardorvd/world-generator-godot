@@ -850,14 +850,20 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var cover: float = clampf(gr.dens * lush * (1.0 - 0.9 * surface.a) / 3.0, 0.0, 1.0) * (1.0 - 0.4 * surface.r)
 	if cover < 0.03:
 		return []
+	var forest_k := smoothstep(0.15, 0.55, surface.r) if _veg_cfg != null else 0.0
 	# Где трава есть, ковёр сплошной: редкую траву сухих и каменистых мест дополняет соломенная дернина
 	if not rocky:
-		cover = lerpf(cover, 1.0, 0.5)
+		cover = lerpf(cover, 1.0, 0.5 * (1.0 - forest_k * 0.85) if _veg_cfg != null else 0.5)
 	cover *= grass_keep * density
+	if _veg_cfg != null and forest_k > 0.0:
+		cover *= lerpf(0.65, _veg_cfg.carpet_forest_cover_mul, forest_k)
 	var path: int = w.path_mask[k]
 	if path == 1:
 		cover *= 0.4 # звериная тропа: вытоптано
 	var tc: Array = gr.tint
+	if _veg_cfg != null:
+		var dark_m := lerpf(1.0, _veg_cfg.carpet_darken_mul, maxf(forest_k, smoothstep(0.2, 0.7, surface.g)))
+		tc = [float(tc[0]) * dark_m, float(tc[1]) * lerpf(dark_m, dark_m * 0.90, forest_k), float(tc[2]) * lerpf(dark_m, dark_m * 0.82, forest_k)]
 	var straw := VegetationLayer._straw(gr, i, j, surface)
 	# Сухость места: мало влаги, каменисто, сухой биом — здесь ковёр соломенный
 	var parched := clampf((0.5 - w.moist[k]) * 1.6 + surface.a * 0.8 + VegetationLayer.open_dry(w.biome[k]) * 0.5, 0.0, 1.0)
