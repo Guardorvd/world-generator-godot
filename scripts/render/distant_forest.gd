@@ -526,32 +526,47 @@ static func _card(st: SurfaceTool, center: Vector3, angle: float, size: Vector2,
 		st.add_vertex(center + along * (corner.x * 2.0 - 1.0) * size.x * lerpf(1.0, taper, top)
 			+ up * (top * 2.0 - 1.0) * size.y + lean * top)
 
-static func _cover(w: WorldData, f: Dictionary, i: int, x: float, y: float, bias: float) -> float:
+static func _cover(w: WorldData, f: Dictionary, i: int, x: float, y: float, bias: float, vp := PackedFloat64Array()) -> float:
 	var bi: int = f.biome[i]
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP, Biomes.GRASS]: return 0.0
-	if not outer_dry(f, i) or f.elev[i] > 0.72 or f.slope[i] > 0.85: return 0.0
+	if not outer_dry(f, i) or f.elev[i] > 0.78 or f.slope[i] > 0.85: return 0.0
+	var has_veg := vp.size() == WorldVegetationConfig.VP_COUNT
+	if not has_veg and f.elev[i] > 0.72: return 0.0
 	var n: Simplex = w.noise.forest
 	var wood := n.fbm(x / StageVegetation.WOOD_SCALE + StageVegetation.WOOD_OX, y / StageVegetation.WOOD_SCALE + StageVegetation.WOOD_OY, StageVegetation.WOOD_OCT)
 	var fine := n.fbm(x / 36.0, y / 36.0, 3)
 	var c := wood * 1.15 + bias + fine * 0.4
 	var altitude := 1.0 - smoothstep(0.35, 0.72, f.elev[i])
+	if has_veg:
+		var along := clampf(y / float(maxi(1, w.H - 1)), 0.0, 1.0)
+		var valley_floor := lerpf(vp[WorldVegetationConfig.VP_VALLEY_TOP_H], vp[WorldVegetationConfig.VP_VALLEY_BOT_H], along)
+		var rel_e := maxf(0.0, f.elev[i] - valley_floor)
+		altitude = 1.0 - smoothstep(vp[WorldVegetationConfig.VP_LINE_LO], vp[WorldVegetationConfig.VP_LINE_HI] + 0.14, rel_e)
 	if bi == Biomes.GRASS:
 		var stand := n.fbm(x / StageVegetation.STAND_SCALE + StageVegetation.STAND_OX,
 			y / StageVegetation.STAND_SCALE + StageVegetation.STAND_OY, 2)
 		var positions: Variant = f.get("meadow_position")
 		var position: float = positions[i] if positions != null else 0.0
-		return StageVegetation.meadow_cover(c, stand, f.moist[i], position) * altitude
+		var mc := StageVegetation.meadow_cover(c, stand, f.moist[i], position)
+		if has_veg:
+			mc = maxf(mc, 0.35 * vp[WorldVegetationConfig.VP_CANOPY_FLOOR])
+		return mc * altitude
 	var amount := smoothstep(-0.3, 0.12, c)
 	var glade := n.fbm(x / StageVegetation.GLADE_SCALE + StageVegetation.GLADE_OX, y / StageVegetation.GLADE_SCALE + StageVegetation.GLADE_OY, 2)
+	if has_veg:
+		if bi == Biomes.FOREST or bi == Biomes.TAIGA:
+			amount = maxf(amount, vp[WorldVegetationConfig.VP_CANOPY_FLOOR])
+		return amount * (1.0 - smoothstep(0.3, 0.45, glade) * (1.0 - vp[WorldVegetationConfig.VP_GLADE_MIN_KEEP])) * altitude
 	return amount * (1.0 - smoothstep(0.3, 0.45, glade) * 0.92) * altitude
 
 static func cover_field(w: WorldData, key: Vector2i, f: Dictionary) -> PackedFloat32Array:
 	var values := PackedFloat32Array()
 	var bias := StageVegetation.world_cover(w.seed_num)
+	var vp := WorldTemplate.veg_params(w.template_id, w.H)
 	for y in range(0, OuterLand.C + 1, 8):
 		for x in range(0, OuterLand.C + 1, 8):
 			var cell := key * OuterLand.C + Vector2i(x, y)
-			values.append(_cover(w, f, (y + 1) * (OuterLand.C + 3) + x + 1, cell.x, cell.y, bias))
+			values.append(_cover(w, f, (y + 1) * (OuterLand.C + 3) + x + 1, cell.x, cell.y, bias, vp))
 	return values
 
 static func sample_cover(values: PackedFloat32Array, x: float, y: float) -> float:
@@ -597,6 +612,8 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 	var side := OuterLand.C + 3
 	var planted := {}
 	var cover_bias := StageVegetation.world_cover(w.seed_num)
+	var vp := WorldTemplate.veg_params(w.template_id, w.H)
+	var has_veg := vp.size() == WorldVegetationConfig.VP_COUNT
 	for y in range(4, OuterLand.C, 8):
 		for x in range(4, OuterLand.C, 8):
 			var cell := origin + Vector2i(x, y)
@@ -612,7 +629,7 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 				var anchor := Vector2i((p / TILE).floor())
 				var at := anchor - origin + Vector2i.ONE
 				var index := at.y * side + at.x
-				var site_cover := _cover(w, f, index, p.x / TILE, p.y / TILE, cover_bias)
+				var site_cover := _cover(w, f, index, p.x / TILE, p.y / TILE, cover_bias, vp)
 				if site_cover < 0.12: continue
 				var ground := _outer_ground(plan_rect, origin, f, heights, regions, p, anchor)
 				if ground == INF: continue
@@ -621,12 +638,17 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 					Biomes.TAIGA: kind = Biomes.T_PINE
 					Biomes.JUNGLE: kind = Biomes.T_JUNGLE
 					Biomes.GRASS: kind = Biomes.T_BIRCH
-				if w.template_id == WorldTemplate.EXPEDITION_ID:
+				if has_veg or w.template_id == WorldTemplate.EXPEDITION_ID:
 					var stand := smoothstep(0.0, 1.0, site_cover)
 					var sun := clampf(0.5 - (f.elev[index + side] - f.elev[index - side]) * 15.0, 0.0, 1.0)
+					var along := clampf((p.y / TILE) / float(maxi(1, w.H - 1)), 0.0, 1.0)
+					var coarse_s := vp[WorldVegetationConfig.VP_PATCH_COARSE] if has_veg else 68.0
+					var grove_s := vp[WorldVegetationConfig.VP_PATCH_GROVE] if has_veg else 22.0
+					var pc := StageVegetation._patch_noise(anchor.x, anchor.y, coarse_s, w.seed_num, StageVegetation.PATCH_COARSE_SALT)
+					var pg := StageVegetation._patch_noise(anchor.x, anchor.y, grove_s, w.seed_num, StageVegetation.PATCH_GROVE_SALT)
 					kind = StageVegetation.expedition_kind(kind, f.biome[index], v, f.elev[index], f.moist[index], f.dw[index], sun, stand,
-						f.slope[index], float(f.rock[index]) / 255.0)
-				var scale := lerpf(0.65, 1.2, site_cover) * lerpf(0.84, 1.13, u)
+						f.slope[index], float(f.rock[index]) / 255.0, along, pc, pg, vp)
+				var scale := lerpf(0.65, 1.2, site_cover) * lerpf(0.84, 1.13, u) * (vp[WorldVegetationConfig.VP_TREE_SCALE_BOOST] if has_veg else 1.0)
 				var radius: float = Biomes.CROWN_RADIUS[kind] * TILE * scale
 				var height := _nominal_height(kind) * scale
 				_add_woody(raw, plants, kind, j, Vector3(p.x, ground, p.y), radius, height, true)

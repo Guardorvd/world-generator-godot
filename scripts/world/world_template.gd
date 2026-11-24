@@ -161,6 +161,33 @@ static func places_cache_suffix(id: String) -> String:
 	return "|p=" + config(tid).places_cache_digest()
 
 
+## Возвращает конфиг растительности шаблона (null для Типа 1).
+static func vegetation_config(id: String) -> WorldVegetationConfig:
+	return config(id).vegetation
+
+
+## Плоский буфер VP_* для C#/GD генерации растительности (пустой для Типа 1 без конфига).
+static func veg_params(id: String, plan_h := 0) -> PackedFloat64Array:
+	var cfg := config(id)
+	if cfg.vegetation == null:
+		return PackedFloat64Array()
+	var h_use := plan_h if plan_h > 0 else cfg.dev_height
+	var drop := clampf(float(maxi(1, h_use - 1)) * GameConfig.TILE * cfg.river_target_grade / GameConfig.HS, cfg.river_drop_min, cfg.river_drop_max)
+	return cfg.vegetation.veg_params(cfg.eco_base, cfg.river_bot_h, cfg.river_bot_h + drop)
+
+
+## Суффикс слоя nature по параметрам WorldVegetationConfig (пусто для Типа 1).
+static func nature_cache_suffix(id: String) -> String:
+	var tid := normalize_id(id)
+	if tid == DEFAULT_ID:
+		return ""
+	var suffix := "|expedition-vegetation-3" if tid == EXPEDITION_ID else ""
+	var vdigest := config(tid).nature_cache_digest()
+	if vdigest != "none":
+		suffix += "|v=" + vdigest
+	return suffix
+
+
 ## Размер плана (W, H) в клетках по сиду и типу. Длина кратна 64 и строго <= 4096 (потолок GPU-текстур).
 static func plan_size(id: String, seed_num: int, short_dev := false, explicit_height := 0) -> Vector2i:
 	var cfg := config(id)

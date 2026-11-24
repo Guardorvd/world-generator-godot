@@ -133,6 +133,60 @@ func seat_road_span(xf: Transform3D, span: Vector2, sink: float, tolerance: floa
 	return xf
 
 
+## Сажает лесной валежник по 7-точечной хорде на неровном рельефе, избегая воды и самой колеи.
+func seat_forest_log(xf: Transform3D, span: Vector2, sink: float, tolerance := 0.44, settle := 0.65) -> Transform3D:
+	var left := span.x
+	var right := span.y
+	var a := xf * Vector3(left, 0.0, 0.0)
+	var b := xf * Vector3(right, 0.0, 0.0)
+	var ya := ground_at(a.x, a.z)
+	var yb := ground_at(b.x, b.z)
+	xf.basis.x.y = (yb - ya) / maxf(0.05, right - left)
+	xf.origin.y = ya - left * xf.basis.x.y - 0.015 - sink
+	var low := INF
+	var high := -INF
+	var refinement := heights.road_refinement
+	for j in 7:
+		var p := xf * Vector3(lerpf(left, right, j / 6.0), 0.0, 0.0)
+		var inside := p.x >= 0 and p.z >= 0 and p.x < world.W * TILE and p.z < world.H * TILE
+		if (heights.depth_at(p.x, p.z) > 0.0 if inside else not region_dry(p.x, p.z)) or heights._cell_list(p.x, p.z) != null:
+			return Transform3D()
+		if inside and refinement != null and refinement.weight_at(p.x, p.z, world.W) > 0.25:
+			return Transform3D()
+		var error := ground_at(p.x, p.z) - p.y
+		low = minf(low, error)
+		high = maxf(high, error)
+	if high - low > tolerance * xf.basis.y.y:
+		return Transform3D()
+	xf.origin.y += lerpf(low, high, settle) - 0.015 - sink
+	return xf
+
+
+## Приземляет вертикальные вывороты и замшелые валуны на склон по нижней точке опоры без парящих корней.
+func seat_embedded_solid(xf: Transform3D, box: AABB, sink: float, max_drop_ratio := 0.58) -> Transform3D:
+	var min_y := INF
+	var max_y := -INF
+	var corners: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(box.position.x, 0.0, box.position.z),
+		Vector3(box.end.x, 0.0, box.position.z),
+		Vector3(box.position.x, 0.0, box.end.z),
+		Vector3(box.end.x, 0.0, box.end.z),
+	]
+	for local_p: Vector3 in corners:
+		var p := xf * local_p
+		var inside := p.x >= 0 and p.z >= 0 and p.x < world.W * TILE and p.z < world.H * TILE
+		if (heights.depth_at(p.x, p.z) > 0.0 if inside else not region_dry(p.x, p.z)):
+			return Transform3D()
+		var gy := ground_at(p.x, p.z)
+		min_y = minf(min_y, gy)
+		max_y = maxf(max_y, gy)
+	if max_y - min_y > maxf(0.32, box.size.y * xf.basis.y.y * max_drop_ratio):
+		return Transform3D()
+	xf.origin.y = min_y - 0.04 - sink
+	return xf
+
+
 func region_dry(x: float, z: float) -> bool:
 	var cell := Vector2i(floori(x / TILE), floori(z / TILE))
 	var key := Vector2i(floori(float(cell.x) / WorldData.REGION_SIZE), floori(float(cell.y) / WorldData.REGION_SIZE))
@@ -145,7 +199,7 @@ func region_dry(x: float, z: float) -> bool:
 
 
 ## Проверяем весь след у воды, дорог и домов; шаг не больше метра.
-func ground_clear(x: float, z: float, radius: float, root_collar := false) -> bool:
+func ground_clear(x: float, z: float, radius: float, root_collar := false, verge_limit := 0.08) -> bool:
 	if root_collar and heights.road_refinement != null and heights.road_refinement.weight_at(x, z, world.W) > 0.35:
 		return false
 	if root_collar and heights.road_refinement == null:
@@ -183,7 +237,7 @@ func ground_clear(x: float, z: float, radius: float, root_collar := false) -> bo
 			# 15.0: у дорог и троп — их настоящее полотно (weight_at ниже), а не клетка 4 м; звериная тропа без полотна — клеткой
 			if (not root_collar and (paths[k] == 1 or (paths[k] > 1 and refinement == null))) or rc[k] != 0:
 				return false
-			if not root_collar and refinement != null and refinement.weight_at(px, pz, width) > 0.08:
+			if not root_collar and refinement != null and refinement.weight_at(px, pz, width) > verge_limit:
 				return false
 			if root_collar and heights._cell_list(px, pz) != null:
 				return false

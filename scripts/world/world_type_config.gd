@@ -504,6 +504,10 @@ const RP_COUNT := 55
 ## Оттенок рыжей хвойно-лиственной подстилки по кромке лесной тропы.
 @export var trail_russet_litter := Color(0.46, 0.24, 0.10)
 
+@export_group("Растительность")
+## Вложенный конфиг плотного зонирования растительности, подлеска и притропных объектов.
+@export var vegetation: WorldVegetationConfig = null
+
 
 func relief_params() -> PackedFloat64Array:
 	var p := PackedFloat64Array()
@@ -620,3 +624,8 @@ func places_cache_digest() -> String:
 		fishing_search_back, fishing_search_fwd, fishing_min_dist, fishing_max_dist,
 	]
 	return var_to_str(values).sha256_text().left(16)
+
+
+## Детерминированный хеш параметров генерации растительности: правка перестраивает слой nature.
+func nature_cache_digest() -> String:
+	return vegetation.cache_digest() if vegetation != null else "none"

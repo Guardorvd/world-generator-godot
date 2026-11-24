@@ -140,6 +140,15 @@ const ROCK_CONTACT := 0.55
 
 var world: WorldData
 var _expedition := false
+var _veg_cfg: WorldVegetationConfig = null
+const SOFT_TRAIL_FORMS := [
+	Understory.FERN, Understory.SWORD_FERN, Understory.SWORD_FERN_TALL,
+	Understory.HERB, Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL,
+	Understory.MOSS, Understory.MOSS_MOUND,
+	Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.ALPINE_SHRUB_CREEPING,
+	Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.FORBS,
+	Understory.SEDGE, Understory.STIPA, Understory.FIREWEED,
+]
 var heights: Heightfield
 var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 ## 18.11.2026: ключи veg по чанкам (Vector2i -> Array[Vector3i]). _drop и refresh проверяют чанки, а не тысячи
@@ -255,6 +264,7 @@ var use_shared_forest_ranges := true
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
 	world = w
 	_expedition = w.template_id == WorldTemplate.EXPEDITION_ID
+	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
 	heights = h
 	placement = Placement.new(w, h)
 	road = RoadObstacles.new(w)
@@ -554,7 +564,10 @@ func _grass_cap() -> int:
 func _detail_cap(far: bool, expedition_form: bool) -> int:
 	if expedition_form:
 		# Варианты делят места прежних форм и сами встречаются локальными группами.
-		return mini(_understory_cap(far), 3072) if _expedition else 0
+		if not _expedition:
+			return 0
+		var mul := _veg_cfg.detail_cap_mul if _veg_cfg != null else 1.0
+		return mini(roundi(_understory_cap(far) * mul), roundi(3072.0 * mul))
 	return _understory_cap(far)
 
 
@@ -2268,6 +2281,8 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var buf: PackedFloat32Array = grass_buf if ctx == null else ctx.grass
 	var w := world
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
+	if _veg_cfg != null and surface.r > 0.45:
+		cnt = floori(float(cnt) * _veg_cfg.grass_forest_density_mul)
 	if cnt <= 0:
 		return n
 	var tc: Array = gr.tint
@@ -2294,6 +2309,8 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 		var verge := 0.0
 		if inside and heights.road_refinement != null:
 			var weight := heights.road_refinement.weight_at(x, z, w.W)
+			if _veg_cfg != null and weight > _veg_cfg.grass_verge_mask:
+				continue
 			if weight > 0.0 and weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
 				continue
 			# 11.4: уцелевшая у полотна трава — выше и суше (некошеная обочина), та же раскладка.
@@ -2490,6 +2507,18 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		_move_weight(weights, Understory.HIGH_GRASS, Understory.BERRY_SHRUB, berry * 0.85)
 		# В старом сыром древостое часть мелкой древесины заменяется валежником.
 		_move_weight(floor_weights, Floor.TWIG, Floor.MOSS_LOG, 0.48 * wet_patch * old_patch)
+		if _veg_cfg != null:
+			weights[Understory.FLOWERS] *= _veg_cfg.forest_flower_mul
+			weights[Understory.MEADOW] *= _veg_cfg.forest_flower_mul
+			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
+			var verge_boost := lerpf(1.0, 1.45, _verge(i, j)) if _in_plan(i, j) else 1.0
+			weights[Understory.SWORD_FERN] *= _veg_cfg.forest_fern_boost * verge_boost
+			weights[Understory.FERN] *= _veg_cfg.forest_fern_boost * verge_boost
+			weights[Understory.BERRY_SHRUB] *= _veg_cfg.forest_berry_boost
+			weights[Understory.MOSS_MOUND] *= _veg_cfg.forest_moss_mound_boost
+			floor_weights[Floor.MOSS_LOG] *= _veg_cfg.forest_nurse_log_mul
+			floor_weights[Floor.STUMP] *= _veg_cfg.forest_root_stump_mul
+			floor_weights[Floor.BOULDER] *= _veg_cfg.forest_boulder_mul
 	weights.append_array(floor_weights)
 	var total := 0.0
 	for weight in weights:
@@ -2526,7 +2555,7 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		if _expedition and kind >= Understory.EXPEDITION_FIRST:
 			var variant_roll := WGRandom.hash2(i * 8 + m, j, seed + 13)
 			if kind >= Floor.FIRST:
-				kind = Floor.FIRST + Floor.expedition_variant(kind - Floor.FIRST, variant_roll, wet_patch, old_patch, surface.a)
+				kind = Floor.FIRST + Floor.expedition_variant(kind - Floor.FIRST, variant_roll, wet_patch, old_patch, surface.a, _veg_cfg)
 			else:
 				kind = Understory.expedition_variant(kind, variant_roll)
 		var far: bool = understory[kind].far
@@ -2676,6 +2705,15 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		var wet_bank := com[Understory.C_WET] * smoothstep(0.36, 0.72, surface.b)
 		_move_weight(weights, Understory.SEDGE, Understory.SWORD_FERN, wet_bank * 0.27)
 		_move_weight(weights, Understory.SEDGE, Understory.BROADLEAF_HERB, wet_bank * 0.33)
+		if _veg_cfg != null:
+			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
+			var cool_shady := clampf(surface.r * 0.8 + surface.a * 0.6 + clampf((alt - 0.15) * 2.5, 0.0, 1.0), 0.0, 1.0)
+			var flower_keep := lerpf(maxf(_veg_cfg.forest_flower_mul, 0.25), _veg_cfg.forest_flower_mul, cool_shady)
+			weights[Understory.FLOWERS] *= flower_keep
+			weights[Understory.MEADOW] *= lerpf(1.0, 0.45, cool_shady)
+			weights[Understory.HIGH_GRASS] *= lerpf(1.0, 0.50, cool_shady)
+			if water < 5.0:
+				weights[Understory.SWORD_FERN] += com[Understory.C_WET] * 0.6 * _veg_cfg.forest_fern_boost * 0.35
 	for weight in weights:
 		total += weight
 	# 17.11.2026: лещина дополняет кусты и травы открытого места (как в лесу): густота растёт на её долю
@@ -2736,6 +2774,23 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		var tint := 0.88 + WGRandom.hash2(hx + m, j, seed + 7) * 0.24
 		_sites(ctx).append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, site_hue,
 			(j * world.W + i) * 8 + m if inside else -1, squash])
+	if _expedition and _veg_cfg != null and _veg_cfg.open_boulder_chance > 0.0 and (water < 4.5 or alt > 0.22 or surface.a > 0.28):
+		var b_roll := WGRandom.hash2(i * 11, j * 13, seed ^ 491)
+		if b_roll < _veg_cfg.open_boulder_chance * clampf(maxf(1.0 - water / 4.5, surface.a + clampf((alt - 0.20) * 2.0, 0.0, 1.0)), 0.15, 1.0):
+			var bx := (i + 0.12 + 0.76 * WGRandom.hash2(i * 11 + 1, j, seed ^ 492)) * TILE
+			var bz := (j + 0.12 + 0.76 * WGRandom.hash2(i, j * 13 + 1, seed ^ 493)) * TILE
+			var subalpine := water >= 4.5 and alt > 0.24
+			var fk := Floor.FIRST + (Floor.MOSS_BOULDER_LOW if WGRandom.hash2(i, j, seed ^ 494) < 0.55 else Floor.MOSS_BOULDER)
+			var pick_kind := Understory.ALPINE_SHRUB_CREEPING if (subalpine and WGRandom.hash2(i, j, seed ^ 495) < 0.40) else fk
+			var far_b: bool = understory[pick_kind].far
+			var dist_b := StreamPolicy.distance_to_coverage(Vector2(bx, bz), Vector2(px, pz), _fill_lead)
+			if dist_b <= _reach_r(pick_kind, far_b):
+				var rank_b := WGRandom.hash2(i * 7, j * 5, seed ^ 496)
+				if rank_b <= _keep(dist_b, _full_r(pick_kind, far_b), _ahead(_reach_r(pick_kind, far_b))):
+					var bscale := 0.72 + WGRandom.hash2(i, j, seed ^ 497) * 0.65
+					var brot := WGRandom.hash2(i, j, seed ^ 498) * TAU
+					var btint := 0.85 + WGRandom.hash2(i, j, seed ^ 499) * 0.25
+					_sites(ctx).append([pick_kind, bx, bz, brot, bscale, btint, rank_b, Color.WHITE, -1, 1.0])
 	return grass_mul
 
 
@@ -2936,6 +2991,12 @@ func _fill_road(px: float, pz: float) -> void:
 	var pairs := road.around(px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, maxf(grass_r, under_r) + _fill_lead.length() * 0.5)
 	road.begin_fill(heights, _forest_surface, pairs)
 	for p in range(0, pairs.size(), 2):
+		if _expedition and _veg_cfg != null:
+			var vp_item := road.pick_verge(heights, _forest_surface, pairs[p], pairs[p + 1])
+			if not vp_item.is_empty():
+				var vkind := Floor.FIRST + Floor.variant_kind(vp_item.floor_kind, int(WGRandom.hash2(roundi(vp_item.x * 7.0), roundi(vp_item.z * 7.0), world.seed_num ^ 73) * 3.0))
+				if StreamPolicy.distance_to_coverage(Vector2(vp_item.x, vp_item.z), Vector2(px, pz), _fill_lead) <= (under_r if understory[vkind].far else grass_r):
+					_put_understory(vkind, vp_item.x, vp_item.z, vp_item.rot, vp_item.scale, 1.0, -1, 0.0, true, vp_item.stretch, vp_item.sink)
 		var o := road.pick(heights, _forest_surface, pairs[p], pairs[p + 1])
 		if o.is_empty():
 			continue
@@ -3031,7 +3092,9 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var reach := object_box.position.abs().max(object_box.end.abs()) * scale
 	var radius := Vector2(reach.x, reach.z).length()
 	# 16.0: куртина проверяет у полотна и воды свою сердцевину: края травы склоняются к кромке
-	var ground_r := radius * (0.5 if kind in Understory.OPEN_FORMS else 1.0)
+	var soft_verge := _veg_cfg != null and kind in SOFT_TRAIL_FORMS
+	var ground_r := radius * (_veg_cfg.soft_core_mul if soft_verge else (0.5 if kind in Understory.OPEN_FORMS else 1.0))
+	var verge_limit := _veg_cfg.soft_verge_mask if soft_verge else 0.08
 	# 16.0: у мест открытых клеток (key = клетка * 8 + место) проверка воды, путей, домов и стволов
 	# неизменна — считается один раз (бит «посчитано» и бит «можно»), а не в каждой раскладке.
 	var cell := key >> 3
@@ -3043,7 +3106,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		# A root collar belongs to its living trunk. Only this low, attached form
 		# may overlap the soft verge; it keeps all water/house/structure checks.
 		var attached := floor_kind == Floor.ROOTS and owner != -1
-		var ground_ok := on_road or placement.ground_clear(x, z, ground_r, attached)
+		var ground_ok := on_road or placement.ground_clear(x, z, ground_r, attached, verge_limit)
 		if measure_road_clutter and on_road and owner != -1 and not placement.objects_clear(x, z, rot, scale, object_box, radius):
 			var roots: Dictionary = road_clutter_stats.get(RoadObstacles.ROOT, {})
 			roots.owner_overlap = roots.get("owner_overlap", 0) + 1
@@ -3075,7 +3138,15 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 					xf = placement.seat_road_span(xf, Floor.log_span(kind - Floor.FIRST), sink, 0.34, 0.70)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
+		elif not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG]:
+			xf = placement.seat_forest_log(xf, Floor.log_span(kind - Floor.FIRST), sink)
+			if xf == Transform3D.IDENTITY:
+				return RoadPlacement.TERRAIN
 		elif not placement.terrain_fits(xf, local_box, 0.25 if on_road and floor_kind == Floor.STONES else 0.18):
+			return RoadPlacement.TERRAIN
+	elif _expedition and floor_kind in [Floor.STUMP, Floor.BOULDER] and (kind - Floor.FIRST) >= Floor.NURSE_LOG:
+		xf = placement.seat_embedded_solid(xf, local_box, sink)
+		if xf == Transform3D.IDENTITY:
 			return RoadPlacement.TERRAIN
 	var box: AABB = xf * local_box
 	if not placement.details_clear(box):
@@ -3111,13 +3182,16 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		var b := xf * Vector3(span.y, 0.0, 0.07)
 		if on_road:
 			# Existing capsules, with local height along the seated mesh.
+			var nurse := kind - Floor.FIRST in [Floor.NURSE_LOG, Floor.NURSE_LOG_SPLIT]
+			var cap_r := (0.31 if nurse else 0.22) * scale
+			var cap_h := (0.58 if nurse else 0.44) * scale
 			var pieces := clampi(ceili(absf(a.y - b.y) / 0.09), 1, 8)
 			for j in pieces:
 				var start := a.lerp(b, float(j) / pieces)
 				var end := a.lerp(b, float(j + 1) / pieces)
 				var center_y := (start.y + end.y) * 0.5
 				var taper := lerpf(1.0, 0.72, (j + 0.5) / pieces)
-				_obstacles_next.append_array([start.x, start.z, end.x, end.z, 0.22 * scale * taper, center_y, center_y + 0.44 * scale * taper])
+				_obstacles_next.append_array([start.x, start.z, end.x, end.z, cap_r * taper, center_y, center_y + cap_h * taper])
 		else:
 			var nurse := kind - Floor.FIRST in [Floor.NURSE_LOG, Floor.NURSE_LOG_SPLIT]
 			_obstacles_next.append_array([a.x, a.z, b.x, b.z, (0.31 if nurse else 0.2) * scale, pos.y,

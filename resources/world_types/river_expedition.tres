@@ -1,6 +1,74 @@
-[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
+[ext_resource type="Script" path="res://scripts/world/world_vegetation_config.gd" id="2_veg"]
+
+[sub_resource type="Resource" id="Resource_vegetation"]
+script = ExtResource("2_veg")
+canopy_floor_density = 0.74
+glade_min_keep = 0.42
+stony_min_keep = 0.48
+tree_gap_k = 0.50
+treeline_line_lo = 0.36
+treeline_line_hi = 0.60
+subalpine_shrub_lo = 0.38
+subalpine_shrub_hi = 0.72
+dense_canopy_boost = 1.42
+headwater_end_along = 0.34
+lower_start_along = 0.62
+patch_scale_coarse = 68.0
+patch_scale_grove = 22.0
+water_alder_dist = 14.0
+water_alder_max_elev = 0.06
+water_alder_share = 0.72
+terrace_maple_dist = 36.0
+terrace_maple_max_elev = 0.12
+terrace_maple_max_slope = 0.30
+terrace_maple_grove_thresh = 0.36
+terrace_maple_headwater_mul = 0.14
+terrace_maple_mid_mul = 0.85
+terrace_maple_lower_mul = 1.25
+lower_birch_share = 0.22
+redcedar_moist_min = 0.46
+redcedar_max_rel_elev = 0.14
+redcedar_share = 0.48
+siberian_cedar_head_share = 0.58
+siberian_cedar_slope_share = 0.36
+larch_sun_slope = 0.20
+larch_elev_lo = 0.07
+larch_elev_hi = 0.44
+larch_headwater_share = 0.44
+spruce_base_share = 0.68
+pine_dry_spur_share = 0.16
+canopy_scale_boost = 1.15
+river_lean_chance = 0.62
+gnarled_upper_chance = 0.55
+snag_deep_chance = 0.035
+trail_edge_tree_boost = 1.35
+riverbank_rock_dist = 3.4
+riverbank_rock_boost = 0.28
+soft_verge_mask = 0.58
+soft_core_mul = 0.32
+grass_verge_mask = 0.48
+carpet_verge_mask = 0.34
+carpet_shade_boost = 0.36
+carpet_flowers_mul = 0.0
+forest_fern_boost = 3.2
+forest_berry_boost = 2.6
+forest_moss_mound_boost = 2.8
+forest_flower_mul = 0.02
+forest_fireweed_mul = 0.0
+forest_nurse_log_mul = 2.9
+forest_root_stump_mul = 2.5
+forest_boulder_mul = 3.0
+mossy_boulder_share = 0.90
+open_boulder_chance = 0.38
+verge_log_chance = 0.52
+verge_shoulder_min = 0.85
+verge_shoulder_max = 2.6
+verge_log_parallel_chance = 0.65
+grass_forest_density_mul = 0.38
+detail_cap_mul = 1.30
 
 [resource]
 script = ExtResource("1_cfg")
@@ -216,3 +284,4 @@ trail_wet_gloss = 0.70
 trail_edge_litter = 0.88
 forest_micro_bump = 0.85
 trail_russet_litter = Color(0.46, 0.24, 0.1, 1)
+vegetation = SubResource("Resource_vegetation")

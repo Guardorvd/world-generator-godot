@@ -123,7 +123,7 @@ static func surface_image(w: WorldData) -> Image:
 
 static func weights(cover: float, conifer: float, wet: float, light: float, rocky: float) -> PackedFloat32Array:
 	var sheltered := cover * (1.0 - rocky * 0.6)
-	return PackedFloat32Array([
+	var out := PackedFloat32Array([
 		sheltered * (1.0 - conifer) * 0.65,
 		sheltered * conifer * 0.65,
 		cover * 0.13,
@@ -136,8 +136,9 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 		cover * (0.008 + rocky * 0.05),
 		0.0, # ветки кладёт только RoadObstacles на полотно
 		0.0, # корень через тропу — тоже RoadObstacles, от настоящего ствола
-		0.0, 0.0, 0.0, 0.0, 0.0, 0.0, # variants share their parent's placement probability
 	])
+	out.resize(COUNT)
+	return out
 
 
 static func _beam(a: Vector3, b: Vector3, radius: float, sides := 6, caps := false) -> Array:
@@ -173,7 +174,16 @@ static func _log(moss: bool, broken := false) -> Mesh:
 	return Plants._colored(parts)
 
 
-static func expedition_variant(kind: int, roll: float, wet: float, old: float, rocky: float) -> int:
+static func expedition_variant(kind: int, roll: float, wet: float, old: float, rocky: float, cfg: WorldVegetationConfig = null) -> int:
+	if cfg != null:
+		var moss := cfg.mossy_boulder_share
+		if kind == MOSS_LOG and roll < maxf(wet * (0.45 + old * 0.5), moss * (0.55 + 0.45 * wet)):
+			return NURSE_LOG_SPLIT if roll < 0.34 * moss else NURSE_LOG
+		if kind == STUMP and roll < maxf(old * (0.40 + wet * 0.55), moss * (0.50 + 0.50 * old)):
+			return ROOT_STUMP if roll < 0.28 * moss else (ROOT_PLATE if roll < 0.54 * moss else ROOT_UPTURNED)
+		if kind == BOULDER and roll < maxf(wet * (0.42 + rocky * 0.52), moss * (0.45 + 0.55 * wet)):
+			return MOSS_BOULDER_LOW if roll < 0.35 * moss else MOSS_BOULDER
+		return kind
 	if kind == MOSS_LOG and roll < wet * (0.45 + old * 0.5):
 		return NURSE_LOG_SPLIT if roll < 0.29 else NURSE_LOG
 	if kind == STUMP and roll < old * (0.40 + wet * 0.55):

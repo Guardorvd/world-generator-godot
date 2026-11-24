@@ -139,6 +139,7 @@ var _enabled := true
 var use_native_tiles := true
 var _ride: Object = null
 var _ride_rev := -1
+var _veg_cfg: WorldVegetationConfig = null
 
 
 func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image) -> void:
@@ -146,6 +147,7 @@ func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image
 	world = w
 	heights = h
 	forest = forest_image
+	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
 	for kind in KINDS:
 		var near_mesh := Models.build_carpet_mesh(kind, false)
 		var mat: ShaderMaterial = VegetationLayer._wind_mat(VegetationLayer.SHADER, WIND[kind][0], true)
@@ -861,6 +863,9 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var parched := clampf((0.5 - w.moist[k]) * 1.6 + surface.a * 0.8 + VegetationLayer.open_dry(w.biome[k]) * 0.5, 0.0, 1.0)
 	var shade := smoothstep(0.3, 0.6, surface.r)
 	var flowers: bool = bd.get("flowers", false) and surface.r < 0.4
+	if _veg_cfg != null:
+		shade = clampf(shade + _veg_cfg.carpet_shade_boost * clampf(surface.r * 1.4, 0.0, 1.0), 0.0, 1.0)
+		flowers = flowers and _veg_cfg.carpet_flowers_mul > 0.0
 	var tall: float = clampf(0.6 + 0.45 * lush, 0.55, 1.15) * grow
 	var step := TILE / SUB
 	var refine = heights.road_refinement
@@ -902,13 +907,14 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		# 15.11.2026: у полотна дернина не обрывается стеной. На обочине (до видимой кромки покрытия) она редеет и
 		# ниже; на травяной колее низкая дернина остаётся на середине между колеями. На самом покрытии её нет.
 		var low := 1.0
+		var verge_mask := _veg_cfg.carpet_verge_mask if _veg_cfg != null else VERGE_MASK
 		if refine != null:
 			var tread: float = refine.edge_at(x, z, w.W) # 15.11: кромка без ступенек метровой сетки, как в шейдере
 			if tread > 0.04:
-				if tread < VERGE_MASK:
-					if WGRandom.hash2(gx, gz, 293) < tread / VERGE_MASK:
+				if tread < verge_mask:
+					if WGRandom.hash2(gx, gz, 293) < tread / verge_mask:
 						continue
-					low = lerpf(0.9, 0.6, tread / VERGE_MASK)
+					low = lerpf(0.9, 0.6, tread / verge_mask)
 				else:
 					var at: Dictionary = refine.sample(x, z, w.W)
 					if at.is_empty() or at.surface != RoadSurface.MEADOW or absf(at.across) > MEADOW_MIDDLE:

@@ -74,7 +74,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--shots-p9") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and not args.has("--verify-phase9") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -106,6 +106,9 @@ func _run() -> void:
 	if args.has("--shots-p7"):
 		ok = await _capture_phase7_shots(seeds[0], tag) and ok
 
+	if args.has("--shots-p9"):
+		ok = await _capture_phase9_shots(seeds[0], tag) and ok
+
 	if args.has("--phase8") or args.has("--phase8-drive") or maple:
 		ok = await _capture_phase3_shots(seeds[0], tag, true, args.has("--phase8-drive"), maple) and ok
 
@@ -117,6 +120,9 @@ func _run() -> void:
 
 	if args.has("--verify-phase7"):
 		ok = _verify_phase7(seeds, short_dev, explicit_h) and ok
+
+	if args.has("--verify-phase9"):
+		ok = _verify_phase9(seeds, short_dev, explicit_h) and ok
 
 	quit(0 if ok else 1)
 
@@ -2067,6 +2073,324 @@ func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
 		print("SHOT: ", out_path, " lod=", chunk_lod)
 		if chunk_lod != 0:
 			push_error("PHASE7_SHOTS: expected LOD0 for %s, got %d" % [sh.name, chunk_lod])
+			all_ok = false
+
+	main._free_game()
+	main.queue_free()
+	await process_frame
+	return all_ok
+
+
+func _verify_phase9(seeds: PackedStringArray, short_dev: bool, explicit_h: int) -> bool:
+	const Floor := preload("res://scripts/render/forest_floor.gd")
+	const Understory := preload("res://scripts/render/understory_models.gd")
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var failures: Array[String] = []
+	var veg_cfg := WorldTemplate.vegetation_config(WorldTemplate.EXPEDITION_ID)
+	if veg_cfg == null:
+		push_error("PHASE9_VERIFY FAIL: WorldTemplate.vegetation_config(EXPEDITION_ID) is null")
+		return false
+	if WorldTemplate.vegetation_config(WorldTemplate.DEFAULT_ID) != null:
+		failures.append("Type 1 default template unexpectedly defines WorldVegetationConfig")
+	if WorldTemplate.normalize_id("") != WorldTemplate.DEFAULT_ID or WorldTemplate.normalize_id("legacy_none") != WorldTemplate.DEFAULT_ID:
+		failures.append("Legacy/empty template_id did not normalize to DEFAULT_ID")
+	var fw := Floor.weights(0.7, 0.7, 0.6, 0.3, 0.2)
+	if fw.size() != Floor.COUNT:
+		failures.append("ForestFloor.weights size %d != COUNT %d" % [fw.size(), Floor.COUNT])
+
+	# Cache isolation & WorldVegetationConfig hash invalidation
+	var c1a := WorldCache.new()
+	c1a.set_template(WorldTemplate.DEFAULT_ID)
+	var k1a := c1a.layer_keys()
+	var c2a := WorldCache.new()
+	c2a.set_template(WorldTemplate.EXPEDITION_ID)
+	var k2a := c2a.layer_keys()
+	var orig_gap_k := veg_cfg.tree_gap_k
+	veg_cfg.tree_gap_k = orig_gap_k - 0.05
+	var c1b := WorldCache.new()
+	c1b.set_template(WorldTemplate.DEFAULT_ID)
+	var k1b := c1b.layer_keys()
+	var c2b := WorldCache.new()
+	c2b.set_template(WorldTemplate.EXPEDITION_ID)
+	var k2b := c2b.layer_keys()
+	veg_cfg.tree_gap_k = orig_gap_k
+	if k1a != k1b:
+		failures.append("Type 1 cache keys changed when Type 2 WorldVegetationConfig mutated")
+	if k2a[0] != k2b[0] or k2a[1] != k2b[1] or k2a[2] == k2b[2]:
+		failures.append("Type 2 nature key did not invalidate cleanly (%s vs %s)" % [str(k2a), str(k2b)])
+
+	var prev_verify := StageVegetation.verify
+	StageVegetation.verify = true
+	for seed_text: String in seeds:
+		StageVegetation.verify_report.clear()
+		var w := WorldGenerator._generate_plan(seed_text, WorldGenerator.PLAN_SIZE, Callable(), Callable(),
+			null, 0, Callable(), WorldGenerator.PlanMode.WORLD, Callable(),
+			WorldTemplate.EXPEDITION_ID, short_dev, explicit_h)
+		if w == null:
+			failures.append("%s: generation returned null" % seed_text)
+			continue
+		var parity_entry: Dictionary = StageVegetation.verify_report[-1] if not StageVegetation.verify_report.is_empty() else {}
+		var parity_ok := not parity_entry.is_empty() and bool(parity_entry.get("same", false))
+		if not parity_ok:
+			failures.append("%s: C# vs GDScript StageVegetation parity mismatch (%s)" % [seed_text, str(parity_entry)])
+		var oak_count := 0
+		var trees := 0
+		var conifers := 0
+		var head_trees := 0
+		var head_alpine := 0
+		var head_broad := 0
+		var low_trees := 0
+		var low_alpine := 0
+		var low_broad := 0
+		var alder_dw_sum := 0.0
+		var alder_n := 0
+		var spruce_dw_sum := 0.0
+		var spruce_n := 0
+		var counts := {}
+		var occupied_forest_cells := {}
+		for o in w.obj_count:
+			var kind := w.obj_k[o]
+			counts[kind] = counts.get(kind, 0) + 1
+			if kind == Biomes.T_OAK:
+				oak_count += 1
+			if not Biomes.is_tree(kind) or kind == Biomes.T_MUGO:
+				continue
+			trees += 1
+			if kind in [Biomes.T_SPRUCE, Biomes.T_WESTERN_REDCEDAR, Biomes.T_SIBERIAN_CEDAR, Biomes.T_LARCH]:
+				conifers += 1
+			var cx := clampi(floori(w.obj_x[o]), 0, w.W - 1)
+			var cy := clampi(floori(w.obj_y[o]), 0, w.H - 1)
+			var cell := cy * w.W + cx
+			if w.biome[cell] == Biomes.FOREST or w.biome[cell] == Biomes.TAIGA:
+				occupied_forest_cells[cell] = true
+			var along := w.obj_y[o] / float(maxi(1, w.H - 1))
+			if along < veg_cfg.headwater_end_along:
+				head_trees += 1
+				if kind == Biomes.T_SIBERIAN_CEDAR or kind == Biomes.T_LARCH:
+					head_alpine += 1
+				elif kind == Biomes.T_MAPLE or kind == Biomes.T_BIRCH:
+					head_broad += 1
+			elif along > veg_cfg.lower_start_along:
+				low_trees += 1
+				if kind == Biomes.T_SIBERIAN_CEDAR or kind == Biomes.T_LARCH:
+					low_alpine += 1
+				elif kind == Biomes.T_MAPLE or kind == Biomes.T_BIRCH:
+					low_broad += 1
+			if kind == Biomes.T_ALDER:
+				alder_dw_sum += w.dist_water[cell]
+				alder_n += 1
+			elif kind == Biomes.T_SPRUCE:
+				spruce_dw_sum += w.dist_water[cell]
+				spruce_n += 1
+		var forest_cells := 0
+		for ci in w.N:
+			if w.river[ci] == 0 and (w.biome[ci] == Biomes.FOREST or w.biome[ci] == Biomes.TAIGA):
+				forest_cells += 1
+		var conifer_share := float(conifers) / maxf(1.0, float(trees))
+		var head_alpine_share := float(head_alpine) / maxf(1.0, float(head_trees))
+		var low_alpine_share := float(low_alpine) / maxf(1.0, float(low_trees))
+		var head_broad_share := float(head_broad) / maxf(1.0, float(head_trees))
+		var low_broad_share := float(low_broad) / maxf(1.0, float(low_trees))
+		var alder_dw := alder_dw_sum / maxf(1.0, float(alder_n))
+		var spruce_dw := spruce_dw_sum / maxf(1.0, float(spruce_n))
+		var cell_fill := float(occupied_forest_cells.size()) / maxf(1.0, float(forest_cells))
+		if oak_count > 0:
+			failures.append("%s: found %d forbidden T_OAK in river_expedition" % [seed_text, oak_count])
+		if conifer_share < 0.60:
+			failures.append("%s: conifer canopy share too low (%.3f < 0.60)" % [seed_text, conifer_share])
+		if head_trees > 100 and low_trees > 100 and head_alpine_share <= low_alpine_share:
+			failures.append("%s: headwater alpine conifer share (%.3f) did not exceed lower valley (%.3f)" % [seed_text, head_alpine_share, low_alpine_share])
+		if head_trees > 100 and low_trees > 100 and low_broad_share <= head_broad_share:
+			failures.append("%s: lower valley maple+birch share (%.3f) did not exceed headwaters (%.3f)" % [seed_text, low_broad_share, head_broad_share])
+		if alder_n > 20 and spruce_n > 20 and alder_dw >= spruce_dw:
+			failures.append("%s: T_ALDER not water-hugging (alder_dw=%.2f >= spruce_dw=%.2f)" % [seed_text, alder_dw, spruce_dw])
+
+		# Live 3D trail check: roadside verge logs/stumps, clean singletrack center mud tread, trail-hugging ferns
+		w.territory_center = WorldGenerator.start_center(w)
+		w.expand_territory(maxi(w.W, w.H))
+		var h := Heightfield.new(w, true)
+		var surf_img := Floor.surface_image(w)
+		var obs := RoadObstacles.new(w)
+		var st := Samples.stations(w.trails[0])
+		var ps: PackedVector2Array = st.p
+		var veg := VegetationLayer.new()
+		veg.carpet_enabled = false
+		veg.use_shared_forest_ranges = false
+		root.add_child(veg)
+		veg.setup(w, h, {}, Models.grass_mesh(), surf_img)
+		veg.settings.trail_clutter = true
+		veg.grass_r = 16.0
+		veg.under_r = 24.0
+		veg._reserve_details(Vector2.ZERO)
+
+		var verge_total := 0
+		var verge_min_gap := INF
+		var pairs_all := obs.around(ps[ps.size() / 2].x, ps[ps.size() / 2].y, float(w.H) * GameConfig.TILE)
+		for p in range(0, pairs_all.size(), 2):
+			var vp_item := obs.pick_verge(h, surf_img, pairs_all[p], pairs_all[p + 1])
+			if vp_item.is_empty():
+				continue
+			verge_total += 1
+			var pt := Vector2(vp_item.x, vp_item.z)
+			var best_d := INF
+			for j in range(0, ps.size(), 2):
+				best_d = minf(best_d, pt.distance_to(ps[j]))
+			verge_min_gap = minf(verge_min_gap, best_d)
+		if verge_total < 3:
+			failures.append("%s: too few roadside verge logs/stumps (%d)" % [seed_text, verge_total])
+		if verge_total > 0 and verge_min_gap < TrailTechnical.CORRIDOR:
+			failures.append("%s: verge prop infringed trail corridor (%.2fm < %.2fm)" % [seed_text, verge_min_gap, TrailTechnical.CORRIDOR])
+
+		var tread_grass := 0
+		var fern_count := 0
+		var nurse_count := 0
+		for probe_idx in [ps.size() / 4, ps.size() / 2, (ps.size() * 3) / 4]:
+			var pt := ps[clampi(probe_idx, 10, ps.size() - 10)]
+			veg._fill_grass(pt.x, pt.y, {}, true)
+			for gi in veg._grass_n:
+				var off: int = gi * VegetationLayer.STRIDE
+				var gx := veg.grass_buf[off + 3]
+				var gz := veg.grass_buf[off + 11]
+				if h.road_refinement.weight_at(gx, gz, w.W) > veg_cfg.grass_verge_mask + 0.001:
+					tread_grass += 1
+			for entry: Dictionary in veg.understory:
+				if entry.base in [Understory.FERN, Understory.SWORD_FERN, Understory.SWORD_FERN_TALL, Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.MOSS_MOUND]:
+					fern_count += int(entry.count)
+				elif entry.base in [Floor.FIRST + Floor.NURSE_LOG, Floor.FIRST + Floor.NURSE_LOG_SPLIT, Floor.FIRST + Floor.ROOT_STUMP, Floor.FIRST + Floor.ROOT_PLATE, Floor.FIRST + Floor.ROOT_UPTURNED]:
+					nurse_count += int(entry.count)
+		veg.free()
+		if tread_grass > 0:
+			failures.append("%s: %d grass blades spawned inside muddy center tread (weight > %.2f)" % [seed_text, tread_grass, veg_cfg.grass_verge_mask])
+		if fern_count < 10:
+			failures.append("%s: too few trail-side ferns/berries/moss mounds placed (%d)" % [seed_text, fern_count])
+		print("PHASE9_METRICS seed=%s obj=%d trees=%d parity=%s oak=%d conifer=%.3f head_alp=%.3f low_alp=%.3f head_broad=%.3f low_broad=%.3f alder_dw=%.2f spruce_dw=%.2f cell_fill=%.3f verge_props=%d(min_d=%.2fm) ferns=%d nurse=%d tread_grass=%d maple=%d redcedar=%d sib_cedar=%d spruce=%d larch=%d alder=%d birch=%d snag=%d" % [
+			seed_text, w.obj_count, trees, str(parity_ok), oak_count, conifer_share,
+			head_alpine_share, low_alpine_share, head_broad_share, low_broad_share, alder_dw, spruce_dw,
+			cell_fill, verge_total, verge_min_gap, fern_count, nurse_count, tread_grass,
+			int(counts.get(Biomes.T_MAPLE, 0)), int(counts.get(Biomes.T_WESTERN_REDCEDAR, 0)),
+			int(counts.get(Biomes.T_SIBERIAN_CEDAR, 0)), int(counts.get(Biomes.T_SPRUCE, 0)),
+			int(counts.get(Biomes.T_LARCH, 0)), int(counts.get(Biomes.T_ALDER, 0)),
+			int(counts.get(Biomes.T_BIRCH, 0)), int(counts.get(Biomes.T_DEAD, 0))])
+		w.clear_noise_fields()
+		w.base_heights = null
+	StageVegetation.verify = prev_verify
+	if failures.is_empty():
+		print("PHASE9_VERIFY: PASS")
+		return true
+	for msg: String in failures:
+		push_error("PHASE9_VERIFY FAIL: " + msg)
+	return false
+
+
+func _capture_phase9_shots(seed_text: String, tag: String) -> bool:
+	const Floor := preload("res://scripts/render/forest_floor.gd")
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	if DisplayServer.get_name() == "headless":
+		push_error("PHASE9_SHOTS: window required (do not pass --headless)")
+		return false
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_size(Vector2i(1280, 720))
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var main: Node = load("res://scenes/main.tscn").instantiate()
+	root.add_child(main)
+	for _i in 20:
+		await process_frame
+	GameContext.scope.cache.enabled = false
+	main.start_game(seed_text, WorldGenerator.START_SIZE, "", false, WorldTemplate.EXPEDITION_ID)
+	var wait_frames := 0
+	while (main.busy or main.game == null or main.game.player == null) and wait_frames < 12000:
+		await process_frame
+		wait_frames += 1
+	if main.busy or main.game == null or main.game.player == null:
+		push_error("PHASE9_SHOTS: GameWorld failed to start")
+		main.queue_free()
+		return false
+	var gw: GameWorld = main.game
+	gw.paused = true
+	main.hud.visible = false
+	if gw.pause_requested.is_connected(main._toggle_pause):
+		gw.pause_requested.disconnect(main._toggle_pause)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if gw.opening_active():
+		gw._finish_opening()
+	if gw.vegetation != null:
+		gw.vegetation.settings.trail_clutter = true
+	gw.hour = 9.5
+	if gw.day != null:
+		gw.day.apply(9.5, 100.0)
+	gw.camera.fov = 68.0
+	gw.camera.current = true
+
+	var w: WorldData = gw.world
+	var h: Heightfield = gw.heights
+	var surf_img := Floor.surface_image(w)
+	var st := Samples.stations(w.trails[0])
+	var ps: PackedVector2Array = st.p
+	var n := ps.size()
+	var head_k := clampi(int(n * 0.18), 25, n - 25)
+	var gorge_k := clampi(int(n * 0.48), 25, n - 25)
+	var maple_k := clampi(int(n * 0.65), 25, n - 25)
+	var lower_k := clampi(int(n * 0.82), 25, n - 25)
+	var best_gorge_sc := -INF
+	for j in range(clampi(int(n * 0.34), 25, n - 25), clampi(int(n * 0.62), 26, n - 25), 3):
+		var c := Samples.cell(w, ps[j])
+		var sc := float(surf_img.get_pixel(c % w.W, c / w.W).r)
+		if sc > best_gorge_sc:
+			best_gorge_sc = sc
+			gorge_k = j
+	var best_maple := Vector2.ZERO
+	var best_maple_n := 0
+	for j in range(clampi(int(n * 0.35), 25, n - 25), n - 25, 6):
+		var pt := ps[j]
+		var cx := floori(pt.x / GameConfig.TILE)
+		var cy := floori(pt.y / GameConfig.TILE)
+		var maples := 0
+		var sum := Vector2.ZERO
+		for dy in range(-5, 6):
+			for dx in range(-5, 6):
+				var ccx := cx + dx
+				var ccy := cy + dy
+				if ccx < 0 or ccy < 0 or ccx >= w.W or ccy >= w.H:
+					continue
+				var chunk_idx := (ccy / w.CS) * w.CW + (ccx / w.CS)
+				for o: int in w.chunks[chunk_idx]:
+					if w.obj_k[o] == Biomes.T_MAPLE:
+						var op := Vector2(w.obj_x[o], w.obj_y[o]) * GameConfig.TILE
+						if op.distance_squared_to(pt) <= 36.0 * 36.0:
+							maples += 1
+							sum += op
+		if maples > best_maple_n:
+			best_maple_n = maples
+			maple_k = j
+			best_maple = sum / maxf(1.0, float(maples))
+
+	var shots: Array[Dictionary] = [
+		{name = "p9_headwaters", k = head_k, look_off = 14, height = 1.45},
+		{name = "p9_gorge_trail", k = gorge_k, look_off = 12, height = 1.30},
+		{name = "p9_maple_terrace", k = maple_k, look_off = 12, height = 1.65, aim = best_maple if best_maple_n > 0 else Vector2.ZERO},
+		{name = "p9_lower_valley", k = lower_k, look_off = 16, height = 1.75},
+	]
+	var all_ok := true
+	for sh: Dictionary in shots:
+		var k: int = sh.k
+		var cam_p := ps[maxi(0, k - 4)]
+		var target_2d: Vector2 = sh.get("aim", Vector2.ZERO)
+		if target_2d == Vector2.ZERO:
+			target_2d = ps[mini(n - 1, k + int(sh.look_off))]
+		else:
+			target_2d = ps[mini(n - 1, k + 8)].lerp(target_2d, 0.55)
+		var pos := Vector3(cam_p.x, h.ground_at(cam_p.x, cam_p.y) + float(sh.height), cam_p.y)
+		var target := Vector3(target_2d.x, h.ground_at(target_2d.x, target_2d.y) + 1.15, target_2d.y)
+		var chunk_lod := await _load_shot_view(gw, pos, 0.6)
+		gw.camera.look_at_from_position(pos, target, Vector3.UP)
+		for _f in 18:
+			await process_frame
+		var img := root.get_viewport().get_texture().get_image()
+		var out_path := ProjectSettings.globalize_path(OUT.path_join("expedition_%s%s.png" % [sh.name, tag]))
+		img.save_png(out_path)
+		print("SHOT: ", out_path, " lod=", chunk_lod, " maples_near=", best_maple_n if sh.name == "p9_maple_terrace" else -1)
+		if chunk_lod != 0:
+			push_error("PHASE9_SHOTS: expected LOD0 for %s, got %d" % [sh.name, chunk_lod])
 			all_ok = false
 
 	main._free_game()

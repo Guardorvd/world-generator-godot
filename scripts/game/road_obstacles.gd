@@ -17,6 +17,7 @@ extends RefCounted
 ## Ступени: ветки, камни и корни — кочка под колесом (подвеска); валун у края — объехать; бревно — перепрыгнуть
 ## (верх до 0,4 м); в бревно или валун в лоб быстрее BikeRide.WALL_CRASH — падение.
 
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const TILE := GameConfig.TILE
 enum { BRANCH, STONES, LOG, BOULDER, ROOT }
 const KIND_NAMES := ["branch", "stones", "log", "boulder", "root"]
@@ -37,6 +38,7 @@ const LOOK := 6.0        # радиус поиска причин вокруг �
 var world: WorldData
 ## Настройки и кэш кандидатов имеют одно время жизни.
 var _tuning: RoadTuning.Obstacles
+var _veg_cfg: WorldVegetationConfig = null
 var clear: Array[Vector2] = [] # места без препятствий (старт), м
 var _index := {}               # Vector2i(ячейка) -> PackedInt32Array пар (маршрут, точка)
 var _sampled: Array[PackedInt32Array] = [] # номер станции -> исходная точка пути
@@ -55,6 +57,7 @@ var _revision := 0
 func _init(w: WorldData) -> void:
 	world = w
 	_tuning = RoadTuning.for_world(w).obstacles.duplicate(true) as RoadTuning.Obstacles
+	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
 	_trails = w.trails.duplicate()
 	if w.trail_plan.get("state") == "found":
 		for d: TrailDefinition in StageTrailPlan._kit(w.trail_plan):
@@ -360,47 +363,9 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 	total *= kind_scale
 	if not rooted and roll >= minf(total, ceiling):
 		return _reject(decisions, "weighted_probability")
-	# Расчищенные и опасные для раскладки места: старт, поселения, сооружения, вода, развилки.
-	for spot in clear:
-		if spot.distance_to(mid) < CLEAR_R:
-			return _reject(decisions, "opening_clearance")
-	for list: Array in [world.settlements, world.sites]:
-		for place: EntityRecord in list:
-			if absf(place.x - mid.x / TILE) < VILLAGE and absf(place.y - mid.y / TILE) < VILLAGE:
-				return _reject(decisions, "near_place")
-	if (inside and (world.river[k] != 0 or world.dist_water[k] < 1.5 or h.depth_at(mid.x, mid.y) > 0.0)) or (not inside and (regional.river[k] != 0 or regional.dw[k] < 1.5)):
-		return _reject(decisions, "water")
-	for dj in range(-STRUCTURE, STRUCTURE + 1):
-		for di in range(-STRUCTURE, STRUCTURE + 1):
-			if h._cell_list(mid.x + di * TILE, mid.y + dj * TILE) != null:
-				return _reject(decisions, "near_structure")
-	var pairs := around(mid.x, mid.y, JUNCTION + SAMPLE_STEP)
-	for p in range(0, pairs.size(), 2):
-		var other := pairs[p]
-		var end := pairs[p + 1]
-		if other == route:
-			continue
-		var nearby: Dictionary = _trails[other]
-		var other_samples := _sampled[other]
-		var from := _point(nearby, other_samples[end - 1])
-		var to := _point(nearby, other_samples[end])
-		var segment := to - from
-		if segment.length_squared() < 0.01:
-			continue
-		var gap := mid.distance_to(Geometry2D.get_closest_point_to_segment(mid, from, to))
-		var heading := segment.normalized()
-		var same_direction := absf(dir.dot(heading)) > 0.94
-		if gap < JUNCTION and protected(other, (_along[other][end - 1] + _along[other][end]) * 0.5):
-			return _reject(decisions, "prepared_protection")
-		if same_direction and absf((mid - from).cross(heading)) < 0.6:
-			# A coincident route should not forbid debris on the shared tread.
-			# The first route owns the overlap, regardless of direction.
-			if gap < 0.6 and other < route:
-				return _reject(decisions, "shared_tread_owner")
-			continue
-		var other_half := (float(nearby.pts[other_samples[end - 1]].w) + float(nearby.pts[other_samples[end]].w)) * TILE * 0.25
-		if gap < (half + other_half + 0.5 if same_direction else JUNCTION):
-			return _reject(decisions, "junction_clearance")
+	var reject_reason := _site_checks(h, route, mid, dir, half, k, inside, regional)
+	if not reject_reason.is_empty():
+		return _reject(decisions, reject_reason)
 	if rooted:
 		return _roots(route, n, a, dir, side, length, half, root_tree, around_me.owner, ground.b > 0.55)
 	var pick_at: float = _roll(route, n, 1) * total / kind_scale
@@ -461,6 +426,179 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 	out.moss = ground.b > 0.55
 	out.parts = [part]
 	return out
+
+
+func _site_checks(h: Heightfield, route: int, mid: Vector2, dir: Vector2, half: float, k: int, inside: bool, regional: Dictionary) -> String:
+	for spot in clear:
+		if spot.distance_to(mid) < CLEAR_R:
+			return "opening_clearance"
+	for list: Array in [world.settlements, world.sites]:
+		for place: EntityRecord in list:
+			if absf(place.x - mid.x / TILE) < VILLAGE and absf(place.y - mid.y / TILE) < VILLAGE:
+				return "near_place"
+	if (inside and (world.river[k] != 0 or world.dist_water[k] < 1.5 or h.depth_at(mid.x, mid.y) > 0.0)) or (not inside and (regional.river[k] != 0 or regional.dw[k] < 1.5)):
+		return "water"
+	for dj in range(-STRUCTURE, STRUCTURE + 1):
+		for di in range(-STRUCTURE, STRUCTURE + 1):
+			if h._cell_list(mid.x + di * TILE, mid.y + dj * TILE) != null:
+				return "near_structure"
+	var pairs := around(mid.x, mid.y, JUNCTION + SAMPLE_STEP)
+	for p in range(0, pairs.size(), 2):
+		var other := pairs[p]
+		var end := pairs[p + 1]
+		if other == route:
+			continue
+		var nearby: Dictionary = _trails[other]
+		var other_samples := _sampled[other]
+		var from := _point(nearby, other_samples[end - 1])
+		var to := _point(nearby, other_samples[end])
+		var segment := to - from
+		if segment.length_squared() < 0.01:
+			continue
+		var gap := mid.distance_to(Geometry2D.get_closest_point_to_segment(mid, from, to))
+		var heading := segment.normalized()
+		var same_direction := absf(dir.dot(heading)) > 0.94
+		if gap < JUNCTION and protected(other, (_along[other][end - 1] + _along[other][end]) * 0.5):
+			return "prepared_protection"
+		if same_direction and absf((mid - from).cross(heading)) < 0.6:
+			if gap < 0.6 and other < route:
+				return "shared_tread_owner"
+			continue
+		var other_half := (float(nearby.pts[other_samples[end - 1]].w) + float(nearby.pts[other_samples[end]].w)) * TILE * 0.25
+		if gap < (half + other_half + 0.5 if same_direction else JUNCTION):
+			return "junction_clearance"
+	return ""
+
+
+## Притропные атмосферные объекты на обочине Экспедиции (замшелый валежник, древний выворот/пень, валун):
+## располагаются вне габарита руля за полушириной коридора и никогда не перекрывают колею.
+func pick_verge(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
+	if _veg_cfg == null or _veg_cfg.verge_log_chance <= 0.0:
+		return {}
+	if route < 0 or route >= _trails.size():
+		return {}
+	var t: Dictionary = _trails[route]
+	var samples := _sampled[route]
+	if n < 3 or n > samples.size() - 3:
+		return {}
+	if protected(route, (_along[route][n - 1] + _along[route][n]) * 0.5):
+		return {}
+	var chance := _veg_cfg.verge_log_chance
+	if _roll(route, n, 71) >= chance or _roll(route, n - 1, 71) < chance or _roll(route, n - 2, 71) < chance:
+		return {}
+	var a := _point(t, samples[n - 1])
+	var b := _point(t, samples[n])
+	var length := a.distance_to(b)
+	if length < 1.0:
+		return {}
+	var dir := (b - a) / length
+	var side := Vector2(-dir.y, dir.x)
+	var mid := (a + b) * 0.5
+	if h.road_refinement != null:
+		for gap: Dictionary in h.road_refinement.gaps:
+			if gap.area.grow(4.0).has_point(mid):
+				return {}
+	var i := floori(mid.x / TILE)
+	var j := floori(mid.y / TILE)
+	var inside := i >= 0 and j >= 0 and i < world.W and j < world.H
+	var k := j * world.W + i
+	var regional := {}
+	var ground: Color
+	if inside:
+		ground = surface.get_pixel(i, j)
+	else:
+		var key := Vector2i(floori(float(i) / WorldData.REGION_SIZE), floori(float(j) / WorldData.REGION_SIZE))
+		var region: Dictionary = _regions.get(key, {})
+		if not region.has("fields") or placement == null:
+			return {}
+		var rect: Rect2i = region.rect
+		if not rect.has_point(Vector2i(i, j)):
+			return {}
+		regional = region.fields
+		k = (j - rect.position.y) * rect.size.x + i - rect.position.x
+		if regional.ocean[k] != 0 or regional.lake[k] != 0:
+			return {}
+		if regional.has("village") and regional.village[k] != 0:
+			return {}
+		var wet: float = regional.moist[k] if regional.has("moist") else 0.45 + 0.4 * exp(-regional.dw[k] / 3.0)
+		var exposed := StageVegetation.Surface.exposure(OuterLand._saved_elev(regional, k), regional.slope[k], wet)
+		ground = Color(placement.cover_at(mid.x, mid.y), 0.5, wet, exposed)
+	if ground.r <= 0.22 and ground.a <= 0.25:
+		return {}
+	var support: RefCounted = placement if placement != null else h
+	var up: float = support.ground_at(mid.x + side.x * 4.0, mid.y + side.y * 4.0) - support.ground_at(mid.x - side.x * 4.0, mid.y - side.y * 4.0)
+	var cross := absf(up) / 8.0
+	if cross > 0.72:
+		return {}
+	var uphill := signf(up) if cross > 0.05 else 0.0
+	var half := (float(t.pts[samples[n - 1]].w) + float(t.pts[samples[n]].w)) * TILE * 0.25
+	if not _site_checks(h, route, mid, dir, half, k, inside, regional).is_empty():
+		return {}
+	var side_roll := _roll(route, n, 72)
+	var edge_side := (uphill if side_roll < 0.75 else -uphill) if uphill != 0.0 else (1.0 if side_roll < 0.5 else -1.0)
+	var lat_offset := half + TrailTechnical.CORRIDOR * 0.5 + lerpf(_veg_cfg.verge_shoulder_min, _veg_cfg.verge_shoulder_max, _roll(route, n, 73))
+	var at := mid + side * edge_side * lat_offset
+	var ai := floori(at.x / TILE)
+	var aj := floori(at.y / TILE)
+	if ai >= 0 and aj >= 0 and ai < world.W and aj < world.H:
+		if world.river[aj * world.W + ai] != 0 or h.depth_at(at.x, at.y) > 0.0:
+			return {}
+	var dy_mid := absf(support.ground_at(at.x, at.y) - support.ground_at(mid.x, mid.y))
+	if dy_mid > 1.8:
+		return {}
+	var type_roll := _roll(route, n, 74)
+	var var_roll := _roll(route, n, 75)
+	var rot_roll := _roll(route, n, 76)
+	var sc_roll := _roll(route, n, 77)
+	var stretch_roll := _roll(route, n, 78)
+	var floor_kind: int
+	var scale: float
+	var stretch := 1.0
+	var sink := 0.0
+	var rot := rot_roll * TAU
+	var is_log := type_roll < 0.50
+	if is_log:
+		floor_kind = Floor.NURSE_LOG if var_roll > 0.35 else Floor.NURSE_LOG_SPLIT
+		scale = lerpf(0.88, 1.25, sc_roll)
+		stretch = lerpf(0.95, 1.35, stretch_roll)
+		sink = 0.06 * scale
+		var angle_off := lerpf(-0.45, 0.45, rot_roll) if _roll(route, n, 79) < _veg_cfg.verge_log_parallel_chance else lerpf(0.55, 1.15, rot_roll) * edge_side
+		var along_v := dir.rotated(angle_off)
+		rot = atan2(-along_v.y, along_v.x)
+	elif type_roll < 0.75:
+		floor_kind = Floor.ROOT_STUMP if var_roll < 0.45 else (Floor.ROOT_PLATE if var_roll < 0.75 else Floor.ROOT_UPTURNED)
+		scale = lerpf(0.95, 1.38, sc_roll)
+		sink = 0.08 * scale
+	else:
+		floor_kind = Floor.MOSS_BOULDER if var_roll > 0.40 else Floor.MOSS_BOULDER_LOW
+		scale = lerpf(0.90, 1.45, sc_roll)
+		sink = 0.14 * scale
+	var out := {floor_kind = floor_kind, x = at.x, z = at.y, rot = rot, scale = scale, stretch = stretch, sink = sink}
+	if not _verge_solid_clear(out, t, samples, n):
+		return {}
+	return out
+
+
+func _verge_solid_clear(part: Dictionary, t: Dictionary, samples: PackedInt32Array, n: int) -> bool:
+	var center := Vector2(part.x, part.z)
+	var fk: int = part.floor_kind
+	var is_log := fk == Floor.NURSE_LOG or fk == Floor.NURSE_LOG_SPLIT
+	var axis := Vector2.from_angle(-part.rot)
+	var half_span: float = 2.85 * float(part.scale) * float(part.stretch)
+	var a: Vector2 = center - axis * half_span if is_log else center
+	var b: Vector2 = center + axis * half_span if is_log else center
+	var radius: float = (0.42 if is_log else (0.65 if fk in [Floor.ROOT_STUMP, Floor.ROOT_PLATE, Floor.ROOT_UPTURNED] else 0.95)) * part.scale
+	var min_clear := radius + TrailTechnical.CORRIDOR + 0.55
+	for j in range(maxi(0, n - 3), mini(samples.size(), n + 3)):
+		var p := _point(t, samples[j])
+		var q := _point(t, samples[j + 1]) if j + 1 < samples.size() else p
+		if is_log and Geometry2D.segment_intersects_segment(a, b, p, q) != null:
+			return false
+		var gap := minf(minf(a.distance_to(Geometry2D.get_closest_point_to_segment(a, p, q)), b.distance_to(Geometry2D.get_closest_point_to_segment(b, p, q))),
+			minf(p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)), q.distance_to(Geometry2D.get_closest_point_to_segment(q, a, b))))
+		if gap < min_clear:
+			return false
+	return true
 
 
 func _solid_clear(part: Dictionary, t: Dictionary, samples: PackedInt32Array, n: int, seen: float, grade: float) -> bool:

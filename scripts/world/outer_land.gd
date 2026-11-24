@@ -352,6 +352,8 @@ static func vegetation(w: WorldData, key: Vector2i, surface: Heightfield = null)
 	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - pad, y0 - pad, side, side, p[0], p[1])
 	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - pad, y0 - pad, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
 	f.expedition = w.template_id == WorldTemplate.EXPEDITION_ID
+	f.veg_params = WorldTemplate.veg_params(w.template_id, w.H)
+	f.plan_h = w.H
 	f.merge(StageVegetation.structure_rect(w, x0 - pad, y0 - pad, side, side))
 	var candidates := RockMassif.sites(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - pad, y0 - pad, side, f.path)
 	var snapshot := {h = f.h, water = f.water, path = f.path, x0 = x0 - pad, y0 = y0 - pad, side = side,
@@ -362,7 +364,9 @@ static func vegetation(w: WorldData, key: Vector2i, surface: Heightfield = null)
 	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
 	if not f.has("dw"):
 		f.dw = f.dist
-	var store := StageVegetation.ObjStore.new(null)
+	var vp_arr: PackedFloat64Array = f.veg_params
+	var gap_k: float = StageVegetation.GAP_K if vp_arr.size() != WorldVegetationConfig.VP_COUNT else vp_arr[WorldVegetationConfig.VP_GAP_K]
+	var store := StageVegetation.ObjStore.new(null, 0, -1, null, gap_k)
 	StageVegetation.place_chunk(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - pad, y0 - pad, side, null, store)
 	return {x = store.x, y = store.y, k = store.k, v = store.v, s = store.s, h = f.h, water = f.get("water", PackedFloat32Array()), path = f.get("path", PackedByteArray()), x0 = x0 - pad, y0 = y0 - pad, side = side}
 

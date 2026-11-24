@@ -51,6 +51,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var has_moist := not moist.is_empty()
 	var rock: PackedByteArray = f.get("rock", PackedByteArray())
 	if rock.is_empty(): rock = Surface.field(elev, slope, moist)
+	var vp: PackedFloat64Array = f.get("veg_params", PackedFloat64Array())
+	var has_veg := vp.size() == WorldVegetationConfig.VP_COUNT
 	var rows := elev.size()/stride
 	# Несколько хешей на чанк вместо нового шума на каждую клетку.
 	var px0 := floori(float(x0) / PATCH_CELLS)
@@ -151,7 +153,12 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				biome_weight = 0.35
 			elif bi == Biomes.DESERT or bi == Biomes.BEACH:
 				biome_weight = 0.5
-			var base_chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.12))
+			var bank_boost := 0.0
+			if has_veg and vp[WorldVegetationConfig.VP_RIVER_ROCK_DIST] > 0.65 and dw[i] < vp[WorldVegetationConfig.VP_RIVER_ROCK_DIST] and sl < 0.65:
+				var dist_fade := 1.0 - smoothstep(0.65, vp[WorldVegetationConfig.VP_RIVER_ROCK_DIST], dw[i])
+				var flat_w := 1.0 - smoothstep(0.35, 0.65, sl)
+				bank_boost = vp[WorldVegetationConfig.VP_RIVER_ROCK_BOOST] * dist_fade * flat_w * (0.45 + 0.55 * patch)
+			var base_chance := 0.005 + bank_boost + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.12))
 			var talus_slope := 1.0 - smoothstep(0.45, 0.85, sl)
 			var talus_gain := 0.12 + 0.14 * patch
 			# Любой источник осыпи умножает talus_slope на число от 0 до 1.
@@ -208,7 +215,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			rng.reset(hc ^ 0x51ed270b)
 			var cx := x + 0.12 + rng.next_float() * 0.76
 			var cy := y + 0.12 + rng.next_float() * 0.76
-			var large := shoulder < 0.1 and rng.next_float() < 0.06 + exposed * 0.12 + talus * (0.04 + 0.2 * toe)
+			var large := shoulder < 0.1 and rng.next_float() < 0.06 + exposed * 0.12 + talus * (0.04 + 0.2 * toe) + bank_boost * 0.28
 			var r := rng.next_float()
 			var scale := (0.75 + r * r * 1.35) if large else ((0.24+r*r*0.48) if mountain>0.3 and r>0.55 else (0.07+r*r*0.30))
 			if not paths.is_empty() and Grid.clearance_at(paths, ox, oy, stride, cx, cy, GameConfig.TILE) < rock_reach(scale): continue
