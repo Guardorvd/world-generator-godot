@@ -155,6 +155,10 @@ static func run(w: WorldData, step: Callable) -> void:
 ## единая публикация через _add_trail → reshape_axes (V2) → _fit_sections → раскладка домов.
 static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable, started_us: int,
 		route_kind := "") -> void:
+	var native := finder.fast()
+	if native == null:
+		# Pathfinder has already reported the missing native build.
+		return
 	if route_kind.is_empty():
 		route_kind = WorldTemplate.expedition_route_kind(w.template_id)
 	step.call(0.66, "Прокладка дороги вдоль долины")
@@ -167,21 +171,17 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 	var climb_cost := float(routing.climb_costs.get(route_kind, routing.climb_costs.road))
 	var turn_cost := float(routing.turn_costs.get(route_kind, routing.turn_costs.road))
 	var bend_cost := float(routing.bend_costs.get(route_kind, routing.bend_costs.road))
-	if routing.expedition_grades.x > 0.0 and finder.fast() != null:
+	if routing.expedition_grades.x > 0.0:
 		finder.max_cross_grade = routing.expedition_cross
-		finder.fast().DownhillGrade = routing.expedition_grades.y
-		finder.fast().DescentWeight = routing.expedition_descent_weight
-		finder.fast().EdgeGradeWeight = routing.expedition_edge_grade
-		finder.fast().TurnTerrainWeight = routing.expedition_turn_terrain
-		var probe := surface.fast_water()
-		if probe != null:
-			probe.RoadDownhillRatio = routing.expedition_grades.y / routing.expedition_grades.x
-			probe.RoadEdgeGradeWeight = routing.expedition_edge_grade
+		native.DownhillGrade = routing.expedition_grades.y
+		native.DescentWeight = routing.expedition_descent_weight
+		native.EdgeGradeWeight = routing.expedition_edge_grade
+		native.TurnTerrainWeight = routing.expedition_turn_terrain
 	var raw_cost := _expedition_shore_cost(w, routing.expedition_shore_avoid)
 	var search_cost := raw_cost
 	var h_scale := 1.0
-	if network_v2 and finder.fast() != null:
-		var ch: Dictionary = finder.fast().CharacterCosts(raw_cost, on_axis, route_kind)
+	if network_v2:
+		var ch: Dictionary = native.CharacterCosts(raw_cost, on_axis, route_kind)
 		search_cost = ch.cost
 		h_scale = float(ch.heuristic_scale)
 	var cost_v := finder.next_cost_version()
@@ -271,6 +271,7 @@ static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, fini
 	var events := groups.duplicate()
 	var fallbacks := []
 	var committed := []
+	var cfg := WorldTemplate.config(w.template_id)
 	var routing := RoadTuning.for_world(w).routing
 	var primary := Vector4(routing.expedition_grades.x, routing.expedition_grades.y, routing.expedition_cross, routing.expedition_edge_grade)
 	var reserve: Vector4 = routing.expedition_connector_limits
@@ -284,9 +285,12 @@ static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, fini
 		push_error("StageTrails (expedition): failed to connect %d -> %d" % [start, finish])
 		return {path = path, total = 0, used = 0, groups = committed, fallbacks = fallbacks}
 	var total := 0
+	var passes: Array[Vector4] = [primary]
+	if reserve.x > 0.0:
+		passes.append(reserve)
 	for cell: int in anchors:
 		var y := cell / w.W
-		var nearest := 55
+		var nearest := cfg.anchor_merge_rows
 		var event := {}
 		for group: Dictionary in groups:
 			var gap := absi(y - int(group.y))
@@ -303,21 +307,21 @@ static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, fini
 	for event: Dictionary in events:
 		var first: PackedInt32Array = event.options[0].cells
 		total += first.size()
-		var from := _expedition_row(path, first[0] / w.W - 22, w.W, prefix)
-		var to := _expedition_row(path, first[-1] / w.W + 22, w.W, from)
+		var from := _expedition_row(path, first[0] / w.W - cfg.anchor_approach_rows, w.W, prefix)
+		var to := _expedition_row(path, first[-1] / w.W + cfg.anchor_approach_rows, w.W, from)
 		var accepted := false
 		if to > from:
 			var outside := {}
 			for j in path.size():
 				if j < from or j > to:
 					outside[path[j]] = true
-			for limits: Vector4 in [primary, reserve]:
-				if limits.x <= 0.0 or accepted:
+			for limits: Vector4 in passes:
+				if accepted:
 					break
 				_set_expedition_grade(finder, limits)
 				for option: Dictionary in event.options:
 					var cells: PackedInt32Array = option.cells
-					if limits == primary and option.shape == "anchor" and event.options.size() > 1:
+					if limits == primary and reserve.x > 0.0 and option.shape == "anchor" and event.options.size() > 1:
 						continue
 					var leg := _expedition_landform_path(w, finder, search, path[from], path[to], cells, outside, limits.x)
 					if leg.is_empty():
@@ -343,10 +347,10 @@ static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, fini
 
 
 static func _set_expedition_grade(finder: Pathfinder, limits: Vector4) -> void:
-	if limits.x > 0.0:
-		finder.max_cross_grade = limits.z
-		finder.fast().DownhillGrade = limits.y
-		finder.fast().EdgeGradeWeight = limits.w
+	var directed := limits.x > 0.0
+	finder.max_cross_grade = limits.z if directed else BENCH_CROSS
+	finder.fast().DownhillGrade = limits.y if directed else 0.0
+	finder.fast().EdgeGradeWeight = limits.w if directed else 1.0
 
 
 static func _expedition_row(path: PackedInt32Array, row: int, width: int, from: int) -> int:
@@ -497,20 +501,8 @@ static func _at_mouth(w: WorldData, x: int, y: int) -> bool:
 ## Стоимость прохода клетки: биом, крутизна, немного шума, реки дороже (брод), устья и крутые русла непроходимы
 static func _build_cost(w: WorldData) -> void:
 	var cost_n := w.noise_field("cost")
-	var tuning := RoadTuning.for_world(w).routing
-	var technical := tuning.expedition_grades.x > 0.0
-	var weights := tuning.expedition_cell_cost if technical else Vector3(7.0, 0.0, 0.0)
-	var noise_weight: float = weights.z if technical else 0.9
 	var fast := Grid.fast_grid()
-	if fast != null:
-		var biome_cost := PackedFloat64Array()
-		for biome: Dictionary in Biomes.LIST:
-			biome_cost.append(float(biome.get("cost", 2.0)))
-		if technical:
-			biome_cost[Biomes.ROCK] = weights.y
-		w.cost = fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, cost_n, biome_cost, FORD_SLOPE, weights.x, noise_weight)
-	else:
-		w.cost = cost_reference(w, cost_n)
+	w.cost = cost_native(fast, w, cost_n) if fast != null else cost_reference(w, cost_n)
 	var cost := w.cost
 	for y in w.H:
 		var row_gap := mini(y, w.H - 1 - y)
@@ -540,12 +532,30 @@ static func _plan_edge_gap(w: WorldData, i: int) -> int:
 	return mini(mini(x, w.W - 1 - x), mini(y, w.H - 1 - y))
 
 
+static func _path_cost_parameters(w: WorldData) -> Dictionary:
+	var tuning := RoadTuning.for_world(w).routing
+	var table := PackedFloat64Array()
+	for biome: Dictionary in Biomes.LIST:
+		table.append(float(biome.get("cost", 2.0)))
+	if tuning.expedition_grades.x > 0.0:
+		var weights: Vector3 = tuning.expedition_cell_cost
+		table[Biomes.ROCK] = weights.y
+		return {biomes = table, slope = weights.x, noise = weights.z}
+	return {biomes = table, slope = 7.0, noise = 0.9}
+
+
+static func cost_native(fast: Object, w: WorldData, cost_n: PackedFloat64Array) -> PackedFloat32Array:
+	var params := _path_cost_parameters(w)
+	return fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, cost_n,
+		params.biomes, FORD_SLOPE, params.slope, params.noise)
+
+
 ## Исходный цикл: запасной путь и эталон численных правил.
 static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFloat32Array:
-	var tuning := RoadTuning.for_world(w).routing
-	var technical := tuning.expedition_grades.x > 0.0
-	var slope_weight: float = tuning.expedition_cell_cost.x if technical else 7.0
-	var noise_weight: float = tuning.expedition_cell_cost.z if technical else 0.9
+	var params := _path_cost_parameters(w)
+	var table: PackedFloat64Array = params.biomes
+	var slope_weight: float = params.slope
+	var noise_weight: float = params.noise
 	var W := w.W
 	var H := w.H
 	var cost := PackedFloat32Array()
@@ -557,9 +567,7 @@ static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFl
 			if w.ocean[i] != 0 or w.lake[i] != 0 or river[i] != 0 and (_at_mouth(w, x, y) or w.slope[i] > FORD_SLOPE):
 				cost[i] = INF
 				continue
-			var bc: float = Biomes.LIST[w.biome[i]].get("cost", 2.0)
-			if technical and w.biome[i] == Biomes.ROCK:
-				bc = tuning.expedition_cell_cost.y
+			var bc := table[w.biome[i]]
 			cost[i] = bc + w.slope[i] * slope_weight + (cost_n[i] * 0.5 + 0.5) * noise_weight + (12.0 if river[i] != 0 else 0.0)
 	return cost
 

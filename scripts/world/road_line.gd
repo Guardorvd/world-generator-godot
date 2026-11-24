@@ -31,17 +31,14 @@ static func build(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: H
 	var line := _build_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, relax)
 	var design := kind if smooth_kind.is_empty() else smooth_kind
 	var grade := StageTrails.MOUNTAIN_GRADE if design == "mountain" else (StageTrails.TRAIL_GRADE if design == "trail" else StageTrails.ROAD_LIMIT)
-	var down_ratio := 1.0
-	if routing.expedition_grades.x > 0.0:
-		grade = routing.expedition_grades.x
-		down_ratio = routing.expedition_grades.y / grade
+	grade = routing.line_limits(grade, 0.0).grade
 	var profile: Array = []
 	var skip := PackedByteArray()
 	for p: Dictionary in line:
 		var at := Vector2(p.x, p.y)
 		profile.append(at)
 		skip.append(1 if axis_blocked(w, on_axis, at) else 0)
-	if profile_ok(surface, profile, grade, skip, down_ratio):
+	if profile_ok(surface, profile, grade, skip, routing.downhill_ratio()):
 		return line
 	fallbacks += 1
 	var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
@@ -65,18 +62,14 @@ static func _build_with(w: WorldData, pts: Array, on_axis: PackedByteArray, surf
 				for j in range(maxi(0, k - 2), mini(pts.size(), k + 3)):
 					fixed[j] = 1
 	var design_kind := kind if smooth_kind.is_empty() else smooth_kind
-	var rules := {
-		grade = StageTrails.MOUNTAIN_GRADE if design_kind == "mountain" else (StageTrails.TRAIL_GRADE if design_kind == "trail" else StageTrails.ROAD_LIMIT),
-		cross = StageTrails.MOUNTAIN_GRADE if design_kind == "mountain" else StageTrails.BENCH_CROSS,
-		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
-		probe = surface.fast_water(), axis = on_axis, corridor = corridor, relax = relax, down_ratio = 1.0,
-	}
 	var routing := RoadTuning.for_world(w).routing
-	if routing.expedition_grades.x > 0.0:
-		rules.grade = routing.expedition_grades.x
-		rules.down_ratio = routing.expedition_grades.y / routing.expedition_grades.x
-		rules.cross = routing.expedition_cross
-		rules.speed = routing.expedition_turn_speed
+	var probe := surface.fast_water()
+	routing.configure_line_probe(probe)
+	var rules := routing.line_limits(
+		StageTrails.MOUNTAIN_GRADE if design_kind == "mountain" else (StageTrails.TRAIL_GRADE if design_kind == "trail" else StageTrails.ROAD_LIMIT),
+		StageTrails.MOUNTAIN_GRADE if design_kind == "mountain" else StageTrails.BENCH_CROSS, TURN_SPEED[design_kind])
+	rules.merge({accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road", probe = probe, axis = on_axis,
+		corridor = corridor, relax = relax, down_ratio = routing.downhill_ratio(), edge_weight = routing.line_edge_weight()})
 	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", routing.straighten)
 	var tolerance: float = straightening.get(design_kind, 0.0)
 	if tolerance > 0.0 and pts.size() > 2:
@@ -205,8 +198,8 @@ static func _chord_ok(surface: Heightfield, pts: Array, fixed: PackedByteArray, 
 		return false
 	var relax: float = rules.relax
 	if relax <= 1.0:
-		return segment_ok(surface, pts[i], pts[j], rules.grade, rules.cross, rules.probe)
-	if not segment_ok(surface, pts[i], pts[j], rules.grade * relax, rules.cross, rules.probe):
+		return segment_ok(surface, pts[i], pts[j], rules.grade, rules.cross, rules.probe, rules.down_ratio, rules.edge_weight)
+	if not segment_ok(surface, pts[i], pts[j], rules.grade * relax, rules.cross, rules.probe, rules.down_ratio, rules.edge_weight):
 		return false
 	var profile: Array = []
 	for k in samples + 1:
@@ -380,7 +373,7 @@ static func fit_curve(surface: Heightfield, control: Array, corridor: Array, wid
 	var relax: float = rules.relax
 	var local := grade * relax if relax > 1.0 else grade
 	for k in range(1, curve.size()):
-		if not segment_ok(surface, curve[k - 1], curve[k], local, rules.cross, rules.probe):
+		if not segment_ok(surface, curve[k - 1], curve[k], local, rules.cross, rules.probe, rules.down_ratio, rules.edge_weight):
 			return []
 	if relax > 1.0:
 		var profile: Array = []
@@ -425,7 +418,8 @@ static func profile_ok(surface: Heightfield, points: Array, grade: float, skip :
 
 
 ## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)
-static func segment_ok(surface: Heightfield, a: Dictionary, b: Dictionary, max_grade := StageTrails.ROAD_LIMIT, max_cross := StageTrails.BENCH_CROSS, probe: Object = null) -> bool:
+static func segment_ok(surface: Heightfield, a: Dictionary, b: Dictionary, max_grade := StageTrails.ROAD_LIMIT,
+		max_cross := StageTrails.BENCH_CROSS, probe: Object = null, down_ratio := 1.0, edge_weight := 1.0) -> bool:
 	if probe != null:
 		return probe.RoadSegment(a.x, a.y, b.x, b.y, a.w, max_grade, max_cross)
 	var dx: float = b.x - a.x
@@ -443,7 +437,9 @@ static func segment_ok(surface: Heightfield, a: Dictionary, b: Dictionary, max_g
 			var x: float = (a.x + dx * t + nx * side) * GameConfig.TILE
 			var z: float = (a.y + dy * t + ny * side) * GameConfig.TILE
 			var h := surface.ground_at(x, z)
-			if surface.depth_at(x, z) > 0.3 or k > 0 and absf(h - previous) > max_grade * length * GameConfig.TILE / steps + 0.00001:
+			var change := h - previous
+			var limit := max_grade * (down_ratio if change < 0.0 else 1.0)
+			if surface.depth_at(x, z) > 0.3 or k > 0 and absf(change) * (1.0 if side == 0.0 else edge_weight) > limit * length * GameConfig.TILE / steps + 0.00001:
 				return false
 			previous = h
 	# Поперёк стены ось может быть горизонтальной. Не срезаем туда безопасный поворот.

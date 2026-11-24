@@ -195,7 +195,7 @@ public partial class FastGrid
 
 	/// <summary>StageTrails._build_cost: one interop call, double arithmetic, float32 result.</summary>
 	public float[] PathCost(int w, int h, byte[] ocean, byte[] lake, byte[] river,
-		float[] slope, byte[] biome, double[] noise, double[] biomeCost, double fordSlope, double slopeWeight = 7.0, double noiseWeight = 0.9)
+		float[] slope, byte[] biome, double[] noise, double[] biomeCost, double fordSlope, double slopeWeight, double noiseWeight)
 	{
 		var cost = new float[checked(w * h)];
 		RunRows(h, true, y =>

@@ -3,14 +3,11 @@ extends RefCounted
 
 
 static func _cost(fast: Object, w: WorldData, noise: PackedFloat64Array) -> Dictionary:
-	var table := PackedFloat64Array()
-	for b: Dictionary in Biomes.LIST:
-		table.append(float(b.get("cost", 2.0)))
 	var started := Time.get_ticks_usec()
 	var reference := StageTrails.cost_reference(w, noise)
 	var gd_ms := (Time.get_ticks_usec() - started) / 1000.0
 	started = Time.get_ticks_usec()
-	var actual: PackedFloat32Array = fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, noise, table, StageTrails.FORD_SLOPE)
+	var actual := StageTrails.cost_native(fast, w, noise)
 	return {ok = var_to_bytes(reference) == var_to_bytes(actual), gd_ms = gd_ms, fast_ms = (Time.get_ticks_usec() - started) / 1000.0}
 
 

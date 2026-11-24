@@ -437,9 +437,13 @@ const RP_COUNT := 61
 ## Дополнительный отступ траверса в лес от носа отрога (клетки). 0 — одиночные якоря.
 @export var anchor_traverse_reach := 0.0
 ## Допустимый зазор между коленами разворота (м).
-@export var anchor_turn_gap_m := Vector2(22.0, 70.0)
+@export var anchor_turn_gap_m := Vector2.ZERO
 ## Перепад между коленами, при котором склон оправдывает разворот (м).
-@export var anchor_turn_drop_m := Vector2(5.0, 25.0)
+@export var anchor_turn_drop_m := Vector2.ZERO
+## Максимальный продольный зазор между отрогом и его запасным одиночным якорем (клетки).
+@export var anchor_merge_rows := 0
+## Запас связки до входа и после выхода при врезке в сквозную тропу (клетки).
+@export var anchor_approach_rows := 0
 ## Боковой запас окна поиска A* между якорями (клеток); увеличение даёт поиску больше свободы обхода.
 @export var segment_win_x := 56
 ## Продольный запас окна поиска A* между якорями (клеток); увеличение расширяет окно поиска.
@@ -643,7 +647,7 @@ func places_cache_digest() -> String:
 		anchor_end_margin, anchor_basin_gap, anchor_min_dy, anchor_diag_ratio,
 		anchor_river_pad_min, anchor_river_pad_max, anchor_inland_min, anchor_inland_max,
 		anchor_inland_start_chance, anchor_inland_streak_chance, anchor_river_streak_chance, anchor_terrain_slope,
-		anchor_traverse_reach, anchor_turn_gap_m, anchor_turn_drop_m,
+		anchor_traverse_reach, anchor_turn_gap_m, anchor_turn_drop_m, anchor_merge_rows, anchor_approach_rows,
 		segment_win_x, segment_win_y, segment_end_y_cap, opening_min_m, opening_max_m,
 		start_y_min, start_y_max, start_sd_min, start_sd_max, start_homes_min, start_homes_max,
 		finish_from_end_max, finish_from_end_min, finish_sd_min, finish_sd_max, finish_homes_min, finish_homes_max,

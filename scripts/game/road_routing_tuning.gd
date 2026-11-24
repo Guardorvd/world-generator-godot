@@ -74,6 +74,27 @@ const KINDS := ["road", "trail", "mountain"]
 @export var line_relax: Dictionary
 
 
+## Правила проектирования линии одинаковы для RoadLine, LineBuilder и reshape_axes.
+func line_limits(grade: float, cross: float, speed := 0.0) -> Dictionary:
+	if expedition_grades.x > 0.0:
+		return {grade = expedition_grades.x, cross = expedition_cross, speed = expedition_turn_speed}
+	return {grade = grade, cross = cross, speed = speed}
+
+
+func downhill_ratio() -> float:
+	return expedition_grades.y / expedition_grades.x if expedition_grades.x > 0.0 and expedition_grades.y > 0.0 else 1.0
+
+
+func line_edge_weight() -> float:
+	return expedition_edge_grade if expedition_grades.x > 0.0 else 1.0
+
+
+func configure_line_probe(probe: Object) -> void:
+	if probe != null and expedition_grades.x > 0.0:
+		probe.RoadDownhillRatio = downhill_ratio()
+		probe.RoadEdgeGradeWeight = line_edge_weight()
+
+
 func valid() -> bool:
 	for table: Dictionary in [climb_costs, turn_costs, bend_costs, straighten, line_relax]:
 		if not valid_kind_values(table, KINDS):

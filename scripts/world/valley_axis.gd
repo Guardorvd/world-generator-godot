@@ -48,7 +48,8 @@ static func for_world(w: WorldData) -> ValleyAxis:
 
 static func get_axis(p_seed: int, p_w: int, p_h: int, p_cfg: WorldTypeConfig = null) -> ValleyAxis:
 	var use_cfg := p_cfg if p_cfg != null else WorldTemplate.config(WorldTemplate.EXPEDITION_ID)
-	var key := "%d|%d|%d|%s" % [p_seed, p_w, p_h, use_cfg.geo_cache_digest()]
+	# The axis retains the resource for anchor and site placement as well as geometry.
+	var key := "%d|%d|%d|%d|%s" % [p_seed, p_w, p_h, use_cfg.get_instance_id(), use_cfg.geo_cache_digest()]
 	_cache_lock.lock()
 	var existing: ValleyAxis = _cache.get(key)
 	_cache_lock.unlock()
@@ -569,7 +570,7 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 	var tech := terrain_anchor and cfg.anchor_terrain_slope > 0.0
 	if tech:
 		slope_caps = [cfg.anchor_terrain_slope]
-		exit_grade = RoadTuning.for_world(w).routing.expedition_grades.x
+		exit_grade = RoadTuning.for_world(w).routing.line_limits(exit_grade, 0.0).grade
 	for cap: float in slope_caps:
 		for y in range(y0, y1 + 1, 2):
 			var ax := _axis_x[y]
@@ -591,7 +592,7 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 				var score := -w.slope[i] * 6.0 - dy_pen * 0.45 - dsd_pen * 0.40
 				if tech:
 					var d := 4
-					var tpi := (w.h[i] - (w.h[i - d] + w.h[i + d] + w.h[i - d * W] + w.h[i + d * W]) * 0.25) * GameConfig.HS
+					var tpi := _anchor_tpi(w, i, d)
 					var shoulder := absf(w.h[i - d] + w.h[i + d] - w.h[i - d * W] - w.h[i + d * W]) * GameConfig.HS
 					score = smoothstep(0.15, 0.6, w.slope[i]) * 0.57 + smoothstep(0.25, 2.8, absf(tpi)) * 0.65
 					score += smoothstep(0.4, 5.0, shoulder) * 0.33 - dy_pen * 0.85 - dsd_pen * 0.95
@@ -747,6 +748,11 @@ func _spur_point(i: int) -> Vector2:
 	return Vector2(i % W, i / W)
 
 
+static func _anchor_tpi(w: WorldData, i: int, reach: int) -> float:
+	var row := reach * w.W
+	return (w.h[i] - (w.h[i - reach] + w.h[i + reach] + w.h[i - row] + w.h[i + row]) * 0.25) * HS
+
+
 ## Search the shoulder or saddle itself. Prefer gentle continuation on contours
 ## and a broader, flatter patch where the route changes direction.
 func _spur_passage(w: WorldData, row: float, offset: float, previous: int, turning: bool) -> int:
@@ -754,12 +760,14 @@ func _spur_passage(w: WorldData, row: float, offset: float, previous: int, turni
 	var y0 := roundi(row)
 	var best := -1
 	var best_score := -INF
-	var grades := RoadTuning.for_world(w).routing.expedition_grades
+	var routing := RoadTuning.for_world(w).routing
+	var climb: float = routing.line_limits(StageTrails.ROAD_LIMIT, 0.0).grade
+	var descent := routing.expedition_grades.y if routing.expedition_grades.x > 0.0 and routing.expedition_grades.y > 0.0 else climb
 	for y in range(maxi(16, y0 - 8), mini(H - 16, y0 + 9), 2):
 		var cos_t := maxf(_axis_cos[y], 0.25)
 		var x0 := roundi(_axis_x[y] + maxf(_river_hw[y] + 5.0, offset) * road_side / cos_t)
 		for x in range(maxi(6, x0 - 9), mini(W - 6, x0 + 10), 2):
-			if not _road_cell_ok(w, river, x, y, cfg.anchor_terrain_slope, maxf(grades.x, grades.y)):
+			if not _road_cell_ok(w, river, x, y, cfg.anchor_terrain_slope, maxf(climb, descent)):
 				continue
 			var i := y * W + x
 			var contour_cost := 0.0
@@ -768,11 +776,11 @@ func _spur_passage(w: WorldData, row: float, offset: float, previous: int, turni
 				if m < 8.0:
 					continue
 				var pitch := (w.h[i] - w.h[previous]) * HS / m
-				var limit := grades.x if pitch > 0.0 else grades.y
+				var limit := climb if pitch > 0.0 else descent
 				if absf(pitch) > limit:
 					continue
 				contour_cost = absf(pitch) * 3.2
-			var tpi := (w.h[i] - (w.h[i - 4] + w.h[i + 4] + w.h[i - 4 * W] + w.h[i + 4 * W]) * 0.25) * HS
+			var tpi := _anchor_tpi(w, i, 4)
 			var patch_slope := maxf(maxf(w.slope[i - 2], w.slope[i + 2]), maxf(w.slope[i - 2 * W], w.slope[i + 2 * W]))
 			var score := -w.slope[i] * 3.2 - contour_cost - absf(tpi) * (0.26 if turning else 0.08)
 			score -= absf(float(y - y0)) * 0.045 + absf(float(x - x0)) * 0.06
