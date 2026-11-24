@@ -244,6 +244,30 @@ public partial class FastGrid
 			double terrainLift = Math.Clamp(curve, -0.35, 0.35) * (1.0 - RoadSmooth(0.25, 0.5, Math.Max(grade, Math.Abs(cross))));
 			double freeLift = kp.Roll * roll * (0.6 + 0.4 * energy) * cp.Character[cAt] + kp.Bump * bump * energy * cp.Character[cAt + 1];
 			lift[j] = RoadLerp(freeLift, terrainLift, landform) * mul * g;
+			if (kp.TechnicalRelief > 0.0)
+			{
+				// Short ledges on roundovers and runnels on concave ground. Select coherent terrain
+				// patches, then use the same metre stations and grade limiter as the corridor.
+				double h0 = RoadGround(raw, width, height, tile, points[Math.Max(from, i - 2)].X, points[Math.Max(from, i - 2)].Y);
+				double h1 = RoadGround(raw, width, height, tile, points[Math.Min(to - 1, i + 2)].X, points[Math.Min(to - 1, i + 2)].Y);
+				double crest = rawMid - (h0 + h1) * 0.5;
+				double pitch = Math.Max(0.0, (h0 - h1) / (4.0 * step));
+				double exposed = surface[i] == 4 ? 1.0 : 0.40;
+				double lip = RoadSmooth(0.025, 0.17, crest) * RoadSmooth(0.13, 0.48, pitch) * exposed;
+				double rut = RoadSmooth(0.02, 0.18, -crest) * RoadSmooth(0.10, 0.39, hole);
+				if (kp.SupportCut > 0.0)
+				{
+					// Leave a braking approach and a supported runout before adding a lip to a crest.
+					Vector2 entry = (points[i] - points[Math.Max(from, i - 7)]).Normalized();
+					Vector2 exit = (points[Math.Min(to - 1, i + 7)] - points[i]).Normalized();
+					double turn = Math.Abs(entry.AngleTo(exit));
+					double approach = Math.Abs(rawMid - rawA) / 10.0;
+					double landing = Math.Abs(rawB - h1) / Math.Max(1.0, 10.0 - 2.0 * step);
+					double exposure = Math.Abs(cross) * kp.NaturalCross + Math.Max(approach, landing) + turn * 0.35;
+					lip *= (1.0 - RoadSmooth(0.24, 0.50, exposure));
+				}
+				lift[j] += kp.TechnicalRelief * (lip - 0.65 * rut) * g;
+			}
 			if (rhythm)
 			{
 				int lr = Math.Min(cp.LevelR, Math.Min(j, n - 1 - j));
@@ -252,7 +276,7 @@ public partial class FastGrid
 				lift[j] -= deviation * Math.Min(0.9, cp.LevelKind[kind] * cp.LevelSurface[surface[i]]) * calm * g;
 			}
 			double natural = cross * kp.Keep * (1.0 - RoadSmooth(0.25, 0.5, Math.Abs(cross))) * hw;
-			double baseTilt = natural;
+			double baseTilt = natural * (1.0 - kp.NaturalCross);
 			if (kp.TurnBank != 0.0 && j >= 2 && j <= n - 3)
 			{
 				int b0 = Math.Max(from, i - 5), b1 = Math.Min(to - 1, i + 5);
@@ -260,7 +284,7 @@ public partial class FastGrid
 				Vector2 tNext = (points[b1] - points[i]).Normalized();
 				double chord = Math.Max(1.0, (b1 - b0) * 0.5 * step);
 				double kappa = (tNext - tPrev).Dot(acrossV) / chord;
-				baseTilt = natural - kappa * kp.TurnBank * hw;
+				baseTilt -= kappa * kp.TurnBank * hw;
 			}
 			double limit = kp.Max * hw;
 			outv[at + 1] = Math.Clamp(baseTilt + kp.Tilt * wobble * (0.5 + 0.5 * energy) * cp.Character[cAt + 2], -limit, limit) * scale * g;
@@ -376,6 +400,7 @@ public partial class FastGrid
 		{
 			int t = included[r], from = routeStarts[r], to = routeStarts[r + 1], n = to - from;
 			bool road = kinds[t] == 0, trail = kinds[t] == 1;
+			var kind = cp.Kinds[kinds[t]];
 			if (kinds[t] == 2)
 			{
 				var distance = new float[n];
@@ -424,7 +449,7 @@ public partial class FastGrid
 					lo = Math.Max(0, j - 12);
 					hi = Math.Min(n - 1, j + 12);
 					double sustained = Math.Abs((double)groundAt[hi] - groundAt[lo]) / Math.Max((hi - lo) * step, step);
-					allowed[j] = (float)(1.0 - RoadSmooth(0.45, 0.7, sustained));
+					allowed[j] = kind.SupportCut > 0.0 ? 1.0f : (float)(1.0 - RoadSmooth(0.45, 0.7, sustained));
 					int safe = FitSafe(p, tangent, routes[r], j * step, road, half[from + j], width, height, tile, water, distWater, shore,
 						structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates,
 						reach, shared, settlements, routeKinds, gap, Math.Max(grade, crossGrade) <= 0.25);
@@ -454,29 +479,57 @@ public partial class FastGrid
 						if (Math.Abs(k - j) <= small) sumSmall += groundAt[k];
 					}
 					double average = RoadLerp(sumSmall / (2 * small + 1), sumH / (2 * radius + 1), amount);
-					double axialLimit = RoadLerp(0.15, 0.9, amount) * (trail ? 0.35 : 1.0);
-					double smoothing = road && authoredRoutes[routes[r]] == 0 ? 0.0 : RoadLerp(0.35, 0.95, amount);
+					double axialLimit = kind.SupportCut > 0.0 ? kind.SupportCut : RoadLerp(0.15, 0.9, amount) * (trail ? 0.35 : 1.0);
+					double smoothing = road && authoredRoutes[routes[r]] == 0 ? 0.0 : RoadLerp(0.35, 0.95, amount) * kind.ProfileFit;
 					double target = groundAt[j] + Math.Clamp((average - groundAt[j]) * smoothing, -axialLimit, axialLimit);
 					profile[from + j] = (float)target;
 					double power = RoadLerp(0.25, 1.0, amount) * allowed[j] * RoadSmooth(0.0, fitFade, distance[j]);
 					double trailPower = trail ? RoadLerp(0.55, 0.85, RoadSmooth(0.5, 0.9, crossSlope)) : 1.0;
-					strength[from + j] = (float)(power * trailPower);
+					strength[from + j] = kind.SupportCut > 0.0
+						? (float)(kind.CrossFit * RoadSmooth(0.0, fitFade, distance[j]))
+						: (float)(power * trailPower * kind.CrossFit);
 					double cap = RoadLerp(0.2, fitLimit, amount) * (trail ? 0.5 : 1.0);
 					double benchLimit = road ? roadBench : trailBench;
 					cap = Math.Max(cap, Math.Min(benchLimit, crossSlope * half[from + j]));
 					limits[from + j] = (float)cap;
+				}
+				if (kind.SupportCut > 0.0 && kind.DirectionalGrades.X > 0.0f)
+				{
+					var gradeScale = new double[n];
+					for (int j = 0; j < n; j++)
+					{
+						Vector2 p = pts[from + j];
+						Vector2 entry = p - pts[from + Math.Max(0, j - 4)];
+						Vector2 exit = pts[from + Math.Min(n - 1, j + 4)] - p;
+						double turn = Math.Abs(entry.AngleTo(exit));
+						gradeScale[j] = RoadLerp(1.0, kind.TurnGradeScale, RoadSmooth(0.3, 1.05, turn));
+					}
+					// Reduce short grade breaks within the earthwork budget. Long profiles that
+					// exhaust the budget remain visible to the routing and ride diagnostics.
+					for (int pass = 0; pass < 4; pass++)
+					for (int k = 1; k < n; k++)
+					{
+						int j = pass % 2 == 0 ? k : n - k;
+						int a = from + j - 1, b = a + 1;
+						double dh = profile[b] - profile[a];
+						double localStep = step * Math.Min(gradeScale[j - 1], gradeScale[j]);
+						double excess = dh - Math.Clamp(dh, -kind.DirectionalGrades.Y * localStep, kind.DirectionalGrades.X * localStep);
+						if (excess == 0.0 || strength[a] <= 0.0f || strength[b] <= 0.0f) continue;
+						double cut = kind.SupportCut;
+						profile[a] = (float)Math.Clamp(profile[a] + excess * 0.5, groundAt[j - 1] - cut, groundAt[j - 1] + cut);
+						profile[b] = (float)Math.Clamp(profile[b] - excess * 0.5, groundAt[j] - cut, groundAt[j] + cut);
+					}
 				}
 			}
 			if (scales[t] > 0.0f)
 				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, profile, strength, limits, raw, ground, width, height, tile, noise, origin, step,
 					cp, routeKinds, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
 		});
-		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor,
-			new[] { cp.Kinds[0].BenchScale, cp.Kinds[1].BenchScale, cp.Kinds[2].BenchScale });
+		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor, cp.Kinds);
 	}
 
 	private sealed record RoadFitData(int[] Routes, int[] Starts, float[] Scales, Vector2[] Points,
-		float[] Profile, float[] Strength, float[] Limit, double[] Corridor, double[] BenchScales)
+		float[] Profile, float[] Strength, float[] Limit, double[] Corridor, Roads.CorridorKind[] Kinds)
 	{
 		public static readonly RoadFitData Empty = new(Array.Empty<int>(), new[] { 0 }, Array.Empty<float>(),
 			Array.Empty<Vector2>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<double>(), null);

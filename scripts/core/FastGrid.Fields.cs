@@ -195,7 +195,7 @@ public partial class FastGrid
 
 	/// <summary>StageTrails._build_cost: one interop call, double arithmetic, float32 result.</summary>
 	public float[] PathCost(int w, int h, byte[] ocean, byte[] lake, byte[] river,
-		float[] slope, byte[] biome, double[] noise, double[] biomeCost, double fordSlope)
+		float[] slope, byte[] biome, double[] noise, double[] biomeCost, double fordSlope, double slopeWeight = 7.0, double noiseWeight = 0.9)
 	{
 		var cost = new float[checked(w * h)];
 		RunRows(h, true, y =>
@@ -208,7 +208,7 @@ public partial class FastGrid
 					cost[i] = float.PositiveInfinity;
 					continue;
 				}
-				cost[i] = (float)(biomeCost[biome[i]] + slope[i] * 7.0 + (noise[i] * 0.5 + 0.5) * 0.9 + (river[i] != 0 ? 12.0 : 0.0));
+				cost[i] = (float)(biomeCost[biome[i]] + slope[i] * slopeWeight + (noise[i] * 0.5 + 0.5) * noiseWeight + (river[i] != 0 ? 12.0 : 0.0));
 			}
 		});
 		return cost;

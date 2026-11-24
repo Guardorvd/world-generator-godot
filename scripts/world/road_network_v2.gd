@@ -520,6 +520,10 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
 		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
+	if routing.expedition_grades.x > 0.0:
+		data.trail_grade = routing.expedition_grades.x
+		data.bench_cross = routing.expedition_cross
+		data.speed = routing.expedition_turn_speed
 	if smooth_lines:
 		data.line_shape = routing.line_shape
 		_add_near_axes(w, pts, data)
@@ -604,7 +608,9 @@ static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByte
 		for leg: Dictionary in ride.legs:
 			(legs.get_or_add(leg.section, []) as Array).append(leg)
 	var input := {on_axis = on_axis, W = w.W, H = w.H, protection_m = routing.axis_protection_m, min_radius_m = routing.axis_min_radius_m,
-		profile_base = StageTrails.RoadLine.PROFILE_BASE, bench_cross = StageTrails.BENCH_CROSS, reach = RoadRefinement.REACH}
+		profile_base = StageTrails.RoadLine.PROFILE_BASE,
+		bench_cross = routing.expedition_cross if routing.expedition_grades.x > 0.0 else StageTrails.BENCH_CROSS,
+		reach = RoadRefinement.REACH}
 	if routing.arc_bends_enabled:
 		_align_sections(w, water, input.merged(arc_settings(routing)), anchors, legs, primary_end, false)
 	if routing.axis_meander_enabled:
@@ -644,6 +650,8 @@ static func _align_sections(w: WorldData, water: Object, input: Dictionary, anch
 				noise.append(lerpf(lerpf(world_noise[a], world_noise[b], fx), lerpf(world_noise[c], world_noise[d], fx), fy))
 				dry.append(GameConfig.TILE * lerpf(lerpf(dist_water[a], dist_water[b], fx), lerpf(dist_water[c], dist_water[d], fx), fy))
 		var grade := StageTrails.ROAD_LIMIT if r < primary_end or t.kind == "road" else StageTrails.TRAIL_GRADE
+		if routing.expedition_grades.x > 0.0:
+			grade = routing.expedition_grades.x
 		var data := input.merged({axis = packed, pins = pins, route_index = r, grade = grade})
 		if meander: data.merge(options[t.kind].merged({noise = noise, water_m_at_station = dry}))
 		var result: Dictionary = _line_core.ShapeRoadAxis(data, water)

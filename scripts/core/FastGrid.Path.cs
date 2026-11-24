@@ -32,6 +32,10 @@ public partial class FastGrid
 	public double BendCost { get; set; }
 	/// <summary>Единица оставляет V1. Для взвешенного поля передаётся безопасная нижняя граница относительно HCost.</summary>
 	public double HeuristicScale { get; set; } = 1.0;
+	public double DownhillGrade { get; set; }
+	public double DescentWeight { get; set; } = 1.0;
+	public double EdgeGradeWeight { get; set; } = 1.0;
+	public double TurnTerrainWeight { get; set; }
 	private static readonly double[] BendShape = { 0.0, 0.0, 0.4, 1.0, 2.0 };
 	private const int BendSteps = 3;
 	private static readonly int[] Octant = { 0, 4, 2, 6, 1, 7, 3, 5 };
@@ -99,7 +103,7 @@ public partial class FastGrid
 		public byte[] Links;
 		public int S, T, Version;
 		public long CostVersion, HeightsVersion, LinksVersion;
-		public double Climb, MaxGrade, MaxCross, Turn, Bend, Heuristic;
+		public double Climb, MaxGrade, MaxCross, Turn, Bend, Heuristic, Downhill, Descent, EdgeGrade, TurnTerrain;
 		public bool UseCorridor;
 		public int X0, Y0, X1, Y1; // окно поиска: клетки x0 <= x < x1, y0 <= y < y1
 
@@ -109,7 +113,8 @@ public partial class FastGrid
 			S == o.S && T == o.T && Version == o.Version && UseCorridor == o.UseCorridor &&
 			X0 == o.X0 && Y0 == o.Y0 && X1 == o.X1 && Y1 == o.Y1 &&
 			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross) && Turn.Equals(o.Turn) && Bend.Equals(o.Bend) &&
-			Heuristic.Equals(o.Heuristic);
+			Heuristic.Equals(o.Heuristic) && Downhill.Equals(o.Downhill) && Descent.Equals(o.Descent) && EdgeGrade.Equals(o.EdgeGrade) &&
+			TurnTerrain.Equals(o.TurnTerrain);
 	}
 
 	/// <summary>Итог поиска с запасом Budget (-1 — без предела): путь, число раскрытий, остановлен ли запасом.</summary>
@@ -278,7 +283,8 @@ public partial class FastGrid
 		{
 			Cost = cost, S = s, T = t, Heights = heights, Climb = climb, MaxGrade = maxGrade, Links = links,
 			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Turn = TurnCost, Bend = BendCost, Version = _corridorVersion,
-			Heuristic = HCost * HeuristicScale,
+			Heuristic = HCost * HeuristicScale, Downhill = DownhillGrade, Descent = DescentWeight, EdgeGrade = EdgeGradeWeight,
+			TurnTerrain = TurnTerrainWeight,
 			CostVersion = CostVersion, HeightsVersion = HeightsVersion, LinksVersion = LinksVersion,
 			X0 = _winX0, Y0 = _winY0, X1 = Math.Min(_winX1, _w), Y1 = Math.Min(_winY1, _h)
 		};
@@ -427,7 +433,7 @@ public partial class FastGrid
 		}
 		_reachGen++;
 		int markA = _reachGen * 2, markB = _reachGen * 2 + 1;
-		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
+		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity || DownhillGrade > 0.0);
 		bool corridor = useCorridor && _hasCorridor;
 		bool hasLinks = links.Length > 0;
 		var mark = _reachMark;
@@ -509,12 +515,13 @@ public partial class FastGrid
 		if (corridor && !linked)
 		{
 			int e = c * 16 + k * 2;
-			grade = Math.Max(grade, _corridor[e]);
-			crossGrade = _corridor[e + 1];
-			if (double.IsPositiveInfinity(grade))
+			double edge = _corridor[e];
+			if (double.IsPositiveInfinity(edge))
 				return false;
+			grade = Math.Max(grade, edge * EdgeGradeWeight);
+			crossGrade = _corridor[e + 1];
 		}
-		return !(grade > maxGrade || crossGrade > maxCrossGrade);
+		return !(grade > (DownhillGrade > 0.0 && hs[n] < hs[c] ? DownhillGrade : maxGrade) || crossGrade > maxCrossGrade);
 	}
 
 	/// <summary>Отпустить буферы и кэш поиска после этапа троп, вернуть полосу в пул без принудительной сборки GC.</summary>
@@ -618,7 +625,8 @@ public partial class FastGrid
 			int s = q.S, t = q.T;
 			double climb = q.Climb, maxGrade = q.MaxGrade, maxCrossGrade = q.MaxCross;
 			double heuristic = q.Heuristic;
-			bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
+			bool directional = q.Downhill > 0.0;
+			bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity || directional);
 			bool corridor = q.UseCorridor && grid._hasCorridor;
 			bool hasLinks = q.Links.Length > 0;
 			int W = grid._w;
@@ -734,15 +742,22 @@ public partial class FastGrid
 							double crossGrade = 0.0;
 							if (corridor && !linked)
 							{
-								grade = Max(grade, ce[k * 2]);
-								crossGrade = ce[k * 2 + 1];
-								if (double.IsPositiveInfinity(grade))
+								double edge = ce[k * 2];
+								if (double.IsPositiveInfinity(edge))
 									continue;
+								grade = Max(grade, edge * q.EdgeGrade);
+								crossGrade = ce[k * 2 + 1];
 							}
-							if (grade > maxGrade || crossGrade > maxCrossGrade)
+							bool downhill = directional && hs[n] < hs[c];
+							if (grade > (downhill ? q.Downhill : maxGrade) || crossGrade > maxCrossGrade)
 								continue;
 							double steep = Max(0.0, grade - 0.22);
-							step += climb * (grade * grade + 4.0 * steep * steep + crossGrade * crossGrade);
+							if (downhill)
+								step += climb * ((grade * grade + 4.0 * steep * steep) * q.Descent + crossGrade * crossGrade);
+							else
+								step += climb * (grade * grade + 4.0 * steep * steep + crossGrade * crossGrade);
+							if (q.TurnTerrain > 0.0 && !linked)
+								step += pt[k] * q.TurnTerrain * (grade * grade + crossGrade * crossGrade);
 						}
 						double ng = gc + dl[k] * step;
 						if (turning)

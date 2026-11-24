@@ -1,12 +1,19 @@
 extends SceneTree
 ## Стенд Типа 2 «Речная экспедиция» (docs/WORLD_TEMPLATES.md):
 ##   -- --geo              география плана, лист-карта с продольным профилем, биомы, время этапов
-##   -- --short            короткая версия (256 × 768) для быстрой отладки
+##   -- --short            короткий план (384 × 1024) для быстрой отладки
 ##   -- --height <N>       явная длина плана (кратно 64, <= 4096)
 ##   -- --seeds a,b        сиды (по умолчанию CONTROL)
 ##   -- --tag <имя>        суффикс файлов
 ##   -- --verify-phase1    проверка изоляции кэша/сейвов/настроек, отсутствия невидимой стены и px <= 4096
 ##   -- --verify-phase2    проверка монотонности реки, краёв ленты, глубины/течения, стыков OuterLand и C# == GDScript
+##   -- --phase83-profile  вместе с --roads: A*, линия, ось, RoadBed и метрический профиль.
+##   -- --fixed-tread      вместе с --roads: три варианта полотна на одной опубликованной оси.
+##   -- --repeat-route     вместе с --roads: повтор первого плана и сравнение оси и опоры.
+##   -- --phase83-ride     вместе с --roads: BikeRide на выбранных технических участках.
+##   -- --probe-tread <a:b> вместе с --roads: заезд между двумя метровыми станциями.
+##   -- --phase83-views    вместе с --shots-p7: технические склоны, берег и долина.
+##   -- --link-shots       вместе с --shots-p7: подход, апекс и выход у поворота с наибольшим углом.
 ##   -- --roads            фаза 3: одна дорога, метрики (длина, берег/лес, набор/сброс, прямые, валидация) и лист-карта
 ##   -- --shots            3D-снимки долины в настоящей сцене GameWorld (нужно окно; короткий мир 256×768)
 ##   -- --phase8          кадры растительности из GameWorld; --short-expedition для короткого плана
@@ -205,8 +212,20 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	for x in range(0, w.W, 8):
 		max_step_m = maxf(max_step_m, absf(w.h[x] - outer.height(x, -1)) * GameConfig.HS)
 		max_step_m = maxf(max_step_m, absf(w.h[(w.H - 1) * w.W + x] - outer.height(x, w.H)) * GameConfig.HS)
-	if max_step_m > 10.0:
-		failures.append("plan/OuterLand edge jump too large: %.2f m" % max_step_m)
+	# Compare the same coordinates in independently generated strips. Adjacent cells
+	# can legitimately differ on a cliff; equality at the overlap detects a seam.
+	var overlap_m := 0.0
+	for side in 2:
+		var edge_x := 0 if side == 0 else w.W - 1
+		var strip_x := StageRelief.height_rect(w, edge_x + side - 1, 0, 2, w.H, false, true)
+		for y in w.H:
+			overlap_m = maxf(overlap_m, absf(w.h[y * w.W + edge_x] - strip_x[y * 2 + 1 - side]) * GameConfig.HS)
+		var edge_y := 0 if side == 0 else w.H - 1
+		var strip_y := StageRelief.height_rect(w, 0, edge_y + side - 1, w.W, 2, false, true)
+		for x in w.W:
+			overlap_m = maxf(overlap_m, absf(w.h[edge_y * w.W + x] - strip_y[(1 - side) * w.W + x]) * GameConfig.HS)
+	if overlap_m > 0.005:
+		failures.append("plan/OuterLand terrain differs at shared positions: %.3f m" % overlap_m)
 
 	# 7. C# == GDScript паритет рельефа долины (ближний 64×64 и разрежённый 35×35 с шагом 4)
 	var fast_patch := StageRelief.height_rect(w, 64, w.H / 3, 64, 64, false, true)
@@ -277,9 +296,9 @@ func _verify_phase2(seed_text: String, short_dev: bool, explicit_h: int) -> bool
 	var f_pct := 100.0 * float(cor_forest) / float(maxi(1, cor_n))
 	var s_pct := 100.0 * float(cor_swamp) / float(maxi(1, cor_n))
 	var rt_pct := 100.0 * float(cor_rock_tundra) / float(maxi(1, cor_n))
-	print("PHASE2_METRICS seed=%s %dx%d drop=%.1fm spurs=%d opp_spurs=%d edge_step=%.2fm cs_gd_diff=%.6f coarse_diff=%.6f sinuosity=%.3f x_span=%.1f bends20=%d sight=%.0fm corridor(forest=%.1f%% swamp=%.1f%% rock+tundra=%.1f%%)" % [
+	print("PHASE2_METRICS seed=%s %dx%d drop=%.1fm spurs=%d opp_spurs=%d edge_step=%.2fm overlap=%.3fm cs_gd_diff=%.6f coarse_diff=%.6f sinuosity=%.3f x_span=%.1f bends20=%d sight=%.0fm corridor(forest=%.1f%% swamp=%.1f%% rock+tundra=%.1f%%)" % [
 		seed_text, w.W, w.H, (axis.top_h - axis.bot_h) * GameConfig.HS, axis.spurs.size(), axis.opp_spurs.size(),
-		max_step_m, max_diff, coarse_diff, float(curv.sinuosity), float(curv.x_span), int(curv.bends_20), float(curv.max_sight_m),
+		max_step_m, overlap_m, max_diff, coarse_diff, float(curv.sinuosity), float(curv.x_span), int(curv.bends_20), float(curv.max_sight_m),
 		f_pct, s_pct, rt_pct])
 
 	w.clear_noise_fields()
@@ -453,6 +472,8 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 	var failures: Array[String] = []
 	var maps: Array[Image] = []
 	var rows := []
+	var phase83 := OS.get_cmdline_user_args().has("--phase83-profile")
+	StageTrails.trace_expedition_route = phase83
 	for seed_text: String in seeds:
 		var t0 := Time.get_ticks_usec()
 		var w := WorldGenerator._generate_plan(seed_text, WorldGenerator.PLAN_SIZE, Callable(), Callable(),
@@ -482,6 +503,28 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 			w.base_heights = null
 			continue
 		var pts: Array = roads[0].pts
+		var shape := _expedition_shape(w, roads[0], surf)
+		if shape.wet_tread_m > 0:
+			failures.append("%s: water across the tread at %d metre stations" % [seed_text, shape.wet_tread_m])
+		if seed_text == seeds[0] and OS.get_cmdline_user_args().has("--repeat-route"):
+			var again := WorldGenerator._generate_plan(seed_text, WorldGenerator.PLAN_SIZE, Callable(), Callable(),
+				null, 0, Callable(), WorldGenerator.PlanMode.WORLD, Callable(), WorldTemplate.EXPEDITION_ID, short_dev, explicit_h)
+			var repeat_ok: bool = again != null and again.trails.size() == 1 and again.h == w.h and again.trails[0].pts == pts
+			if repeat_ok:
+				var repeated := Heightfield.new(again, true)
+				repeat_ok = repeated.hv == surf.hv and repeated.road_refinement.patches == surf.road_refinement.patches
+			print("EXPEDITION REPEAT ", seed_text, " ", "MATCH terrain/axis/bed/metre" if repeat_ok else "DIFF")
+			if not repeat_ok:
+				failures.append("%s: repeat changed terrain, axis or tread" % seed_text)
+		if OS.get_cmdline_user_args().has("--fixed-tread"):
+			_fixed_tread(w, roads[0], tag)
+		if phase83:
+			_phase83_profiles(w, surf, pts, tag)
+		if OS.get_cmdline_user_args().has("--phase83-ride") and not _phase83_ride(w, surf, roads[0], shape):
+			failures.append("%s: BikeRide did not complete its technical probes" % seed_text)
+		var ride_window := _arg("--probe-tread", "").split(":", false)
+		if ride_window.size() == 2 and not _probe_tread(w, surf, roads[0], Vector2i(int(ride_window[0]), int(ride_window[1]))):
+			failures.append("%s: BikeRide did not stay in the tread in %s" % [seed_text, ":".join(ride_window)])
 		var T := GameConfig.TILE
 		var len_m := 0.0
 		var near_river_m := 0.0
@@ -607,7 +650,9 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 			obstacles_occupied = int(obs.get("occupied", 0)),
 			obstacles_parts = obs.get("parts", {}),
 			gaps = gaps_count,
+			shape = shape,
 		}
+		print("EXPEDITION SHAPE ", seed_text, " ", JSON.stringify(shape.duplicate().merged({axis = []}, true)))
 		rows.append(row)
 		print("PHASE3_ROAD %-11s %s  %.2fkm  river=%.1f%% forest=%.1f%%  +%3.0fm/-%3.0fm  maxG=%.1f%%  bend=%.1f%% maxStr=%.0fm  anc=%s  trails=%.0fms total=%.0fms  sites=%s" % [
 			row.seed, row.size, row.len_km, row.near_river_pct, row.deep_forest_pct,
@@ -615,7 +660,7 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 			row.anchors, row.trails_ms, row.total_ms, str(row.sites)])
 		print("  PHASE5_OBS %-11s kind=%s gaps=%d occupied=%d parts=%s surf=%s" % [
 			seed_text, route_kind, gaps_count, int(obs.get("occupied", 0)), str(obs.get("parts", {})), str(surf_pct)])
-		maps.append(_render_road_strip(w, surf))
+		maps.append(_render_road_strip(w, surf, shape))
 		w.clear_noise_fields()
 		w.base_heights = null
 	if not maps.is_empty():
@@ -635,7 +680,480 @@ func _verify_phase3_roads(seeds: PackedStringArray, tag: String, short_dev: bool
 	return false
 
 
-func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
+static func _expedition_shape(w: WorldData, route: Dictionary, surf: Heightfield) -> Dictionary:
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var stations := Samples.stations(route)
+	var ps: PackedVector2Array = stations.p
+	var halves: PackedFloat32Array = stations.half
+	var river := ValleyAxis.for_world(w)
+	var reach := Vector2(INF, -INF)
+	var across_m := 0
+	var upstream_m := 0
+	var upstream_run := 0
+	var longest_upstream := 0
+	var worst_up := 0.0
+	var worst_down := 0.0
+	var grades := RoadTuning.for_world(w).routing.expedition_grades
+	var grade_excess := Vector2i.ZERO
+	var wet_tread := 0
+	for i in ps.size():
+		var p := ps[i]
+		var normal := Samples.normal(ps, i) * halves[i]
+		var left := p - normal
+		var right := p + normal
+		wet_tread += int(maxf(surf.depth_at(p.x, p.y), maxf(surf.depth_at(left.x, left.y), surf.depth_at(right.x, right.y))) > 0.03)
+		if i < 12 or i >= ps.size() - 12:
+			continue
+		var row := p.y / GameConfig.TILE
+		var away := absf(p.x - river.axis_x_at(row) * GameConfig.TILE) * river.axis_cos_at(roundi(row))
+		reach = Vector2(minf(reach.x, away), maxf(reach.y, away))
+		var dir := (ps[i + 12] - ps[i - 12]).normalized()
+		var river_dir := Vector2(river.axis_x_at(row + 3.0) - river.axis_x_at(row - 3.0), 6.0).normalized()
+		var along := dir.dot(river_dir)
+		across_m += int(absf(along) < 0.5)
+		upstream_m += int(along < -0.5)
+		upstream_run = upstream_run + 1 if along < -0.5 else 0
+		longest_upstream = maxi(longest_upstream, upstream_run)
+		var grade := (_height_at(surf, ps[i + 2]) - _height_at(surf, ps[i - 2])) * 0.25
+		grade_excess += Vector2i(int(grade > grades.x), int(grade < -grades.y))
+		worst_up = maxf(worst_up, grade)
+		worst_down = maxf(worst_down, -grade)
+	var groups := []
+	var station := 0
+	for group: Dictionary in w.generation_profile.get("expedition_groups", []):
+		if group.shape == "anchor":
+			continue
+		var stops := []
+		var cells := PackedInt32Array([group.entry])
+		cells.append_array(group.cells)
+		cells.append(group.exit)
+		for cell: int in cells:
+			var point := Vector2(cell % w.W + 0.5, cell / w.W + 0.5) * GameConfig.TILE
+			var dist := INF
+			var closest := station
+			for i in range(station, ps.size()):
+				var d := ps[i].distance_squared_to(point)
+				if d < dist:
+					dist = d
+					closest = i
+			station = closest
+			stops.append(station)
+		var turn := 0.0
+		var apex: int = stops[0]
+		for i in range(maxi(24, stops[0]), mini(ps.size() - 24, stops[-1] + 1)):
+			var angle := absf(rad_to_deg((ps[i] - ps[i - 24]).angle_to(ps[i + 24] - ps[i])))
+			if angle > turn:
+				turn = angle
+				apex = i
+		groups.append({shape = group.shape, row = group.y, stops_m = stops, turn_deg_24m = roundi(turn), apex_m = apex,
+			elevation_change_m = snappedf(_height_at(surf, ps[stops[-1]]) - _height_at(surf, ps[stops[0]]), 0.1),
+			marker = [ps[apex].x / GameConfig.TILE, ps[apex].y / GameConfig.TILE]})
+	var knots := []
+	for i in _expedition_knots(ps, 10.0):
+		knots.append([ps[i].x / GameConfig.TILE, ps[i].y / GameConfig.TILE])
+	return {river_distance_m = [roundi(reach.x), roundi(reach.y)], across_m = across_m, upstream_m = upstream_m,
+		longest_upstream_m = longest_upstream, groups = groups, fallback = w.generation_profile.get("expedition_fallbacks", []),
+		up_over_limit_m = grade_excess.x, down_over_limit_m = grade_excess.y, max_grade = [worst_up, worst_down],
+		wet_tread_m = wet_tread, axis = knots}
+
+
+static func _expedition_knots(ps: PackedVector2Array, tolerance: float) -> PackedInt32Array:
+	var stack: Array[Vector2i] = [Vector2i(0, ps.size() - 1)]
+	var result := PackedInt32Array([0])
+	while not stack.is_empty():
+		var span: Vector2i = stack.pop_back()
+		var error := tolerance * tolerance
+		var split := -1
+		for i in range(span.x + 1, span.y):
+			var p := Geometry2D.get_closest_point_to_segment(ps[i], ps[span.x], ps[span.y])
+			var d := p.distance_squared_to(ps[i])
+			if d > error:
+				error = d
+				split = i
+		if split < 0:
+			result.append(span.y)
+		else:
+			stack.append(Vector2i(split, span.y))
+			stack.append(Vector2i(span.x, split))
+	return result
+
+
+func _fixed_tread(w: WorldData, route: Dictionary, tag: String) -> void:
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var base := Heightfield.base_of(w)
+	var samples := Samples.stations(route)
+	var ps: PackedVector2Array = samples.p
+	var half: PackedFloat32Array = samples.half
+	var offcamber := 40
+	var turn := 40
+	var cross_max := 0.0
+	var turn_max := 0.0
+	for i in range(40, ps.size() - 40):
+		var norm := Samples.normal(ps, i) * half[i]
+		var cross := absf(_height_at(base, ps[i] + norm) - _height_at(base, ps[i] - norm)) / (2.0 * half[i])
+		var angle := absf((ps[i] - ps[i - 6]).angle_to(ps[i + 6] - ps[i]))
+		if cross > cross_max:
+			cross_max = cross
+			offcamber = i
+		if angle > turn_max:
+			turn_max = angle
+			turn = i
+	var sites := {offcamber = offcamber, turn = turn}
+	if w.seed_text == "Туман-4821" and ps.size() > 5540:
+		sites.ledge = 5510
+	var tuning := RoadTuning.for_world(w)
+	var profiles := {}
+	for name: String in ["8.3", "8.2", "8.3+"]:
+		var preset := tuning
+		if name != "8.3+":
+			preset = tuning.duplicate() as RoadTuning
+			preset.trail = tuning.trail.duplicate() as RoadKindTuning
+			var values := [0.01, 0.55, 1.1, 0.98, 0.045, 0.07, 0.09, 0.20, 0.92, 0.48, 0.0, 0.035, 0.52] if name == "8.3" \
+				else [0.15, 1.0, 2.5, 0.85, 0.18, 0.28, 1.0, 1.0, 0.0, 0.0, 0.20, 0.25, 1.8]
+			var keys := ["flat", "shoulder", "window", "bed_keep", "cut", "side", "profile_fit", "cross_fit",
+				"natural_cross", "technical_relief", "level", "bench_scale", "turn_bank"]
+			for j in keys.size():
+				preset.trail.set(keys[j], values[j])
+			preset.trail.support_cut = 0.0
+		var h := base.copy()
+		RoadBed.refine(h, {}, PackedByteArray(), preset)
+		var view := {}
+		for stage: String in ["bed", "metre"]:
+			if stage == "metre":
+				h.road_refinement = RoadRefinement.build(h, true, {}, false, preset)
+			var sections := {}
+			for site: String in sites:
+				var center: int = sites[site]
+				var stations := []
+				var peak_cross := 0.0
+				var peak_up := 0.0
+				var peak_down := 0.0
+				var rms_cross := 0.0
+				for i in range(center - 16, center + 17):
+					var n := Samples.normal(ps, i) * half[i]
+					var left := _height_at(h, ps[i] - n)
+					var right := _height_at(h, ps[i] + n)
+					var cross := (right - left) / (2.0 * half[i])
+					var grade := (_height_at(h, ps[i + 2]) - _height_at(h, ps[i - 2])) * 0.25
+					peak_cross = maxf(peak_cross, absf(cross))
+					rms_cross += cross * cross
+					peak_up = maxf(peak_up, grade)
+					peak_down = maxf(peak_down, -grade)
+					stations.append([i, left, _height_at(h, ps[i]), right, grade, cross])
+				var metrics := {cross_rms = sqrt(rms_cross / 33.0), peak_cross = peak_cross, peak_up = peak_up, peak_down = peak_down}
+				print("FIXED TREAD ", w.seed_text, " ", name, " ", stage, " ", site, " @", center, " ", JSON.stringify(metrics))
+				sections[site] = {station = center, metrics = metrics, rows = stations}
+			view[stage] = sections
+		profiles[name] = view
+	var file := FileAccess.open(OUT.path_join("expedition_tread_%s%s.json" % [w.seed_num, tag]), FileAccess.WRITE)
+	file.store_string(JSON.stringify(profiles))
+
+
+static func _height_at(h: Heightfield, p: Vector2) -> float:
+	return h.ground_at(p.x, p.y)
+
+
+func _phase83_profiles(w: WorldData, final: Heightfield, pts: Array, tag: String) -> void:
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var base := Heightfield.base_of(w)
+	var rows := {}
+	var data := {}
+	for phase: String in ["astar", "line", "reshape", "bed", "final"]:
+		var line: Array = pts
+		if phase in ["astar", "line"]:
+			line = w.generation_profile.get("expedition_" + phase, pts)
+		var stations: PackedVector2Array = Samples.stations({pts = line}).p
+		var hs := PackedFloat32Array()
+		for at in stations:
+			if phase == "bed":
+				hs.append(final.base_ground_at(at.x, at.y))
+			elif phase == "final":
+				hs.append(final.ground_at(at.x, at.y))
+			else:
+				hs.append(base.ground_at(at.x, at.y))
+		var row := {length_m = stations.size() - 1, up_m = 0.0, down_m = 0.0, up30_m = 0, down40_m = 0, down60_m = 0,
+			turn_m = 0, straight_max_m = 0, ledges = 0, max_up = 0.0, max_down = 0.0, min_turn_r_m = INF}
+		var straight := 0
+		var last_ledge := -10
+		for i in range(1, hs.size()):
+			var dy := hs[i] - hs[i - 1]
+			row.up_m += maxf(0.0, dy)
+			row.down_m -= minf(0.0, dy)
+			if i < 5 or i > hs.size() - 6:
+				continue
+			var grade := (hs[i + 2] - hs[i - 2]) / 4.0
+			row.up30_m += int(grade >= 0.30)
+			row.down40_m += int(grade <= -0.40)
+			row.down60_m += int(grade <= -0.60)
+			row.max_up = maxf(row.max_up, grade)
+			row.max_down = maxf(row.max_down, -grade)
+			var turn := absf((stations[i] - stations[i - 4]).angle_to(stations[i + 4] - stations[i]))
+			if turn > deg_to_rad(10.0):
+				row.turn_m += 1
+				row.min_turn_r_m = minf(row.min_turn_r_m, 2.0 / sin(turn * 0.5))
+			straight = straight + 1 if turn < deg_to_rad(4.0) else 0
+			row.straight_max_m = maxi(row.straight_max_m, straight)
+			if i - last_ledge >= 5 and absf(hs[i + 2] - 2.0 * hs[i] + hs[i - 2]) > 0.42:
+				row.ledges += 1
+				last_ledge = i
+		if not is_finite(row.min_turn_r_m):
+			row.min_turn_r_m = 0.0
+		rows[phase] = row
+		data[phase] = Array(hs)
+	var raw: Array = data.reshape
+	var bed: Array = data.bed
+	var physical: Array = data.final
+	var diff := Vector2.ZERO
+	for i in raw.size():
+		diff += Vector2(absf(bed[i] - raw[i]), absf(physical[i] - raw[i]))
+	var floor_sum := 0.0
+	var floor_n := 0
+	for y in range(12, w.H - 12, 4):
+		for x in range(12, w.W - 12, 4):
+			var i := y * w.W + x
+			if w.biome[i] not in [Biomes.FOREST, Biomes.TAIGA] or w.dist_water[i] < 6.0:
+				continue
+			var around := (w.h[i + 4] + w.h[i - 4] + w.h[i + 4 * w.W] + w.h[i - 4 * w.W]) * 0.25
+			floor_sum += absf(w.h[i] - around) * GameConfig.HS
+			floor_n += 1
+	var mean_change := diff / maxf(1, raw.size())
+	var out := {seed = w.seed_text, profiles = rows, profile_h = data, bed_delta_m = mean_change.x, total_delta_m = mean_change.y,
+		forest_tpi_m = floor_sum / maxi(1, floor_n), bed_ms = final.path_timings.get("road_bed_ms", 0.0),
+		gaps = final.road_refinement.gaps.size(), reshaping = w.generation_profile.get("road_axis_meander", {})}
+	print("PHASE83 PROFILE ", w.seed_text, " ", JSON.stringify(out.duplicate().merged({profile_h = []}, true)))
+	var file := FileAccess.open(OUT.path_join("phase83_profile_%s%s.json" % [w.seed_num, tag]), FileAccess.WRITE)
+	file.store_string(JSON.stringify(out))
+
+
+func _ride_vegetation(w: WorldData, h: Heightfield) -> VegetationLayer:
+	const Floor := preload("res://scripts/render/forest_floor.gd")
+	var veg := VegetationLayer.new()
+	veg.carpet_enabled = false
+	veg.use_shared_forest_ranges = false
+	root.add_child(veg)
+	veg.setup(w, h, {}, Models.grass_mesh(), Floor.surface_image(w))
+	veg.settings.trail_clutter = true
+	veg.grass_r = 18.0
+	veg.under_r = 33.0
+	veg._reserve_details(Vector2.ZERO)
+	h.obstacles = ForestObstacles.new(w, h)
+	return veg
+
+
+func _probe_tread(w: WorldData, h: Heightfield, route: Dictionary, limits: Vector2i) -> bool:
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var samples := Samples.stations(route)
+	if limits.x < 3 or limits.y >= samples.p.size() - 8 or limits.y <= limits.x:
+		return false
+	var veg := _ride_vegetation(w, h)
+	var passed := false
+	for line: Vector2 in [Vector2(0.9, 0.0), Vector2(0.67, 0.18), Vector2(0.55, -0.18)]:
+		var ride := _phase83_bike_segment(w, h, veg, samples, (limits.x + limits.y) / 2, "ledge", line.x, false, limits, line.y)
+		print("EXPEDITION TREAD RIDE ", w.seed_text, " ", limits, " ", JSON.stringify(ride))
+		passed = passed or ride.success
+	veg.free()
+	return passed
+
+
+func _phase83_ride(w: WorldData, h: Heightfield, route: Dictionary, shape: Dictionary) -> bool:
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var samples := Samples.stations(route)
+	var ps: PackedVector2Array = samples.p
+	var candidates := {descent = [], climb = [], turn = [], ledge = []}
+	var pump_station := -1
+	var pump_score := 0.0
+	for i in range(45, ps.size() - 48, 5):
+		var p := ps[i]
+		if h.road_refinement.gaps.any(func(g: Dictionary) -> bool: return (g.area as Rect2).grow(21.0).has_point(p)):
+			continue
+		var y := h.ground_at(p.x, p.y)
+		var y0 := h.ground_at(ps[i - 3].x, ps[i - 3].y)
+		var y1 := h.ground_at(ps[i + 3].x, ps[i + 3].y)
+		var angle := absf((ps[i] - ps[i - 4]).angle_to(ps[i + 4] - ps[i]))
+		var grade := (y1 - y0) / 6.0
+		candidates.descent.append([i, -grade])
+		candidates.climb.append([i, grade])
+		candidates.turn.append([i, angle])
+		var crest := y - (y0 + y1) * 0.5
+		candidates.ledge.append([i, crest + maxf(0.0, -grade) * 0.45])
+		if absf(grade) < 0.22 and angle < 0.28 and maxf(absf(y - y0), absf(y - y1)) < 1.55 and crest > pump_score:
+			pump_station = i
+			pump_score = crest
+	var veg := _ride_vegetation(w, h)
+	var ok := true
+	for name: String in candidates:
+		var choices: Array = candidates[name]
+		choices.sort_custom(func(a: Array, b: Array) -> bool: return a[1] > b[1])
+		var tested := 0
+		var last := -100
+		for choice: Array in choices:
+			var index: int = choice[0]
+			if tested > 0 and abs(index - last) < 45:
+				continue
+			var passed := false
+			for pace: float in [1.0, 0.72, 0.50]:
+				var ride := _phase83_bike_segment(w, h, veg, samples, index, name, pace)
+				print("PHASE83 RIDE ", w.seed_text, " ", name, " at=", index, " score=", snappedf(choice[1], 0.001), " ", JSON.stringify(ride))
+				passed = passed or ride.success
+				if ride.success:
+					break
+			ok = passed and ok
+			if name == "ledge" and tested == 1:
+				var hop := _phase83_bike_segment(w, h, veg, samples, index, name, 0.8, true)
+				print("PHASE83 HOP ", w.seed_text, " at=", index, " ", JSON.stringify(hop))
+			tested += 1
+			last = index
+			if tested == 2:
+				break
+		ok = tested == 2 and ok
+	if pump_station >= 0:
+		var pump := _phase83_bike_segment(w, h, veg, samples, pump_station, "pump", 0.9)
+		print("PHASE83 PUMP ", w.seed_text, " at=", pump_station, " ", JSON.stringify(pump))
+	if not shape.groups.is_empty():
+		var details: Array = shape.groups.duplicate()
+		details.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.turn_deg_24m > b.turn_deg_24m)
+		var feature: Dictionary = details[0]
+		var limits := Vector2i(maxi(2, feature.stops_m[0] - 15), mini(ps.size() - 8, feature.stops_m[-1] + 15))
+		var passed := false
+		for pace: float in [0.82, 0.60, 0.48]:
+			var ride := _phase83_bike_segment(w, h, veg, samples, feature.apex_m, feature.shape, pace, false, limits)
+			print("EXPEDITION LINK RIDE ", w.seed_text, " ", feature.shape, " ", limits, " ", JSON.stringify(ride))
+			passed = passed or ride.success
+			if passed:
+				break
+		ok = passed and ok
+	veg.free()
+	return ok
+
+
+func _phase83_bike_segment(w: WorldData, h: Heightfield, veg: VegetationLayer, samples: Dictionary, center: int, feature: String,
+		pace: float, hop_probe := false, limits := Vector2i.ZERO, lateral := 0.0) -> Dictionary:
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var ps: PackedVector2Array = samples.p
+	var halves: PackedFloat32Array = samples.half
+	var start := limits.x if limits != Vector2i.ZERO else center - 16
+	var finish := limits.y if limits != Vector2i.ZERO else center + 17
+	var at := ps[start] + Samples.normal(ps, start) * lateral
+	var dir := ps[start + 2] - ps[start]
+	var bike := BikeRide.new()
+	var player := PlayerState.new()
+	var control := BikeController.new()
+	bike.x = at.x
+	bike.z = at.y
+	bike.heading = atan2(-dir.x, -dir.y)
+	bike.y = h.ground_at(at.x, at.y)
+	bike.mount(player)
+	bike.speed = 4.4 * pace
+	var last_veg := Vector2.INF
+	var progress := float(start)
+	var air := 0
+	var landings := 0
+	var air_run := 0
+	var max_off := 0.0
+	var contact_ticks := 0
+	var pump_ticks := 0
+	var tried_hop := false
+	var off_ticks := 0
+	var wrong_leg_ticks := 0
+	var landing_off := 0
+	var first_exit := -1
+	var fastest := 0.0
+	var skipped := false
+	var last_move := 0
+	var last_progress := progress
+	var limit_ticks := (10 + finish - start) * 60
+	for tick in limit_ticks:
+		var p := Vector2(bike.x, bike.z)
+		var near := clampi(floori(progress), 2, ps.size() - 9)
+		var projected := _tread_projection(ps, p, near - 2, near + 4)
+		if projected.x > progress + 1.5:
+			skipped = true
+			break
+		progress = maxf(progress, projected.x)
+		if progress - last_progress > 0.5:
+			last_progress = progress
+			last_move = tick
+		var axle := Vector2(-sin(bike.heading), -cos(bike.heading)) * BikeRide.HUB
+		var in_tread := true
+		for wheel: Vector2 in [p + axle, p - axle]:
+			var contact := _tread_projection(ps, wheel, near - 3, near + 4)
+			var cell := floori(contact.x)
+			var width := lerpf(halves[cell], halves[cell + 1], contact.x - cell)
+			max_off = maxf(max_off, contact.y)
+			if contact.y > width:
+				in_tread = false
+				var other_leg := _tread_projection(ps, wheel, near - 100, near + 100)
+				var other := floori(other_leg.x)
+				if absf(other_leg.x - contact.x) > 5.0 and other_leg.y <= halves[other]:
+					wrong_leg_ticks += 1
+		if not in_tread:
+			off_ticks += 1
+			if first_exit < 0:
+				first_exit = near
+		fastest = maxf(fastest, bike.speed)
+		if bike.airborne:
+			air += 1
+			air_run += 1
+		elif air_run > 0:
+			if air_run >= 3 and not bike.crashed:
+				landings += 1
+				landing_off += int(not in_tread)
+			air_run = 0
+		if bike.crashed or progress >= finish or projected.y > 5.0 or tick - last_move > 6 * 60:
+			break
+		if last_veg.distance_squared_to(p) > 10.0 * 10.0:
+			veg._fill_grass(p.x, p.y, {}, true)
+			veg._accept_contacts()
+			h.obstacles.update(p.x, p.y, veg.obstacles, veg.obstacles_version, true)
+			h.obstacles.set_bumps(veg.bumps, veg.obstacles_version)
+			last_veg = p
+		var aim := minf(ps.size() - 2, projected.x + clampf(1.1 + bike.speed * 0.24, 1.65, 3.0))
+		var goal := ps[floori(aim)].lerp(ps[floori(aim) + 1], fposmod(aim, 1.0)) + Samples.normal(ps, floori(aim)) * lateral - (p + axle * 0.35)
+		var yaw := atan2(-goal.x, -goal.y)
+		var steer := clampf(-wrapf(yaw - bike.heading, -PI, PI) * 4.1, -1.0, 1.0)
+		var bend := absf((ps[near + 3] - ps[near]).angle_to(ps[near + 8] - ps[near + 3]))
+		var slope := (_height_at(h, ps[near + 7]) - _height_at(h, ps[near])) / 7.0
+		var speed := 6.0 if feature == "ledge" or feature == "climb" else 5.2
+		var target := maxf(1.8, speed * pace / (1.0 + bend + maxf(0.0, -slope - 0.15)))
+		var throttle := clampf((target - bike.speed) * 0.95 - slope * 0.55, -1.0, 1.0)
+		if feature == "pump" and absi(near - center) <= 5:
+			bike.pump_pressed = true
+			bike.body_back = near < center
+			bike.body_forward = near >= center
+			throttle = maxf(0.0, throttle)
+		else:
+			bike.pump_pressed = false
+			bike.body_back = false
+			bike.body_forward = false
+		var jump := hop_probe and not tried_hop and near >= center - 6 and not bike.airborne
+		tried_hop = tried_hop or jump
+		control.ride(1.0 / 60.0, player, bike, w, h, throttle, steer, false, jump, false)
+		contact_ticks += int((bike.contact_f() and bike.slick_f < 1.0) or (bike.contact_r() and bike.slick_r < 1.0))
+		pump_ticks += int(bike.pump_active > 0.1)
+	var finished := progress >= finish and not bike.crashed
+	return {success = finished and off_ticks == 0 and not skipped, finished = finished, pace = pace, lateral_m = lateral,
+		reached = snappedf(progress - start, 0.1), length_m = finish - start, first_exit_m = first_exit, skipped = skipped,
+		off_tread_ticks = off_ticks, wrong_leg_wheel_ticks = wrong_leg_ticks, landings_off_tread = landing_off, fastest_m_s = snappedf(fastest, 0.01),
+		max_off_m = snappedf(max_off, 0.01),
+		air_ticks = air, landings = landings, bump_contact_ticks = contact_ticks, pump_ticks = pump_ticks,
+		hop_height_m = snappedf(bike.hop_height, 0.01), crash = BikeRide.CrashCause.keys()[bike.crash_cause] if bike.crashed else ""}
+
+
+## Projection against connected metre segments on the active leg. The station
+## cannot jump to the nearby return leg of a hairpin.
+static func _tread_projection(ps: PackedVector2Array, p: Vector2, first: int, last: int) -> Vector2:
+	var best := Vector2(0, INF)
+	for i in range(maxi(0, first), mini(last, ps.size() - 1)):
+		var tangent := ps[i + 1] - ps[i]
+		var along := clampf((p - ps[i]).dot(tangent) / maxf(tangent.length_squared(), 0.0001), 0.0, 1.0)
+		var dist := p.distance_squared_to(ps[i] + tangent * along)
+		if dist < best.y:
+			best = Vector2(i + along, dist)
+	best.y = sqrt(best.y)
+	return best
+
+
+func _render_road_strip(w: WorldData, surf: Heightfield, shape: Dictionary) -> Image:
 	var img := _render_strip_with_profile(w)
 	var step := 2 if w.H > 1536 else 1
 	var iw := ceili(float(w.W) / step)
@@ -643,18 +1161,13 @@ func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
 	var prof_w := 96
 	# Рисуем дорогу на карте-полосе (тёплая охра) и профиль высоты дороги справа (оранжевый).
 	var road_col := Color(0.95, 0.78, 0.34)
-	var road_edge := Color(0.28, 0.19, 0.08)
+	var road_edge := Color(0.13, 0.09, 0.04)
 	var road_y_h := {}
 	var route_kind := WorldTemplate.expedition_route_kind(w.template_id)
 	for t: Dictionary in w.trails:
 		if t.kind != route_kind: continue
 		for p: Dictionary in t.pts:
-			var px := clampi(roundi(float(p.x) / step), 1, iw - 2)
 			var py := clampi(roundi(float(p.y) / step), 1, ih - 2)
-			for dy in range(-1, 2):
-				for dx in range(-1, 2):
-					if absi(dx) + absi(dy) <= 1:
-						img.set_pixel(px + dx, py + dy, road_col if dx == 0 and dy == 0 else road_edge)
 			var hm := surf.ground_at(float(p.x) * GameConfig.TILE, float(p.y) * GameConfig.TILE)
 			road_y_h[py] = hm
 	for py_key: int in road_y_h:
@@ -670,6 +1183,20 @@ func _render_road_strip(w: WorldData, surf: Heightfield) -> Image:
 			for dx in range(-r, r + 1):
 				if dx * dx + dy * dy <= r * r:
 					img.set_pixel(px + dx, py + dy, col)
+	var line: Array = shape.axis
+	var pixels := PackedVector2Array()
+	for i in range(1, line.size()):
+		var a := Vector2i(roundi(line[i - 1][0] / step), roundi(line[i - 1][1] / step))
+		var b := Vector2i(roundi(line[i][0] / step), roundi(line[i][1] / step))
+		for p: Vector2i in Geometry2D.bresenham_line(a, b):
+			pixels.append(Vector2(clampi(p.x, 1, iw - 2), clampi(p.y, 1, ih - 2)))
+	for p in pixels:
+		draw_dot.call(p.x * step, p.y * step, 1, road_edge)
+	for p in pixels:
+		img.set_pixelv(Vector2i(p), road_col)
+	for group: Dictionary in shape.groups:
+		draw_dot.call(group.marker[0], group.marker[1], 4, road_edge)
+		draw_dot.call(group.marker[0], group.marker[1], 2, Color(1.0, 0.48, 0.67) if group.shape == "switchback" else Color(1.0, 0.85, 0.58))
 	if w.settlements.size() >= 1:
 		draw_dot.call(w.settlements[0].x, w.settlements[0].y, 4, Color(0.25, 0.96, 0.40))
 	if w.settlements.size() >= 2:
@@ -2002,6 +2529,9 @@ func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
 	var hw: PackedFloat32Array = st.half
 	var n := mini(ps.size(), mini(span.y, fit.get("strength", PackedFloat32Array()).size()))
 
+	var phase83 := OS.get_cmdline_user_args().has("--phase83-views")
+	var best_ledge_k := -1
+	var best_ledge_score := -INF
 	var best_descent_k := -1
 	var best_descent_score := -INF
 	var best_camber_k := -1
@@ -2015,10 +2545,12 @@ func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
 	var surf_img := Floor.surface_image(w)
 
 	for j in range(45, n - 45):
-		if float(fit.strength[j]) < 0.2 or absf(r.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE + 2]) <= 0.001:
+		if not phase83 and (float(fit.strength[j]) < 0.2 or absf(r.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE + 2]) <= 0.001):
 			continue
 		var p := ps[j]
-		if w.road_surface[Samples.cell(w, p)] != RoadSurface.FOREST:
+		if not phase83 and w.road_surface[Samples.cell(w, p)] != RoadSurface.FOREST:
+			continue
+		if phase83 and h.depth_at(p.x, p.y) > 0.0:
 			continue
 		var tangent := (ps[j + 3] - ps[j - 3]).normalized()
 		var nn := Vector2(-tangent.y, tangent.x)
@@ -2045,6 +2577,10 @@ func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
 			best_berm_fallback_k = j
 		var turn_dot := (t_next - t_prev).dot(across_v)
 		var crest := h.ground_at(p.x, p.y) - 0.5 * (h.ground_at(ps[j - 5].x, ps[j - 5].y) + h.ground_at(ps[j + 5].x, ps[j + 5].y))
+		var ledge_score := crest + maxf(0.0, grade) * 1.8 - curv * 2.0
+		if ledge_score > best_ledge_score:
+			best_ledge_score = ledge_score
+			best_ledge_k = j
 		var bank_slope := (((h.ground_at(p.x + across_v.x * half, p.y + across_v.y * half) - h.ground_at(p.x - across_v.x * half, p.y - across_v.y * half)) / (2.0 * half)) * (-signf(turn_dot))) if absf(turn_dot) > 1e-4 else 0.0
 		var berm_sc := bank_slope * 2.5 + curv - absf(grade) * 0.3 - maxf(0.0, crest) * 1.5
 		if curv > 0.035 and crest < 0.08 and bank_slope > 0.03 and berm_sc > best_berm_score:
@@ -2058,7 +2594,23 @@ func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
 
 	var berm_k := best_berm_k if best_berm_k >= 0 else best_berm_fallback_k
 	var shots: Array[Dictionary] = []
-	for entry: Array in [["p7_descent", best_descent_k, -2, 7, 1.25], ["p7_offcamber", best_camber_k, -2, 6, 1.25], ["p7_berm", berm_k, -5, 3, 1.45]]:
+	var views := [["p7_descent", best_descent_k, -2, 7, 1.25], ["p7_offcamber", best_camber_k, -2, 6, 1.25], ["p7_berm", berm_k, -5, 3, 1.45]]
+	if phase83:
+		views.append(["p83_ledge", best_ledge_k, -6, 9, 1.55])
+	if OS.get_cmdline_user_args().has("--link-shots"):
+		var shape := _expedition_shape(w, w.trails[0], h)
+		var feature: Dictionary = {}
+		for group: Dictionary in shape.groups:
+			if feature.is_empty() or group.turn_deg_24m > feature.turn_deg_24m:
+				feature = group
+		if feature.is_empty():
+			push_error("LINK SHOTS: no committed landform")
+			main.queue_free()
+			return false
+		print("LINK SHOTS ", w.seed_text, " ", w.W, "x", w.H, " ", JSON.stringify(feature))
+		views = [["p83plus_approach", feature.apex_m, -14, -5, 1.25], ["p83plus_apex", feature.apex_m, -2, 4, 1.25],
+			["p83plus_exit", feature.apex_m, 7, 16, 1.25]]
+	for entry: Array in views:
 		var k: int = entry[1]
 		if k < 0:
 			continue
@@ -2118,6 +2670,17 @@ func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
 			pos = Vector3(cam_p.x, h.ground_at(cam_p.x, cam_p.y) + 1.15, cam_p.y),
 			target = Vector3(look.x, h.ground_at(look.x, look.y) + 0.05, look.y),
 		})
+
+	if phase83:
+		var axis := ValleyAxis.for_world(w)
+		for view: Array in [["p83_valley", 0.54, 38.0, 34.0], ["p83_bank", 0.68, 8.0, 4.5]]:
+			var row: float = w.H * view[1]
+			var x0 := axis.axis_x_at(row)
+			var side := float(axis.road_side)
+			var a := Vector2(x0 + side * (axis.river_hw_at(row) + float(view[2])), row) * GameConfig.TILE
+			var b := Vector2(x0 - side * 13.0, row + 23.0) * GameConfig.TILE
+			shots.append({name = view[0], pos = Vector3(a.x, h.ground_at(a.x, a.y) + float(view[3]), a.y),
+				target = Vector3(b.x, h.ground_at(b.x, b.y) + 3.5, b.y)})
 
 	var all_ok := true
 	for sh: Dictionary in shots:

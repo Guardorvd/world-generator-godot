@@ -211,6 +211,9 @@ public partial class FastGrid
 		return outCells.ToArray();
 	}
 
+	public double RoadDownhillRatio { get; set; } = 1.0;
+	public double RoadEdgeGradeWeight { get; set; } = 1.0;
+
 	/// <summary>Копия StageTrails.RoadLine.segment_ok: участок ленты от (ax, ay) до (bx, by) шириной aw (клетки)
 	/// не уходит в воду глубже 0,3 м и не круче maxGrade вдоль и maxCross поперёк.</summary>
 	public bool RoadSegment(double ax, double ay, double bx, double by, double aw, double maxGrade, double maxCross)
@@ -238,7 +241,9 @@ public partial class FastGrid
 				double z = (ay + dy * t + ny * side) * _tile;
 				if (!Finite(x, z)) return WaterFailure("Road sampling coordinates overflow");
 				double h = Ground(x, z);
-				if (Depth(x, z) > 0.3 || k > 0 && Math.Abs(h - previous) > maxGrade * length * _tile / steps + 0.00001)
+				double change = h - previous;
+				double limit = (change < 0.0 ? maxGrade * RoadDownhillRatio : maxGrade) * length * _tile / steps;
+				if (Depth(x, z) > 0.3 || k > 0 && Math.Abs(change) * (s == 0 ? 1.0 : RoadEdgeGradeWeight) > limit + 0.00001)
 					return false;
 				previous = h;
 			}

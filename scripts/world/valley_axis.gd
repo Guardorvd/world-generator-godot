@@ -472,7 +472,7 @@ func build_map_river() -> Array:
 
 ## Готовая 3D-лента реки в формате Heightfield.ribbons (метры): края заходят в берег (cfg.river_ribbon_margin_m),
 ## уровень воды строго невозрастает; подходит для WaterBuilder, RideGround, depth_at, current_at и SurfaceSnapshot.
-func build_river_ribbon() -> Array:
+func build_river_ribbon(ground_at: Callable) -> Array:
 	var pts: Array = []
 	var step := maxf(0.5, cfg.river_ribbon_step)
 	var fy := 1.5
@@ -504,8 +504,10 @@ func build_river_ribbon() -> Array:
 		var dir := Vector2(b.x - a.x, b.z - a.z).normalized()
 		if dir.length_squared() < 0.01:
 			dir = Vector2(0.0, 1.0)
-		p.left = Vector3(p.x - dir.y * p.w, p.y, p.z + dir.x * p.w)
-		p.right = Vector3(p.x + dir.y * p.w, p.y, p.z - dir.x * p.w)
+		var center := Vector2(p.x, p.z)
+		var normal := Vector2(-dir.y, dir.x)
+		p.left = _ribbon_bank(center, normal, p.w, p.y, ground_at)
+		p.right = _ribbon_bank(center, -normal, p.w, p.y, ground_at)
 		var incoming := Vector2(p.x - a.x, p.z - a.z).normalized()
 		var outgoing := Vector2(b.x - p.x, b.z - p.z).normalized()
 		p.bend = clampf(incoming.cross(outgoing) * 3.0, -1.0, 1.0)
@@ -513,8 +515,25 @@ func build_river_ribbon() -> Array:
 	return pts
 
 
+## Fit a nominal ribbon edge to the nearest dry point when the sampled bank is lower.
+static func _ribbon_bank(center: Vector2, normal: Vector2, width_m: float, level_m: float, ground_at: Callable) -> Vector3:
+	var bank := center + normal * width_m
+	if float(ground_at.call(bank.x, bank.y)) < level_m:
+		# Search at half-metre resolution within two terrain cells of the nominal edge.
+		for half_meter in range(1, int(TILE * 4.0) + 1):
+			var delta := float(half_meter) * 0.5
+			for offset in [-delta, delta]:
+				var reach: float = width_m + offset
+				if reach <= 0.0:
+					continue
+				var q := center + normal * reach
+				if float(ground_at.call(q.x, q.y)) >= level_m:
+					return Vector3(q.x, level_m, q.y)
+	return Vector3(bank.x, level_m, bank.y)
+
+
 ## Проверка сухой проезжаемой клетки (для площадок поселений и якорей дороги).
-static func _road_cell_ok(w: WorldData, river: PackedByteArray, x: int, y: int, max_slope: float) -> bool:
+static func _road_cell_ok(w: WorldData, river: PackedByteArray, x: int, y: int, max_slope: float, exit_grade := StageTrails.ROAD_LIMIT) -> bool:
 	if x < 4 or y < 14 or x >= w.W - 4 or y >= w.H - 14:
 		return false
 	var i := y * w.W + x
@@ -530,14 +549,14 @@ static func _road_cell_ok(w: WorldData, river: PackedByteArray, x: int, y: int, 
 			if dx == 0 and dy == 0:
 				continue
 			var step := 1.41421356 if dx != 0 and dy != 0 else 1.0
-			if w.slope[nb] <= 0.34 and absf(w.h[nb] - h0) * StageTrails.HEIGHT_SCALE / step <= StageTrails.ROAD_LIMIT:
+			if w.slope[nb] <= maxf(0.34, max_slope) and absf(w.h[nb] - h0) * StageTrails.HEIGHT_SCALE / step <= exit_grade:
 				exits += 1
 	return exits >= 4
 
 
 ## Подбирает лучшую ровную сухую террасу в полосе [y_min, y_max] и отступе [sd_min, sd_max] по стороне side_sign.
 func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_max: float, side_sign: int,
-		max_slope := 0.22, prefer_y := -1.0, prefer_sd := -1.0) -> int:
+		max_slope := 0.22, prefer_y := -1.0, prefer_sd := -1.0, terrain_anchor := false) -> int:
 	var river := w.river_cells()
 	var y0 := clampi(y_min, 16, H - 16)
 	var y1 := clampi(y_max, y0, H - 16)
@@ -546,6 +565,11 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 	var best := -1
 	var best_score := -INF
 	var slope_caps := [max_slope, maxf(max_slope, 0.32)]
+	var exit_grade := StageTrails.ROAD_LIMIT
+	var tech := terrain_anchor and cfg.anchor_terrain_slope > 0.0
+	if tech:
+		slope_caps = [cfg.anchor_terrain_slope]
+		exit_grade = RoadTuning.for_world(w).routing.expedition_grades.x
 	for cap: float in slope_caps:
 		for y in range(y0, y1 + 1, 2):
 			var ax := _axis_x[y]
@@ -558,13 +582,19 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 			var xmin := mini(x_a, x_b)
 			var xmax := maxi(x_a, x_b)
 			for x in range(xmin, xmax + 1, 2):
-				if not _road_cell_ok(w, river, x, y, cap):
+				if not _road_cell_ok(w, river, x, y, cap, exit_grade):
 					continue
 				var i := y * W + x
 				var sd := (float(x) - ax) * cos_t * float(side_sign)
 				var dy_pen := absf(float(y) - py) / maxf(12.0, float(y1 - y0))
 				var dsd_pen := absf(sd - psd) / maxf(8.0, hi - lo)
 				var score := -w.slope[i] * 6.0 - dy_pen * 0.45 - dsd_pen * 0.40
+				if tech:
+					var d := 4
+					var tpi := (w.h[i] - (w.h[i - d] + w.h[i + d] + w.h[i - d * W] + w.h[i + d * W]) * 0.25) * GameConfig.HS
+					var shoulder := absf(w.h[i - d] + w.h[i + d] - w.h[i - d * W] - w.h[i + d * W]) * GameConfig.HS
+					score = smoothstep(0.15, 0.6, w.slope[i]) * 0.57 + smoothstep(0.25, 2.8, absf(tpi)) * 0.65
+					score += smoothstep(0.4, 5.0, shoulder) * 0.33 - dy_pen * 0.85 - dsd_pen * 0.95
 				if score > best_score:
 					best_score = score
 					best = i
@@ -647,13 +677,13 @@ func road_anchors(w: WorldData, start_cell: int, finish_cell: int) -> PackedInt3
 			var sd_lo := rhw + cfg.anchor_river_pad_min
 			var sd_hi := rhw + cfg.anchor_river_pad_max
 			var sd_pref := lerpf(sd_lo + 1.0, sd_hi - 1.5, rng.next_float())
-			cell = find_terrace_cell(w, ey - 14, ey + 14, sd_lo, sd_hi, road_side, 0.16, float(ey), sd_pref)
+			cell = find_terrace_cell(w, ey - 14, ey + 14, sd_lo, sd_hi, road_side, 0.16, float(ey), sd_pref, true)
 		else:
 			var base_reach := float(ev.reach) if float(ev.reach) > 10.0 else 34.0
 			var sd_pref := clampf(base_reach + lerpf(6.0, 18.0, rng.next_float()), cfg.anchor_inland_min, inland_hi)
 			var sd_lo := maxf(cfg.anchor_inland_min - 6.0, sd_pref - 10.0)
 			var sd_hi := minf(inland_hi + 4.0, sd_pref + 10.0)
-			cell = find_terrace_cell(w, ey - 16, ey + 16, sd_lo, sd_hi, road_side, 0.20, float(ey), sd_pref)
+			cell = find_terrace_cell(w, ey - 16, ey + 16, sd_lo, sd_hi, road_side, 0.20, float(ey), sd_pref, true)
 
 		if cell >= 0:
 			var cy := cell / W
@@ -666,3 +696,89 @@ func road_anchors(w: WorldData, start_cell: int, finish_cell: int) -> PackedInt3
 				if mode == "inland": inland_n += 1
 				else: river_n += 1
 	return out
+
+
+## Corridor choices for each real spur. Groups advance down the valley, but a turn
+## can lead back across its slope before the route descends to the exit.
+func road_anchor_groups(w: WorldData, start: int, finish: int) -> Array[Dictionary]:
+	var groups: Array[Dictionary] = []
+	if cfg.anchor_traverse_reach <= 0.0:
+		return groups
+	for spur: Dictionary in spurs:
+		var y: float = spur.y
+		var span: float = spur.half_len
+		if y - span < start / W + cfg.anchor_end_margin or y + span > finish / W - cfg.anchor_end_margin:
+			continue
+		var reach: float = spur.reach
+		var inside := minf(reach + cfg.anchor_traverse_reach, cfg.wall_road_start + _wall_shift_r[roundi(y)] - 12.0)
+		var entry := _spur_passage(w, y - span * 0.76, reach * 0.67, -1, false)
+		var exit := _spur_passage(w, y + span * 0.80, reach * 0.74, -1, false)
+		var shoulder := _spur_passage(w, y, inside, entry, false)
+		if mini(mini(entry, exit), shoulder) < 0:
+			continue
+		var alternatives: Array[Dictionary] = []
+		var approach := _spur_passage(w, y - span * 0.32, inside - 4.0, entry, false)
+		var turn := _spur_passage(w, y + span * 0.39, inside + 3.0, approach, true)
+		var return_leg := _spur_passage(w, y + span * 0.12, inside - 8.0, turn, false)
+		if mini(mini(approach, turn), return_leg) >= 0:
+			var gap := _spur_point(approach).distance_to(_spur_point(return_leg)) * GameConfig.TILE
+			var drop := (w.h[approach] - w.h[return_leg]) * HS
+			var lead := _spur_point(turn) - _spur_point(approach)
+			var back := _spur_point(return_leg) - _spur_point(turn)
+			if gap >= cfg.anchor_turn_gap_m.x and gap <= cfg.anchor_turn_gap_m.y and drop >= cfg.anchor_turn_drop_m.x \
+					and drop <= cfg.anchor_turn_drop_m.y and lead.y > 0.0 and back.y < -3.0 \
+					and absf(lead.angle_to(back)) >= deg_to_rad(125.0):
+				alternatives.append({shape = "switchback", cells = PackedInt32Array([entry, approach, turn, return_leg, exit])})
+		alternatives.append({shape = "traverse", cells = PackedInt32Array([entry, shoulder, exit])})
+		var lower := _spur_passage(w, y + span * 0.14, inside - cfg.anchor_traverse_reach * 0.55, entry, false)
+		var lower_exit := _spur_passage(w, y + span * 0.66, reach * 0.58, lower, false)
+		if lower >= 0 and lower != shoulder and lower_exit >= 0:
+			alternatives.append({shape = "lower_traverse", cells = PackedInt32Array([entry, lower, lower_exit])})
+		# The connected approaches can themselves form the shoulders of an arc.
+		# Retain the contour crossing when only its original lead-in or exit is blocked.
+		alternatives.append({shape = "shoulder_arc", cells = PackedInt32Array([shoulder])})
+		if lower >= 0 and lower != shoulder:
+			alternatives.append({shape = "lower_arc", cells = PackedInt32Array([lower])})
+		groups.append({y = roundi(y), options = alternatives})
+	return groups
+
+
+func _spur_point(i: int) -> Vector2:
+	return Vector2(i % W, i / W)
+
+
+## Search the shoulder or saddle itself. Prefer gentle continuation on contours
+## and a broader, flatter patch where the route changes direction.
+func _spur_passage(w: WorldData, row: float, offset: float, previous: int, turning: bool) -> int:
+	var river := w.river_cells()
+	var y0 := roundi(row)
+	var best := -1
+	var best_score := -INF
+	var grades := RoadTuning.for_world(w).routing.expedition_grades
+	for y in range(maxi(16, y0 - 8), mini(H - 16, y0 + 9), 2):
+		var cos_t := maxf(_axis_cos[y], 0.25)
+		var x0 := roundi(_axis_x[y] + maxf(_river_hw[y] + 5.0, offset) * road_side / cos_t)
+		for x in range(maxi(6, x0 - 9), mini(W - 6, x0 + 10), 2):
+			if not _road_cell_ok(w, river, x, y, cfg.anchor_terrain_slope, maxf(grades.x, grades.y)):
+				continue
+			var i := y * W + x
+			var contour_cost := 0.0
+			if previous >= 0:
+				var m := _spur_point(previous).distance_to(Vector2(x, y)) * GameConfig.TILE
+				if m < 8.0:
+					continue
+				var pitch := (w.h[i] - w.h[previous]) * HS / m
+				var limit := grades.x if pitch > 0.0 else grades.y
+				if absf(pitch) > limit:
+					continue
+				contour_cost = absf(pitch) * 3.2
+			var tpi := (w.h[i] - (w.h[i - 4] + w.h[i + 4] + w.h[i - 4 * W] + w.h[i + 4 * W]) * 0.25) * HS
+			var patch_slope := maxf(maxf(w.slope[i - 2], w.slope[i + 2]), maxf(w.slope[i - 2 * W], w.slope[i + 2 * W]))
+			var score := -w.slope[i] * 3.2 - contour_cost - absf(tpi) * (0.26 if turning else 0.08)
+			score -= absf(float(y - y0)) * 0.045 + absf(float(x - x0)) * 0.06
+			if turning:
+				score -= patch_slope * 4.0
+			if score > best_score:
+				best_score = score
+				best = i
+	return best

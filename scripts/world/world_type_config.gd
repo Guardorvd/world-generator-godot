@@ -60,7 +60,26 @@ const RP_OUTER_RIDGE_SPAN := 51
 const RP_OUTER_RIDGE_BASE_H := 52
 const RP_OUTER_RIDGE_MTN_AMP := 53
 const RP_OPP_SPUR_START_PAD := 54
-const RP_COUNT := 55
+const RP_MESO_SCALE := 55
+const RP_MESO_AMP := 56
+const RP_BANK_VARIATION := 57
+const RP_FLOOR_GULLY := 58
+const RP_MICRO_OPEN := 59
+const RP_MICRO_GAIN := 60
+const RP_COUNT := 61
+
+@export_group("Рельеф лесного дна долины")
+## Масштаб холмов в клетках и амплитуда в долях высоты мира.
+@export var meso_scale := 14.0
+@export var meso_amp := 0.0
+## Размах модуляции высоты и длины спада берега по полю суши.
+@export var bank_variation := 0.0
+## Глубина распадка ниже предгорий, в долях высоты мира.
+@export var floor_gully := 0.0
+## Доля снятия ослабления микрорельефа в низинах и множитель амплитуды.
+@export var valley_micro := Vector2(0.0, 1.0)
+## Верхний уклон клетки для технических якорей. Ноль сохраняет выбор террасы.
+@export var anchor_terrain_slope := 0.0
 
 @export_group("Тип мира и размеры")
 ## Уникальный id типа мира (задаёт папки кэша, сохранений и истории).
@@ -415,6 +434,12 @@ const RP_COUNT := 55
 @export var anchor_inland_streak_chance := 0.55
 ## Вероятность задержаться у реки на два узла подряд; увеличение удлиняет береговые отрезки.
 @export var anchor_river_streak_chance := 0.30
+## Дополнительный отступ траверса в лес от носа отрога (клетки). 0 — одиночные якоря.
+@export var anchor_traverse_reach := 0.0
+## Допустимый зазор между коленами разворота (м).
+@export var anchor_turn_gap_m := Vector2(22.0, 70.0)
+## Перепад между коленами, при котором склон оправдывает разворот (м).
+@export var anchor_turn_drop_m := Vector2(5.0, 25.0)
 ## Боковой запас окна поиска A* между якорями (клеток); увеличение даёт поиску больше свободы обхода.
 @export var segment_win_x := 56
 ## Продольный запас окна поиска A* между якорями (клеток); увеличение расширяет окно поиска.
@@ -508,6 +533,12 @@ const RP_COUNT := 55
 func relief_params() -> PackedFloat64Array:
 	var p := PackedFloat64Array()
 	p.resize(RP_COUNT)
+	p[RP_MESO_SCALE] = meso_scale
+	p[RP_MESO_AMP] = meso_amp
+	p[RP_BANK_VARIATION] = bank_variation
+	p[RP_FLOOR_GULLY] = floor_gully
+	p[RP_MICRO_OPEN] = valley_micro.x
+	p[RP_MICRO_GAIN] = valley_micro.y
 	p[RP_WARP_SCALE] = warp_scale
 	p[RP_WARP_AMP] = warp_amp
 	p[RP_BANK_HEIGHT] = bank_height
@@ -611,7 +642,8 @@ func places_cache_digest() -> String:
 		single_road, road_tuning_path, expedition_route_kind, allow_road_gaps, home_is_first_settlement,
 		anchor_end_margin, anchor_basin_gap, anchor_min_dy, anchor_diag_ratio,
 		anchor_river_pad_min, anchor_river_pad_max, anchor_inland_min, anchor_inland_max,
-		anchor_inland_start_chance, anchor_inland_streak_chance, anchor_river_streak_chance,
+		anchor_inland_start_chance, anchor_inland_streak_chance, anchor_river_streak_chance, anchor_terrain_slope,
+		anchor_traverse_reach, anchor_turn_gap_m, anchor_turn_drop_m,
 		segment_win_x, segment_win_y, segment_end_y_cap, opening_min_m, opening_max_m,
 		start_y_min, start_y_max, start_sd_min, start_sd_max, start_homes_min, start_homes_max,
 		finish_from_end_max, finish_from_end_min, finish_sd_min, finish_sd_max, finish_homes_min, finish_homes_max,

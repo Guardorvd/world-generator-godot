@@ -56,6 +56,21 @@ func bed_params() -> PackedFloat64Array:
 	return PackedFloat64Array([flat, shoulder, window, bed_keep, cut, side])
 
 
+@export_group("Метровая сетка")
+## Доля второго выравнивания оси относительно прежней подгонки RoadFitNetwork.
+@export var profile_fit := 1.0
+## Доля боковой подгонки метрической сетки.
+@export var cross_fit := 1.0
+## Доля защиты природного поперечного уклона от добавленного наклона.
+@export var natural_cross := 0.0
+## Высота выборочных скальных бровок и промоин, м.
+@export var technical_relief := 0.0
+## Максимальная местная подрезка или подсыпка опорной полосы, м. 0 — обычное полотно.
+@export var support_cut := 0.0
+## Доля направленного предела уклона в тесном апексе после подгонки профиля.
+@export var turn_grade_scale := 1.0
+
+
 ## Формы коридора с ключами Roads.CorridorParams.
 func corridor() -> Dictionary:
 	var out := {"roll": roll, "bump": bump, "tilt": tilt, "keep": tilt_keep, "max": tilt_max, "dish": dish, "var": dish_var,
@@ -64,4 +79,14 @@ func corridor() -> Dictionary:
 		out["bench_scale"] = bench_scale
 	if not is_zero_approx(turn_bank):
 		out["turn_bank"] = turn_bank
+	if profile_fit != 1.0 or cross_fit != 1.0:
+		out["profile_fit"] = profile_fit
+		out["cross_fit"] = cross_fit
+	if natural_cross != 0.0:
+		out["natural_cross"] = natural_cross
+	if technical_relief > 0.0:
+		out["technical_relief"] = technical_relief
+	if support_cut > 0.0:
+		out["support_cut"] = support_cut
+		out["turn_grade_scale"] = turn_grade_scale
 	return out

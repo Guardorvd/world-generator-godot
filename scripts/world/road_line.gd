@@ -31,13 +31,17 @@ static func build(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: H
 	var line := _build_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, relax)
 	var design := kind if smooth_kind.is_empty() else smooth_kind
 	var grade := StageTrails.MOUNTAIN_GRADE if design == "mountain" else (StageTrails.TRAIL_GRADE if design == "trail" else StageTrails.ROAD_LIMIT)
+	var down_ratio := 1.0
+	if routing.expedition_grades.x > 0.0:
+		grade = routing.expedition_grades.x
+		down_ratio = routing.expedition_grades.y / grade
 	var profile: Array = []
 	var skip := PackedByteArray()
 	for p: Dictionary in line:
 		var at := Vector2(p.x, p.y)
 		profile.append(at)
 		skip.append(1 if axis_blocked(w, on_axis, at) else 0)
-	if profile_ok(surface, profile, grade, skip):
+	if profile_ok(surface, profile, grade, skip, down_ratio):
 		return line
 	fallbacks += 1
 	var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
@@ -65,9 +69,15 @@ static func _build_with(w: WorldData, pts: Array, on_axis: PackedByteArray, surf
 		grade = StageTrails.MOUNTAIN_GRADE if design_kind == "mountain" else (StageTrails.TRAIL_GRADE if design_kind == "trail" else StageTrails.ROAD_LIMIT),
 		cross = StageTrails.MOUNTAIN_GRADE if design_kind == "mountain" else StageTrails.BENCH_CROSS,
 		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
-		probe = surface.fast_water(), axis = on_axis, corridor = corridor, relax = relax,
+		probe = surface.fast_water(), axis = on_axis, corridor = corridor, relax = relax, down_ratio = 1.0,
 	}
-	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", RoadTuning.for_world(w).routing.straighten)
+	var routing := RoadTuning.for_world(w).routing
+	if routing.expedition_grades.x > 0.0:
+		rules.grade = routing.expedition_grades.x
+		rules.down_ratio = routing.expedition_grades.y / routing.expedition_grades.x
+		rules.cross = routing.expedition_cross
+		rules.speed = routing.expedition_turn_speed
+	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", routing.straighten)
 	var tolerance: float = straightening.get(design_kind, 0.0)
 	if tolerance > 0.0 and pts.size() > 2:
 		var pulled := straighten(surface, pts, fixed, rules, tolerance)
@@ -201,7 +211,7 @@ static func _chord_ok(surface: Heightfield, pts: Array, fixed: PackedByteArray, 
 	var profile: Array = []
 	for k in samples + 1:
 		profile.append(a.lerp(b, float(k) / samples))
-	return profile_ok(surface, profile, rules.grade)
+	return profile_ok(surface, profile, rules.grade, PackedByteArray(), rules.down_ratio)
 
 
 ## Сохраняем вершины дуг и якоря; длинные прямые делим для профиля и покрытия.
@@ -376,7 +386,7 @@ static func fit_curve(surface: Heightfield, control: Array, corridor: Array, wid
 		var profile: Array = []
 		for p: Dictionary in curve:
 			profile.append(Vector2(p.x, p.y))
-		if not profile_ok(surface, profile, grade):
+		if not profile_ok(surface, profile, grade, PackedByteArray(), rules.down_ratio):
 			return []
 	return curve
 
@@ -389,7 +399,7 @@ const PROFILE_BASE := 3.0 # клеток (12 м)
 
 
 ## points — точки вдоль линии (Vector2, клетки), не реже 0,25 клетки
-static func profile_ok(surface: Heightfield, points: Array, grade: float, skip := PackedByteArray()) -> bool:
+static func profile_ok(surface: Heightfield, points: Array, grade: float, skip := PackedByteArray(), down_ratio := 1.0) -> bool:
 	var T := GameConfig.TILE
 	var heights := PackedFloat64Array()
 	var along := PackedFloat64Array()
@@ -407,7 +417,9 @@ static func profile_ok(surface: Heightfield, points: Array, grade: float, skip :
 			continue
 		while j + 1 < k and along[k] - along[j + 1] >= PROFILE_BASE:
 			j += 1
-		if absf(heights[k] - heights[j]) > grade * (along[k] - along[j]) * T + 0.00001:
+		var rise := heights[k] - heights[j]
+		var limit := grade * down_ratio if rise < 0.0 else grade
+		if absf(rise) > limit * (along[k] - along[j]) * T + 0.00001:
 			return false
 	return true
 

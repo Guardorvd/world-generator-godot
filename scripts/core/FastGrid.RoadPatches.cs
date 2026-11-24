@@ -498,6 +498,7 @@ public partial class FastGrid
 		int cell = cz * width + cx;
 		double pin = RoadSmooth(1.0, 2.5, distWater[cell]);
 		if (!float.IsNegativeInfinity(water[cell])) pin = 0.0;
+		double dryPin = pin;
 		int key = Math.Clamp((int)Math.Floor(z / tile - 0.5), 0, height - 2) * width + Math.Clamp((int)Math.Floor(x / tile - 0.5), 0, width - 2);
 		double structurePin = 1.0;
 		for (int s = structStarts[key]; s < structStarts[key + 1]; s++)
@@ -533,7 +534,22 @@ public partial class FastGrid
 		colors[n] = color;
 		double delta = Math.Clamp(target - baseHeight, -limit, limit);
 		double value = baseHeight + delta * influence * pin * power;
-		if (fitLen > 0 && influence > 0.0 && float.IsNegativeInfinity(water[cell]) && power > 0.0)
+		var kind = fit.Kinds != null ? fit.Kinds[segKind[selected]] : default;
+		if (kind.SupportCut > 0.0 && fitLen > 0 && power > 0.0 && dryPin > 0.0)
+		{
+			Vector2 tangent = segDelta[selected].Normalized(), normal = new(tangent.Y, -tangent.X);
+			Vector2 axis = segA[selected] + segDelta[selected] * (float)u;
+			double cross = (RoadGround(ground, width, height, tile, axis.X + normal.X, axis.Y + normal.Y)
+				- RoadGround(ground, width, height, tile, axis.X - normal.X, axis.Y - normal.Y)) * 0.5;
+			// The metre triangles need support outside the visible tread edge too.
+			double shelf = 1.0 - RoadSmooth(half + step * 0.65, half + step * 1.9, distance);
+			double bench = RoadSmooth(BenchLo, BenchHi, Math.Abs(cross));
+			double crossfall = Math.Clamp(cross * kind.NaturalCross, -kind.Max, kind.Max);
+			double correction = Math.Clamp(level + side * crossfall - baseHeight, -kind.SupportCut, kind.SupportCut);
+			value = RoadLerp(value, baseHeight + correction * dryPin * structurePin * power,
+				shelf * RoadLerp(1.0, kind.BenchScale, bench));
+		}
+		else if (fitLen > 0 && influence > 0.0 && float.IsNegativeInfinity(water[cell]) && power > 0.0)
 		{
 			var a = segA[selected];
 			var d = segDelta[selected];
@@ -541,7 +557,7 @@ public partial class FastGrid
 			var axis = a + d * (float)u;
 			double cross = Math.Abs(RoadGround(ground, width, height, tile, axis.X + (double)normal.X, axis.Y + (double)normal.Y)
 				- RoadGround(ground, width, height, tile, axis.X - (double)normal.X, axis.Y - (double)normal.Y)) / (2.0 * half);
-			double benchScale = fit.BenchScales != null ? fit.BenchScales[segKind[selected]] : 1.0;
+			double benchScale = fit.Kinds != null ? kind.BenchScale : 1.0;
 			double bench = benchScale == 1.0 ? RoadSmooth(BenchLo, BenchHi, cross) : RoadSmooth(BenchLo, BenchHi, cross) * benchScale;
 			if (bench > 0.0)
 			{

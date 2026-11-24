@@ -8,6 +8,26 @@ const KINDS := ["road", "trail", "mountain"]
 @export var turn_costs: Dictionary
 @export var bend_costs: Dictionary
 
+@export_group("Технический маршрут экспедиции")
+## Пределы поиска на подъёме и спуске. Ноль сохраняет прежний профиль.
+@export var expedition_grades := Vector2.ZERO
+## Запасной поиск сухой связи. Компоненты: подъём, спуск, поперечный крен, вес кромки.
+@export var expedition_connector_limits := Vector4.ZERO
+## Предельный поперечный крен коридора A* и коротких дуг.
+@export var expedition_cross := 0.0
+## Вес продольного уклона на боковой кромке. Ось и поперечный крен имеют свои пределы.
+@export var expedition_edge_grade := 1.0
+## Доля штрафа за продольную крутизну на спусках.
+@export var expedition_descent_weight := 1.0
+## Вес крутизны клетки, стоимость скальной клетки, амплитуда шума стоимости.
+@export var expedition_cell_cost := Vector3.ZERO
+## Расчётная скорость тесных поворотов, м/с.
+@export var expedition_turn_speed := 0.0
+## Множитель цены поворота при большом продольном уклоне или поперечном крене.
+@export var expedition_turn_terrain := 0.0
+## Отступ от кромки реки (м), добавленная цена клетки и затухание у лагерей (м).
+@export var expedition_shore_avoid := Vector3.ZERO
+
 @export_group("Стоимость клеток")
 ## Цена клетки воды в поиске дороги с сооружениями.
 @export var bridge_cost := 0.0
@@ -75,6 +95,12 @@ func cache_values() -> Array:
 		axis_meander_min_m, axis_meander_fit_m, axis_meander_search_m, axis_meander_min_shift_m,
 		axis_meander_slope, axis_meander_slope_fade, axis_meander_water_m,
 		_ordered_values(axis_meander_road), _ordered_values(axis_meander_trail)])
+	if expedition_grades.x > 0.0:
+		values.append_array([expedition_grades, expedition_cross, expedition_edge_grade, expedition_descent_weight, expedition_cell_cost, expedition_turn_speed])
+	if expedition_connector_limits.x > 0.0:
+		values.append(expedition_connector_limits)
+	if expedition_turn_terrain > 0.0 or expedition_shore_avoid.x > 0.0:
+		values.append_array([expedition_turn_terrain, expedition_shore_avoid])
 	return values
 
 

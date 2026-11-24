@@ -8,7 +8,9 @@ namespace Roads;
 /// hollow — продавленные места, ditch/lip — канава и вал у края, grade — предел добавленного продольного уклона.</summary>
 public readonly struct CorridorKind
 {
-	public readonly double Roll, Bump, Tilt, Keep, Max, Dish, DishVar, Hollow, Ditch, Lip, Grade, BenchScale, TurnBank;
+	public readonly double Roll, Bump, Tilt, Keep, Max, Dish, DishVar, Hollow, Ditch, Lip, Grade, BenchScale, TurnBank, ProfileFit, CrossFit, NaturalCross, TechnicalRelief;
+	public readonly double SupportCut, TurnGradeScale;
+	public readonly Vector2 DirectionalGrades;
 
 	public CorridorKind(Godot.Collections.Dictionary d)
 	{
@@ -17,6 +19,13 @@ public readonly struct CorridorKind
 		Grade = Num(d, "grade");
 		BenchScale = OptionalNum(d, "bench_scale", 1.0);
 		TurnBank = OptionalNum(d, "turn_bank", 0.0);
+		ProfileFit = OptionalNum(d, "profile_fit", 1.0);
+		CrossFit = OptionalNum(d, "cross_fit", 1.0);
+		NaturalCross = OptionalNum(d, "natural_cross", 0.0);
+		TechnicalRelief = OptionalNum(d, "technical_relief", 0.0);
+		SupportCut = OptionalNum(d, "support_cut", 0.0);
+		TurnGradeScale = OptionalNum(d, "turn_grade_scale", 1.0);
+		DirectionalGrades = d.TryGetValue("directional_grades", out var grades) ? grades.AsVector2() : Vector2.Zero;
 	}
 
 	internal static double Num(Godot.Collections.Dictionary d, string key)

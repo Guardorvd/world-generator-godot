@@ -488,12 +488,13 @@ static func _valley_rect_gd(w: WorldData, axis: ValleyAxis, tbl: Dictionary, rp:
 		norm = norm_job.call(0, rows)
 	if not surface:
 		return norm
+	var micro := Vector2(rp[WorldTypeConfig.RP_MICRO_OPEN], rp[WorldTypeConfig.RP_MICRO_GAIN])
 	var with_micro := PackedFloat32Array()
 	if not parallel:
-		with_micro = _micro_rows(w.noise.micro, norm, x0, y0, cw, 0, ch)
+		with_micro = _micro_rows(w.noise.micro, norm, x0, y0, cw, 0, ch, micro)
 	else:
 		for b: PackedFloat32Array in Parallel.bands(ch, func(j0: int, j1: int) -> PackedFloat32Array:
-			return _micro_rows(w.noise.micro, norm, x0, y0, cw, j0, j1)):
+			return _micro_rows(w.noise.micro, norm, x0, y0, cw, j0, j1, micro)):
 			with_micro.append_array(b)
 	for j in ch:
 		var rj := j + total_pad
@@ -528,11 +529,20 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 		var u := ad / maxf(0.5, rhw)
 		d_chan = -bd * (1.0 - u * u)
 	else:
-		d_chan = rp[WorldTypeConfig.RP_BANK_HEIGHT] * (1.0 - exp(-(ad - rhw) / rp[WorldTypeConfig.RP_BANK_DECAY]))
+		var bank_var := rp[WorldTypeConfig.RP_BANK_VARIATION]
+		var bank := hill.noise(X / 7.0 + 52.0, Y / 11.0) * bank_var if bank_var > 0.0 else 0.0
+		d_chan = rp[WorldTypeConfig.RP_BANK_HEIGHT] * (1.0 + bank) * (1.0 - exp(-(ad - rhw) / (rp[WorldTypeConfig.RP_BANK_DECAY] * (1.0 - bank))))
 	var land_damp := 1.0 - (1.0 - smoothstep(rhw + rp[WorldTypeConfig.RP_DAMP_START], rhw + rp[WorldTypeConfig.RP_DAMP_END], ad)) * cf
 	var hills_fine := hill.fbm(X / rp[WorldTypeConfig.RP_FOLDS_FINE_SCALE], Y / rp[WorldTypeConfig.RP_FOLDS_FINE_SCALE], 4)
 	var hills_broad := hill.fbm(X / rp[WorldTypeConfig.RP_FOLDS_BROAD_SCALE] + 32.4, Y / rp[WorldTypeConfig.RP_FOLDS_BROAD_SCALE] - 18.6, 2)
 	var folds := rp[WorldTypeConfig.RP_FOLDS_BROAD_AMP] * hills_broad + rp[WorldTypeConfig.RP_FOLDS_FINE_AMP] * hills_fine
+	var meso_amp := rp[WorldTypeConfig.RP_MESO_AMP]
+	if meso_amp > 0.0:
+		var scale := rp[WorldTypeConfig.RP_MESO_SCALE]
+		var m := hill.fbm((X + 0.31 * Y) / scale + 37.0, (Y - 0.31 * X) / (scale * 1.65) - 12.0, 2)
+		var crest := 1.0 - absf(ridge.noise((X - 0.4 * Y) / (scale * 0.77) + 20.0, (Y + X * 0.4) / (scale * 2.1) - 11.0))
+		var dry_band := smoothstep(rhw + 2.2, rhw + 10.0, ad)
+		folds += meso_amp * dry_band * (m + 0.62 * (smoothstep(0.55, 0.95, crest) - 0.42))
 	var road_d := maxf(0.0, sd - (rhw + rp[WorldTypeConfig.RP_BENCH_START_PAD]))
 	var bench_rise := rp[WorldTypeConfig.RP_BENCH_RISE_LIN] * road_d + rp[WorldTypeConfig.RP_BENCH_RISE_QUAD] * road_d * road_d
 	var spur_lift := 0.0
@@ -562,14 +572,18 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 	if m_gain > 0.0:
 		var m_relief := mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, 1.0)
 		wall_term += m_relief * m_gain * mountain_height
-	if rp[WorldTypeConfig.RP_GULLY_DEPTH] > 0.0 and wall > rp[WorldTypeConfig.RP_GULLY_WALL_MIN]:
+	var floor_cut := 0.0
+	var floor_gate := rp[WorldTypeConfig.RP_FLOOR_GULLY] * smoothstep(rhw + 8.0, rhw + 34.0, ad)
+	if rp[WorldTypeConfig.RP_GULLY_DEPTH] > 0.0 and (wall > rp[WorldTypeConfig.RP_GULLY_WALL_MIN] or floor_gate > 0.0):
 		var gw_mask := smoothstep(rp[WorldTypeConfig.RP_GULLY_WALL_MIN], rp[WorldTypeConfig.RP_GULLY_WALL_MAX], wall)
 		var g_warp := warp_y.fbm(X / 95.0 - 5.2, Y / 95.0 + 11.4, 2) * 38.0
 		var gu := (ad + warp_x.fbm(X / 140.0 + 9.1, Y / 140.0 - 4.3, 2) * 24.0) / rp[WorldTypeConfig.RP_GULLY_SCALE_X]
 		var gv := (Y - 0.28 * ad + g_warp) / rp[WorldTypeConfig.RP_GULLY_SCALE_Y]
 		var gn := absf(ridge.fbm(gu + 19.3, gv - 7.1, 2))
 		var g_t := clampf(1.0 - gn / maxf(1e-4, rp[WorldTypeConfig.RP_GULLY_WIDTH]), 0.0, 1.0)
-		wall_term -= gw_mask * rp[WorldTypeConfig.RP_GULLY_DEPTH] * (1.0 - 0.55 * outer_wall) * (g_t * g_t * (3.0 - 2.0 * g_t))
+		var g_shape := g_t * g_t * (3.0 - 2.0 * g_t)
+		wall_term -= gw_mask * rp[WorldTypeConfig.RP_GULLY_DEPTH] * (1.0 - 0.55 * outer_wall) * g_shape
+		floor_cut = floor_gate * g_shape * (1.0 - wall)
 	if rp[WorldTypeConfig.RP_COULOIR_DEPTH] > 0.0 and wall > rp[WorldTypeConfig.RP_COULOIR_WALL_MIN]:
 		var cw_mask := smoothstep(rp[WorldTypeConfig.RP_COULOIR_WALL_MIN], rp[WorldTypeConfig.RP_COULOIR_WALL_MAX], wall)
 		var c_patch := smoothstep(rp[WorldTypeConfig.RP_COULOIR_PATCH_MIN], rp[WorldTypeConfig.RP_COULOIR_PATCH_MAX],
@@ -583,12 +597,12 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 			wall_term -= cw_mask * c_patch * rp[WorldTypeConfig.RP_COULOIR_DEPTH] * (c_t * c_t * (3.0 - 2.0 * c_t))
 	if wall_term < 0.0:
 		wall_term = 0.0
-	var h := fh + d_chan * cf + rp[WorldTypeConfig.RP_CLOSED_LIFT] * (1.0 - cf) + land_damp * (bench_rise + folds * (1.0 - rp[WorldTypeConfig.RP_WALL_FOLDS_SUPPRESS] * wall) + spur_lift + opp_spur_lift + wall_term)
+	var h := fh + d_chan * cf + rp[WorldTypeConfig.RP_CLOSED_LIFT] * (1.0 - cf) + land_damp * (bench_rise + folds * (1.0 - rp[WorldTypeConfig.RP_WALL_FOLDS_SUPPRESS] * wall) + spur_lift + opp_spur_lift + wall_term - floor_cut)
 	if h < rp[WorldTypeConfig.RP_HEIGHT_FLOOR]: h = rp[WorldTypeConfig.RP_HEIGHT_FLOOR]
 	return h
 
 
-static func _micro_rows(noise: Simplex, base: PackedFloat32Array, x0: int, y0: int, cw: int, j0: int, j1: int) -> PackedFloat32Array:
+static func _micro_rows(noise: Simplex, base: PackedFloat32Array, x0: int, y0: int, cw: int, j0: int, j1: int, profile := Vector2(0.0, 1.0)) -> PackedFloat32Array:
 	var n := noise.clone()
 	var stride := cw + 2 * MICRO_PAD
 	var out := PackedFloat32Array()
@@ -596,13 +610,13 @@ static func _micro_rows(noise: Simplex, base: PackedFloat32Array, x0: int, y0: i
 	for j in range(j0, j1):
 		for i in cw:
 			var k := (j + MICRO_PAD) * stride + i + MICRO_PAD
-			out[(j - j0) * cw + i] = add_micro(base, k, stride, n, x0 + i, y0 + j)
+			out[(j - j0) * cw + i] = add_micro(base, k, stride, n, x0 + i, y0 + j, profile)
 	return out
 
 
 ## Рябь остаётся слабой в поймах и ложбинах, а на открытой низкой суше меняется пятнами.
 ## Соседи читаются из основы до ряби. Численная копия — FastGrid.ReliefMicro.
-static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simplex, x: float, y: float) -> float:
+static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simplex, x: float, y: float, profile := Vector2(0.0, 1.0)) -> float:
 	var h := base[k]
 	if h <= 0.0:
 		return h
@@ -628,7 +642,7 @@ static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simp
 				terrain += 0.10 * smoothstep(0.16, 0.48, patch) * lowland * (1.0 - shelter) * (1.0 - terrain)
 			var varied := terrain * (0.35 + 0.65 * smoothstep(-0.55, 0.15, patch))
 			strength = lerpf(1.0, varied, weight)
-	return maxf(1e-4, h + noise.fbm(x / 9.0, y / 9.0, 2) * 0.006 * minf(1.0, h * 40.0) * strength)
+	return maxf(1e-4, h + noise.fbm(x / 9.0, y / 9.0, 2) * 0.006 * minf(1.0, h * 40.0) * lerpf(strength, 1.0, profile.x) * profile.y)
 
 
 ## Макрорельеф до уровня моря по прямоугольнику клеток cw × ch с углом (x0, y0), в том числе за краем карты.

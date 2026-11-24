@@ -112,7 +112,7 @@ func layer_keys() -> PackedStringArray:
 ## Зависимости начинаются со слоя, который впервые читает эти настройки.
 static func _road_layer_suffixes(tuning: RoadTuning, prepared_paths: bool) -> Dictionary:
 	var bed := tuning.bed_cache_suffix()
-	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix()
+	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix() + tuning.surface_cache_suffix()
 	if prepared_paths:
 		places += bed + tuning.tread_cache_suffix()
 	return {"places": places, "nature": bed + tuning.clearance_cache_suffix()}
