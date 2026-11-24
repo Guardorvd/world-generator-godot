@@ -8,19 +8,26 @@ namespace Roads;
 /// hollow — продавленные места, ditch/lip — канава и вал у края, grade — предел добавленного продольного уклона.</summary>
 public readonly struct CorridorKind
 {
-	public readonly double Roll, Bump, Tilt, Keep, Max, Dish, DishVar, Hollow, Ditch, Lip, Grade;
+	public readonly double Roll, Bump, Tilt, Keep, Max, Dish, DishVar, Hollow, Ditch, Lip, Grade, BenchScale, TurnBank;
 
 	public CorridorKind(Godot.Collections.Dictionary d)
 	{
 		Roll = Num(d, "roll"); Bump = Num(d, "bump"); Tilt = Num(d, "tilt"); Keep = Num(d, "keep"); Max = Num(d, "max");
 		Dish = Num(d, "dish"); DishVar = Num(d, "var"); Hollow = Num(d, "hollow"); Ditch = Num(d, "ditch"); Lip = Num(d, "lip");
 		Grade = Num(d, "grade");
+		BenchScale = OptionalNum(d, "bench_scale", 1.0);
+		TurnBank = OptionalNum(d, "turn_bank", 0.0);
 	}
 
 	internal static double Num(Godot.Collections.Dictionary d, string key)
 	{
 		if (!d.ContainsKey(key)) throw new ArgumentException("нет ключа «" + key + "» в параметрах дорог");
 		return d[key].AsDouble();
+	}
+
+	internal static double OptionalNum(Godot.Collections.Dictionary d, string key, double fallback)
+	{
+		return d.ContainsKey(key) ? d[key].AsDouble() : fallback;
 	}
 }
 

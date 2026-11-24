@@ -252,8 +252,18 @@ public partial class FastGrid
 				lift[j] -= deviation * Math.Min(0.9, cp.LevelKind[kind] * cp.LevelSurface[surface[i]]) * calm * g;
 			}
 			double natural = cross * kp.Keep * (1.0 - RoadSmooth(0.25, 0.5, Math.Abs(cross))) * hw;
+			double baseTilt = natural;
+			if (kp.TurnBank != 0.0 && j >= 2 && j <= n - 3)
+			{
+				int b0 = Math.Max(from, i - 5), b1 = Math.Min(to - 1, i + 5);
+				Vector2 tPrev = (points[i] - points[b0]).Normalized();
+				Vector2 tNext = (points[b1] - points[i]).Normalized();
+				double chord = Math.Max(1.0, (b1 - b0) * 0.5 * step);
+				double kappa = (tNext - tPrev).Dot(acrossV) / chord;
+				baseTilt = natural - kappa * kp.TurnBank * hw;
+			}
 			double limit = kp.Max * hw;
-			outv[at + 1] = Math.Clamp(natural + kp.Tilt * wobble * (0.5 + 0.5 * energy) * cp.Character[cAt + 2], -limit, limit) * scale * g;
+			outv[at + 1] = Math.Clamp(baseTilt + kp.Tilt * wobble * (0.5 + 0.5 * energy) * cp.Character[cAt + 2], -limit, limit) * scale * g;
 			outv[at + 2] = (kp.Dish + kp.DishVar * bowl) * (0.5 + 0.5 * energy) * scale * g;
 			outv[at + 3] = kp.Hollow * RoadSmooth(0.2, 0.55, hole) * RoadLerp(0.3, 1.0, broken) * mul * holes * g;
 			outv[at + 4] = Math.Clamp(spot * 1.6, -0.7, 0.7);
@@ -461,14 +471,15 @@ public partial class FastGrid
 				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, profile, strength, limits, raw, ground, width, height, tile, noise, origin, step,
 					cp, routeKinds, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
 		});
-		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor);
+		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor,
+			new[] { cp.Kinds[0].BenchScale, cp.Kinds[1].BenchScale, cp.Kinds[2].BenchScale });
 	}
 
 	private sealed record RoadFitData(int[] Routes, int[] Starts, float[] Scales, Vector2[] Points,
-		float[] Profile, float[] Strength, float[] Limit, double[] Corridor)
+		float[] Profile, float[] Strength, float[] Limit, double[] Corridor, double[] BenchScales)
 	{
 		public static readonly RoadFitData Empty = new(Array.Empty<int>(), new[] { 0 }, Array.Empty<float>(),
-			Array.Empty<Vector2>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<double>());
+			Array.Empty<Vector2>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<double>(), null);
 	}
 
 	/// <summary>RoadRefinement._fit_safe on the column index: bit 0 — profile fit allowed, bit 1 — corridor forms too.</summary>

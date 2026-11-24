@@ -15,6 +15,8 @@ extends SceneTree
 ##   -- --shots-p3         3D-снимки фазы 3: старт, берег, лесной отрог, финиш с причалом (нужно окно)
 ##   -- --verify-phase4    проверка меню, большой карты M (масштаб вокруг игрока), доски заданий/альбома и сохранения Типа 2 (нужно окно)
 ##   -- --verify-phase5    проверка изоляции per-template RoadTuning, 16-поточности, ключей кэша, SurfaceSnapshot и шейдеров
+##   -- --verify-phase7    проверка полотна Типа 2: корыто, косогор, контруклон, препятствия, паритет RoadBump и проезд
+##   -- --shots-p7         крупные планы тропы Типа 2 с высоты руля: спуск, косогор, контруклон, корни (нужно окно)
 ## Лимит 240 с.
 
 const CONTROL := ["Север-1234", "Туман-4821"]
@@ -72,7 +74,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -101,6 +103,9 @@ func _run() -> void:
 	if args.has("--shots-p3"):
 		ok = await _capture_phase3_shots(seeds[0], tag) and ok
 
+	if args.has("--shots-p7"):
+		ok = await _capture_phase7_shots(seeds[0], tag) and ok
+
 	if args.has("--phase8") or args.has("--phase8-drive") or maple:
 		ok = await _capture_phase3_shots(seeds[0], tag, true, args.has("--phase8-drive"), maple) and ok
 
@@ -109,6 +114,9 @@ func _run() -> void:
 
 	if args.has("--verify-phase5"):
 		ok = _verify_phase5() and ok
+
+	if args.has("--verify-phase7"):
+		ok = _verify_phase7(seeds, short_dev, explicit_h) and ok
 
 	quit(0 if ok else 1)
 
@@ -783,13 +791,7 @@ func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, driv
 	for sh: Dictionary in shots:
 		var pos: Vector3 = sh.pos
 		var target: Vector3 = sh.target
-		gw.player.x = pos.x
-		gw.player.z = pos.z
-		gw.player.feet = h.ground_at(pos.x, pos.z)
-		gw.stream_coordinator.force_terrain(pos, GameWorld.NEAR)
-		if gw.outer != null:
-			gw.outer.preload_around(pos.x, pos.z, OuterTerrain.RADIUS * 0.7)
-		gw.stream_coordinator.force_vegetation(pos)
+		await _load_shot_view(gw, pos, 0.7)
 		gw.camera.look_at_from_position(pos, target, Vector3.UP)
 		for _f in 18:
 			await process_frame
@@ -802,6 +804,44 @@ func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, driv
 	main.queue_free()
 	await process_frame
 	return true
+
+
+func _load_shot_view(gw: GameWorld, pos: Vector3, outer_scale := 0.6) -> int:
+	gw.player.x = pos.x
+	gw.player.z = pos.z
+	gw.player.feet = gw.heights.ground_at(pos.x, pos.z)
+	gw.stream_coordinator.force_terrain(pos, GameWorld.NEAR)
+	if gw.outer != null:
+		gw.outer.preload_around(pos.x, pos.z, OuterTerrain.RADIUS * outer_scale)
+	gw.stream_coordinator.force_vegetation(pos)
+	if gw.terrain_stream == null:
+		return 0
+	gw.terrain_stream._lod_at = Vector2.INF
+	gw.terrain_stream._far_at = Vector2.INF
+	var p2 := Vector2(pos.x, pos.z)
+	var ck := Vector2i(floori(pos.x / PlanTerrain.SIDE), floori(pos.z / PlanTerrain.SIDE))
+	var lod0_r := PlanTerrain.LOD1_DIST - PlanTerrain.LOD_HYSTERESIS
+	var wait := 0
+	while wait < 400:
+		if gw.chunk_source != null:
+			gw.chunk_source.poll()
+		gw.terrain_stream.update(pos.x, pos.z, false, true, INF)
+		var ready: bool = gw.terrain_stream.nodes.has(ck) and gw.terrain_stream._node_lod.get(ck, -1) == 0 and gw.terrain_stream.nodes[ck].material_override == gw.terrain_stream.material
+		if ready:
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					var nk := ck + Vector2i(dx, dy)
+					if gw.terrain_stream.chunks.has(nk) and gw.terrain_stream.distance_to_chunk(nk, p2) < lod0_r:
+						if not gw.terrain_stream.nodes.has(nk) or gw.terrain_stream._node_lod.get(nk, -1) != 0:
+							ready = false
+							break
+				if not ready:
+					break
+		if ready:
+			break
+		await process_frame
+		wait += 1
+	return gw.terrain_stream._node_lod.get(ck, -1)
 
 
 func _maple_capture(gw: GameWorld, road: Array, tag: String) -> bool:
@@ -1582,3 +1622,454 @@ func _verify_phase5() -> bool:
 	for msg: String in failures:
 		push_error("PHASE5_VERIFY FAIL: " + msg)
 	return false
+
+
+func _verify_phase7(seeds: PackedStringArray, short_dev: bool, explicit_h: int) -> bool:
+	const Floor := preload("res://scripts/render/forest_floor.gd")
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	var failures: Array[String] = []
+	var t1 := RoadTuning.for_template(WorldTemplate.DEFAULT_ID)
+	var t2 := RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
+	if not is_equal_approx(t1.section.crown, 0.035) or t1.trail.bench_scale != 1.0 or t1.trail.turn_bank != 0.0 or t1.obstacles.root_reach != 3.5:
+		failures.append("Type 1 defaults changed: crown=%.4f bench=%.3f bank=%.3f root_reach=%.2f" % [
+			t1.section.crown, t1.trail.bench_scale, t1.trail.turn_bank, t1.obstacles.root_reach])
+	if t2.section.crown != 0.0 or t2.trail.bench_scale >= 0.5 or t2.trail.turn_bank <= 0.5 or t2.obstacles.root_reach <= 4.0:
+		failures.append("Type 2 Phase 7 tuning unexpected: crown=%.4f bench=%.3f bank=%.3f root_reach=%.2f" % [
+			t2.section.crown, t2.trail.bench_scale, t2.trail.turn_bank, t2.obstacles.root_reach])
+	if RoadBump.rut_params(WorldTemplate.DEFAULT_ID) != Vector2(RoadBump.RUT_AT, RoadBump.RUT_W):
+		failures.append("Type 1 rut_params altered")
+	if RoadBump.rut_params(WorldTemplate.EXPEDITION_ID).x != 0.0:
+		failures.append("Type 2 trail_single_rut expected center rut at 0.0")
+
+	for seed_text: String in seeds:
+		var w := WorldGenerator._generate_plan(seed_text, WorldGenerator.PLAN_SIZE, Callable(), Callable(),
+			null, 0, Callable(), WorldGenerator.PlanMode.WORLD, Callable(),
+			WorldTemplate.EXPEDITION_ID, short_dev, explicit_h)
+		if w == null:
+			failures.append("%s: generation returned null" % seed_text)
+			continue
+		w.territory_center = WorldGenerator.start_center(w)
+		w.expand_territory(maxi(w.W, w.H))
+		var h := Heightfield.new(w, true)
+		if RoadRefinement.code_version() <= 0 or h.road_refinement == null or h.road_refinement.patches.is_empty():
+			failures.append("%s: C# RoadRefinement missing or produced no patches" % seed_text)
+			continue
+		var val_err := RoadRecords.validation_error(w.trails, "phase7(%s)" % seed_text, RoadRecords.Phase.SURFACED)
+		if not val_err.is_empty():
+			failures.append("%s: RoadRecords invalid: %s" % [seed_text, val_err])
+
+		var r := h.road_refinement
+		var fit: Dictionary = r.fit_routes.get(0, {})
+		var span: Vector2i = r.corridor_routes.get(0, Vector2i.ZERO)
+		var st := Samples.stations(w.trails[0])
+		var ps: PackedVector2Array = st.p
+		var hw: PackedFloat32Array = st.half
+		var n := mini(ps.size(), mini(span.y, fit.get("strength", PackedFloat32Array()).size()))
+
+		var dish_sum := 0.0
+		var dish_n := 0
+		var keep_sum := 0.0
+		var keep_n := 0
+		var cor_bank_sum := 0.0
+		var final_bank_sum := 0.0
+		var bank_n := 0
+		var grade1_max := 0.0
+		var grade1_raw_max := 0.0
+		var grade1_gap_max := 0.0
+		var raw_g1_at_max := 0.0
+		var grades := PackedFloat64Array()
+		var forest_sample_pos := Vector2.INF
+		var forest_grade := 0.0
+
+		for j in range(6, n - 6):
+			var p := ps[j]
+			var tangent := (ps[j + 2] - ps[j - 2]).normalized()
+			var across_v := Vector2(tangent.y, -tangent.x)
+			var half := hw[j]
+			var c := h.ground_at(p.x, p.y)
+			var el := h.ground_at(p.x - across_v.x * half * 0.9, p.y - across_v.y * half * 0.9)
+			var er := h.ground_at(p.x + across_v.x * half * 0.9, p.y + across_v.y * half * 0.9)
+			var c_prev := h.ground_at(ps[j - 1].x, ps[j - 1].y)
+			var g1 := absf(c - c_prev)
+			var in_gap := false
+			for gap: Dictionary in r.gaps:
+				if (gap.area as Rect2).grow(2.0).has_point(p):
+					in_gap = true
+					break
+			if in_gap:
+				grade1_gap_max = maxf(grade1_gap_max, g1)
+			else:
+				grades.append(g1)
+				if g1 > grade1_max:
+					grade1_max = g1
+					raw_g1_at_max = absf(h.ground_at(p.x, p.y, true) - h.ground_at(ps[j - 1].x, ps[j - 1].y, true))
+					grade1_raw_max = raw_g1_at_max
+
+			var strength := float(fit.strength[j])
+			var cor_dish := r.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE + 2]
+			var cor_open := absf(cor_dish) > 0.001
+			if strength > 0.2 and cor_open and not in_gap:
+				dish_sum += c - (el + er) * 0.5
+				dish_n += 1
+				var raw_l := h.ground_at(p.x - across_v.x * half * 0.9, p.y - across_v.y * half * 0.9, true)
+				var raw_r := h.ground_at(p.x + across_v.x * half * 0.9, p.y + across_v.y * half * 0.9, true)
+				var raw_cross := (raw_r - raw_l) / (1.8 * half)
+				var final_cross := (er - el) / (1.8 * half)
+				if absf(raw_cross) > 0.14:
+					keep_sum += absf(final_cross) / absf(raw_cross)
+					keep_n += 1
+				var t_prev := (ps[j] - ps[j - 5]).normalized()
+				var t_next := (ps[j + 5] - ps[j]).normalized()
+				var kappa := (t_next - t_prev).dot(across_v) / 5.0
+				if absf(kappa) > 0.035:
+					var cor_tilt := r.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE + 1]
+					cor_bank_sum += -cor_tilt * signf(kappa) / half
+					final_bank_sum += -(final_cross - raw_cross * t2.trail.tilt_keep) * signf(kappa)
+					bank_n += 1
+			if forest_sample_pos == Vector2.INF and strength > 0.2 and not in_gap and w.road_surface[Samples.cell(w, p)] == RoadSurface.FOREST:
+				forest_sample_pos = p
+				forest_grade = absf(h.ground_at(ps[j + 4].x, ps[j + 4].y) - h.ground_at(ps[j - 4].x, ps[j - 4].y)) / 8.0
+
+		grades.sort()
+		var grade1_p99 := grades[int(grades.size() * 0.99)] if not grades.is_empty() else 0.0
+		var mean_dish_cm := 100.0 * dish_sum / maxi(1, dish_n)
+		var mean_keep := keep_sum / maxi(1, keep_n)
+		var mean_cor_bank := cor_bank_sum / maxi(1, bank_n)
+		var mean_final_bank := final_bank_sum / maxi(1, bank_n)
+
+		if mean_dish_cm >= -1.5:
+			failures.append("%s: trail dish not trough-like (mean_dish=%.2f cm, expected <= -1.5 cm)" % [seed_text, mean_dish_cm])
+		if keep_n > 0 and mean_keep < 0.25:
+			failures.append("%s: off-camber cross-slope overly flattened (keep=%.2f)" % [seed_text, mean_keep])
+		if bank_n < 10 or mean_cor_bank <= 0.03 or mean_final_bank <= 0.01:
+			failures.append("%s: inward turn bank too weak/wrong sign (samples=%d cor=%.3f final=%.3f)" % [
+				seed_text, bank_n, mean_cor_bank, mean_final_bank])
+		if grade1_p99 > 0.42 or (grade1_max > 0.55 and grade1_max - grade1_raw_max > 0.25):
+			failures.append("%s: aliasing/step spike on non-gap 1m stations (p99=%.3f max=%.3f raw_at_max=%.3f gap_max=%.3f)" % [seed_text, grade1_p99, grade1_max, grade1_raw_max, grade1_gap_max])
+
+		var surf_img := Floor.surface_image(w)
+		var obs := RoadObstacles.new(w)
+		var cand := obs.measure_candidates(h, surf_img, 0)
+		var parts: Dictionary = cand.parts
+		if int(parts.get("root", 0)) < 5 or int(cand.occupied) < 20:
+			failures.append("%s: too few trail obstacles/roots (%s)" % [seed_text, str(cand)])
+
+		var bump_delta := 0.0
+		if forest_sample_pos != Vector2.INF:
+			var contact := h.path_contact(forest_sample_pos.x, forest_sample_pos.y)
+			var cb: Vector4 = contact.get("bump", Vector4.ZERO)
+			var base_forest := RoadBump.LIST[RoadSurface.FOREST]
+			if cb.x <= base_forest.x * 1.3 or cb.z <= base_forest.z * 1.3:
+				failures.append("%s: Type 2 RoadBump contact did not receive boosted FOREST params (%s)" % [seed_text, str(cb)])
+			bump_delta = RoadBump.height(forest_sample_pos.x, forest_sample_pos.y, RoadSurface.FOREST, forest_grade, 0.0, w.template_id)
+
+		# Полный проезд по тропе на велосипеде со всеми живыми препятствиями VegetationLayer / ForestObstacles
+		var veg := VegetationLayer.new()
+		veg.carpet_enabled = false
+		veg.use_shared_forest_ranges = false
+		root.add_child(veg)
+		veg.setup(w, h, {}, Models.grass_mesh(), surf_img)
+		veg.settings.trail_clutter = true
+		veg.grass_r = 16.0
+		veg.under_r = 32.0
+		veg._reserve_details(Vector2.ZERO)
+		h.obstacles = ForestObstacles.new(w, h)
+		var b := BikeRide.new()
+		var p := PlayerState.new()
+		var control := BikeController.new()
+		var from := 6
+		b.x = ps[from].x
+		b.z = ps[from].y
+		var ahead0 := ps[mini(ps.size() - 1, from + 5)] - ps[from]
+		b.heading = atan2(-ahead0.x, -ahead0.y)
+		b.y = h.ground_at(b.x, b.z)
+		b.mount(p)
+		b.speed = 6.5
+		var dt := 1.0 / 60.0
+		var near := from
+		var fill_at := Vector2.INF
+		var ticks := 0
+		var stuck_ticks := 0
+		var best_near := from
+		var max_off := 0.0
+		var sq_sum := 0.0
+		var air_ticks := 0
+		var max_bumps := 0
+		var bypasses_used := 0
+		var active_gap_id := -1
+		var max_ticks := maxi(3600, int(ps.size() * 60 / 3))
+		while ticks < max_ticks and not b.crashed and near < ps.size() - 14:
+			var pos := Vector2(b.x, b.z)
+			if pos.distance_squared_to(fill_at) >= 24.0 * 24.0:
+				veg._fill_grass(pos.x, pos.y, {}, true)
+				veg._accept_contacts()
+				h.obstacles.update(pos.x, pos.y, veg.obstacles, veg.obstacles_version, true)
+				h.obstacles.set_bumps(veg.bumps, veg.obstacles_version)
+				max_bumps = maxi(max_bumps, veg.bumps.size() / 6)
+				fill_at = pos
+			var best_d := INF
+			for j in range(maxi(0, near - 2), mini(ps.size(), near + 14)):
+				var d := pos.distance_squared_to(ps[j])
+				if d < best_d:
+					best_d = d
+					near = j
+			if near > best_near:
+				best_near = near
+				stuck_ticks = 0
+			else:
+				stuck_ticks += 1
+				if stuck_ticks > 360:
+					break
+			var look_pt := ps[mini(ps.size() - 1, near + 6)]
+			var in_bypass := false
+			for gi in r.gaps.size():
+				var gap: Dictionary = r.gaps[gi]
+				if (gap.area as Rect2).grow(4.0).has_point(pos):
+					var bpts: Array = gap.bypass.pts
+					var bp_best := 0
+					var bp_d := INF
+					for bi in bpts.size():
+						var bd := pos.distance_squared_to(Vector2(bpts[bi].x, bpts[bi].y) * GameConfig.TILE)
+						if bd < bp_d:
+							bp_d = bd
+							bp_best = bi
+					if bp_best < bpts.size() - 2:
+						var target_pt: Dictionary = bpts[mini(bpts.size() - 1, bp_best + 4)]
+						look_pt = Vector2(target_pt.x, target_pt.y) * GameConfig.TILE
+						in_bypass = true
+						if active_gap_id != gi:
+							active_gap_id = gi
+							bypasses_used += 1
+						break
+			if not in_bypass:
+				max_off = maxf(max_off, sqrt(best_d))
+			var goal := look_pt - pos
+			var want := atan2(-goal.x, -goal.y)
+			var steer := clampf(-wrapf(want - b.heading, -PI, PI) * 2.6, -1.0, 1.0)
+			var d1 := (ps[mini(ps.size() - 1, near + 4)] - ps[near]).normalized()
+			var d2 := (ps[mini(ps.size() - 1, near + 14)] - ps[mini(ps.size() - 1, near + 6)]).normalized()
+			var turn_ahead := absf(d1.angle_to(d2))
+			var target_spd := clampf(7.5 - turn_ahead * 3.8, 4.8, 7.5)
+			var throttle := clampf((target_spd - b.speed) * 0.7, -1.0, 1.0)
+			control.ride(dt, p, b, w, h, throttle, steer, false, false, false)
+			sq_sum += b.squash_f * b.squash_f + b.squash_r * b.squash_r
+			air_ticks += int(b.airborne)
+			ticks += 1
+		var susp_rms_cm := sqrt(sq_sum / maxf(1.0, float(ticks * 2))) * 100.0
+		var finished := not b.crashed and stuck_ticks <= 360 and near >= ps.size() - 14
+		if not finished:
+			var near_gap := INF
+			for gap: Dictionary in r.gaps:
+				near_gap = minf(near_gap, pos_to_rect_dist(Vector2(b.x, b.z), gap.area as Rect2))
+			failures.append("%s: full BikeRide did not finish cleanly (crashed=%s cause=%s stuck=%d near=%d/%d at=(%.1f,%.1f) gap_d=%.1fm)" % [
+				seed_text, b.crashed, BikeRide.CrashCause.keys()[b.crash_cause], stuck_ticks, near, ps.size(), b.x, b.z, near_gap])
+		if max_bumps == 0:
+			failures.append("%s: live VegetationLayer loaded 0 road bump contacts along the route" % seed_text)
+		if susp_rms_cm < 0.25:
+			failures.append("%s: suspension RMS unrealistically flat (%.2f cm)" % [seed_text, susp_rms_cm])
+		veg.free()
+		print("PHASE7_METRICS seed=%s len=%dm dish=%.2fcm keep=%.2f(n=%d) bank_cor=%.3f bank_final=%.3f(n=%d) g1_p99=%.3f g1_max=%.3f(raw=%.3f gap=%.3f) obs=%s bump_sample=%.2fcm max_bumps=%d bypasses=%d ride=(%d/%dm max_off=%.2fm susp=%.2fcm air=%d crashed=%s)" % [
+			seed_text, n, mean_dish_cm, mean_keep, keep_n, mean_cor_bank, mean_final_bank, bank_n, grade1_p99, grade1_max, grade1_raw_max, grade1_gap_max,
+			JSON.stringify(parts), bump_delta * 100.0, max_bumps, bypasses_used, near, ps.size(), max_off, susp_rms_cm, air_ticks, str(b.crashed)])
+		w.clear_noise_fields()
+		w.base_heights = null
+
+	if failures.is_empty():
+		print("PHASE7_VERIFY: PASS")
+		return true
+	for msg: String in failures:
+		push_error("PHASE7_VERIFY FAIL: " + msg)
+	return false
+
+
+static func pos_to_rect_dist(p: Vector2, rect: Rect2) -> float:
+	var c := p.clamp(rect.position, rect.end)
+	return p.distance_to(c)
+
+
+func _capture_phase7_shots(seed_text: String, tag: String) -> bool:
+	const Floor := preload("res://scripts/render/forest_floor.gd")
+	const Samples := preload("res://tools/road_surface_samples.gd")
+	if DisplayServer.get_name() == "headless":
+		push_error("PHASE7_SHOTS: window required (do not pass --headless)")
+		return false
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_size(Vector2i(1280, 720))
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var main: Node = load("res://scenes/main.tscn").instantiate()
+	root.add_child(main)
+	for _i in 20:
+		await process_frame
+	GameContext.scope.cache.enabled = false
+	main.start_game(seed_text, WorldGenerator.START_SIZE, "", false, WorldTemplate.EXPEDITION_ID)
+	var wait_frames := 0
+	while (main.busy or main.game == null or main.game.player == null) and wait_frames < 12000:
+		await process_frame
+		wait_frames += 1
+	if main.busy or main.game == null or main.game.player == null:
+		push_error("PHASE7_SHOTS: GameWorld failed to start")
+		main.queue_free()
+		return false
+	var gw: GameWorld = main.game
+	gw.paused = true
+	main.hud.visible = false
+	if gw.pause_requested.is_connected(main._toggle_pause):
+		gw.pause_requested.disconnect(main._toggle_pause)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if gw.opening_active():
+		gw._finish_opening()
+	if gw.vegetation != null:
+		gw.vegetation.settings.trail_clutter = true
+	gw.hour = 10.5
+	if gw.day != null:
+		gw.day.apply(10.5, 100.0)
+	gw.camera.fov = 68.0
+	gw.camera.current = true
+
+	var w: WorldData = gw.world
+	var h: Heightfield = gw.heights
+	var r := h.road_refinement
+	var fit: Dictionary = r.fit_routes.get(0, {})
+	var span: Vector2i = r.corridor_routes.get(0, Vector2i.ZERO)
+	var st := Samples.stations(w.trails[0])
+	var ps: PackedVector2Array = st.p
+	var hw: PackedFloat32Array = st.half
+	var n := mini(ps.size(), mini(span.y, fit.get("strength", PackedFloat32Array()).size()))
+
+	var best_descent_k := -1
+	var best_descent_score := -INF
+	var best_camber_k := -1
+	var best_camber_score := -INF
+	var best_berm_k := -1
+	var best_berm_score := -INF
+	var best_berm_fallback_k := -1
+	var best_berm_fallback_score := -INF
+	var forest_probe_k := -1
+	var best_forest_score := -INF
+	var surf_img := Floor.surface_image(w)
+
+	for j in range(45, n - 45):
+		if float(fit.strength[j]) < 0.2 or absf(r.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE + 2]) <= 0.001:
+			continue
+		var p := ps[j]
+		if w.road_surface[Samples.cell(w, p)] != RoadSurface.FOREST:
+			continue
+		var tangent := (ps[j + 3] - ps[j - 3]).normalized()
+		var nn := Vector2(-tangent.y, tangent.x)
+		var across_v := Vector2(tangent.y, -tangent.x)
+		var half := hw[j]
+		var grade := (h.ground_at(ps[j - 6].x, ps[j - 6].y) - h.ground_at(ps[j + 6].x, ps[j + 6].y)) / 12.0
+		var raw_cross := absf(h.ground_at(p.x + nn.x * half, p.y + nn.y * half, true) - h.ground_at(p.x - nn.x * half, p.y - nn.y * half, true)) / (2.0 * half)
+		var final_cross := absf(h.ground_at(p.x + nn.x * half, p.y + nn.y * half) - h.ground_at(p.x - nn.x * half, p.y - nn.y * half)) / (2.0 * half)
+		var t_prev := (ps[j] - ps[j - 5]).normalized()
+		var t_next := (ps[j + 5] - ps[j]).normalized()
+		var curv := (t_next - t_prev).length() / 5.0
+
+		var descent_sc := grade - curv * 1.5
+		if grade > 0.04 and curv < 0.03 and descent_sc > best_descent_score:
+			best_descent_score = descent_sc
+			best_descent_k = j
+		var camber_sc := final_cross + raw_cross * 0.5 - curv * 2.0
+		if raw_cross > 0.14 and camber_sc > best_camber_score:
+			best_camber_score = camber_sc
+			best_camber_k = j
+		var berm_fallback_sc := curv - absf(grade) * 0.2
+		if curv > 0.035 and berm_fallback_sc > best_berm_fallback_score:
+			best_berm_fallback_score = berm_fallback_sc
+			best_berm_fallback_k = j
+		var turn_dot := (t_next - t_prev).dot(across_v)
+		var crest := h.ground_at(p.x, p.y) - 0.5 * (h.ground_at(ps[j - 5].x, ps[j - 5].y) + h.ground_at(ps[j + 5].x, ps[j + 5].y))
+		var bank_slope := (((h.ground_at(p.x + across_v.x * half, p.y + across_v.y * half) - h.ground_at(p.x - across_v.x * half, p.y - across_v.y * half)) / (2.0 * half)) * (-signf(turn_dot))) if absf(turn_dot) > 1e-4 else 0.0
+		var berm_sc := bank_slope * 2.5 + curv - absf(grade) * 0.3 - maxf(0.0, crest) * 1.5
+		if curv > 0.035 and crest < 0.08 and bank_slope > 0.03 and berm_sc > best_berm_score:
+			best_berm_score = berm_sc
+			best_berm_k = j
+		var cell_at := Samples.cell(w, p)
+		var tree_cover := float(surf_img.get_pixelv(Vector2i(cell_at % w.W, cell_at / w.W)).r) if j % 4 == 0 else -INF
+		if tree_cover > best_forest_score:
+			best_forest_score = tree_cover
+			forest_probe_k = j
+
+	var berm_k := best_berm_k if best_berm_k >= 0 else best_berm_fallback_k
+	var shots: Array[Dictionary] = []
+	for entry: Array in [["p7_descent", best_descent_k, -2, 7, 1.25], ["p7_offcamber", best_camber_k, -2, 6, 1.25], ["p7_berm", berm_k, -5, 3, 1.45]]:
+		var k: int = entry[1]
+		if k < 0:
+			continue
+		var p0 := ps[maxi(0, k + int(entry[2]))]
+		var look := ps[mini(ps.size() - 1, k + int(entry[3]))]
+		shots.append({
+			name = entry[0],
+			pos = Vector3(p0.x, h.ground_at(p0.x, p0.y) + float(entry[4]), p0.y),
+			target = Vector3(look.x, h.ground_at(look.x, look.y) + 0.12, look.y),
+		})
+
+	# 4-й крупный план — на реальный корень, пересекающий саму колею в лесу (расстояние до оси тропы < 1.35 м)
+	var probe_candidates: Array[int] = [maxi(45, forest_probe_k if forest_probe_k >= 0 else n / 3), n / 6, n / 4, n / 3, n / 2, (2 * n) / 3, (3 * n) / 4, (5 * n) / 6]
+	var best_root := Vector2.INF
+	var best_root_d := INF
+	var root_k := probe_candidates[0]
+	for cand_k: int in probe_candidates:
+		var ck := clampi(cand_k, 45, n - 45)
+		var probe_pos := Vector3(ps[ck].x, h.ground_at(ps[ck].x, ps[ck].y) + 1.2, ps[ck].y)
+		gw.player.x = probe_pos.x
+		gw.player.z = probe_pos.z
+		gw.player.feet = probe_pos.y - 1.2
+		gw.stream_coordinator.force_vegetation(probe_pos)
+		if gw.vegetation != null and gw.vegetation.understory.size() > Floor.FIRST + Floor.ROOT_SPAN_C:
+			for form: int in [Floor.ROOT_SPAN, Floor.ROOT_SPAN_B, Floor.ROOT_SPAN_C]:
+				var entry: Dictionary = gw.vegetation.understory[Floor.FIRST + form]
+				var buffer: PackedFloat32Array = entry.buf
+				for i in entry.count:
+					var offset: int = i * VegetationLayer.STRIDE
+					var rp := Vector2(buffer[offset + 3], buffer[offset + 11])
+					var d_trail := INF
+					var rk_local := ck
+					for j in range(maxi(0, ck - 90), mini(ps.size(), ck + 90)):
+						var dj := ps[j].distance_to(rp)
+						if dj < d_trail:
+							d_trail = dj
+							rk_local = j
+					if w.road_surface[Samples.cell(w, ps[rk_local])] == RoadSurface.FOREST and d_trail < 1.35 and d_trail < best_root_d:
+						best_root_d = d_trail
+						best_root = rp
+						root_k = rk_local
+	if best_root != Vector2.INF:
+		var cam_p := ps[maxi(0, root_k - 3)]
+		var aim := ps[root_k].lerp(best_root, 0.35)
+		print("PHASE7_ROOT_SHOT at=", best_root, " trail_d=", snappedf(best_root_d, 0.05), " trail_k=", root_k)
+		shots.append({
+			name = "p7_roots",
+			pos = Vector3(cam_p.x, h.ground_at(cam_p.x, cam_p.y) + 1.10, cam_p.y),
+			target = Vector3(aim.x, h.ground_at(aim.x, aim.y) + 0.04, aim.y),
+		})
+	else:
+		print("PHASE7_ROOT_SHOT fallback at trail_k=", root_k)
+		var cam_p := ps[maxi(0, root_k - 4)]
+		var look := ps[mini(ps.size() - 1, root_k + 4)]
+		shots.append({
+			name = "p7_roots",
+			pos = Vector3(cam_p.x, h.ground_at(cam_p.x, cam_p.y) + 1.15, cam_p.y),
+			target = Vector3(look.x, h.ground_at(look.x, look.y) + 0.05, look.y),
+		})
+
+	var all_ok := true
+	for sh: Dictionary in shots:
+		var pos: Vector3 = sh.pos
+		var target: Vector3 = sh.target
+		var chunk_lod := await _load_shot_view(gw, pos, 0.6)
+		gw.camera.look_at_from_position(pos, target, Vector3.UP)
+		for _f in 18:
+			await process_frame
+		var img := root.get_viewport().get_texture().get_image()
+		var out_path := ProjectSettings.globalize_path(OUT.path_join("expedition_%s%s.png" % [sh.name, tag]))
+		img.save_png(out_path)
+		print("SHOT: ", out_path, " lod=", chunk_lod)
+		if chunk_lod != 0:
+			push_error("PHASE7_SHOTS: expected LOD0 for %s, got %d" % [sh.name, chunk_lod])
+			all_ok = false
+
+	main._free_game()
+	main.queue_free()
+	await process_frame
+	return all_ok

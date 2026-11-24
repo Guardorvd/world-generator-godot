@@ -46,6 +46,7 @@ var trail_shaping := {} # trail id -> cut/fill volumes, extremes, designed and n
 var trail_elements_baked := false # A fresh refinement accepts one authored earthwork pass.
 var _height := 0
 var _reach := NATURAL_REACH
+var _bumps := PackedVector4Array(RoadBump.LIST)
 
 
 ## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
@@ -58,6 +59,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps 
 	var r := RoadRefinement.new()
 	r._height = heights.world.H
 	r._section = RoadTuning.for_world(heights.world).section
+	r._bumps = RoadBump.surface_list(heights.world.template_id)
 	var fast := Grid.native_grid()
 	if fast == null:
 		push_error("RoadRefinement: метровая сетка дорог считается только на C#: нужна сборка Godot .NET и dotnet build")
@@ -240,6 +242,7 @@ static func from_patches(ready: Dictionary, height: int, template_id := "") -> R
 	r.patches = ready
 	r._height = height
 	r._section = RoadTuning.for_template(template_id).section
+	r._bumps = RoadBump.surface_list(template_id)
 	return r
 
 static var _code_version := -1
@@ -396,7 +399,7 @@ func sample(x: float, z: float, width: int) -> Dictionary:
 	var colors: PackedColorArray = p.color
 	var uvs: PackedVector2Array = p.uv
 	var gradient := Vector2(hs[b] - hs[a], hs[c] - hs[a]) / STEP if tx + tz <= 1.0 else Vector2(hs[a] - hs[c], hs[a] - hs[b]) / STEP
-	var bumps: Vector4 = RoadBump.LIST[p.surface[a]] * wa + RoadBump.LIST[p.surface[b]] * wb + RoadBump.LIST[p.surface[c]] * wc
+	var bumps: Vector4 = _bumps[p.surface[a]] * wa + _bumps[p.surface[b]] * wb + _bumps[p.surface[c]] * wc
 	var bump_weight: float = (wa if p.surface[a] != 0 else 0.0) + (wb if p.surface[b] != 0 else 0.0) + (wc if p.surface[c] != 0 else 0.0)
 	if bump_weight > 0.0: bumps.y = maxf(0.1, bumps.y / bump_weight)
 	var closest := a if wa >= wb and wa >= wc else (b if wb >= wc else c)

@@ -121,7 +121,7 @@ public partial class FastGrid
 		public readonly int[] Keys, Route, Surface, Next, CellStarts, Candidates;
 		public readonly Vector2[] A, Delta;
 		public readonly double[] Len2, Half, Ha, Hb, Along;
-		public readonly byte[] Road;
+		public readonly byte[] Road, Kind;
 
 		public RoadSegments(RoadIndexData data)
 		{
@@ -139,6 +139,7 @@ public partial class FastGrid
 			Hb = data.SegHb.ToArray();
 			Along = data.SegAlong.ToArray();
 			Road = data.SegRoad.ToArray();
+			Kind = data.SegKind.ToArray();
 		}
 	}
 
@@ -146,7 +147,7 @@ public partial class FastGrid
 	{
 		public readonly List<Vector2> SegA = new(), SegDelta = new();
 		public readonly List<double> SegLen2 = new(), SegHalf = new(), SegHa = new(), SegHb = new(), SegAlong = new();
-		public readonly List<byte> SegRoad = new();
+		public readonly List<byte> SegRoad = new(), SegKind = new();
 		public readonly List<int> SegSurf = new(), SegNext = new(), SegRoute = new();
 		public readonly List<int> Keys = new();
 		public bool[] LocalCell;
@@ -231,7 +232,7 @@ public partial class FastGrid
 						{
 							id = d.SegA.Count;
 							d.SegA.Add(a); d.SegDelta.Add(delta); d.SegLen2.Add(len2); d.SegHalf.Add(halfA); d.SegHalf.Add(halfB);
-							d.SegRoad.Add(kinds[t] == 0 ? (byte)1 : (byte)0); d.SegSurf.Add(psurf[from + n - 1]); d.SegNext.Add(psurf[from + n]);
+							d.SegRoad.Add(kinds[t] == 0 ? (byte)1 : (byte)0); d.SegKind.Add((byte)kinds[t]); d.SegSurf.Add(psurf[from + n - 1]); d.SegNext.Add(psurf[from + n]);
 							d.SegHa.Add(profile[n - 1]); d.SegHb.Add(profile[n]); d.SegAlong.Add(myAlong); d.SegRoute.Add(routeIds[t]);
 						}
 						if (!firstSeen[key]) { firstSeen[key] = true; d.Keys.Add(key); }
@@ -350,7 +351,7 @@ public partial class FastGrid
 				RoadNearest(points[n], width, height, tile, reach, index.A, index.Delta, index.Len2, index.Half,
 					index.Road, index.CellStarts, index.Candidates,
 					ref selected, ref u, ref dist, ref side);
-				RoadVertexOne(n, points[n], selected, u, dist, side, width, height, tile, step, index.Half, index.Road, index.Surface,
+				RoadVertexOne(n, points[n], selected, u, dist, side, width, height, tile, step, index.Half, index.Road, index.Kind, index.Surface,
 					index.Next, index.Ha, index.Hb, index.Along, index.Len2, index.Route, index.A, index.Delta,
 					fitStart, fitCount, fit, corStart, corCount, surfaces, ground, water, distWater, noise, origin,
 					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags, active,
@@ -467,7 +468,7 @@ public partial class FastGrid
 	/// <summary>RoadRefinement._vertex для одной точки без пути (selected &lt; 0) и с путём; тот же порядок операций, что у
 	/// прежнего пакета RoadVertices (удалён 16.11.2026; двухпроходная запись там нужна была только SIMD, значения те же).</summary>
 	private static void RoadVertexOne(int n, Vector2 pt, int selected, double u, double distance, double side, int width, int height,
-		double tile, double step, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext, double[] segHa, double[] segHb, double[] segAlong,
+		double tile, double step, double[] segHalf, byte[] segRoad, byte[] segKind, int[] segSurf, int[] segNext, double[] segHa, double[] segHb, double[] segAlong,
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, RoadFitData fit,
 		int[] corStart, int[] corCount, double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap,
@@ -505,7 +506,8 @@ public partial class FastGrid
 		double gx = RoadGround(ground, width, height, tile, x + 1.0, z) - RoadGround(ground, width, height, tile, x - 1.0, z);
 		double gz = RoadGround(ground, width, height, tile, x, z + 1.0) - RoadGround(ground, width, height, tile, x, z - 1.0);
 		pin *= 1.0 - RoadSmooth(steepLo, steepHi, new Vector2((float)gx, (float)gz).Length() * 0.5);
-		double crown = 0.035 * (1.0 - RoadSmooth(0.0, half, distance));
+		double crownHeight = tread.Length > 7 ? tread[7] : 0.035;
+		double crown = crownHeight * (1.0 - RoadSmooth(0.0, half, distance));
 		double detail = crown + slow * 0.06 * (1.0 - mask);
 		double limit = road ? 0.65 : 0.3;
 		double target = RoadLerp(segHa[selected], segHb[selected], u) + detail;
@@ -539,7 +541,8 @@ public partial class FastGrid
 			var axis = a + d * (float)u;
 			double cross = Math.Abs(RoadGround(ground, width, height, tile, axis.X + (double)normal.X, axis.Y + (double)normal.Y)
 				- RoadGround(ground, width, height, tile, axis.X - (double)normal.X, axis.Y - (double)normal.Y)) / (2.0 * half);
-			double bench = RoadSmooth(BenchLo, BenchHi, cross);
+			double benchScale = fit.BenchScales != null ? fit.BenchScales[segKind[selected]] : 1.0;
+			double bench = benchScale == 1.0 ? RoadSmooth(BenchLo, BenchHi, cross) : RoadSmooth(BenchLo, BenchHi, cross) * benchScale;
 			if (bench > 0.0)
 			{
 				double lvl = road ? level : RoadGround(ground, width, height, tile, axis.X, axis.Y);

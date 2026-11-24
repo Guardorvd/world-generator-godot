@@ -103,16 +103,48 @@ static func hole(x: float, z: float, chance: float, rough: float) -> Vector2:
 	return Vector2((1.0 - q) * (1.0 - q), r) if q < 1.0 else Vector2.ZERO
 
 
+## Параметры кочек покрытия для шаблона мира (в Типе 1 побайтно LIST[surface], без аллокаций).
+static func surface_at(surface: int, template_id := "") -> Vector4:
+	if surface <= 0 or surface >= LIST.size():
+		return Vector4.ZERO
+	var base: Vector4 = LIST[surface]
+	if surface != RoadSurface.FOREST or template_id.is_empty() or WorldTemplate.is_default(template_id):
+		return base
+	var cfg := WorldTemplate.config(template_id)
+	return Vector4(base.x * cfg.trail_bump_scale, base.y, base.z * cfg.trail_bump_scale, maxf(base.w, cfg.trail_forest_holes))
+
+
+## Полная таблица из 8 покрытий с учётом шаблона мира для uniform surface_bump и кэша RoadRefinement.
+static func surface_list(template_id := "") -> PackedVector4Array:
+	if template_id.is_empty() or WorldTemplate.is_default(template_id):
+		return PackedVector4Array(LIST)
+	var out := PackedVector4Array()
+	out.resize(LIST.size())
+	for i in LIST.size():
+		out[i] = surface_at(i, template_id)
+	return out
+
+
+## Положение и ширина колеи полотна: две автомобильные в Типе 1 или одна центральная на singletrack.
+static func rut_params(template_id := "") -> Vector2:
+	if template_id.is_empty() or WorldTemplate.is_default(template_id):
+		return Vector2(RUT_AT, RUT_W)
+	var cfg := WorldTemplate.config(template_id)
+	if cfg.trail_single_rut:
+		return Vector2(0.0, cfg.trail_single_rut_w)
+	return Vector2(RUT_AT, RUT_W)
+
+
 ## Высота точки касания над полотном, м (колея и яма — ниже нуля). grade — уклон пути,
 ## across — поперечная координата полотна (−1..1 от оси до кромки, RoadRefinement.sample).
-static func height(x: float, z: float, surface: int, grade: float, across := 0.0) -> float:
+static func height(x: float, z: float, surface: int, grade: float, across := 0.0, template_id := "") -> float:
 	if surface <= 0 or surface >= LIST.size():
 		return 0.0
-	return height_params(x, z, LIST[surface], grade, across)
+	return height_params(x, z, surface_at(surface, template_id), grade, across, rut_params(template_id))
 
 
 ## Interpolated material parameters, as in terrain.gdshader; the category stays discrete for grip.
-static func height_params(x: float, z: float, b: Vector4, grade: float, across := 0.0) -> float:
+static func height_params(x: float, z: float, b: Vector4, grade: float, across := 0.0, rut := Vector2(RUT_AT, RUT_W)) -> float:
 	if b.y <= 0.0: return 0.0
 	var p := patch(x, z)
 	var rough := lerpf(0.35, 1.6, smoothstep(0.25, 0.75, p.x))
@@ -120,7 +152,7 @@ static func height_params(x: float, z: float, b: Vector4, grade: float, across :
 	var out := b.x * rough * (1.0 + STEEP_GAIN * smoothstep(STEEP.x, STEEP.y, absf(grade))) * bumps
 	var a := absf(across)
 	if b.z > 0.0 and a < 1.0:
-		out -= b.z * smoothstep(0.35, 0.7, p.y) * exp(-pow((a - RUT_AT) / RUT_W, 2.0))
+		out -= b.z * smoothstep(0.35, 0.7, p.y) * exp(-pow((a - rut.x) / maxf(rut.y, 0.02), 2.0))
 	if b.w > 0.0 and a < 0.75:
 		var pit := hole(x, z, b.w, smoothstep(0.3, 0.8, p.x) * 1.5)
 		out -= pit.x * pit.y * HOLE_DEPTH

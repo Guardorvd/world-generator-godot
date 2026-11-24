@@ -21,6 +21,9 @@ uniform float surface_crack[8];
 uniform vec4 surface_look[8];
 // 16.11.2026: колеи — доля полуширины от оси и ширина (RoadBump.RUT_AT, RUT_W; ставит TerrainBuilder). Те же, что трясут колесо.
 uniform vec2 road_rut = vec2(0.47, 0.13);
+// Характер живой лесной тропы шаблона (x — тёмный суглинок ядра, y — блеск влаги, z — кайма рыжего опада, w — ближние кочки леса).
+uniform vec4 trail_look = vec4(0.0);
+uniform vec3 trail_litter_col : source_color = vec3(0.46, 0.24, 0.10);
 #ifdef ROAD_TUNED_EDGE
 uniform vec3 road_edge;
 #endif
@@ -790,7 +793,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float tracks = exp(-pow((abs(ax) - road_rut.x) / road_rut.y, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
 			smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5) * 0.6)
 			* (1.0 - organic * 0.4) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
-		tracks *= mix(1.0, meadow, singletrack);
+		float forest_track = singletrack * smoothstep(0.35, 0.60, organic) * (1.0 - meadow);
+		tracks *= mix(1.0, max(meadow, forest_track * step(road_rut.x, 0.1)), singletrack);
 		float foot_wear = tread * singletrack * (1.0 - meadow);
 		soil *= 1.0 - foot_wear * (0.035 + wet * 0.035);
 		soil *= 1.0 - tracks * (0.07 + fine * 0.05 + road_bump_p.z * 2.5);
@@ -892,13 +896,59 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		soil *= 1.0 - lip * mix(0.16, 0.07, grain);
 		soil *= 1.0 + clamp(bump.x * 4.5, -0.09, 0.08) * bump_vis;
 		// 15.11: влага. Сырое место темнее и холоднее, впадины (колеи, ямы, низ волны) сыреют первыми, бугры сохнут.
-		// Сила — по покрытию (гравий почти не темнеет, земля и подстилка заметно); блеск слабый и только во впадинах.
+		// Сила — по покрытию (гравий почти не темнеет, земля и подстилка заметно); блеск слабей и только во впадинах.
 		float hollow = clamp(max(max(pit, tracks * (1.0 - drift_h)), wash_hollow) + clamp(-bump.x * 12.0, 0.0, 0.4) - clamp(bump.x * 8.0, 0.0, 0.3) - drift_h * 0.4, 0.0, 1.0);
 		float damp_r = smoothstep(0.50, 0.82, wet + hollow * 0.22 + clamp(-curve * 0.3, 0.0, 0.12) + (n_big - 0.5) * 0.25) * road_look.z;
+		float trail_zone = singletrack * (1.0 - meadow);
+		float core_track = trail_zone * max(smoothstep(0.35, 0.60, organic), canopy * (1.0 - grain * 0.50) * 0.78);
+		float litter_track = trail_zone * max(smoothstep(0.35, 0.60, organic), canopy * 0.85);
+		float core_w = exp(-pow(across / 0.36, 2.0)) * core_track;
+		float track_wet = 0.0;
+		if (trail_look.x > 0.0 && core_track > 0.0) {
+			vec3 loam_base = COLOR.rgb * (0.94 + (n_mid - 0.5) * 0.14 + (fine - 0.5) * 0.08 * near)
+				* mix(vec3(0.92, 0.94, 0.96), vec3(1.04, 1.02, 0.98), smoothstep(0.2, 0.8, dry));
+			vec3 loam_tint = mix(vec3(0.50, 0.41, 0.33), vec3(0.32, 0.26, 0.21), clamp(wet * 0.65 + hollow * 0.55, 0.0, 1.0));
+			vec3 loam = loam_base * loam_tint * (0.90 + fine * 0.14 + (fh.b - 0.5) * 0.18);
+			soil = mix(soil, loam, core_w * trail_look.x * (0.65 + 0.35 * near));
+			stone_occ *= 1.0 - core_w * trail_look.x * 0.85;
+			fabric_tilt *= 1.0 - core_w * trail_look.x * 0.72;
+			fabric_tilt += ((fn.zw - vec2(0.5)) * (1.0 - core_w * 0.80) * 0.65 + (detail_n.xy - vec2(0.5)) * 0.45 * core_w) * core_track * trail_look.x * near;
+		}
+		if (trail_look.y > 0.0 && core_track > 0.0) {
+			track_wet = core_w * trail_look.y * clamp(0.35 + wet * 0.55 + hollow * 0.45 + (n_big - 0.5) * 0.25, 0.0, 1.0);
+			damp_r = clamp(damp_r + track_wet * 0.45, 0.0, 1.0);
+		}
 		// дно впадин темнее и при высоком солнце: объём не зависит от часа
 		soil *= 1.0 - hollow * 0.10 * bump_fade;
 		soil *= mix(vec3(1.0), vec3(0.70, 0.72, 0.76), damp_r);
 		road_gloss = damp_r * (0.25 + 0.75 * hollow) * road * near * 0.3;
+		if (track_wet > 0.0) {
+			road_gloss = max(road_gloss, track_wet * 0.34 * road * near);
+		}
+		if (trail_look.z > 0.0 && litter_track > 0.0) {
+			float ragged_x = abs(ax) + (n_big - 0.5) * 0.20 + (n_mid - 0.5) * 0.28 + (fleck - 0.5) * 0.18 + (mh.r - 0.5) * 0.14 * near;
+			float edge_band = smoothstep(0.26, 0.54, ragged_x) * (1.0 - smoothstep(0.92, 1.28, ragged_x));
+			float litter_clump = smoothstep(0.22, 0.76, fine * 0.40 + fleck * 0.35 + n_mid * 0.25);
+			float edge_litter_w = edge_band * (0.45 + 0.55 * litter_clump) * litter_track * trail_look.z;
+			vec3 russet = mix(trail_litter_col, dry_litter, 0.25 + 0.25 * n_mid) * (0.72 + 0.48 * fine) * mix(0.76, 1.12, mh.r) * mix(1.0, 0.74, wet);
+			if (near > 0.0) {
+				vec2 lc2 = pr * 4.6 + vec2(31.1, 14.7);
+				vec2 ls2 = grain_hash(floor(lc2));
+				vec2 ll2 = fract(lc2) - (vec2(0.25) + ls2 * 0.5);
+				float la2 = ls2.x * 6.2831853;
+				ll2 = mat2(vec2(cos(la2), sin(la2)), vec2(-sin(la2), cos(la2))) * ll2;
+				float lshape2 = abs(ll2.x) * 0.75 + abs(ll2.y) * 2.1;
+				float laa2 = max(pixel_m * 4.6, 0.015);
+				float fleaf = (1.0 - smoothstep(0.14 - laa2, 0.14 + laa2, lshape2)) * step(0.32, ls2.y) * (1.0 - smoothstep(0.20, 0.60, laa2)) * edge_litter_w * near;
+				russet = mix(russet, trail_litter_col * mix(0.85, 1.35, ls2.x), fleaf * 0.70);
+			}
+			soil = mix(soil, russet, edge_litter_w * 0.85);
+			if (verge > 0.0) {
+				verge_col = mix(verge_col, russet, edge_litter_w * 0.85 * smoothstep(0.02, 0.25, edge_v));
+			}
+			road_gloss *= 1.0 - edge_litter_w * 0.75;
+			fabric_tilt += (mn.xy - vec2(0.5)) * 1.10 * edge_litter_w * near;
+		}
 		// 15.11: тени форм. Склон колеи, ямы и кочки, отвёрнутый от солнца круче его высоты, в своей тени; дно впадин
 		// при низком солнце закрыто бровкой. Гасится только прямой свет (light), небо остаётся: тень не чёрная.
 		if (sun_dir.y > 0.02 && road_quality.x >= 0.4) {
@@ -964,6 +1014,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// пряди и пучки травы: свет цепляется за них вплоть до нескольких метров
 		detail_n.xy += (mn.xy - 0.5) * 1.5 * lumps;
 	}
+	float forest_bumps = canopy * (1.0 - rock) * (1.0 - snow) * (1.0 - road) * trail_look.w * near;
+	if (forest_bumps > 0.0) {
+		vec3 fn2 = textureGrad(detail_normal, p * (1.0 / 0.61) + vec2(0.31, 0.63), gdx * (1.0 / 0.61), gdy * (1.0 / 0.61)).rgb;
+		detail_n.xy += ((fn2.xy - 0.5) * 1.15 + (mn.zw - 0.5) * 1.45 + (mn.xy - 0.5) * 0.75) * forest_bumps;
+		float hummock = smoothstep(0.24, 0.78, n_fine * 0.55 + mh.g * 0.45);
+		col *= mix(1.0, mix(0.84, 1.10, hummock), forest_bumps);
+		micro_shadow *= 1.0 - clamp((0.55 - mh.g) * 1.35, 0.0, 0.40) * forest_bumps;
+	}
 	if (ground_n > 0.0) {
 		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
 	}
@@ -976,7 +1034,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	AO = sky * (use_vertex_color ? 1.0 : texture(cavity_tex, UV).r);
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
-	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n + 0.55 * lumps, 0.5 + road_rough * 0.5, road) * near;
+	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n + 0.55 * lumps + 0.55 * forest_bumps, 0.5 + road_rough * 0.5, road) * near;
 }
 
 // Clouds attenuate the directional source, never sky light or bicycle lamps.

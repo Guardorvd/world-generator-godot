@@ -427,10 +427,13 @@ func _detail_material(template_id := "") -> ShaderMaterial:
 	for s: Dictionary in RoadSurface.LIST.slice(1):
 		surfaces.append(Vector3(s.grain, s.organic, s.rough))
 	mat.set_shader_parameter("surface_detail", surfaces)
-	mat.set_shader_parameter("surface_bump", PackedVector4Array(RoadBump.LIST))
+	mat.set_shader_parameter("surface_bump", RoadBump.surface_list(template_id))
 	mat.set_shader_parameter("surface_crack", PackedFloat32Array(RoadBump.CRACKS))
 	mat.set_shader_parameter("surface_look", PackedVector4Array(RoadBump.LOOK))
-	mat.set_shader_parameter("road_rut", Vector2(RoadBump.RUT_AT, RoadBump.RUT_W))
+	mat.set_shader_parameter("road_rut", RoadBump.rut_params(template_id))
+	var cfg := WorldTemplate.config(template_id)
+	mat.set_shader_parameter("trail_look", Vector4(cfg.trail_loam_darkness, cfg.trail_wet_gloss, cfg.trail_edge_litter, cfg.forest_micro_bump))
+	mat.set_shader_parameter("trail_litter_col", cfg.trail_russet_litter)
 	if mat.shader != SHADER:
 		var section := RoadTuning.for_template(template_id).section
 		mat.set_shader_parameter("road_edge", Vector3(section.edge, section.litter, 1.0 / section.fade))

@@ -116,7 +116,7 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 	_road_mat.shader = Shader.new()
 	_road_mat.shader.code = ROAD_SHADER
 	_road_mat.set_shader_parameter("road_color", ROAD_COLOR)
-	_road_mat.set_shader_parameter("road_rut", Vector2(RoadBump.RUT_AT, RoadBump.RUT_W))
+	_road_mat.set_shader_parameter("road_rut", RoadBump.rut_params(w.template_id))
 	_road_mat.set_shader_parameter("detail_tex", terrain_builder.outer_material().get_shader_parameter("detail_tex"))
 
 

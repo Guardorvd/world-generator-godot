@@ -29,6 +29,8 @@ const KINDS := ["road", "trail", "mountain", "animal"]
 @export var fade := 0.0
 @export var min_fade := 0.0
 @export var max_fade := 0.0
+## Высота выпуклой кроны в центре полотна, м (0.035 — базовое значение Типа 1, 0 — без кроны).
+@export var crown := 0.035
 
 
 func valid() -> bool:
@@ -43,9 +45,13 @@ func valid() -> bool:
 		for kind: String in Routing.KINDS:
 			if cut[kind] >= 1.0:
 				return false
-	for value: float in tread_params():
+	var tp := tread_params()
+	for i in mini(7, tp.size()):
+		var value := tp[i]
 		if not is_finite(value) or value < 0.0:
 			return false
+	if not is_finite(crown) or absf(crown) > 0.2:
+		return false
 	return (is_finite(junction_transition) and junction_transition > 0.0
 		and full_wander_half > 0.0 and fade > 0.0 and min_fade > 0.0 and max_fade >= min_fade)
 
@@ -66,9 +72,11 @@ func clearance_values() -> Array:
 	return values
 
 
-## Порядок аргументов FastGrid.RoadStamp.
+## Порядок аргументов FastGrid.RoadStamp. Базовый Типа 1 (7 чисел) сохраняет отпечаток BASELINE_TREAD_DIGEST.
 func tread_params() -> PackedFloat64Array:
-	return PackedFloat64Array([edge, litter, wander, full_wander_half, fade, min_fade, max_fade])
+	if is_equal_approx(crown, 0.035):
+		return PackedFloat64Array([edge, litter, wander, full_wander_half, fade, min_fade, max_fade])
+	return PackedFloat64Array([edge, litter, wander, full_wander_half, fade, min_fade, max_fade, crown])
 
 
 func tread_alpha(half: float, d: float, slow: float, organic: float) -> float:

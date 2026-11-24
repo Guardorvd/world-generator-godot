@@ -161,26 +161,27 @@ static func _point(t: Dictionary, n: int) -> Vector2:
 ## зазор до кромки, сколько камня выше по склону. Только объекты мира в чанках вокруг, без новых карт.
 func _context(mid: Vector2, dir: Vector2, side: Vector2, half: float, length: float, uphill: float) -> Dictionary:
 	var out := {trees = 0, root = Vector3(INF, 0.0, 0.0), owner = -1, gap = INF, rocks = 0.0}
+	var look := maxf(LOOK, _tuning.root_reach + 2.5)
 	if placement != null:
-		var records: Array = placement.nature_around(mid, half + LOOK)
+		var records: Array = placement.nature_around(mid, half + look)
 		for at in range(0, records.size(), 6):
-			_consider(out, Vector2(records[at], records[at + 1]), int(records[at + 4]), records[at + 5], int(records[at + 3]), mid, dir, side, half, length, uphill)
+			_consider(out, Vector2(records[at], records[at + 1]), int(records[at + 4]), records[at + 5], int(records[at + 3]), mid, dir, side, half, length, uphill, look)
 		return out
 	if world.CS <= 0 or world.chunks.is_empty():
 		return out
-	var r := half + LOOK
+	var r := half + look
 	var span := world.CS * TILE
 	for cy in range(maxi(0, floori((mid.y - r) / span)), mini(world.CH, floori((mid.y + r) / span) + 1)):
 		for cx in range(maxi(0, floori((mid.x - r) / span)), mini(world.CW, floori((mid.x + r) / span) + 1)):
 			for o: int in world.chunks[cy * world.CW + cx]:
 				var p := Vector2(world.obj_x[o], world.obj_y[o]) * TILE
-				_consider(out, p, world.obj_k[o], world.obj_s[o], o, mid, dir, side, half, length, uphill)
+				_consider(out, p, world.obj_k[o], world.obj_s[o], o, mid, dir, side, half, length, uphill, look)
 	return out
 
 
-func _consider(out: Dictionary, p: Vector2, kind: int, s: float, owner: int, mid: Vector2, dir: Vector2, side: Vector2, half: float, length: float, uphill: float) -> void:
+func _consider(out: Dictionary, p: Vector2, kind: int, s: float, owner: int, mid: Vector2, dir: Vector2, side: Vector2, half: float, length: float, uphill: float, look := LOOK) -> void:
 	var off := p - mid
-	if absf(off.x) > half + LOOK or absf(off.y) > half + LOOK: return
+	if absf(off.x) > half + look or absf(off.y) > half + look: return
 	var lateral := off.dot(side)
 	if kind == Biomes.T_ROCK:
 		if uphill != 0.0 and lateral * uphill > half: out.rocks += minf(s, 1.5)
@@ -191,11 +192,11 @@ func _consider(out: Dictionary, p: Vector2, kind: int, s: float, owner: int, mid
 	if kind == Biomes.T_MUGO or not Biomes.is_tree(kind) or s < 0.6: return
 	out.trees += 1
 	var along := off.dot(dir)
-	if s < ROOT_TREE or not StageVegetation.TRUNK.has(kind) or along < -length * 0.5 or along >= length * 0.5: return
+	if s < _tuning.root_tree_min or not StageVegetation.TRUNK.has(kind) or along < -length * 0.5 or along >= length * 0.5: return
 	var gap := absf(lateral) - half
 	var previous: Vector3 = out.root
 	var first := p.x < previous.x or (p.x == previous.x and p.y < previous.y)
-	if gap >= 0.0 and gap < ROOT_REACH and (gap < out.gap or (is_equal_approx(gap, out.gap) and first)):
+	if gap >= 0.0 and gap < _tuning.root_reach and (gap < out.gap or (is_equal_approx(gap, out.gap) and first)):
 		out.gap = gap
 		out.root = Vector3(p.x, p.y, s)
 		out.owner = owner
@@ -333,7 +334,7 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 	var root_tree: Vector3 = around_me.root
 	var rooted := false
 	if root_tree.x != INF:
-		var root_chance: float = _tuning.root_chance * (1.0 - smoothstep(0.4, ROOT_REACH, root_gap)) * _tuning.root_surface[surf]
+		var root_chance: float = _tuning.root_chance * (1.0 - smoothstep(0.4, _tuning.root_reach, root_gap)) * _tuning.root_surface[surf]
 		root_chance *= _tuning.root_on_road if t.kind == "road" else 1.0
 		rooted = _tree_roll(root_tree, 0) < root_chance
 	if not debris and not rooted: return _reject(decisions, "no_selected_candidate")
@@ -348,7 +349,7 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 		((pow(cover, 1.5) * _tuning.log_cover + minf(trees, 5) * _tuning.log_tree) if trees >= 2 else 0.0)
 			* seen * (_tuning.log_on_road if t.kind == "road" else 1.0),
 		# валун скатился с косогора под скалой
-		(rocky * _tuning.boulder_rock + falls * _tuning.boulder_scree) * smoothstep(0.1, 0.5, cross) * lerpf(0.5, 1.0, seen),
+		(rocky * _tuning.boulder_rock + falls * _tuning.boulder_scree) * smoothstep(_tuning.boulder_cross_min, _tuning.boulder_cross_max, cross) * lerpf(0.5, 1.0, seen),
 		# корни — только от настоящего ствола у кромки
 		0.0, # Roots are selected by their tree, independently of the debris lottery.
 	])
@@ -423,20 +424,20 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 		STONES:
 			# обломки скатываются к нижнему краю полотна; часть их в грунте
 			var low := -uphill if uphill != 0.0 else signf(lateral)
-			at += side * low * half * (0.25 + 0.45 * absf(lateral))
+			at += side * low * half * (_tuning.stone_lateral_min + _tuning.stone_lateral_span * absf(lateral))
 			scale = 0.6 + 0.8 * scale
 			sink = 0.03 * scale
 		LOG:
 			at += side * lateral * half * 0.2
-			if t.kind == "trail" and shape < 0.15:
+			if t.kind == "trail" and shape < _tuning.log_across_chance:
 				# поперёк всей тропы, с перекосом до ±25°; толщина такая, что прыжок его берёт
 				rot = atan2(-side.y, side.x) + (rot / TAU - 0.5) * 0.9
 			else:
 				# у кромки вдоль тропы или наискосок, концом на полотне: объехать по свободной стороне
 				var edge := signf(lateral) if lateral != 0.0 else 1.0
-				var skew := lerpf(0.05, 0.75, smoothstep(0.15, 1.0, shape)) * edge
+				var skew := lerpf(0.05, 0.75, smoothstep(_tuning.log_across_chance, 1.0, shape)) * edge
 				var along := dir.rotated(skew)
-				at = a.lerp(b, 0.5) + side * edge * (half + 0.5 - 0.6 * smoothstep(0.5, 1.0, shape))
+				at = a.lerp(b, 0.5) + side * edge * (half + _tuning.log_edge_offset - _tuning.log_edge_inset * smoothstep(0.5, 1.0, shape))
 				rot = atan2(-along.y, along.x)
 			scale = 0.7 + 0.25 * scale
 			stretch = 0.6 + 0.55 * _roll(route, n, 7)
@@ -446,7 +447,7 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 			var edge := uphill if uphill != 0.0 else signf(lateral)
 			scale = 0.7 + 0.3 * scale
 			var lane := TrailTechnical.CORRIDOR + 0.17 + 0.25 * (1.0 - seen) + 0.25 * smoothstep(0.08, 0.25, grade)
-			at += side * (1.0 if edge >= 0.0 else -1.0) * maxf(half * (0.45 + 0.25 * absf(lateral)), lane + 0.85 * scale)
+			at += side * (1.0 if edge >= 0.0 else -1.0) * maxf(half * (_tuning.boulder_lateral_min + _tuning.boulder_lateral_span * absf(lateral)), lane + 0.85 * scale)
 			sink = 0.12 * scale
 		ROOT:
 			return _roots(route, n, a, dir, side, length, half, root_tree, around_me.owner, ground.b > 0.55)
@@ -491,7 +492,7 @@ func _roots(route: int, n: int, a: Vector2, dir: Vector2, side: Vector2, length:
 	var u := clampf((trunk - a).dot(dir) / length, 0.15, 0.85)
 	var center := a + dir * u * length
 	var far_edge := side * signf((center - trunk).dot(side)) * (half + 0.25)
-	var count := 1 + int(_tree_roll(tree, 8) < 0.45) + int(_tree_roll(tree, 9) < 0.12)
+	var count := 1 + int(_tree_roll(tree, 8) < _tuning.root_pair_chance) + int(_tree_roll(tree, 9) < _tuning.root_triple_chance)
 	var parts: Array = []
 	for c in count:
 		var fan := (c - (count - 1) * 0.5) * 1.45
@@ -499,7 +500,7 @@ func _roots(route: int, n: int, a: Vector2, dir: Vector2, side: Vector2, length:
 		var end := center + far_edge * lerpf(0.45, 1.0, _tree_roll(tree, 30 + c)) + dir * (fan + (_tree_roll(tree, 10 + c) - 0.5))
 		var span := end - start
 		var at := (start + end) * 0.5
-		var thick := clampf(1.0 + 0.6 * (tree.z - ROOT_TREE) + 0.35 * _tree_roll(tree, 20 + c), 1.0, 1.6)
+		var thick := clampf(1.0 + 0.6 * (tree.z - _tuning.root_tree_min) + 0.35 * _tree_roll(tree, 20 + c), 1.0, 1.6)
 		parts.append({kind = ROOT, x = at.x, z = at.y, rot = atan2(-span.y, span.x), scale = thick,
 			stretch = span.length() / thick, sink = -0.005 + 0.025 * _tree_roll(tree, 40 + c), variant = int(_tree_roll(tree, 50 + c) * 3.0)})
 	var out: Dictionary = parts[0].duplicate()

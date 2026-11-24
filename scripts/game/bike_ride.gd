@@ -1366,13 +1366,14 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 
 ## x: weighted road microheight, y: local tread weight. Obstacles are added separately.
 func _wheel_road(heights: Heightfield, px: float, pz: float, surf: int, weight: float, grade: float, across: float) -> Vector2:
-	var bump: Vector4 = RoadBump.LIST[surf]
+	var template_id := heights.world.template_id
+	var bump: Vector4 = RoadBump.surface_at(surf, template_id)
 	if heights.road_refinement != null:
 		var contact := heights.path_contact(px, pz)
 		surf = int(contact.get("surface", RoadSurface.NONE))
 		weight = smoothstep(0.05, 0.9, float(contact.get("weight", 0.0)))
 		across = float(contact.get("across", 0.0))
-		bump = contact.get("bump", RoadBump.LIST[surf])
+		bump = contact.get("bump", RoadBump.surface_at(surf, template_id))
 		if contact.has("grade"):
 			grade = contact.grade
 		else:
@@ -1380,7 +1381,7 @@ func _wheel_road(heights: Heightfield, px: float, pz: float, surf: int, weight: 
 			grade = Vector2(_surface(heights, px + 0.5, pz, y) - _surface(heights, px - 0.5, pz, y),
 				_surface(heights, px, pz + 0.5, y) - _surface(heights, px, pz - 0.5, y)).length()
 	var origin := Vector2(heights.world.world_origin) * GameConfig.TILE
-	return Vector2(RoadBump.height_params(px + origin.x, pz + origin.y, bump, grade, across) * weight, weight)
+	return Vector2(RoadBump.height_params(px + origin.x, pz + origin.y, bump, grade, across, RoadBump.rut_params(template_id)) * weight, weight)
 
 
 ## Колёса на точках касания. Подвеска колеса получает толчок, когда вертикальная скорость земли

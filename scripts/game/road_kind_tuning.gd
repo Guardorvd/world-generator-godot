@@ -45,6 +45,10 @@ extends Resource
 @export var grade := 0.0
 ## Доля выравнивания спокойных участков (умножается на долю покрытия RoadTuning.level_surface)
 @export var level := 0.0
+## Доля выполаживания полки на косогоре (1.0 — полная полка Типа 1, 0.0 — естественный косогор)
+@export var bench_scale := 1.0
+## Сила контруклона в поворотах (поперечный уклон на 1/м кривизны; 0 — без контруклона)
+@export var turn_bank := 0.0
 
 
 ## Числа полотна для C# (FastGrid.RoadBedRefine): flat, shoulder, window, keep, cut, side.
@@ -54,5 +58,10 @@ func bed_params() -> PackedFloat64Array:
 
 ## Формы коридора с ключами Roads.CorridorParams.
 func corridor() -> Dictionary:
-	return {"roll": roll, "bump": bump, "tilt": tilt, "keep": tilt_keep, "max": tilt_max, "dish": dish, "var": dish_var,
+	var out := {"roll": roll, "bump": bump, "tilt": tilt, "keep": tilt_keep, "max": tilt_max, "dish": dish, "var": dish_var,
 		"hollow": hollow, "ditch": ditch, "lip": lip, "grade": grade}
+	if not is_equal_approx(bench_scale, 1.0):
+		out["bench_scale"] = bench_scale
+	if not is_zero_approx(turn_bank):
+		out["turn_bank"] = turn_bank
+	return out
