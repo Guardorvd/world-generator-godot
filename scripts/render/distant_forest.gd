@@ -20,7 +20,7 @@ const OUTER_SCRUB_END := 720.0
 const PLANT_SHARE := 0.8
 const TURF_SHARE := 1.0 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальними дерновинами
 enum { FINE, COARSE, SCRUB, PLANT }
-enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS, SPRUCE, LARCH, ALDER, REDCEDAR, SIBERIAN_CEDAR, MAPLE }
+enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS, SPRUCE, LARCH, ALDER, REDCEDAR, SIBERIAN_CEDAR, MAPLE, HEMLOCK, DOUGLAS_FIR }
 ## INSTANCE_CUSTOM.x в distant_plant.gdshader. Номер формы остаётся ключом меша.
 enum PlantClass { TREE, BUSH, SCRUB, GRASS }
 const PARTS := ["f", "c", "s", "p"]
@@ -127,6 +127,8 @@ static func _form(kind: int) -> int:
 		Biomes.T_WESTERN_REDCEDAR: return Form.REDCEDAR
 		Biomes.T_SIBERIAN_CEDAR: return Form.SIBERIAN_CEDAR
 		Biomes.T_MAPLE: return Form.MAPLE
+		Biomes.T_HEMLOCK: return Form.HEMLOCK
+		Biomes.T_DOUGLAS_FIR: return Form.DOUGLAS_FIR
 		Biomes.T_ACACIA: return Form.UMBRELLA
 		Biomes.T_PALM: return Form.PALM
 		_: return Form.BROADLEAF
@@ -154,6 +156,12 @@ static func _add_woody(raw: Array, plants: Dictionary, kind: int, variant: int, 
 	else:
 		var center := 0.48 if is_bush else (0.60 if color.a > 0.5 else 0.70)
 		var extent := 0.39 if is_bush or color.a > 0.5 else 0.29
+		if kind == Biomes.T_HEMLOCK:
+			center = 0.52
+			extent = 0.43
+		elif kind == Biomes.T_DOUGLAS_FIR:
+			center = 0.73
+			extent = 0.27
 		var stem_base := 0.0 if is_bush else -center / extent
 		raw.append([at + Vector3.UP * height * center, Vector3(r, height * extent, r), color, stem_base, 0.0])
 
@@ -457,6 +465,20 @@ static func _plant_mesh(form: int) -> ArrayMesh:
 				var low := 0.58 if siberian else (0.46 if larch else 0.39)
 				_card(st, Vector3(0, low, 0), angle, Vector2(0.99, 0.22 if larch else 0.29), 0.57 if cedar else 0.43, 2.0)
 				_card(st, Vector3(0, 0.79, 0), angle + 0.38, Vector2(0.79 if siberian else 0.56, 0.23), 0.65 if siberian else 0.37, 2.0)
+		Form.HEMLOCK:
+			_stem(st, 0.94, 0.055)
+			for i in 4:
+				var angle := i * 2.399
+				var offset := Vector3(cos(angle), 0, sin(angle)) * 0.12
+				_card(st, offset + Vector3.UP * (0.32 + 0.081 * i), angle, Vector2(0.87 - 0.075 * i, 0.24), 0.51, 2.0)
+				_card(st, -offset + Vector3.UP * (0.66 + 0.048 * i), angle + 0.42, Vector2(0.63 - 0.085 * i, 0.19), 0.46, 2.0)
+			_card(st, Vector3(0.24, 0.945, 0.05), 0.35, Vector2(0.28, 0.05), 0.0, 2.0)
+		Form.DOUGLAS_FIR:
+			_stem(st, 0.96, 0.12)
+			for i in 3:
+				var angle := i * PI / 3.0
+				_card(st, Vector3(0.09, 0.56 + 0.034 * i, -0.05), angle, Vector2(0.94, 0.21), 0.49, 2.0)
+				_card(st, Vector3(-0.09, 0.81, 0.06), angle + 0.35, Vector2(0.73, 0.20), 0.45, 2.0)
 		Form.ALDER:
 			_stem(st, 0.67, 0.071, 0.36)
 			_stem(st, 0.58, 0.056, -0.42)

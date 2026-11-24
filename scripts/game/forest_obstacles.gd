@@ -152,7 +152,9 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 			for o in world.chunks[cy * world.CW + cx]:
 				var kind := world.obj_k[o]
 				var s := world.obj_s[o]
-				if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or TRUNK[kind] * s < MIN_TRUNK):
+				var age := world.obj_v[o] / 3 if ForestModels.has_ages(kind) else ForestModels.ADULT_AGE
+				var trunk := StageVegetation.trunk_radius(kind, age) * s
+				if kind != Biomes.T_ROCK and trunk < MIN_TRUNK:
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
@@ -175,7 +177,7 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 					_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 				elif heights.depth_at(x, z) <= GameConfig.WATER_MARGIN:
 					var top := base + 1.85 * s if kind == Biomes.T_MUGO else INF
-					_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, top)
+					_put(out, x, z, x, z, trunk * SNUG, base, top)
 	# 8.4: за краем карты — объекты, которые VegetationLayer уже разложил (OuterLand.veg, с высотой земли)
 	for chunk: Vector2i in outer:
 		var items: Dictionary = outer[chunk]

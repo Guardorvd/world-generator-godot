@@ -34,6 +34,7 @@ uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool forest_enabled = false;
+uniform bool expedition_floor = false;
 // 16.11: затенение впадин для света неба (TerrainBuilder.set_cavity): 1 — открыто; без карты — белый, без затенения
 uniform sampler2D cavity_tex : hint_default_white, filter_linear_mipmap, repeat_disable;
 uniform sampler2D community_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
@@ -217,13 +218,19 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		vec4 forest = texture(forest_tex, UV);
 		wet = forest.b;
 		exposure = forest.a;
-		float cover = smoothstep(0.03, 0.8, forest.r) * (1.0 - snow);
+		float cover = smoothstep(0.03, expedition_floor ? 0.57 : 0.8, forest.r) * (1.0 - snow);
 		canopy = cover;
 		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
 		vec3 soil = mix(leaf_soil, needle_soil, forest.g);
 		soil *= mix(1.12, 0.72, forest.b);
 		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
 		soil = mix(soil, floor_moss, moss * 0.7);
+		if (expedition_floor) {
+			vec3 damp_duff = mix(vec3(0.25, 0.151, 0.088), vec3(0.185, 0.137, 0.086), forest.g);
+			damp_duff *= mix(1.20, 0.68, forest.b) * mix(0.76, 1.25, n_mid);
+			vec3 olive = mix(vec3(0.19, 0.23, 0.082), vec3(0.29, 0.34, 0.13), n_mid);
+			soil = mix(damp_duff, olive, moss * (0.66 + 0.48 * patch));
+		}
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
 		float stones = forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6);
 		soil = mix(soil, rock_color * 0.72, stones * 0.75);
@@ -241,9 +248,17 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
 			// первые опавшие листья: в лиственном лесу часть листьев подстилки жёлтая
 				vec3 leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), vec3(0.50, 0.33, 0.05), step(0.74, scatter.x) * (1.0 - forest.g) * 0.85);
+				if (expedition_floor) {
+					float needles = max(abs(local.x) * 0.42, abs(local.y) * 3.65);
+					float leaf = length(local * vec2(0.66, 1.49)) + abs(local.x + local.y) * 0.15;
+					float shape2 = mix(leaf, needles, forest.g);
+					float intact = (1.0 - smoothstep(0.18 - aa, 0.18 + aa, shape2)) * step(0.23, scatter.y);
+					litter = intact * (1.0 - smoothstep(0.25, 0.9, aa));
+					leaf_c = mix(vec3(0.36, 0.19, 0.083), vec3(0.51, 0.30, 0.12), scatter.x);
+				}
 				soil = mix(soil, leaf_c, litter * near * (0.55 - moss * 0.25));
 		}
-		col = mix(col, soil, cover * (0.62 + patch * 0.25));
+		col = mix(col, soil, cover * (expedition_floor ? (0.81 + patch * 0.18) : (0.62 + patch * 0.25)));
 		// 6.7: под пологом меньше света неба. Хвойный плотнее и холоднее; в лиственном
 		// медленно плывут тёплые просветы — как солнце сквозь качающуюся листву.
 		// 6.8: на опушке тень набирается медленнее, под ельником светлее, просветы заметнее.
@@ -285,7 +300,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	vec2 ground_tilt = vec2(0.0);
 	float ground_relief = 0.0;
 	float ground_lumps = 0.0;
-	float ground_w = (1.0 - rock) * (1.0 - canopy * 0.85);
+	float ground_w = (1.0 - rock) * (1.0 - canopy * (expedition_floor ? 1.0 : 0.85));
 	float n_zone = texture(detail_tex, vec2(dot(p, vec2(0.78, -0.62)), dot(p, vec2(0.62, 0.78))) * (1.0 / 97.0) + vec2(0.71, 0.29)).r;
 	if (ground_w > 0.01) {
 		float stony = smoothstep(0.54, 0.68, n_zone + (n_mid - 0.5) * 0.14 + slope * 0.9);
@@ -375,6 +390,9 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			turf = mix(turf, turf * vec3(0.94, 1.0, 0.88), clamp(-mid_pat * 3.0, 0.0, 1.0) * 0.4);
 			float view_d = length(wpos - CAMERA_POSITION_WORLD);
 			float open_w = mix(0.35, 1.0, smoothstep(30.0, 160.0, view_d)) * (1.0 - (use_vertex_color ? UV.y : canopy)) * distant_vegetation.w;
+			if (expedition_floor) {
+				open_w *= 1.0 - canopy;
+			}
 			if (open_w > 0.01) {
 				vec2 cell = p * 0.25;
 				vec3 com_n = (community_tex_enabled && !use_vertex_color && dot(world_offset, world_offset) < 1e-6)

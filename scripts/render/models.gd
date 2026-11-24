@@ -156,7 +156,7 @@ static func grass_mesh() -> ArrayMesh:
 ## цветы (несколько стебельков с венчиками; цвет венчика — цвет экземпляра).
 ## far — дальняя форма: только травинки с порогом ниже CARPET_FAR_KEEP, те самые, что шейдер оставляет вдали,
 ## поэтому смена формы по расстоянию не видна.
-enum { CARPET_MEADOW, CARPET_DRY, CARPET_SHADE, CARPET_FLOWERS, CARPET_STONES, CARPET_KINDS }
+enum { CARPET_MEADOW, CARPET_DRY, CARPET_SHADE, CARPET_FLOWERS, CARPET_STONES, CARPET_MOSS, CARPET_WOODLAND_LEAVES, CARPET_BERRY, CARPET_SEDGE, CARPET_KINDS }
 const CARPET_R := 0.5
 const CARPET_FAR_KEEP := 0.45
 ## [высоких, коротких, высота от, высота до, полуширина от, полуширина до, наклон кончика, цвет корня, цвет кончика, доля соломенных]
@@ -172,15 +172,89 @@ static func build_carpet_mesh(kind := CARPET_MEADOW, far := false) -> ArrayMesh:
 	var cache_key := kind * 2 + (1 if far else 0)
 	if _carpet_mesh_cache.has(cache_key):
 		return _carpet_mesh_cache[cache_key]
+	if kind >= CARPET_MOSS and not ForestModels.baking:
+		return preload("res://scripts/render/asset_catalog.gd").get_catalog().forest_carpet[cache_key]
 	var mesh: ArrayMesh
 	if kind == CARPET_FLOWERS:
 		mesh = _carpet_flowers(far)
 	elif kind == CARPET_STONES:
 		mesh = _carpet_stones(far)
+	elif kind >= CARPET_MOSS:
+		mesh = _forest_carpet(kind, far)
 	else:
 		mesh = _build_carpet_grass_mesh(kind, far)
 	_carpet_mesh_cache[cache_key] = mesh
 	return mesh
+
+
+## Формы под пологом: непрозрачная геометрия без атласа и без теней.
+static func _forest_carpet(kind: int, far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var count := 15 if kind == CARPET_SEDGE else (5 if kind == CARPET_MOSS else (9 if kind == CARPET_WOODLAND_LEAVES else 12))
+	for n in count:
+		var a := n * 2.39996
+		var seed := WGRandom.hash2(n, kind, 809)
+		var r := sqrt((n + 0.3) / count) * 0.41
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-dir.z, 0, dir.x)
+		var at := dir * r
+		var rank := 0.14 + 0.16 * seed if n % 3 != 1 else 0.62 + 0.21 * seed
+		if far and rank > CARPET_FAR_KEEP:
+			continue
+		st.set_uv2(Vector2(rank, 0.0))
+		if kind == CARPET_MOSS:
+			var width := 0.17 + seed * 0.12
+			var peak := at + Vector3.UP * (0.047 + 0.07 * seed)
+			var edge := 5 if n % 2 == 0 else 6
+			for j in edge:
+				var p0 := at + dir.rotated(Vector3.UP, j * TAU / edge) * width
+				var p1 := at + dir.rotated(Vector3.UP, (j + 1) * TAU / edge) * width
+				_carpet_triangle(st, p0, p1, peak, Color(0.76, 0.82, 0.57), Color(1.2, 1.30, 0.85))
+		elif kind == CARPET_SEDGE:
+			var h := 0.15 + 0.21 * seed
+			var width := 0.019 + 0.017 * seed
+			var bend := at + dir * h * 0.62 + Vector3.UP * h
+			var tip := at + dir * h * 1.40 + Vector3.UP * h * 0.51
+			var root := Color(0.68, 0.76, 0.48)
+			var top := Color(1.46, 1.23, 0.82) if seed > 0.78 else Color(0.95, 1.22, 0.70)
+			_carpet_triangle(st, at - side * width * 0.6, at + side * width * 0.6, bend + side * width, root, top)
+			_carpet_triangle(st, at - side * width * 0.6, bend + side * width, bend - side * width, root, top)
+			_carpet_triangle(st, bend + side * width, tip, bend - side * width, top, top)
+		else:
+			var berry := kind == CARPET_BERRY
+			var h := (0.13 + 0.14 * seed) if berry else (0.055 + 0.065 * seed)
+			var stem := at + Vector3.UP * h
+			var size := (0.075 if berry else 0.095) * (0.8 + 0.4 * seed)
+			var color := Color(1.52, 0.91, 0.64) if berry and seed > 0.84 else Color(0.94, 1.19, 0.82)
+			if berry and not far:
+				_carpet_triangle(st, at - side * 0.008, at + side * 0.008, stem, Color(0.72, 0.68, 0.38), color * 0.80)
+			for leaf in (2 if berry else 3):
+				var axis := dir.rotated(Vector3.UP, leaf * TAU / (2.0 if berry else 3.0))
+				var across := axis.cross(Vector3.UP) * size * 0.53
+				var neck := stem + axis * size * 0.52 + Vector3.UP * size * 0.27
+				var end := stem + axis * size - Vector3.UP * size * 0.10
+				_carpet_triangle(st, stem, neck + across, neck - across, color * 0.82, color)
+				if berry or far:
+					_carpet_triangle(st, neck - across, neck + across, end, color, color)
+				else:
+					var tip_side := across * 0.47
+					_carpet_triangle(st, neck - across, neck + across, end + tip_side, color, color)
+					_carpet_triangle(st, neck - across, end + tip_side, end - tip_side, color, color)
+	return st.commit()
+
+
+static func _carpet_triangle(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, base: Color, tip: Color) -> void:
+	var normal := (b - a).cross(c - a).normalized()
+	st.set_normal(normal if normal.y >= 0.0 else -normal)
+	st.set_color(base)
+	st.set_uv(Vector2(0.0, minf(1.0, a.y * 3.0)))
+	st.add_vertex(a)
+	st.set_uv(Vector2(1.0, minf(1.0, b.y * 3.0)))
+	st.add_vertex(b)
+	st.set_color(tip)
+	st.set_uv(Vector2(0.5, minf(1.0, c.y * 3.0)))
+	st.add_vertex(c)
 
 
 static func _build_carpet_grass_mesh(kind: int, far: bool) -> ArrayMesh:

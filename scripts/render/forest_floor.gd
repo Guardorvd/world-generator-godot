@@ -5,10 +5,19 @@ const Plants := preload("res://scripts/render/understory_models.gd")
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH, ROOT_SPAN,
 	ROOT_SPAN_B, ROOT_SPAN_C, STONE_SINGLE, STONES_PAIR, LOG_BROKEN, MOSS_LOG_BROKEN,
-	NURSE_LOG, NURSE_LOG_SPLIT, ROOT_STUMP, ROOT_PLATE, ROOT_UPTURNED, MOSS_BOULDER, MOSS_BOULDER_LOW, COUNT }
+	NURSE_LOG, NURSE_LOG_SPLIT, ROOT_STUMP, ROOT_PLATE, ROOT_UPTURNED, MOSS_BOULDER, MOSS_BOULDER_LOW, NURSE_LOG_LONG, NURSE_LOG_HOLLOW, NURSE_LOG_PAIR, COUNT }
 const FIRST := Plants.COUNT # смещение групп MultiMesh и запечённых far_forms, вне сохранений
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
+## [ось A, ось B, радиус комля, радиус вершины]; тот же след у меша и физических капсул.
+const LARGE_LOGS := {
+	NURSE_LOG_LONG: [[Vector3(-5.25, 0.52, -0.05), Vector3(5.70, 0.27, 0.12), 0.61, 0.27]],
+	NURSE_LOG_HOLLOW: [[Vector3(-4.33, 0.48, 0.02), Vector3(4.03, 0.22, -0.10), 0.56, 0.30]],
+	NURSE_LOG_PAIR: [
+		[Vector3(-4.55, 0.46, -0.30), Vector3(4.15, 0.22, 0.56), 0.51, 0.25],
+		[Vector3(-2.65, 0.30, 0.94), Vector3(2.90, 0.17, 1.55), 0.34, 0.14],
+	],
+}
 static var _shared_meshes: Array[Mesh] = []
 static var _shared_far := {}
 static var _stone_bounds := {}
@@ -18,7 +27,7 @@ static func base_kind(kind: int) -> int:
 	if kind in [ROOT_SPAN_B, ROOT_SPAN_C]: return ROOT_SPAN
 	if kind in [STONE_SINGLE, STONES_PAIR]: return STONES
 	if kind == LOG_BROKEN: return LOG
-	if kind in [MOSS_LOG_BROKEN, NURSE_LOG, NURSE_LOG_SPLIT]: return MOSS_LOG
+	if kind in [MOSS_LOG_BROKEN, NURSE_LOG, NURSE_LOG_SPLIT] or LARGE_LOGS.has(kind): return MOSS_LOG
 	if kind in [ROOT_STUMP, ROOT_PLATE, ROOT_UPTURNED]: return STUMP
 	if kind in [MOSS_BOULDER, MOSS_BOULDER_LOW]: return BOULDER
 	return kind
@@ -175,6 +184,9 @@ static func _log(moss: bool, broken := false) -> Mesh:
 
 static func expedition_variant(kind: int, roll: float, wet: float, old: float, rocky: float) -> int:
 	if kind == MOSS_LOG and roll < wet * (0.45 + old * 0.5):
+		var large := wet * (0.10 + 0.28 * old)
+		if roll < large:
+			return [NURSE_LOG_LONG, NURSE_LOG_HOLLOW, NURSE_LOG_PAIR][mini(2, int(roll * 3.0 / large))]
 		return NURSE_LOG_SPLIT if roll < 0.29 else NURSE_LOG
 	if kind == STUMP and roll < old * (0.40 + wet * 0.55):
 		return ROOT_STUMP if roll < 0.20 else (ROOT_PLATE if roll < 0.39 else ROOT_UPTURNED)
@@ -218,6 +230,49 @@ static func _nurse_log(split: bool, far: bool) -> Mesh:
 	return Plants._colored(parts)
 
 
+static func _large_nurse_log(kind: int, far: bool) -> Mesh:
+	var parts: Array = []
+	var moss: Array = []
+	for trunk: Array in LARGE_LOGS[kind]:
+		var a: Vector3 = trunk[0]
+		var b: Vector3 = trunk[1]
+		var r0: float = trunk[2]
+		var r1: float = trunk[3]
+		var hollow := kind == NURSE_LOG_HOLLOW
+		var path := [a, a.lerp(b, 0.09) + Vector3.UP * 0.04, a.lerp(b, 0.57) + Vector3(0, 0.06, -0.07), b]
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		ForestModels._tube(st, [path, r0, r1, BARK, false], 6 if far else 10, 0, 0)
+		parts.append([[st.commit(), Transform3D.IDENTITY], BARK.darkened(0.14)])
+		if hollow:
+			var inward := (b - a).normalized()
+			for n in (7 if far else 10):
+				var angle := n * TAU / (7 if far else 10)
+				var side := Vector3(0, cos(angle), sin(angle))
+				var mouth := a + side * r0 * (0.88 + 0.22 * sin(n * 2.21)) - inward * (0.08 + 0.18 * absf(cos(n * 2.16)))
+				var deep := a + side * (r0 * 0.62) + inward * (0.46 + 0.19 * sin(angle * 3.0))
+				parts.append([_beam(mouth, deep, r0 * 0.16, 4, true), WOOD.darkened(0.12 + 0.15 * absf(sin(angle)))])
+			parts.append([_beam(a + inward * 0.71, a + inward * 0.74, r0 * 0.72, 7, true), Color("30251c")])
+		else:
+			parts.append([_beam(a - Vector3(0.04, 0, 0), a, r0 * 0.94, 8, true), WOOD.darkened(0.19)])
+		parts.append([_beam(b - Vector3(0.13, 0, 0), b + Vector3(0.05, 0, 0), r1 * 0.88, 6, true), WOOD])
+		for n in (3 if far else 6):
+			var t := (n + 0.75) / (3.85 if far else 6.8)
+			var p := a.lerp(b, t)
+			var r := lerpf(r0, r1, t)
+			var side := 1.0 if n % 2 == 0 else -1.0
+			var tip := p + Vector3(0.37 + 0.10 * n, r * (0.75 + 0.4 * sin(n * 1.3)), side * r * 1.45)
+			parts.append([_beam(p, tip, r * 0.27, 4), BARK])
+			moss.append([p + Vector3(0, r * 0.95, sin(n * 1.9) * r * 0.29),
+				Vector3(1.13 if far else 0.78, 0.13, r * 0.84), Color("5b7134"), 5 if far else 7])
+		if not far:
+			var fern := Plants._sword_fern(true, false)
+			var at := a.lerp(b, 0.31) + Vector3.UP * (r0 * 0.83)
+			parts.append([[fern, Transform3D(Basis.from_scale(Vector3.ONE * 0.43), at)], Color("58783f")])
+	parts.append([[Plants._dome_mesh(moss, true), Transform3D.IDENTITY], Color("587031")])
+	return Plants._colored(parts)
+
+
 static func _root_stump(variant: int, far: bool) -> Mesh:
 	var upright := variant == 0
 	var base := Vector3(0, -0.045, 0)
@@ -228,9 +283,14 @@ static func _root_stump(variant: int, far: bool) -> Mesh:
 		[_beam(head - Vector3(0.018, 0.07, 0), head + Vector3(0.03, 0.02, 0), 0.29, 6, true), WOOD.darkened(0.16)],
 	]
 	var count := 6 if far else 8
+	if not upright:
+		# Тёмная масса грунта за корнями читается как плита даже на дальнем LOD.
+		var plate := Models.boulder(Vector3(0.30, 0.86, 0.94), 516 + variant, 0.83)
+		var plate_mesh: Mesh = plate.get_meta("lod_meshes")[1] if far else plate
+		parts.append([[plate_mesh, Transform3D(Basis(Vector3.UP, 0.22), center - Vector3(0.18, 0.19, 0))], Color("544537")])
 	for n in count:
 		var a := n * TAU / count + 0.24 * cos(n * 2.3)
-		var span := (0.65 + 0.36 * sin(n * 2.6) ** 2.0) * (1.0 if upright else 1.24)
+		var span := (0.65 + 0.36 * sin(n * 2.6) ** 2.0) * (1.0 if upright else (1.67 if variant == 1 else 1.39))
 		var dir := Vector3(cos(a), 0.0, sin(a)) if upright else Vector3(0.19 * sin(a + 0.6), 0.74 * cos(a), sin(a))
 		var end := center + dir * span
 		end.y = maxf(end.y, -0.045)
@@ -331,7 +391,9 @@ static func build_far_meshes() -> Dictionary:
 		NURSE_LOG: _nurse_log(false, true), NURSE_LOG_SPLIT: _nurse_log(true, true),
 		ROOT_STUMP: _root_stump(0, true), ROOT_PLATE: _root_stump(1, true), ROOT_UPTURNED: _root_stump(2, true),
 		MOSS_BOULDER: _moss_boulder(false).get_meta("lod_meshes")[1],
-		MOSS_BOULDER_LOW: _moss_boulder(true).get_meta("lod_meshes")[1]}
+		MOSS_BOULDER_LOW: _moss_boulder(true).get_meta("lod_meshes")[1],
+		NURSE_LOG_LONG: _large_nurse_log(NURSE_LOG_LONG, true), NURSE_LOG_HOLLOW: _large_nurse_log(NURSE_LOG_HOLLOW, true),
+		NURSE_LOG_PAIR: _large_nurse_log(NURSE_LOG_PAIR, true)}
 
 
 static func _moss_boulder(low: bool) -> Mesh:
@@ -411,6 +473,7 @@ static func build_meshes() -> Array[Mesh]:
 		root_span(1), root_span(2), stone_mesh(1), stone_mesh(2), _log(false, true), _log(true, true),
 		_nurse_log(false, false), _nurse_log(true, false), _root_stump(0, false), _root_stump(1, false), _root_stump(2, false),
 		_moss_boulder(false), _moss_boulder(true),
+		_large_nurse_log(NURSE_LOG_LONG, false), _large_nurse_log(NURSE_LOG_HOLLOW, false), _large_nurse_log(NURSE_LOG_PAIR, false),
 	]
 
 

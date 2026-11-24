@@ -10,6 +10,7 @@ extends SceneTree
 ##   -- --roads            фаза 3: одна дорога, метрики (длина, берег/лес, набор/сброс, прямые, валидация) и лист-карта
 ##   -- --shots            3D-снимки долины в настоящей сцене GameWorld (нужно окно; короткий мир 256×768)
 ##   -- --phase8          кадры растительности из GameWorld; --short-expedition для короткого плана
+##   -- --phase82-canopy [road:offset] — лесной ракурс с седла; без индекса стенд выбирает сомкнутый полог.
 ##   -- --phase8-drive    отдельный проезд с замером кадров на том же сохранённом плане
 ##   -- --maple           клён на лесной дороге и влажной террасе в GameWorld
 ##   -- --shots-p3         3D-снимки фазы 3: старт, берег, лесной отрог, финиш с причалом (нужно окно)
@@ -53,6 +54,7 @@ func _arg(name: String, fallback: String = "") -> String:
 func _run() -> void:
 	var args := OS.get_cmdline_user_args()
 	var maple := args.has("--maple")
+	var phase82 := args.has("--phase82-canopy")
 	var tag := _arg("--tag", "")
 	var short_dev := args.has("--short")
 	var explicit_h := int(_arg("--height", "0"))
@@ -74,7 +76,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not phase82 and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -106,7 +108,7 @@ func _run() -> void:
 	if args.has("--shots-p7"):
 		ok = await _capture_phase7_shots(seeds[0], tag) and ok
 
-	if args.has("--phase8") or args.has("--phase8-drive") or maple:
+	if args.has("--phase8") or args.has("--phase8-drive") or maple or phase82:
 		ok = await _capture_phase3_shots(seeds[0], tag, true, args.has("--phase8-drive"), maple) and ok
 
 	if args.has("--verify-phase4"):
@@ -691,7 +693,7 @@ func _capture_phase3_shots(seed_text: String, tag: String, phase8 := false, driv
 		await process_frame
 	GameContext.scope.cache.enabled = phase8
 	if phase8:
-		StageVegetation.verify = true
+		StageVegetation.verify = not OS.get_cmdline_user_args().has("--phase82-canopy")
 		StageVegetation.verify_report.clear()
 	main.start_game(seed_text, WorldGenerator.START_SIZE, "", false, WorldTemplate.EXPEDITION_ID)
 	var wait_frames := 0
@@ -976,6 +978,13 @@ func _phase8_capture(gw: GameWorld, road: Array, tag: String, drive_only: bool) 
 			if candidates[name] > scores.get(name, -INF):
 				sites[name] = k
 				scores[name] = candidates[name]
+	if OS.get_cmdline_user_args().has("--phase82-canopy"):
+		var frame := await _phase82_canopy(gw, road, tag)
+		if drive_only:
+			var start := _arg("--phase82-canopy", "").get_slice(":", 0)
+			var index := clampi(int(start), 24, road.size() - 25) if not start.is_empty() else int(sites.wet_forest)
+			return await _phase8_drive(gw, road, index) and frame
+		return frame
 	if drive_only:
 		return await _phase8_drive(gw, road, sites.wet_forest)
 	var ok := true
@@ -1009,6 +1018,57 @@ func _phase8_capture(gw: GameWorld, road: Array, tag: String, drive_only: bool) 
 	return ok
 
 
+func _phase82_canopy(gw: GameWorld, road: Array, tag: String) -> bool:
+	var choice := _arg("--phase82-canopy", "").split(":", false)
+	var index := -1
+	var offset := 0.0
+	if choice.size() == 2:
+		index = clampi(int(choice[0]), 24, road.size() - 25)
+		offset = float(choice[1])
+	else:
+		var surface := gw.vegetation._forest_surface
+		var score := -INF
+		for k in range(24, road.size() - 24, 3):
+			var a := Vector2(road[k].x, road[k].y)
+			var b := Vector2(road[k + 6].x, road[k + 6].y)
+			var dir := (b - a).normalized()
+			var cross := dir.orthogonal()
+			for side: float in [-4.5, 0.0, 4.5]:
+				var at := a + cross * side
+				var cover := 0.0
+				for sample: Vector2 in [at, at + dir, at + dir * 2.0, at + dir + cross * 2.0, at + dir - cross * 2.0]:
+					if not Rect2(Vector2.ZERO, Vector2(surface.get_size())).has_point(sample):
+						continue
+					cover += surface.get_pixelv(Vector2i(sample)).r
+				var ground := gw.heights.ground_at(at.x * GameConfig.TILE, at.y * GameConfig.TILE)
+				if gw.heights.depth_at(at.x * GameConfig.TILE, at.y * GameConfig.TILE) > 0.0:
+					continue
+				var forward := at + dir * 3.0
+				var fall := absf(ground - gw.heights.ground_at(forward.x * GameConfig.TILE, forward.y * GameConfig.TILE))
+				var rank := cover - fall * 0.13 - absf(side) * 0.15
+				if rank > score:
+					score = rank
+					index = k
+					offset = side
+	if index < 0:
+		return false
+	var a := Vector2(road[index].x, road[index].y)
+	var b := Vector2(road[index + 6].x, road[index + 6].y)
+	var dir := (b - a).normalized()
+	var at := (a + dir.orthogonal() * offset) * GameConfig.TILE
+	var eye := Vector3(at.x, gw.heights.ground_at(at.x, at.y) + 1.65, at.y)
+	var ahead := at + dir * 14.0
+	var look := Vector3(ahead.x, gw.heights.ground_at(ahead.x, ahead.y) + 1.35, ahead.y)
+	await _load_shot_view(gw, eye)
+	gw.camera.look_at_from_position(eye, look)
+	for _f in 15:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var path := OUT.path_join("expedition_phase82_canopy%s.jpg" % tag)
+	print("PHASE82 CANOPY ", index, ":", offset, " at=", at, " size=", Vector2i(gw.world.W, gw.world.H), " shot=", path)
+	return root.get_texture().get_image().save_jpg(ProjectSettings.globalize_path(path), 0.92) == OK
+
+
 func _phase8_drive(gw: GameWorld, road: Array, start: int) -> bool:
 	var tile := GameConfig.TILE
 	var path := Curve2D.new()
@@ -1022,6 +1082,10 @@ func _phase8_drive(gw: GameWorld, road: Array, start: int) -> bool:
 	gw.stream_coordinator.force_terrain(eye, GameWorld.NEAR)
 	gw.stream_coordinator.force_vegetation(eye)
 	var intervals := PackedFloat64Array()
+	var view := root.get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(view, true)
+	var cpu := 0.0
+	var gpu := 0.0
 	var calls := 0.0
 	var primitives := 0.0
 	var lag := 0.0
@@ -1044,6 +1108,8 @@ func _phase8_drive(gw: GameWorld, road: Array, start: int) -> bool:
 			intervals.append((now - began) / 1000.0)
 			calls += RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
 			primitives += RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
+			cpu += RenderingServer.viewport_get_measured_render_time_cpu(view)
+			gpu += RenderingServer.viewport_get_measured_render_time_gpu(view)
 			lag = maxf(lag, gw.vegetation.coverage_lag(p))
 		began = now
 		distance = (now - start_us) * 0.000014 # 14 м/с
@@ -1053,7 +1119,7 @@ func _phase8_drive(gw: GameWorld, road: Array, start: int) -> bool:
 	var n := intervals.size()
 	print("PHASE8 DRIVE ", {frames = n, p50_ms = intervals[n / 2], p95_ms = intervals[ceili(n * 0.95) - 1],
 		p99_ms = intervals[ceili(n * 0.99) - 1], max_ms = intervals[-1], max_coverage_lag_m = lag,
-		draw_calls = calls / n, primitives = primitives / n, memory_mib = OS.get_static_memory_usage() / 1048576.0,
+		draw_calls = calls / n, primitives = primitives / n, viewport_cpu_ms = cpu / n, viewport_gpu_ms = gpu / n, memory_mib = OS.get_static_memory_usage() / 1048576.0,
 		stream_groups_max_us = gw.stream_coordinator.stats.group_max_us})
 	return true
 

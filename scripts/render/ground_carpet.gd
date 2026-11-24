@@ -71,7 +71,6 @@ const LEAD_MAX_S := 1.2
 const JOB_TILES := 48
 const BUILD_THREADS := 2
 const URGENT_PAD := 6.0     # м за видимой дальностью, ещё обязательные (запас на ход до следующей склейки)
-const KINDS := Models.CARPET_KINDS
 ## Ветер и свет вида: [sway, flutter, sway_speed, ao, glow, base_shade] (см. VegetationLayer._wind_mat) и насколько трава расступается у игрока, м
 const WIND := [
 	[[0.05, 0.014, 1.7, 0.75, 0.4, 0.7], 0.12],
@@ -79,6 +78,10 @@ const WIND := [
 	[[0.02, 0.008, 1.3, 0.7, 0.3, 0.75], 0.05],
 	[[0.06, 0.02, 1.6, 0.9, 0.3, 0.75], 0.1],
 	[[0.0, 0.0, 1.0, 1.0, 0.0], 0.0], # камни и комья у полотна: не качаются и не расступаются
+	[[0.0, 0.0, 1.0, 0.90, 0.0, 0.80], 0.0], # мох
+	[[0.014, 0.005, 1.2, 0.83, 0.17, 0.80], 0.025],
+	[[0.018, 0.006, 1.2, 0.80, 0.16, 0.78], 0.035],
+	[[0.035, 0.012, 1.5, 0.84, 0.26, 0.76], 0.075],
 ]
 ## 15.11.2026: россыпь у дорожного полотна по покрытию (RoadSurface): доля занятых ячеек на обочине и кромке, на самом полотне.
 ## Гравий и камень выбрасывают щебень к краям и оставляют его между колеями; грунтовка и тропы — редкие комья; песок чистый.
@@ -106,6 +109,8 @@ var grass_keep := 1.0        # flora.grass
 var grow := 1.0              # flora.grow
 var detail := 1.0            # flora.detail
 
+var _expedition := false
+var _kinds := Models.CARPET_MOSS # прежние пять групп в исходном мире
 var count := 0               # экземпляров на экране (замер)
 var capped := 0              # сколько раз склейка упёрлась в CAP
 var last_job_ms := 0.0
@@ -146,11 +151,13 @@ func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image
 	world = w
 	heights = h
 	forest = forest_image
-	for kind in KINDS:
+	_expedition = w.template_id == WorldTemplate.EXPEDITION_ID
+	_kinds = Models.CARPET_KINDS if _expedition else Models.CARPET_MOSS
+	for kind in _kinds:
 		var near_mesh := Models.build_carpet_mesh(kind, false)
 		var mat: ShaderMaterial = VegetationLayer._wind_mat(VegetationLayer.SHADER, WIND[kind][0], true)
 		mat.set_shader_parameter("height", near_mesh.get_aabb().end.y)
-		mat.set_shader_parameter("grass_variation", kind != Models.CARPET_STONES)
+		mat.set_shader_parameter("grass_variation", kind != Models.CARPET_STONES and kind != Models.CARPET_MOSS)
 		mat.set_shader_parameter("trample", WIND[kind][1])
 		for far in 2:
 			var mesh := near_mesh if far == 0 else Models.build_carpet_mesh(kind, true)
@@ -514,7 +521,7 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 		_account_tile_bytes(added_bytes)
 		build_us += Time.get_ticks_usec() - build_began
 	var outs: Array = []        # слой -> квадрат -> набор плиток
-	for n in KINDS * 2:
+	for n in _kinds * 2:
 		outs.append({})
 	var total := 0
 	var used := {}
@@ -535,7 +542,7 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2, fade_clock: float, immedi
 		var y: Vector2 = _tile_y[key]
 		var tile_low := Vector3(key.x * TILE, y.x, key.y * TILE)
 		var tile_high := Vector3((key.x + 1) * TILE, y.y, (key.y + 1) * TILE)
-		for kind in KINDS:
+		for kind in _kinds:
 			var part: PackedFloat32Array = parts[kind]
 			var m := part.size() / STRIDE
 			if m == 0:
@@ -743,7 +750,7 @@ func _build_tile(i: int, j: int) -> Dictionary:
 	var stones := _road_stones(i, j, ys)
 	if not stones.is_empty():
 		if parts.is_empty():
-			for kind in KINDS:
+			for kind in _kinds:
 				parts.append(PackedFloat32Array())
 		parts[Models.CARPET_STONES] = stones
 	return {parts = parts, y = ys[0]}
@@ -860,7 +867,13 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	# Сухость места: мало влаги, каменисто, сухой биом — здесь ковёр соломенный
 	var parched := clampf((0.5 - w.moist[k]) * 1.6 + surface.a * 0.8 + VegetationLayer.open_dry(w.biome[k]) * 0.5, 0.0, 1.0)
 	var shade := smoothstep(0.3, 0.6, surface.r)
-	var flowers: bool = bd.get("flowers", false) and surface.r < 0.4
+	var forest_mix := 0.0
+	if _expedition:
+		forest_mix = smoothstep(0.12, 0.46, surface.r) * (1.0 - 0.62 * surface.a)
+		if w.biome[k] in [Biomes.FOREST, Biomes.TAIGA]:
+			forest_mix = maxf(forest_mix, 0.24 * (1.0 - surface.a))
+		cover *= 1.0 - 0.28 * forest_mix
+	var flowers: bool = bd.get("flowers", false) and surface.r < 0.4 and forest_mix < 0.35
 	var tall: float = clampf(0.6 + 0.45 * lush, 0.55, 1.15) * grow
 	var step := TILE / SUB
 	var refine = heights.road_refinement
@@ -873,7 +886,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	if use_native_tiles and _ride != null and not has_road_patch and (refine != null or path < 2):
 		var fast: Variant = Grid.fast_grid()
 		if fast != null:
-			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r)
+			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r, forest_mix, _expedition)
 			if res is Dictionary and res.get("ok", false):
 				if not res.get("any", false):
 					return []
@@ -883,8 +896,8 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var y_high := -INF
 	var parts: Array = []
 	var filled := PackedInt32Array()
-	filled.resize(KINDS)
-	for kind in KINDS:
+	filled.resize(_kinds)
+	for kind in _kinds:
 		var part := PackedFloat32Array()
 		part.resize(SUB * SUB * STRIDE)
 		parts.append(part)
@@ -933,6 +946,11 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		elif WGRandom.hash2(gx, gz, 263) < parched * (0.15 + 0.85 * dry_patch) + dry * 0.3:
 			kind = Models.CARPET_DRY
 			dry = maxf(dry, 0.45)
+		if forest_mix > 0.0 and WGRandom.hash2(gx, gz, 295) < forest_mix:
+			var mix := 0.75 * VegetationLayer._value_noise(x / 4.7, z / 4.7, 297) + 0.25 * h2
+			kind = Models.CARPET_MOSS if mix < 0.39 - 0.14 * parched else Models.CARPET_WOODLAND_LEAVES
+			if mix > 0.69 - 0.13 * parched:
+				kind = Models.CARPET_SEDGE if mix > 0.84 - 0.19 * parched else Models.CARPET_BERRY
 		var sc := 0.85 + 0.45 * h1
 		var sy: float = sc * tall * (0.7 + 0.6 * h2) * low
 		var basis := Basis(Vector3.UP, h2 * TAU)
@@ -943,10 +961,13 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		var tint := Color(lerpf(tc[0] * 0.9, 0.6, dry) * lum * 1.15, lerpf(tc[1], 0.57, dry) * lum * 1.15, lerpf(tc[2], 0.32, dry) * lum * 1.15, 1.0 - surface.r)
 		if kind == Models.CARPET_SHADE:
 			tint = Color(tint.r * 0.66, tint.g * 0.8, tint.b * 0.74, tint.a)
+		elif kind >= Models.CARPET_MOSS:
+			tint = Color(0.28 + 0.10 * parched, 0.39 - 0.04 * parched, 0.19 + 0.035 * h2, tint.a)
+			tint = Color(tint.r * lum, tint.g * lum, tint.b * lum, tint.a)
 		_put(parts[kind], filled[kind], basis.scaled_local(Vector3(sc, sy, sc)), x, y, z, tint, WGRandom.hash2(gx, gz, 241), 0.3 * h1)
 		filled[kind] += 1
 		# Цветы — полянами ~5 м, цвет поляны общий (шум 14 м), изредка другой
-		if flowers and kind != Models.CARPET_SHADE and low == 1.0:
+		if flowers and kind < Models.CARPET_SHADE and low == 1.0:
 			var bloom := smoothstep(0.52, 0.78, VegetationLayer._value_noise(x / 5.0, z / 5.0, 269)) * (1.0 - 0.7 * parched)
 			if WGRandom.hash2(gx, gz, 271) < 0.16 * bloom:
 				var pick := int(VegetationLayer._value_noise(x / 14.0, z / 14.0, 277) * 3.999)
@@ -960,7 +981,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		y_low = minf(y_low, y)
 		y_high = maxf(y_high, y)
 	var any := false
-	for kind in KINDS:
+	for kind in _kinds:
 		parts[kind].resize(filled[kind] * STRIDE)
 		any = any or filled[kind] > 0
 	if not any:

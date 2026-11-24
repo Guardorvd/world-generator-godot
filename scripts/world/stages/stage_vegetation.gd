@@ -46,7 +46,7 @@ const TRUNK := {
 	Biomes.T_ROWAN: 0.15, Biomes.T_MUGO: 0.24,
 	Biomes.T_SPRUCE: 0.40, Biomes.T_LARCH: 0.32, Biomes.T_ALDER: 0.33,
 	Biomes.T_WESTERN_REDCEDAR: 0.98, Biomes.T_SIBERIAN_CEDAR: 0.56,
-	Biomes.T_MAPLE: 0.77,
+	Biomes.T_MAPLE: 0.77, Biomes.T_HEMLOCK: 0.53, Biomes.T_DOUGLAS_FIR: 1.08,
 	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
 }
 ## Снежная ель и молодые деревья (крона до земли) опускают ветви к земле: эта доля кроны тоже не над полотном.
@@ -54,7 +54,7 @@ const TRUNK := {
 const LOW_CROWN := 0.3
 ## 11.11.2026: отступ между объектами — 0.18 + GAP_K * (сумма радиусов крон), клеток. Сосны в пологе через 4,5–5 м,
 ## дубы через 6–7 м, молодняк через 2–3 м. Самый большой зазор (два старых дуба) около 2,6 клетки — поиск соседей
-## ±3 клетки в ObjStore.add его покрывает; поднимать GAP_K или крону — проверить, что зазор меньше 3 клеток.
+## ObjStore.add расширяет поиск по максимальному фактическому радиусу.
 const GAP_K := 0.75
 
 
@@ -364,12 +364,27 @@ static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = [], t
 
 ## Хватает ли просвета объекту вида kind масштаба sc в точке (x, y): ствол (и нижние ветви ели и стланика) не на полотне
 static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float, age := ForestModels.ADULT_AGE) -> bool:
-	var need: float = TRUNK.get(kind, 0.0) * sc
+	var need := trunk_radius(kind, age) * sc
 	if kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO or kind == Biomes.T_ALDER or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
-		need += (0.55 if kind == Biomes.T_MAPLE else LOW_CROWN) * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
+		var low_share := LOW_CROWN
+		if kind in [Biomes.T_SPRUCE, Biomes.T_HEMLOCK]:
+			low_share = 0.82
+		elif kind in [Biomes.T_MAPLE, Biomes.T_DOUGLAS_FIR]:
+			low_share = 0.55
+		need += low_share * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
 	elif not TRUNK.has(kind):
 		need = 0.5 * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE # куст и камыш — краем к кромке
 	return Grid.clearance_at(field, ox, oy, stride, x, y, GameConfig.TILE) >= need
+
+
+static func trunk_radius(kind: int, age := ForestModels.ADULT_AGE) -> float:
+	var radius: float = TRUNK.get(kind, 0.0)
+	match kind:
+		Biomes.T_WESTERN_REDCEDAR:
+			return radius * [1.22, 0.90, 1.58][age]
+		Biomes.T_DOUGLAS_FIR:
+			return radius * [1.0, 0.77, 1.42][age]
+	return radius
 
 
 ## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
@@ -546,7 +561,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var tree_age := ForestModels.ADULT_AGE
 					if b_tree[kind] != 0:
 						# 11.11.2026: размер и возрастной класс древостоя; класс пишется в вариант: v = оттенок + 3 * класс
-						var form := tree_form(age, interior, line, moist[i], exposed, rng.next_float(), kind == Biomes.T_MAPLE)
+						var form := tree_form(age, interior, line, moist[i], exposed, rng.next_float(), kind)
 						sc = form.x
 						if kind == Biomes.T_MUGO:
 							sc = lerpf(0.74, 1.30, fposmod(form.x * 7.13, 1.0)) * lerpf(1.0, 0.76, _ss(0.28, 0.44, e))
@@ -670,13 +685,15 @@ static func cover_at(w: WorldData, x: int, y: int) -> Vector2:
 ## На опушках и у полян молодых больше, полог поднимается вглубь массива. Граница леса и скалы: дерево мельчает
 ## до 0,5 и становится молодым (компактная крона до земли), карликов взрослой формы нет.
 ## Одно случайное число r на дерево, как прежде (расход чисел rng на объект не меняется).
-static func tree_form(age: float, interior: float, line: float, moist: float, exposed: float, r: float, maple := false) -> Vector2:
+static func tree_form(age: float, interior: float, line: float, moist: float, exposed: float, r: float, kind := -1) -> Vector2:
 	var r2 := fposmod(r * 9.73, 1.0)
 	var r3 := fposmod(r * 31.7 + 0.37, 1.0)
 	var young_stand := 1.0 - _ss(0.08, 0.24, age)  # 1 — молодняк
 	var p_old := (1.0 - young_stand) * 0.032 * _ss(0.4, 0.85, age)
-	if maple:
+	if kind == Biomes.T_MAPLE:
 		p_old += 0.18 * _ss(0.24, 0.66, age)
+	elif kind == Biomes.T_DOUGLAS_FIR:
+		p_old += 0.10 * _ss(0.30, 0.72, age)
 	var p_young := young_stand * 0.9 + (1.0 - young_stand) * (0.095 + 0.15 * (1.0 - interior))
 	var p_second := (1.0 - young_stand) * 0.14
 	var canopy := lerpf(0.86, 1.06, age) * (0.82 + 0.18 * interior) * (0.85 + 0.15 * moist)
@@ -688,6 +705,8 @@ static func tree_form(age: float, interior: float, line: float, moist: float, ex
 	elif r < p_old + p_young:
 		cls = ForestModels.YOUNG_AGE
 		size = 0.2 + 0.22 * r2
+		if kind in [Biomes.T_HEMLOCK, Biomes.T_SPRUCE] and r3 < 0.58:
+			size = 0.048 + 0.10 * r2
 	elif r < p_old + p_young + p_second:
 		size = canopy * (0.6 + 0.15 * r2)
 	else:
@@ -755,6 +774,14 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 			var maple := 0.37 * terrace * lowland * shelter * patch * _ss(0.50, 0.79, moist)
 			if roll < spruce * maple:
 				return Biomes.T_MAPLE
+			# Примесь в существующих местах ели; зоны и пропорции уточняются в фазе 9.
+			var coastal := _ss(0.40, 0.73, moist) * (1.0 - 0.72 * cool)
+			var hemlock := coastal * (0.14 + 0.22 * stand) * (1.0 - 0.30 * light)
+			var douglas := coastal * _ss(0.20, 0.70, light) * (0.13 + 0.12 * shelter)
+			if roll < spruce * (maple + hemlock):
+				return Biomes.T_HEMLOCK
+			if roll < spruce * (maple + hemlock + douglas):
+				return Biomes.T_DOUGLAS_FIR
 		return Biomes.T_SPRUCE
 	roll -= spruce
 	var larch := (0.08 + 0.48 * cool) * (0.5 + 0.5 * light) * (1.0 - 0.68 * wet) * (1.32 - 0.65 * stand)
