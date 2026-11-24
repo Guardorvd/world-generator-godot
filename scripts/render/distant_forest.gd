@@ -73,6 +73,8 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i, include_scrub := t
 	var raw: Array = []
 	var plants := {}
 	var wooded := {} # 12 m cells with trees: open-land scrub is not sampled there (the forest proxies cover it)
+	var atm := WorldTemplate.atmosphere_config(w.template_id)
+	var autumn := atm.autumn_strength if atm != null else 0.0
 	var rect := Rect2i(key * PlanTerrain.CELLS, Vector2i.ONE * PlanTerrain.CELLS)
 	for cy in range(maxi(0, rect.position.y / w.CS), mini(w.CH, ceili(float(rect.end.y) / w.CS))):
 		for cx in range(maxi(0, rect.position.x / w.CS), mini(w.CW, ceili(float(rect.end.x) / w.CS))):
@@ -94,7 +96,7 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i, include_scrub := t
 					wooded[Vector2i(floori(x / (TILE * SCRUB_STEP)), floori(z / (TILE * SCRUB_STEP)))] = true
 				var jitter := WGRandom.hash2(floori(w.obj_x[o] * 71), floori(w.obj_y[o] * 67), 23)
 				var height := _nominal_height(kind) * size * lerpf(0.92, 1.12, jitter)
-				_add_woody(raw, plants, kind, w.obj_v[o], Vector3(x, ground, z), radius, height, false)
+				_add_woody(raw, plants, kind, w.obj_v[o], Vector3(x, ground, z), radius, height, false, autumn)
 	var scrub := _plan_scrub(w, h, rect, wooded, plants) if include_scrub else []
 	return pack(raw, scrub, plants)
 
@@ -137,8 +139,8 @@ static func _plant_hash(at: Vector3, salt: int) -> float:
 
 
 static func _add_woody(raw: Array, plants: Dictionary, kind: int, variant: int, at: Vector3, radius: float,
-		height: float, outer: bool) -> void:
-	var color := tint(kind, variant, at.x / TILE, at.z / TILE)
+		height: float, outer: bool, autumn := 0.0) -> void:
+	var color := tint(kind, variant, at.x / TILE, at.z / TILE, autumn)
 	var is_bush := kind == Biomes.T_BUSH or kind == Biomes.T_MUGO
 	var r := radius * (1.15 if kind == Biomes.T_MUGO else 1.0)
 	if kind == Biomes.T_MAPLE:
@@ -282,7 +284,7 @@ static func _add_scrub(proxies: Array, plants: Dictionary, site: Dictionary, p: 
 	_append_plant(plants, at, half.x * 1.08, half.y * 2.0, item[2], form, outer, 0.0)
 
 ## Instance colour: rgb is the leaf tint, alpha is the conifer share (the shader narrows conifers into cones).
-static func tint(kind: int, variant: int, x: float, y: float) -> Color:
+static func tint(kind: int, variant: int, x: float, y: float, autumn := 0.0) -> Color:
 	var color := Color("7ca94e")
 	if Biomes.EXPEDITION_CROWN.has(kind): color = Biomes.EXPEDITION_CROWN[kind]
 	elif kind == Biomes.T_PINE: color = Color("568758")
@@ -294,7 +296,7 @@ static func tint(kind: int, variant: int, x: float, y: float) -> Color:
 	elif kind == Biomes.T_BUSH: color = Color("6a8c42")
 	elif kind == Biomes.T_PALM: color = Color("589943")
 	elif kind == Biomes.T_ACACIA: color = Color("91a852")
-	color = Biomes.leaf_tone(kind, color * (0.92 + (variant % 3) * 0.06), x, y) # тот же тон, что у ближней модели
+	color = Biomes.leaf_tone(kind, color * (0.92 + (variant % 3) * 0.06), x, y, autumn) # тот же тон, что у ближней модели
 	color.a = 1.0 if Biomes.is_conifer(kind) and kind != Biomes.T_MUGO else 0.0
 	return color
 
@@ -614,6 +616,8 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 	var cover_bias := StageVegetation.world_cover(w.seed_num)
 	var vp := WorldTemplate.veg_params(w.template_id, w.H)
 	var has_veg := vp.size() == WorldVegetationConfig.VP_COUNT
+	var atm := WorldTemplate.atmosphere_config(w.template_id)
+	var autumn := atm.autumn_strength if atm != null else 0.0
 	for y in range(4, OuterLand.C, 8):
 		for x in range(4, OuterLand.C, 8):
 			var cell := origin + Vector2i(x, y)
@@ -651,7 +655,7 @@ static func outer(w: WorldData, key: Vector2i, f: Dictionary, heights: PackedFlo
 				var scale := lerpf(0.65, 1.2, site_cover) * lerpf(0.84, 1.13, u) * (vp[WorldVegetationConfig.VP_TREE_SCALE_BOOST] if has_veg else 1.0)
 				var radius: float = Biomes.CROWN_RADIUS[kind] * TILE * scale
 				var height := _nominal_height(kind) * scale
-				_add_woody(raw, plants, kind, j, Vector3(p.x, ground, p.y), radius, height, true)
+				_add_woody(raw, plants, kind, j, Vector3(p.x, ground, p.y), radius, height, true, autumn)
 				planted[p] = true
 	return pack(raw, scrub, plants, true)
 

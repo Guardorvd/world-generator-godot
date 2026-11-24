@@ -13,7 +13,7 @@ const SHADER := preload("res://resources/sky_cloud_dome.gdshader")
 const SIZE := Vector2i(2048, 512)
 const BANDS := 8
 const PARAMS := ["zenith_color", "horizon_color", "sun_dir", "sun_color", "halo", "moon_dir", "night",
-	"cloud_color", "cloud_cover", "cumulus_steps", "cloud_time", "cloud_seed", "moon_phase"]
+	"cloud_color", "cloud_cover", "overcast_deck", "cumulus_steps", "cloud_time", "cloud_seed", "moon_phase"]
 
 var sky_mat: ShaderMaterial
 var _vp: SubViewport
@@ -24,6 +24,7 @@ var _on := false
 var _full := true
 var _last_time := NAN
 var _last_sun := Vector3.ZERO
+var _last_deck := -1.0
 
 
 func _init(material: ShaderMaterial) -> void:
@@ -66,14 +67,17 @@ func _process(_delta: float) -> void:
 		return
 	var t: float = sky_mat.get_shader_parameter("cloud_time")
 	var sun: Vector3 = sky_mat.get_shader_parameter("sun_dir")
-	if is_nan(_last_time) or absf(t - _last_time) > 2.0 or sun.normalized().dot(_last_sun) < 0.9995:
+	var deck_v: Variant = sky_mat.get_shader_parameter("overcast_deck")
+	var deck := float(deck_v) if deck_v != null else 0.0
+	if is_nan(_last_time) or absf(t - _last_time) > 2.0 or sun.normalized().dot(_last_sun) < 0.9995 or absf(deck - _last_deck) > 0.001:
 		_full = true
 	# пауза: погода стоит — купол не пересчитывается
-	if not _full and t == _last_time and sun.normalized() == _last_sun:
+	if not _full and t == _last_time and sun.normalized() == _last_sun and absf(deck - _last_deck) <= 0.001:
 		_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		return
 	_last_time = t
 	_last_sun = sun.normalized()
+	_last_deck = deck
 	for p: String in PARAMS:
 		var v: Variant = sky_mat.get_shader_parameter(p)
 		if v == null:

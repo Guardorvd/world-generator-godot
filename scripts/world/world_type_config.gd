@@ -508,6 +508,10 @@ const RP_COUNT := 55
 ## Вложенный конфиг плотного зонирования растительности, подлеска и притропных объектов.
 @export var vegetation: WorldVegetationConfig = null
 
+@export_group("Атмосфера и сезон")
+## Вложенный конфиг пасмурного неба, осенней палитры, тумана и 3D LUT (null для Типа 1).
+@export var atmosphere: WorldAtmosphereConfig = null
+
 
 func relief_params() -> PackedFloat64Array:
 	var p := PackedFloat64Array()

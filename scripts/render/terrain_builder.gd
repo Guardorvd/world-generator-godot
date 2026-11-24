@@ -434,6 +434,8 @@ func _detail_material(template_id := "") -> ShaderMaterial:
 	var cfg := WorldTemplate.config(template_id)
 	mat.set_shader_parameter("trail_look", Vector4(cfg.trail_loam_darkness, cfg.trail_wet_gloss, cfg.trail_edge_litter, cfg.forest_micro_bump))
 	mat.set_shader_parameter("trail_litter_col", cfg.trail_russet_litter)
+	var atm := cfg.atmosphere
+	mat.set_shader_parameter("autumn_ground", Vector4(atm.autumn_strength, atm.ground_turf_desat, atm.ground_moss_darken, atm.ground_litter_warmth) if atm != null else Vector4.ZERO)
 	if mat.shader != SHADER:
 		var section := RoadTuning.for_template(template_id).section
 		mat.set_shader_parameter("road_edge", Vector3(section.edge, section.litter, 1.0 / section.fade))

@@ -1,7 +1,45 @@
-[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=3 format=3]
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
 [ext_resource type="Script" path="res://scripts/world/world_vegetation_config.gd" id="2_veg"]
+[ext_resource type="Script" path="res://scripts/world/world_atmosphere_config.gd" id="3_atm"]
+
+[sub_resource type="Resource" id="Resource_atmosphere"]
+script = ExtResource("3_atm")
+cloud_cover_min = 0.78
+cloud_cover_max = 0.92
+overcast_deck = 0.86
+overcast_zenith = Color(0.33, 0.38, 0.43, 1)
+overcast_horizon = Color(0.57, 0.62, 0.65, 1)
+overcast_cloud_color = Color(0.6, 0.64, 0.67, 1)
+overcast_sun_color = Color(0.84, 0.87, 0.9, 1)
+overcast_ambient = Color(0.49, 0.54, 0.58, 1)
+sky_overcast_blend = 0.84
+sun_halo_mul = 0.20
+sun_energy_mul = 0.46
+ambient_energy_mul = 1.44
+exposure_mul = 0.92
+shadow_blur_add = 1.35
+day_saturation_mul = 0.84
+fog_density_mul = 1.50
+local_mist_floor = 0.58
+fog_height_offset = 24.0
+fog_height_density_mul = 2.28
+aerial_perspective_mul = 1.22
+volumetric_density_mul = 2.20
+local_mist_patch_mul = 1.45
+autumn_strength = 0.88
+ground_turf_desat = 0.78
+ground_moss_darken = 0.68
+ground_litter_warmth = 0.85
+style_preset = "expedition_overcast"
+lut_warm_shift = 0.14
+lut_cool_brown = 0.44
+lut_desat_green = 0.52
+agx_contrast_max = 1.34
+depth_near_mul = 0.90
+depth_far_desat_mul = 1.25
+depth_haze_mul = 1.38
 
 [sub_resource type="Resource" id="Resource_vegetation"]
 script = ExtResource("2_veg")
@@ -296,3 +334,4 @@ trail_edge_litter = 0.88
 forest_micro_bump = 0.85
 trail_russet_litter = Color(0.46, 0.24, 0.1, 1)
 vegetation = SubResource("Resource_vegetation")
+atmosphere = SubResource("Resource_atmosphere")

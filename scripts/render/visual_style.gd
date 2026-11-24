@@ -28,16 +28,37 @@ const LUT_SIZE := 32
 const LUT_STEPS := 24          # сила LUT округляется до 1/24: кэш из 25 текстур, а не пересчёт на каждый шаг ползунка
 const ACES_WHITE := 6.0        # как в scenes/game_world.tscn
 const TONEMAP_ACES := 3
+const DEFAULT_PRESET := "default"
 
 static var on: Dictionary = DEFAULT_ON.duplicate()
 static var amount: Dictionary = DEFAULT_AMOUNT.duplicate()
 
 static var _env: Environment
-static var _graded: PackedFloat32Array  # LUT на полной силе (r, g, b подряд)
-static var _lut_cache: Dictionary = {}
-static var _lut_step := -1
+static var _atm: WorldAtmosphereConfig = null
+static var _preset := DEFAULT_PRESET
+static var _graded_cache: Dictionary = {}  # signature -> PackedFloat32Array на полной силе
+static var _lut_cache: Dictionary = {}     # "signature:step" -> ImageTexture3D
+static var _lut_key := ""
 static var _day_exposure := -1.0   # выдержка и насыщенность DayCycle без стиля (для привязанного окружения):
 static var _day_saturation := 1.0  # на паузе DayCycle стоит, и refresh() пересчитывает их сам
+
+
+static func active_preset() -> String:
+	return _preset
+
+
+static func _preset_key() -> String:
+	if _atm == null or _preset == DEFAULT_PRESET:
+		return DEFAULT_PRESET
+	return _atm.lut_signature()
+
+
+## Назначает профиль цветокоррекции и разделения планов (null возвращает прежний дефолтный пресет Типа 1).
+static func set_profile(atm: WorldAtmosphereConfig) -> void:
+	_atm = atm
+	_preset = atm.style_preset if atm != null and not atm.style_preset.is_empty() else DEFAULT_PRESET
+	_lut_key = ""
+	refresh()
 
 
 ## Сила эффекта, 0 если выключен
@@ -65,10 +86,13 @@ static func is_bound() -> bool:
 	return _env != null
 
 
-## Мир закрыт: всё возвращается в нейтральное состояние (глобальные параметры шейдеров, окружение)
+## Мир закрыт: всё возвращается в нейтральное состояние (глобальные параметры шейдеров, окружение, профиль пресета)
 static func release() -> void:
 	_reset_environment()
 	_env = null
+	_atm = null
+	_preset = DEFAULT_PRESET
+	_lut_key = ""
 	_day_exposure = -1.0
 	RenderingServer.global_shader_parameter_set("style_depth", Vector4.ZERO)
 
@@ -111,8 +135,11 @@ static func set_haze(color: Color) -> void:
 ## Применить текущие настройки: LUT, тонмаппер, параметры шейдеров
 static func refresh() -> void:
 	var depth := strength("depth") if _env != null else 0.0 # без мира (меню, Trail Lab) шейдеры остаются нейтральными
+	var near_mul := _atm.depth_near_mul if _atm != null else 1.0
+	var far_mul := _atm.depth_far_desat_mul if _atm != null else 1.0
+	var haze_mul := _atm.depth_haze_mul if _atm != null else 1.0
 	RenderingServer.global_shader_parameter_set("style_depth",
-		Vector4(depth, depth, depth, 1.0) if depth > 0.0 else Vector4.ZERO)
+		Vector4(depth * near_mul, depth * far_mul, depth * haze_mul, 1.0) if depth > 0.0 else Vector4.ZERO)
 	if _env == null:
 		return
 	_apply_grade(strength("grade"))
@@ -137,12 +164,13 @@ static func _apply_grade(k: float) -> void:
 		_env.adjustment_color_correction = null
 		return
 	var step := clampi(roundi(k * LUT_STEPS), 1, LUT_STEPS)
-	if step == _lut_step and _env.adjustment_color_correction != null:
+	var key := "%s:%d" % [_preset_key(), step]
+	if key == _lut_key and _env.adjustment_color_correction != null:
 		return
-	_lut_step = step
-	if not _lut_cache.has(step):
-		_lut_cache[step] = _build_lut(float(step) / LUT_STEPS)
-	_env.adjustment_color_correction = _lut_cache[step]
+	_lut_key = key
+	if not _lut_cache.has(key):
+		_lut_cache[key] = _build_lut(float(step) / LUT_STEPS)
+	_env.adjustment_color_correction = _lut_cache[key]
 
 
 static func _apply_highlights(k: float) -> void:
@@ -150,33 +178,43 @@ static func _apply_highlights(k: float) -> void:
 		_env.tonemap_mode = TONEMAP_ACES
 		_env.tonemap_white = ACES_WHITE
 		return
+	var contrast_max := _atm.agx_contrast_max if _atm != null else 1.5
 	_env.tonemap_mode = Environment.TONE_MAPPER_AGX
 	_env.tonemap_agx_white = lerpf(20.0, 10.0, k)
-	_env.tonemap_agx_contrast = lerpf(1.15, 1.5, k)
+	_env.tonemap_agx_contrast = lerpf(1.15, contrast_max, k)
 
 
 # ---------- 3D LUT ----------
 
 ## Цветокоррекция одного цвета (sRGB после тонмаппинга) на полной силе
-static func grade_color(c: Color) -> Color:
+static func grade_color(c: Color, preset := _preset, atm: WorldAtmosphereConfig = _atm) -> Color:
 	var luma := c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
 	var hi := maxf(c.r, maxf(c.g, c.b))
 	var lo := minf(c.r, minf(c.g, c.b))
 	var chroma := (hi - lo) / maxf(hi, 0.0001)
-	# 1. Прохладные тени: тёмные участки чуть уходят в сине-зелёный; нейтральный серый середины не трогается.
+	var overcast := preset == "expedition_overcast" and atm != null
+	# 1. Прохладные тени: для пасмурной экспедиции — более глубокий сланцевый баланс без грязи.
 	var shadow := pow(1.0 - smoothstep(0.0, 0.5, luma), 1.4)
-	var rgb := Vector3(c.r, c.g, c.b) * Vector3.ONE.lerp(Vector3(0.93, 0.99, 1.065), shadow)
-	# 2. Золотистые света, только у окрашенных поверхностей: белые облака, снег и небо остаются нейтральными.
+	var shadow_tint := Vector3(0.93, 0.99, 1.065)
+	if overcast:
+		shadow_tint = shadow_tint.lerp(Vector3(0.89, 0.96, 1.08), atm.lut_cool_brown)
+	var rgb := Vector3(c.r, c.g, c.b) * Vector3.ONE.lerp(shadow_tint, shadow)
+	# 2. Золотистые света (в пасмурном пресете снижены через lut_warm_shift).
 	var gold := smoothstep(0.35, 0.85, luma) * smoothstep(0.05, 0.3, chroma)
-	rgb *= Vector3.ONE.lerp(Vector3(1.055, 1.016, 0.915), gold)
+	var warm_k := atm.lut_warm_shift if overcast else 1.0
+	rgb *= Vector3.ONE.lerp(Vector3(1.055, 1.016, 0.915), gold * warm_k)
+	if overcast and atm.lut_cool_brown > 0.0:
+		var mid := smoothstep(0.08, 0.32, luma) * (1.0 - smoothstep(0.58, 0.90, luma)) * smoothstep(0.04, 0.25, chroma)
+		rgb *= Vector3.ONE.lerp(Vector3(1.02, 0.985, 0.945), mid * atm.lut_cool_brown * 0.45)
 	var out := Color(rgb.x, rgb.y, rgb.z)
-	# 3. Зелень: на свету к жёлто-оливковому, в тени к сине-зелёному, самая кричащая приглушается.
+	# 3. Зелень: летом — оливково-сине-зелёный баланс; осенью — приглушение летней зелени при сохранности меди и охры.
 	var h := out.h * 360.0
-	var green := smoothstep(62.0, 92.0, h) * (1.0 - smoothstep(150.0, 180.0, h))
+	var green := smoothstep(68.0 if overcast else 62.0, 95.0 if overcast else 92.0, h) * (1.0 - smoothstep(145.0 if overcast else 150.0, 175.0 if overcast else 180.0, h))
 	if green > 0.0 and out.s > 0.0:
 		var warm := smoothstep(0.12, 0.7, luma)
-		var shift := lerpf(10.0, -8.0, warm) * green
-		var sat := out.s * (1.0 - 0.24 * smoothstep(0.5, 0.95, out.s) * green)
+		var shift := (lerpf(12.0, 2.0, warm) if overcast else lerpf(10.0, -8.0, warm)) * green
+		var sat_damp := atm.lut_desat_green * smoothstep(0.18, 0.72, out.s) if overcast else 0.24 * smoothstep(0.5, 0.95, out.s)
+		var sat := out.s * (1.0 - sat_damp * green)
 		out = Color.from_hsv(fposmod(h + shift, 360.0) / 360.0, sat, out.v)
 	# 4. Светлота остаётся прежней: оттенок и насыщенность меняются, яркость нет.
 	var new_luma := out.r * 0.2126 + out.g * 0.7152 + out.b * 0.0722
@@ -199,17 +237,23 @@ static func _lut_input(i: int) -> float:
 
 
 static func _build_lut(k: float) -> ImageTexture3D:
-	if _graded.is_empty():
-		_graded.resize(LUT_SIZE * LUT_SIZE * LUT_SIZE * 3)
+	var sig := _preset_key()
+	var graded: PackedFloat32Array
+	if _graded_cache.has(sig):
+		graded = _graded_cache[sig]
+	else:
+		graded = PackedFloat32Array()
+		graded.resize(LUT_SIZE * LUT_SIZE * LUT_SIZE * 3)
 		var at := 0
 		for b in LUT_SIZE:
 			for g in LUT_SIZE:
 				for r in LUT_SIZE:
-					var out := grade_color(Color(_lut_input(r), _lut_input(g), _lut_input(b)))
-					_graded[at] = out.r
-					_graded[at + 1] = out.g
-					_graded[at + 2] = out.b
+					var out := grade_color(Color(_lut_input(r), _lut_input(g), _lut_input(b)), _preset, _atm)
+					graded[at] = out.r
+					graded[at + 1] = out.g
+					graded[at + 2] = out.b
 					at += 3
+		_graded_cache[sig] = graded
 	var slices: Array[Image] = []
 	var bytes_per_slice := LUT_SIZE * LUT_SIZE * 3
 	for b in LUT_SIZE:
@@ -221,7 +265,7 @@ static func _build_lut(k: float) -> ImageTexture3D:
 			for r in LUT_SIZE:
 				var src := Vector3(_lut_input(r), _lut_input(g), _lut_input(b))
 				for ch in 3:
-					var v := lerpf(src[ch], _graded[at], k)
+					var v := lerpf(src[ch], graded[at], k)
 					data[write] = clampi(roundi(v * 255.0), 0, 255)
 					write += 1
 					at += 1

@@ -2288,6 +2288,9 @@ func _free_game() -> void:
 	_cancel_hud_fade()
 	if GameContext.scope.resource_profile != null: GameContext.scope.resource_profile.save()
 	if game != null:
+		var bd := game.get_node_or_null("BoardDisplay")
+		if bd != null:
+			bd.set_process(false)
 		game.queue_free()
 		game = null
 	hud.clear_world()

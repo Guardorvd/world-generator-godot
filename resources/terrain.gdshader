@@ -24,6 +24,8 @@ uniform vec2 road_rut = vec2(0.47, 0.13);
 // Характер живой лесной тропы шаблона (x — тёмный суглинок ядра, y — блеск влаги, z — кайма рыжего опада, w — ближние кочки леса).
 uniform vec4 trail_look = vec4(0.0);
 uniform vec3 trail_litter_col : source_color = vec3(0.46, 0.24, 0.10);
+// Осенняя палитра земли (x — сила осени, y — приглушение летней травы, z — потемнение мха, w — медный опад; 0 в Типе 1).
+uniform vec4 autumn_ground = vec4(0.0);
 #ifdef ROAD_TUNED_EDGE
 uniform vec3 road_edge;
 #endif
@@ -223,7 +225,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		vec3 soil = mix(leaf_soil, needle_soil, forest.g);
 		soil *= mix(1.12, 0.72, forest.b);
 		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
-		soil = mix(soil, floor_moss, moss * 0.7);
+		vec3 moss_c = mix(floor_moss, floor_moss * vec3(0.76, 0.73, 0.56), autumn_ground.z);
+		soil = mix(soil, moss_c, moss * 0.7);
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
 		float stones = forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6);
 		soil = mix(soil, rock_color * 0.72, stones * 0.75);
@@ -239,9 +242,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			float aa = max(length(fwidth(cells)), 0.015);
 			float litter = (1.0 - smoothstep(0.13 - aa, 0.13 + aa, shape));
 			litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
-			// первые опавшие листья: в лиственном лесу часть листьев подстилки жёлтая
-				vec3 leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), vec3(0.50, 0.33, 0.05), step(0.74, scatter.x) * (1.0 - forest.g) * 0.85);
+			// первые опавшие листья: в лиственном лесу и в осеннем типе мира опад заметнее и меднее
+				vec3 autumn_leaf = mix(vec3(0.50, 0.33, 0.05), vec3(0.48, 0.22, 0.06), autumn_ground.w);
+				float leaf_share = step(mix(0.74, 0.42, autumn_ground.w), scatter.x) * max(1.0 - forest.g, autumn_ground.w * 0.75);
+				vec3 leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), autumn_leaf, leaf_share * 0.85);
 				soil = mix(soil, leaf_c, litter * near * (0.55 - moss * 0.25));
+		}
+		if (autumn_ground.x > 0.0) {
+			soil *= mix(vec3(1.0), vec3(0.92, 0.84, 0.76), autumn_ground.x * 0.55);
 		}
 		col = mix(col, soil, cover * (0.62 + patch * 0.25));
 		// 6.7: под пологом меньше света неба. Хвойный плотнее и холоднее; в лиственном
@@ -308,6 +316,9 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			turf = mix(turf, turf_l * vec3(1.06, 0.98, 0.62), season * mix(0.36, 0.5, dryness) * (1.0 - damp * 0.6));
 			float ripe = smoothstep(0.30, 0.82, dryness + (n_mid - 0.5) * 0.22 + (n_zone - 0.5) * 0.3) * season * (1.0 - damp * 0.85);
 			turf = mix(turf, turf_l * vec3(1.42, 1.20, 0.40), ripe * 0.42);
+			if (autumn_ground.x > 0.0) {
+				turf = mix(turf, turf_l * vec3(0.95, 0.87, 0.60), autumn_ground.y * 0.65);
+			}
 			float clump = smoothstep(0.34, 0.70, n_mid * 0.6 + n_fine * 0.4);
 			turf *= mix(0.88, 1.09, clump);
 			// участки видны и вдали: каменистый — реже и землистее, сырой — гуще и темнее
@@ -362,7 +373,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				vec2 fl = fract(fc) - (vec2(0.2) + fh * 0.6);
 				float faa = max(px3 * 4.1 * 0.5, 0.008);
 				float flower = (1.0 - smoothstep(0.075 - faa, 0.075 + faa, length(fl))) * step(0.90, fh.x)
-					* smoothstep(0.45, 0.65, n_big + (n_mid - 0.5) * 0.5 + damp * 0.25) * lush * (1.0 - bare) * (1.0 - stony * 0.7) * (1.0 - smoothstep(0.12, 0.4, faa));
+					* smoothstep(0.45, 0.65, n_big + (n_mid - 0.5) * 0.5 + damp * 0.25) * lush * (1.0 - bare) * (1.0 - stony * 0.7) * (1.0 - smoothstep(0.12, 0.4, faa))
+					* (1.0 - autumn_ground.x);
 				vec3 petal = fh.y < 0.45 ? vec3(0.92, 0.90, 0.80) : (fh.y < 0.8 ? vec3(0.93, 0.72, 0.10) : vec3(0.50, 0.36, 0.72));
 				turf = mix(turf, petal, flower * 0.85 * near);
 			}
@@ -418,7 +430,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				float lum = dot(open_col, vec3(0.3, 0.55, 0.15));
 				open_col = mix(open_col, vec3(lum) * vec3(1.12, 1.08, 0.92), steppe * (ca.x + ca.y) * 0.45);
 				// иван-чай — своими пятнами (~24 м) на опушках, в разнотравье и кустарнике
-				float bloom = smoothstep(0.58, 0.82, com_n.b) * (1.0 - steppe) * clamp(ca.y * 0.3 + ca.z * 0.6 + cb.x * 1.2, 0.0, 1.0);
+				float bloom = smoothstep(0.58, 0.82, com_n.b) * (1.0 - steppe) * clamp(ca.y * 0.3 + ca.z * 0.6 + cb.x * 1.2, 0.0, 1.0) * (1.0 - autumn_ground.x);
 				open_col = mix(open_col, vec3(lum) * vec3(1.35, 0.78, 1.15), bloom * 0.42);
 				// Keep the ground visible between the sparser dry communities.
 				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));

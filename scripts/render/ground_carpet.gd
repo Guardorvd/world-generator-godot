@@ -140,6 +140,7 @@ var use_native_tiles := true
 var _ride: Object = null
 var _ride_rev := -1
 var _veg_cfg: WorldVegetationConfig = null
+var _atm_cfg: WorldAtmosphereConfig = null
 
 
 func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image) -> void:
@@ -148,6 +149,7 @@ func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image
 	heights = h
 	forest = forest_image
 	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
+	_atm_cfg = WorldTemplate.atmosphere_config(w.template_id)
 	for kind in KINDS:
 		var near_mesh := Models.build_carpet_mesh(kind, false)
 		var mat: ShaderMaterial = VegetationLayer._wind_mat(VegetationLayer.SHADER, WIND[kind][0], true)
@@ -864,7 +866,12 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	if _veg_cfg != null:
 		var dark_m := lerpf(1.0, _veg_cfg.carpet_darken_mul, maxf(forest_k, smoothstep(0.2, 0.7, surface.g)))
 		tc = [float(tc[0]) * dark_m, float(tc[1]) * lerpf(dark_m, dark_m * 0.90, forest_k), float(tc[2]) * lerpf(dark_m, dark_m * 0.82, forest_k)]
+	if _atm_cfg != null and _atm_cfg.autumn_strength > 0.0:
+		var ak := _atm_cfg.autumn_strength * 0.55
+		tc = [lerpf(float(tc[0]), float(tc[0]) * 1.04, ak), lerpf(float(tc[1]), float(tc[1]) * 0.86, ak), lerpf(float(tc[2]), float(tc[2]) * 0.68, ak)]
 	var straw := VegetationLayer._straw(gr, i, j, surface)
+	if _atm_cfg != null and _atm_cfg.autumn_strength > 0.0:
+		straw = clampf(straw + _atm_cfg.autumn_strength * 0.35, 0.0, 1.0)
 	# Сухость места: мало влаги, каменисто, сухой биом — здесь ковёр соломенный
 	var parched := clampf((0.5 - w.moist[k]) * 1.6 + surface.a * 0.8 + VegetationLayer.open_dry(w.biome[k]) * 0.5, 0.0, 1.0)
 	var shade := smoothstep(0.3, 0.6, surface.r)

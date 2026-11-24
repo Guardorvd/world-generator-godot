@@ -18,6 +18,7 @@ enum Mode { OFF, ANALYTIC, VOLUMETRIC }
 var use_node_pool := true
 var world: WorldData
 var heights: Heightfield
+var _atm: WorldAtmosphereConfig = null
 var patches := {}
 var _pool: Array[Node3D] = []
 var mode := Mode.OFF
@@ -33,6 +34,7 @@ var stats := {evaluated = 0, sampled = 0, created = 0, material_updates = 0, cac
 func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
+	_atm = WorldTemplate.atmosphere_config(w.template_id)
 	_plan_sites.clear()
 
 func set_quality(level: int, env: Environment) -> void:
@@ -229,8 +231,10 @@ func _site(key: Vector2i) -> Dictionary:
 		var cell := Vector2i((point / GameConfig.TILE).floor())
 		var data := world.tile_info(cell.x, cell.y)
 		if data.is_empty(): continue
-		var strength := suitability(data)
+		var strength := suitability(data, _atm != null)
 		if strength <= 0.0: continue
+		if _atm != null:
+			strength *= _atm.local_mist_patch_mul
 		var ground := heights.ground_at(point.x, point.y)
 		var water := maxf(heights.river_level(point.x, point.y), heights.lake_level(point.x, point.y))
 		if not Rect2i(0, 0, world.W, world.H).has_point(cell):
@@ -256,12 +260,12 @@ func _site(key: Vector2i) -> Dictionary:
 	best.size.z = maxf(48.0, lerpf(100.0, 48.0, smoothstep(3.0, 16.0, relief.y)) * (0.9 + 0.1 * cos(phase)))
 	return best
 
-static func suitability(data: Dictionary) -> float:
+static func suitability(data: Dictionary, expedition := false) -> float:
 	var biome: int = data.get("biome", Biomes.ROCK)
 	if biome in [Biomes.DEEP, Biomes.OCEAN, Biomes.SHALLOW, Biomes.SNOW, Biomes.PEAK]: return 0.0
-	var moisture := smoothstep(0.48, 0.82, float(data.get("moist", 0.0)))
+	var moisture := smoothstep(0.36 if expedition else 0.48, 0.72 if expedition else 0.82, float(data.get("moist", 0.0)))
 	var lowland := 1.0 - smoothstep(0.35, 0.72, float(data.get("elev", 1.0)))
-	var gentle := 1.0 - smoothstep(0.12, 0.4, float(data.get("slope", 1.0)))
+	var gentle := 1.0 - smoothstep(0.16 if expedition else 0.12, 0.55 if expedition else 0.4, float(data.get("slope", 1.0)))
 	var habitat := 1.0 if biome in [Biomes.FOREST, Biomes.JUNGLE, Biomes.TAIGA, Biomes.SWAMP, Biomes.LAKE] or data.get("river", false) else 0.45
 	var value := moisture * lowland * gentle * habitat
-	return 0.007 * value if value > 0.2 else 0.0
+	return 0.007 * value if value > (0.14 if expedition else 0.2) else 0.0

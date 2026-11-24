@@ -27,6 +27,7 @@ uniform vec3 moon_dir = vec3(0.0, -0.7, -0.7);
 uniform float night = 0.0;                       // 0 днём, 1 ночью: звёзды и луна
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;                 // доля неба под кучевыми облаками, примерно
+uniform float overcast_deck = 0.0;               // сплошная пасмурная пелена днём (0 в прежнем Типе 1)
 uniform int cumulus_steps : hint_range(2, 5) = 5;
 uniform bool cloud_lite = false;                // 16.11: среднее качество облаков — синоптика кучевых раз на пиксель
 uniform float cloud_time = 0.0;                 // секунды анимации неба, общие для облаков и ночных эффектов
@@ -171,9 +172,10 @@ void sky() {
 	float above = smoothstep(-0.15, 0.05, s_dir.y);   // гало гаснет, когда солнце глубоко под горизонтом
 	float low_sun = (1.0 - smoothstep(-0.02, 0.32, s_dir.y)) * smoothstep(-0.16, -0.01, s_dir.y);
 	// Двухзонное рассеяние Ми и мягкое зарево вдоль горизонта со стороны солнца
+	float sun_flare_att = 1.0 - overcast_deck * (1.0 - night) * 0.65;
 	float horizon_band = exp(-h * 5.2) * (0.35 + 0.65 * pow(sd, 3.0)) * low_sun * above;
-	col += mix(sun_color, vec3(1.0, 0.48, 0.28), low_sun * 0.55) * horizon_band * 0.24;
-	col += sun_color * (pow(sd, 6.0) * 0.34 + pow(sd, 48.0) * 0.48) * halo * above;
+	col += mix(sun_color, vec3(1.0, 0.48, 0.28), low_sun * 0.55) * horizon_band * 0.24 * sun_flare_att;
+	col += sun_color * (pow(sd, 6.0) * 0.34 + pow(sd, 48.0) * 0.48) * halo * above * sun_flare_att;
 	// 12.11: сумерки напротив солнца — розовый «пояс Венеры» над горизонтом и сизая тень Земли под ним
 	float twilight = (1.0 - smoothstep(0.0, 0.20, s_dir.y)) * smoothstep(-0.26, -0.03, s_dir.y);
 	if (twilight > 0.001) {
@@ -188,7 +190,8 @@ void sky() {
 		// солнце: диск с мягким краем и тесным ореолом, днём не ярче, чем выдержит тоновая кривая
 		float sun_up = smoothstep(-0.05, 0.02, s_dir.y);
 		float sun_disc = smoothstep(0.99925, 0.99965, sd) * sun_up;
-		col += sun_color * (sun_disc * 2.8 + pow(sd, 1400.0) * 0.55 * sun_up);
+		float disc_att = 1.0 - overcast_deck * (1.0 - night) * 0.88;
+		col += sun_color * (sun_disc * 2.8 + pow(sd, 1400.0) * 0.55 * sun_up) * disc_att;
 		if (night > 0.001) {
 			col += night_sky(d, sd) * night;
 		}
@@ -208,9 +211,11 @@ void sky() {
 		// В карте отражений (AT_CUBEMAP_PASS) — согласованный по времени суток отсвет облачного покрова для воды и поверхностей
 		vec2 uv_c = sky_uv(d, 0.12) + vec2(cloud_time * 0.012, cloud_time * 0.004) + vec2(cloud_seed * 0.37, cloud_seed * 0.61);
 		float cn = smoothstep(0.62 - cloud_cover * 0.45, 0.82 - cloud_cover * 0.35, noise(uv_c * 1.4));
-		vec3 refl_cloud = mix(cloud_color * 0.92, mix(sun_color, vec3(1.0, 0.52, 0.34), low_sun * 0.5) * 0.95, low_sun * 0.55);
+		float deck_r = overcast_deck * (1.0 - night);
+		cn = mix(cn, 0.90, deck_r);
+		vec3 refl_cloud = mix(cloud_color * 0.92, mix(sun_color, vec3(1.0, 0.52, 0.34), low_sun * 0.5) * 0.95, low_sun * 0.55 * (1.0 - deck_r * 0.70));
 		refl_cloud = mix(refl_cloud, mix(zenith_color, horizon_color, 0.5) * 1.15, night * 0.65);
-		col = mix(col, refl_cloud, cn * smoothstep(0.02, 0.35, d.y) * 0.45);
+		col = mix(col, refl_cloud, cn * smoothstep(0.02, 0.35, d.y) * mix(0.45, 0.85, deck_r));
 	}
 	// 12.11: лёгкий неподвижный шум ниже шага 8 бит разбивает полосы на плавных градиентах (ночь, сумерки)
 	if (!AT_CUBEMAP_PASS) {

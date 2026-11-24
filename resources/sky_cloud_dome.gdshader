@@ -13,6 +13,7 @@ uniform vec3 moon_dir = vec3(0.0, -0.7, -0.7);
 uniform float night = 0.0;
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;
+uniform float overcast_deck = 0.0;
 uniform int cumulus_steps = 5;
 uniform bool cloud_lite = false;
 uniform float cloud_time = 0.0;

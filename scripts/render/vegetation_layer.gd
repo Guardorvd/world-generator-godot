@@ -259,12 +259,15 @@ var load_radius := tree_r + LOAD_MARGIN
 var drop_radius := load_radius + DROP_MARGIN
 ## Отдельное окно привала задаёт собственные дальности леса.
 var use_shared_forest_ranges := true
+var _autumn_strength := 0.0
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
 	world = w
 	_expedition = w.template_id == WorldTemplate.EXPEDITION_ID
 	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
+	var atm := WorldTemplate.atmosphere_config(w.template_id)
+	_autumn_strength = atm.autumn_strength if atm != null else 0.0
 	heights = h
 	placement = Placement.new(w, h)
 	road = RoadObstacles.new(w)
@@ -1388,7 +1391,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 					_put_transform(buf, n * 16, xf)
 				else:
 					_put_xform(buf, n * 16, pos.x, pos.y, pos.z, rot, s, sy)
-				var col: Color = Biomes.leaf_tone(kind % ForestModels.MODEL_STRIDE, def.leaves[v % def.leaves.size()], ox, oy)
+				var col: Color = Biomes.leaf_tone(kind % ForestModels.MODEL_STRIDE, def.leaves[v % def.leaves.size()], ox, oy, _autumn_strength)
 				buf[n * 16 + 12] = col.r
 				buf[n * 16 + 13] = col.g
 				buf[n * 16 + 14] = col.b
@@ -2592,14 +2595,23 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		var rot := WGRandom.hash2(slot_x, j, seed + 6) * TAU
 		var tint := 0.85 + WGRandom.hash2(slot_x, j, seed + 7) * 0.3
 		kind = Floor.FIRST + Floor.variant_kind(kind - Floor.FIRST, int(WGRandom.hash2(slot_x, j, seed + 9) * 3.0)) if kind >= Floor.FIRST else kind
+		var autumn_u := WGRandom.hash2(slot_x, j, seed + 12)
 		if kind == Understory.HAZEL or kind == Understory.HAZEL_TALL:
 			var grow_hz := _flora_grow(kind)
 			var h_u := WGRandom.hash2(slot_x, j, seed + 10)
 			var hz_scale := (lerpf(0.68, 1.24, h_u) if kind == Understory.HAZEL else lerpf(0.92, 1.38, h_u)) * grow_hz
 			var hz_squash := lerpf(0.84, 1.06, WGRandom.hash2(slot_x, j, seed + 11)) if kind == Understory.HAZEL else lerpf(0.94, 1.12, WGRandom.hash2(slot_x, j, seed + 11))
-			var yellow := smoothstep(0.68, 0.96, patch * 0.4 + WGRandom.hash2(slot_x, j, seed + 12) * 0.6)
+			var yellow := smoothstep(0.68, 0.96, patch * 0.4 + autumn_u * 0.6)
 			var hz_hue := Color.WHITE.lerp(Color(1.16, 1.08, 0.72), yellow * 0.75)
+			if _expedition and _autumn_strength > 0.0:
+				hz_hue = _autumn_understory_hue(kind, patch, autumn_u, _autumn_strength, hz_hue)
 			_sites(ctx).append([kind, x, z, rot, hz_scale, tint, rank, hz_hue, -1, hz_squash])
+		elif _expedition and _autumn_strength > 0.0 and kind < Floor.FIRST:
+			var site_hue := _autumn_understory_hue(kind, patch, autumn_u, _autumn_strength)
+			if site_hue != Color.WHITE:
+				_sites(ctx).append([kind, x, z, rot, scale, tint, rank, site_hue, -1])
+			else:
+				_sites(ctx).append([kind, x, z, rot, scale, tint, rank])
 		else:
 			_sites(ctx).append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
@@ -2647,6 +2659,28 @@ func _flora_keep(kind: int) -> float:
 
 func _flora_grow(kind: int) -> float:
 	return flora.grow if kind < Floor.FIRST else 1.0
+
+
+## Ранне-осенний оттенок подлеска и трав (Фаза 10); хвойный подрост и серебристая ковыль остаются без желтизны.
+func _autumn_understory_hue(kind: int, patch: float, u: float, autumn: float, base := Color.WHITE) -> Color:
+	if autumn <= 0.0:
+		return base
+	var mix_k := clampf(autumn * lerpf(0.42, 0.96, smoothstep(0.15, 0.85, patch * 0.55 + u * 0.45)), 0.0, 1.0)
+	if kind == Understory.BERRY_SHRUB or kind == Understory.BERRY_SHRUB_SPREAD:
+		var target := Color(1.20, 0.68, 0.52) if u < 0.6 else Color(1.08, 0.56, 0.48)
+		return base * Color.WHITE.lerp(target, mix_k)
+	if kind == Understory.ALPINE_SHRUB or kind == Understory.ALPINE_SHRUB_CREEPING:
+		return base * Color.WHITE.lerp(Color(1.08, 0.82, 0.58), mix_k * 0.85)
+	if kind == Understory.SWORD_FERN or kind == Understory.SWORD_FERN_TALL:
+		return base * Color.WHITE.lerp(Color(1.06, 0.90, 0.64), mix_k * 0.72)
+	if kind in [Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL, Understory.HERB, Understory.MEADOW]:
+		return base * Color.WHITE.lerp(Color(1.09, 0.91, 0.62), mix_k * 0.78)
+	if kind in [Understory.HAZEL, Understory.HAZEL_TALL]:
+		return base * Color.WHITE.lerp(Color(1.18, 0.96, 0.58), autumn * lerpf(0.30, 0.75, u))
+	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG]:
+		var target := Color(1.18, 0.86, 0.54) if u > 0.4 else Color(1.06, 0.92, 0.64)
+		return base * Color.WHITE.lerp(target, mix_k * 0.82)
+	return base
 
 
 ## 16.0: открытое место — растительное сообщество клетки (Understory.communities): массивы
@@ -2797,6 +2831,9 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 			site_hue = Color.WHITE # серебро остей не желтим
 		elif kind == Understory.FIREWEED:
 			scale *= 0.85 + 0.3 * bloom
+		if _expedition and _autumn_strength > 0.0 and not (kind == Understory.BUSH and juniper) and kind != Understory.STIPA:
+			var au_u := WGRandom.hash2(hx + m, j, seed + 12) if kind in [Understory.BUSH, Understory.HAZEL, Understory.HAZEL_TALL] else WGRandom.hash2(hx + m, j, seed + 9)
+			site_hue = _autumn_understory_hue(kind, com[Understory.C_SHRUB], au_u, _autumn_strength, site_hue)
 		if _expedition and _veg_cfg != null and kind >= Understory.EXPEDITION_FIRST and kind < Floor.FIRST:
 			scale *= lerpf(1.0, _veg_cfg.forest_understory_scale_mul, 0.7)
 		var tint := 0.88 + WGRandom.hash2(hx + m, j, seed + 7) * 0.24

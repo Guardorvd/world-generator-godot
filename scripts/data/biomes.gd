@@ -114,7 +114,32 @@ static func is_conifer(kind: int) -> bool:
 ## зелень лиственных чуть глубже и спокойнее, а часть берёз, дубов, рябин, кустов и акаций уже тронута золотом и
 ## ржавчиной. Желтеют не поодиночке вразброс, а куртинами (~100 м), внутри куртины — не каждое дерево.
 ## Хвойные, джунгли и пальмы остаются в своей палитре. x, y — место дерева в клетках мира.
-static func leaf_tone(kind: int, col: Color, x: float, y: float) -> Color:
+static func leaf_tone(kind: int, col: Color, x: float, y: float, autumn := 0.0) -> Color:
+	if autumn > 0.0:
+		var stand_a := WGRandom.hash2(floori(x / 20.0), floori(y / 20.0), 911)
+		var own_a := WGRandom.hash2(floori(x * 127.0), floori(y * 131.0), 913)
+		var turn_a := own_a * 0.62 + stand_a * 0.38
+		var out_a := col
+		if kind == T_MAPLE:
+			out_a = Color(col.r * 0.92, col.g * 0.86, col.b * 0.74)
+			var target_m := Color("9e381e") if own_a < 0.35 else (Color("b85d24") if own_a < 0.72 else Color("b07a2a"))
+			out_a = out_a.lerp(target_m, smoothstep(0.16, 0.72, turn_a) * 0.92 * autumn)
+		elif kind == T_LARCH:
+			var target_l := Color("c4962c") if own_a > 0.42 else Color("9e8d34")
+			out_a = col.lerp(target_l, smoothstep(0.20, 0.76, turn_a) * 0.88 * autumn)
+		elif kind == T_ALDER:
+			out_a = Color(col.r * 0.88, col.g * 0.84, col.b * 0.74)
+			out_a = out_a.lerp(Color("8f6e30") if own_a > 0.45 else Color("787038"), smoothstep(0.32, 0.84, turn_a) * 0.68 * autumn)
+		elif kind == T_BIRCH:
+			out_a = col.lerp(Color("c69c32") if own_a > 0.4 else Color("a8782e"), smoothstep(0.24, 0.78, turn_a) * 0.90 * autumn)
+		elif kind in [T_SPRUCE, T_PINE, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_MUGO]:
+			out_a = col.lerp(Color(col.r * 0.82, col.g * 0.89, col.b * 0.88), autumn * 0.45)
+		elif kind == T_BUSH or kind == T_ROWAN:
+			out_a = col.lerp(Color("9c4a26") if own_a < 0.5 else Color("a8762c"), smoothstep(0.28, 0.82, turn_a) * 0.78 * autumn)
+		else:
+			return col
+		out_a.a = col.a
+		return out_a
 	if kind != T_OAK and kind != T_BIRCH and kind != T_BUSH and kind != T_ACACIA and kind != T_ROWAN:
 		return col
 	var stand := WGRandom.hash2(floori(x / 26.0), floori(y / 26.0), 911)

@@ -465,6 +465,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
+	day.atmosphere = WorldTemplate.atmosphere_config(world.template_id)
 	add_child(day.make_cloud_dome()) # 16.11: облака неба считаются в куполе по полосам, не по пикселям экрана
 	camera.add_child(StyleGrain.new()) # 13.11: зерно визуального стиля, рисуется только в 3D-мире
 	local_mist = preload("res://scripts/render/local_mist.gd").new()
@@ -747,6 +748,7 @@ func _apply_lighting_and_fog() -> void:
 		local_mist.set_quality(settings.fog_quality, $WorldEnvironment.environment)
 	preload("res://scripts/render/lighting_quality.gd").apply_clouds($WorldEnvironment.environment, settings.cloud_quality)
 	# визуальный стиль (13.11): окружение мира и настройки игрока; на паузе меню меняет их сразу, здесь — на старте и после паузы
+	VisualStyle.set_profile(WorldTemplate.atmosphere_config(world.template_id))
 	VisualStyle.bind($WorldEnvironment.environment)
 	VisualStyle.configure(settings.style_on, settings.style_amount)
 	if garlands != null:

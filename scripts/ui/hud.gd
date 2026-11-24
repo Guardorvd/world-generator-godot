@@ -507,6 +507,8 @@ func in_open_land(p: Dictionary) -> bool:
 
 ## Доска показывает само поселение и два ближайших доступных места.
 func board_places(settlement: Variant, catalog: Variant = null) -> Array:
+	if world == null:
+		return []
 	var id := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var here := InteractionService.target(world.place(id))
 	var center := Vector2(settlement.x, settlement.y)

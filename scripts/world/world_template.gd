@@ -166,6 +166,11 @@ static func vegetation_config(id: String) -> WorldVegetationConfig:
 	return config(id).vegetation
 
 
+## Возвращает конфиг атмосферы, сезона и LUT шаблона (null для Типа 1).
+static func atmosphere_config(id: String) -> WorldAtmosphereConfig:
+	return config(id).atmosphere
+
+
 ## Плоский буфер VP_* для C#/GD генерации растительности (пустой для Типа 1 без конфига).
 static func veg_params(id: String, plan_h := 0) -> PackedFloat64Array:
 	var cfg := config(id)

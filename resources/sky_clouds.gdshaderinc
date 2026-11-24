@@ -120,7 +120,8 @@ float cumulus_density_at(vec2 p, float h, float cov, float morph, bool shadow_pa
 
 	// Башни сужаются к вершине: широкое основание и рельефные пики наверху
 	float taper = mix(0.0, 0.16, (h * h) / max(out_tower, 0.38));
-	float eff_cov = clamp(cov * 0.90 - taper, 0.06, 0.74);
+	float deck_day = overcast_deck * (1.0 - smoothstep(0.15, 0.75, night));
+	float eff_cov = clamp(cov * mix(0.90, 1.08, deck_day) - taper * (1.0 - 0.55 * deck_day), 0.06, mix(0.74, 0.96, deck_day));
 	float edge = 1.0 - eff_cov;
 
 	// Небольшой ветровой наклон вершин башен
@@ -253,6 +254,22 @@ vec4 sky_clouds(vec3 d) {
 		}
 	}
 
+	float deck_day = overcast_deck * (1.0 - smoothstep(0.15, 0.75, night));
+	if (deck_day > 0.001) {
+		vec2 uv_deck = sky_uv(d, 0.14) * 1.15 + wind * 0.75 + seed_ofs * 0.5;
+		float stratus_var = fbm_flow(uv_deck, morph * 0.45);
+		float stratus_base = fbm(uv_deck * 0.45 - vec2(seed_ofs.y, seed_ofs.x));
+		float deck_m = smoothstep(0.18, 0.82, stratus_var * 0.68 + stratus_base * 0.32);
+		float stratus_a = clamp((0.72 + 0.28 * deck_m) * deck_day, 0.0, 0.97) * fade;
+		vec3 deck_dark = mix(cloud_color * vec3(0.70, 0.74, 0.79), zenith_color * 0.95, 0.35);
+		vec3 deck_light = mix(cloud_color * 1.02, horizon_color * 1.05, 0.45);
+		vec3 deck_col = mix(deck_dark, deck_light, deck_m);
+		deck_col += active_light_col * pow(max(active_dot, 0.0), 3.0) * 0.14 * above * (1.0 - night);
+		deck_col = mix(deck_col, horizon_color, horizon_haze * 0.72);
+		cc = mix(cc, deck_col, stratus_a);
+		ct *= 1.0 - stratus_a;
+	}
+
 	// 3. Нижний объёмный ярус: живые кучевые облака (humilis, mediocris, congestus) и валы (stratocumulus)
 	// При меньшем числе выборок каждый шаг покрывает большую часть слоя.
 	vec2 uv_base = sky_uv(d, 0.11);
@@ -261,7 +278,7 @@ vec4 sky_clouds(vec3 d) {
 	float trans = 1.0;
 	vec3 accum = vec3(0.0);
 	float phase = cloud_phase(active_dot);
-	float silver = pow(max(active_dot, 0.0), 12.0) * (0.82 + halo * 1.35) * (above + night * 0.45);
+	float silver = pow(max(active_dot, 0.0), 12.0) * (0.82 + halo * 1.35) * (above + night * 0.45) * (1.0 - deck_day * 0.78);
 	vec2 light_horiz = normalize(active_dir.xz + vec2(1e-4)) * 0.075;
 	float light_vert = clamp(active_dir.y, 0.14, 0.85) * 0.24;
 
@@ -364,7 +381,7 @@ vec4 sky_clouds(vec3 d) {
 		float shaft = smoothstep(0.36, 0.95, streaks) * pow(active_dot, 5.0) * trans;
 		float low_boost = 0.35 + low_sun * 1.6;
 		float lit_time = max(above, night * 0.3);
-		cc += active_light_col * shaft * smoothstep(0.12, 0.5, cloud_cover) * low_boost * lit_time * 0.22 * fade;
+		cc += active_light_col * shaft * smoothstep(0.12, 0.5, cloud_cover) * low_boost * lit_time * 0.22 * fade * (1.0 - deck_day * 0.78);
 	}
 	return vec4(cc, ct);
 }

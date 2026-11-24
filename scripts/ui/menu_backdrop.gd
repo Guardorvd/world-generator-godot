@@ -343,6 +343,7 @@ func _build_light() -> void:
 	_cycle.cloud_cover_override = 0.3
 	Lighting.apply(env, sun, 0, _quality == 2, 0)
 	sun.directional_shadow_max_distance = 80.0
+	VisualStyle.set_profile(null)
 	VisualStyle.configure(_settings.style_on, _settings.style_amount)
 	VisualStyle.bind(env)
 	_camera = Camera3D.new()

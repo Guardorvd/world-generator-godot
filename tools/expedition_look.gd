@@ -74,7 +74,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--shots-p9") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and not args.has("--verify-phase9") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--shots-p9") and not args.has("--shots-p10") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and not args.has("--verify-phase9") and not args.has("--verify-phase10") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -123,6 +123,10 @@ func _run() -> void:
 
 	if args.has("--verify-phase9"):
 		ok = _verify_phase9(seeds, short_dev, explicit_h) and ok
+	if args.has("--verify-phase10"):
+		ok = await _verify_phase10(seeds) and ok
+	if args.has("--shots-p10"):
+		ok = await _capture_phase10_shots(seeds[0], tag) and ok
 
 	quit(0 if ok else 1)
 
@@ -2417,3 +2421,328 @@ func _capture_phase9_shots(seed_text: String, tag: String) -> bool:
 	main.queue_free()
 	await process_frame
 	return all_ok
+
+
+func _launch_p10_world(main: Node, seed_text: String, template_id: String) -> GameWorld:
+	main.start_game(seed_text, WorldGenerator.START_SIZE, "", false, template_id)
+	var wait_frames := 0
+	while (main.busy or main.game == null or main.game.player == null) and wait_frames < 12000:
+		await process_frame
+		wait_frames += 1
+	if main.busy or main.game == null or main.game.player == null:
+		return null
+	var gw: GameWorld = main.game
+	gw.paused = true
+	main.hud.visible = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if gw.opening_active():
+		gw._finish_opening()
+	return gw
+
+
+func _verify_phase10(seeds: PackedStringArray) -> bool:
+	var failures: PackedStringArray = []
+	var prev_cache := GameContext.scope.cache.enabled
+	var prev_preset := VisualStyle.active_preset()
+	GameContext.scope.cache.enabled = false
+
+	# 1. Профиль WorldAtmosphereConfig и изоляция Типа 1 / Типа 2
+	if WorldTemplate.atmosphere_config(WorldTemplate.DEFAULT_ID) != null:
+		failures.append("Type 1 atmosphere_config must be null")
+	var atm := WorldTemplate.atmosphere_config(WorldTemplate.EXPEDITION_ID)
+	if atm == null:
+		failures.append("Type 2 atmosphere_config returned null")
+		GameContext.scope.cache.enabled = prev_cache
+		return false
+	if atm.style_preset != "expedition_overcast":
+		failures.append("Expected style_preset=expedition_overcast, got=%s" % atm.style_preset)
+	if atm.overcast_deck < 0.7 or atm.autumn_strength < 0.7 or atm.cloud_cover_min < 0.7 or atm.cloud_cover_max < atm.cloud_cover_min:
+		failures.append("Unexpected overcast/autumn defaults on WorldAtmosphereConfig")
+
+	# 2. VisualStyle 3D LUT и инварианты цветокоррекции
+	VisualStyle.set_profile(atm)
+	if VisualStyle.active_preset() != "expedition_overcast":
+		failures.append("VisualStyle.active_preset mismatch after set_profile(atm)")
+	if not VisualStyle.grade_color(Color.BLACK).is_equal_approx(Color.BLACK):
+		failures.append("VisualStyle.grade_color failed black preservation")
+	if not VisualStyle.grade_color(Color.WHITE).is_equal_approx(Color.WHITE):
+		failures.append("VisualStyle.grade_color failed white preservation")
+	var summer_green := Color(0.22, 0.72, 0.26)
+	var gr_def := VisualStyle.grade_color(summer_green, VisualStyle.DEFAULT_PRESET, null)
+	var gr_ov := VisualStyle.grade_color(summer_green, "expedition_overcast", atm)
+	if gr_ov.s >= gr_def.s - 0.05:
+		failures.append("expedition_overcast LUT did not mute summer green (def_s=%.3f ov_s=%.3f)" % [gr_def.s, gr_ov.s])
+	var copper := Color(0.76, 0.34, 0.14)
+	var cp_ov := VisualStyle.grade_color(copper, "expedition_overcast", atm)
+	if cp_ov.r <= cp_ov.b + 0.28 or cp_ov.s < 0.50:
+		failures.append("expedition_overcast LUT damaged autumn copper (r=%.3f b=%.3f s=%.3f)" % [cp_ov.r, cp_ov.b, cp_ov.s])
+	VisualStyle.set_profile(null)
+	if VisualStyle.active_preset() != VisualStyle.DEFAULT_PRESET:
+		failures.append("VisualStyle.set_profile(null) did not restore DEFAULT_PRESET")
+
+	# 3. Осенняя палитра Biomes.leaf_tone (усреднённо по 16 точкам и сохранность хвои)
+	var mp_def := Biomes.leaf_tone(Biomes.T_MAPLE, Color.WHITE, 12.0, 18.0, 0.0)
+	var mp_base := Biomes.leaf_tone(Biomes.T_MAPLE, Color.WHITE, 12.0, 18.0)
+	if not mp_def.is_equal_approx(mp_base):
+		failures.append("Biomes.leaf_tone(autumn=0) diverged from baseline")
+	var mp_rb := 0.0
+	var la_rb := 0.0
+	var la_gb := 0.0
+	var sp_cool_ok := true
+	for k in 16:
+		var sx := 6.0 + k * 7.0
+		var sy := 10.0 + k * 11.0
+		var mp_k := Biomes.leaf_tone(Biomes.T_MAPLE, Color.WHITE, sx, sy, atm.autumn_strength)
+		var la_k := Biomes.leaf_tone(Biomes.T_LARCH, Color.WHITE, sx, sy, atm.autumn_strength)
+		var sp_k := Biomes.leaf_tone(Biomes.T_SPRUCE, Color.WHITE, sx, sy, atm.autumn_strength)
+		mp_rb += mp_k.r - mp_k.b
+		la_rb += la_k.r - la_k.b
+		la_gb += la_k.g - la_k.b
+		if sp_k.g < sp_k.r or sp_k.b < 0.14:
+			sp_cool_ok = false
+	if mp_rb / 16.0 <= 0.15:
+		failures.append("Maple autumn leaf_tone avg r-b=%.3f <= 0.15" % (mp_rb / 16.0))
+	if la_rb / 16.0 <= 0.10 or la_gb / 16.0 <= 0.06:
+		failures.append("Larch autumn leaf_tone avg r-b=%.3f g-b=%.3f too cool" % [la_rb / 16.0, la_gb / 16.0])
+	if not sp_cool_ok:
+		failures.append("Spruce conifer leaf_tone lost cool green tone")
+
+	# 4. Живой запуск Типа 2 -> выход -> запуск Типа 1 (сброс пасмурности, осени и LUT)
+	if DisplayServer.get_name() != "headless":
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		DisplayServer.window_set_size(Vector2i(1280, 720))
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var main: Node = load("res://scenes/main.tscn").instantiate()
+	root.add_child(main)
+	for _i in 15:
+		await process_frame
+
+	var seed_text := seeds[0] if not seeds.is_empty() else "Север-1234"
+	var gw2 := await _launch_p10_world(main, seed_text, WorldTemplate.EXPEDITION_ID)
+	if gw2 == null:
+		failures.append("Failed to launch Type 2 GameWorld")
+	else:
+		var env2 := gw2.get_node("WorldEnvironment").environment as Environment
+		if VisualStyle.active_preset() != "expedition_overcast":
+			failures.append("Live Type 2 VisualStyle preset=%s != expedition_overcast" % VisualStyle.active_preset())
+		if gw2.day == null or gw2.day.atmosphere != atm:
+			failures.append("Live Type 2 DayCycle.atmosphere not bound")
+		if gw2.local_mist == null or gw2.local_mist._atm != atm:
+			failures.append("Live Type 2 LocalMist._atm not bound")
+		gw2.camera.global_position = Vector3(gw2.player.x, 120.0, gw2.player.z)
+		gw2.day._fog_time = NAN
+		gw2.day.apply(14.0, 100.0, true)
+		var cover2 := float(gw2.day.sky_mat.get_shader_parameter("cloud_cover"))
+		var deck2 := float(gw2.day.sky_mat.get_shader_parameter("overcast_deck"))
+		var fog_hi := env2.fog_height
+		if cover2 < atm.cloud_cover_min - 0.01 or cover2 > atm.cloud_cover_max + 0.01:
+			failures.append("Type 2 cloud_cover=%.3f outside [%.2f, %.2f]" % [cover2, atm.cloud_cover_min, atm.cloud_cover_max])
+		if deck2 < atm.overcast_deck * 0.9:
+			failures.append("Type 2 overcast_deck=%.3f too low" % deck2)
+		if absf(fog_hi - (120.0 + atm.fog_height_offset)) > 1.5:
+			failures.append("Type 2 dynamic fog_height at y=120 got %.2f" % fog_hi)
+		gw2.camera.global_position = Vector3(gw2.player.x, 25.0, gw2.player.z)
+		gw2.day._fog_time = NAN
+		gw2.day.apply(14.0, 102.0, true)
+		var fog_lo := env2.fog_height
+		if absf(fog_lo - (25.0 + atm.fog_height_offset)) > 1.5 or (fog_hi - fog_lo) < 80.0:
+			failures.append("Type 2 dynamic fog_height did not follow elevation: hi=%.2f lo=%.2f" % [fog_hi, fog_lo])
+		var ag2: Variant = gw2.terrain_stream.material.get_shader_parameter("autumn_ground")
+		if not (ag2 is Vector4) or (ag2 as Vector4).x < 0.7:
+			failures.append("Type 2 terrain autumn_ground uniform invalid: %s" % str(ag2))
+		print("PHASE10_TYPE2 cover=%.3f deck=%.3f fog_hi=%.1f fog_lo=%.1f fog_d=%.5f fog_hd=%.5f autumn=%.2f" % [
+			cover2, deck2, fog_hi, fog_lo, env2.fog_density, env2.fog_height_density, (ag2 as Vector4).x if ag2 is Vector4 else -1.0])
+
+		main._back_to_menu()
+		for _i in 25:
+			await process_frame
+		if VisualStyle.active_preset() != VisualStyle.DEFAULT_PRESET:
+			failures.append("VisualStyle not reset to DEFAULT_PRESET after exiting Type 2 (preset=%s)" % VisualStyle.active_preset())
+
+		var gw1 := await _launch_p10_world(main, seed_text, WorldTemplate.DEFAULT_ID)
+		if gw1 == null:
+			failures.append("Failed to launch Type 1 GameWorld after Type 2")
+		else:
+			var env1 := gw1.get_node("WorldEnvironment").environment as Environment
+			gw1.camera.global_position = Vector3(gw1.player.x, 120.0, gw1.player.z)
+			gw1.day._fog_time = NAN
+			gw1.day.apply(14.0, 100.0, true)
+			var deck1 := float(gw1.day.sky_mat.get_shader_parameter("overcast_deck"))
+			var cover1 := float(gw1.day.sky_mat.get_shader_parameter("cloud_cover"))
+			var ag1: Variant = gw1.terrain_stream.material.get_shader_parameter("autumn_ground")
+			if VisualStyle.active_preset() != VisualStyle.DEFAULT_PRESET:
+				failures.append("Type 1 VisualStyle leaked preset=%s" % VisualStyle.active_preset())
+			if gw1.day.atmosphere != null or gw1.local_mist._atm != null:
+				failures.append("Type 1 leaked Type 2 atmosphere reference")
+			if absf(deck1) > 0.001:
+				failures.append("Type 1 overcast_deck leaked=%.3f" % deck1)
+			if not (ag1 is Vector4) or not (ag1 as Vector4).is_equal_approx(Vector4.ZERO):
+				failures.append("Type 1 terrain autumn_ground leaked=%s" % str(ag1))
+			if not is_equal_approx(env1.fog_height, DayCycle.MIST_TOP):
+				failures.append("Type 1 fog_height=%.2f != MIST_TOP=%.2f" % [env1.fog_height, DayCycle.MIST_TOP])
+			print("PHASE10_TYPE1_AFTER cover=%.3f deck=%.3f fog_h=%.1f fog_d=%.5f preset=%s" % [
+				cover1, deck1, env1.fog_height, env1.fog_density, VisualStyle.active_preset()])
+			main._free_game()
+
+	main.queue_free()
+	await process_frame
+	GameContext.scope.cache.enabled = prev_cache
+	if prev_preset != VisualStyle.active_preset():
+		VisualStyle.release()
+	if failures.is_empty():
+		print("PHASE10_VERIFY: PASS")
+		return true
+	for msg: String in failures:
+		push_error("PHASE10_VERIFY FAIL: " + msg)
+	return false
+
+
+func _capture_phase10_shots(seed_text: String, tag: String) -> bool:
+	if DisplayServer.get_name() == "headless":
+		push_error("PHASE10_SHOTS: window required (do not pass --headless)")
+		return false
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_size(Vector2i(1280, 720))
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	var prev_cache := GameContext.scope.cache.enabled
+	GameContext.scope.cache.enabled = false
+	var main: Node = load("res://scenes/main.tscn").instantiate()
+	root.add_child(main)
+	for _i in 20:
+		await process_frame
+	var gw := await _launch_p10_world(main, seed_text, WorldTemplate.EXPEDITION_ID)
+	if gw == null:
+		push_error("PHASE10_SHOTS: Type 2 GameWorld failed to start")
+		main.queue_free()
+		GameContext.scope.cache.enabled = prev_cache
+		return false
+	if gw.vegetation != null:
+		gw.vegetation.settings.trail_clutter = true
+	var prev_fog: int = gw.services.settings.fog_quality
+	var w := gw.world
+	var h := gw.heights
+	var T := GameConfig.TILE
+	var road: Array = w.trails[0].pts if not w.trails.is_empty() else []
+	if road.size() < 40:
+		push_error("PHASE10_SHOTS: road too short")
+		main._free_game()
+		main.queue_free()
+		GameContext.scope.cache.enabled = prev_cache
+		return false
+
+	# 1-3. Участок дороги вдоль долины (10:30, 14:00, 17:30)
+	var tk := clampi(int(road.size() * 0.42), 20, road.size() - 30)
+	var tp0 := Vector2(road[tk].x, road[tk].y) * T
+	var tp1 := Vector2(road[tk + 24].x, road[tk + 24].y) * T
+	var trail_pos := Vector3(tp0.x, h.ground_at(tp0.x, tp0.y) + 3.4, tp0.y)
+	var trail_look := Vector3(tp1.x, h.ground_at(tp1.x, tp1.y) + 3.6, tp1.y)
+
+	# 4. Придорожный клён в ранне-осенней палитре (14:00)
+	var maple_pos := trail_pos
+	var maple_look := trail_look
+	var best_ms := -INF
+	for o in w.obj_count:
+		if w.obj_k[o] != Biomes.T_MAPLE:
+			continue
+		var at := Vector2(w.obj_x[o], w.obj_y[o]) * T
+		var near_p := Vector2.ZERO
+		var best_d2 := INF
+		for k in range(16, road.size() - 24):
+			var rp := Vector2(road[k].x, road[k].y) * T
+			var d2 := at.distance_squared_to(rp)
+			if d2 < best_d2:
+				best_d2 = d2
+				near_p = rp
+		var dist := sqrt(best_d2)
+		var sc := float(w.obj_s[o]) * 2.0 - absf(dist - 9.0) * 0.55
+		if sc > best_ms:
+			best_ms = sc
+			var away := (near_p - at).normalized()
+			if away.length_squared() < 0.01:
+				away = Vector2(0.0, -1.0)
+			var cam_p := near_p + away * 6.5
+			maple_pos = Vector3(cam_p.x, h.ground_at(cam_p.x, cam_p.y) + 2.8, cam_p.y)
+			maple_look = Vector3(at.x, h.ground_at(at.x, at.y) + 4.8, at.y)
+
+	# 5-7. Обзор долины со склона для сравнения режимов тумана (14:00: Med / Vol / Off)
+	var axis := ValleyAxis.for_world(w)
+	var best_fk := tk
+	var best_sd := -INF
+	for k in range(30, maxi(31, road.size() - 40)):
+		var sd := (float(road[k].x) - axis.axis_x_at(float(road[k].y))) * float(axis.road_side)
+		if sd > best_sd:
+			best_sd = sd
+			best_fk = k
+	var vp0 := Vector2(road[best_fk].x, road[best_fk].y) * T + Vector2(float(axis.road_side) * 18.0, 0.0)
+	var look_y_tile := clampf(float(road[best_fk].y) + 28.0, 8.0, float(w.H - 8))
+	var vl1 := Vector2((axis.axis_x_at(look_y_tile) + 0.5) * T, look_y_tile * T)
+	var fog_pos := Vector3(vp0.x, h.ground_at(vp0.x, vp0.y) + 15.0, vp0.y)
+	var fog_look := Vector3(vl1.x, h.ground_at(vl1.x, vl1.y) + 11.0, vl1.y)
+
+	var t2_shots := [
+		{name = "p10_trail_1030", hour = 10.5, fog = 1, pos = trail_pos, target = trail_look},
+		{name = "p10_trail_1400", hour = 14.0, fog = 1, pos = trail_pos, target = trail_look},
+		{name = "p10_trail_1730", hour = 17.5, fog = 1, pos = trail_pos, target = trail_look},
+		{name = "p10_maple_1400", hour = 14.0, fog = 1, pos = maple_pos, target = maple_look},
+		{name = "p10_valley_fog_med", hour = 14.0, fog = 1, pos = fog_pos, target = fog_look},
+		{name = "p10_valley_fog_vol", hour = 14.0, fog = 2, pos = fog_pos, target = fog_look},
+		{name = "p10_valley_fog_off", hour = 14.0, fog = GameSettings.FOG_OFF, pos = fog_pos, target = fog_look},
+	]
+	for sh: Dictionary in t2_shots:
+		gw.services.settings.fog_quality = int(sh.fog)
+		gw._apply_lighting_and_fog()
+		gw.hour = float(sh.hour)
+		await _load_shot_view(gw, sh.pos, 0.7)
+		gw.camera.look_at_from_position(sh.pos, sh.target, Vector3.UP)
+		gw.day._fog_time = NAN
+		gw.day.apply(gw.hour, 100.0, true)
+		if gw.local_mist != null:
+			gw.local_mist.update(sh.pos, 0.5)
+		for _f in 18:
+			await process_frame
+		var img := root.get_viewport().get_texture().get_image()
+		var out_path := ProjectSettings.globalize_path(OUT.path_join("expedition_%s%s.png" % [sh.name, tag]))
+		img.save_png(out_path)
+		var env_shot := gw.get_node("WorldEnvironment").environment as Environment
+		print("SHOT: ", out_path, " vol_fog=", env_shot.volumetric_fog_enabled, " fog_d=", env_shot.fog_density, " fog_hd=", env_shot.fog_height_density)
+
+	gw.services.settings.fog_quality = prev_fog
+	gw._apply_lighting_and_fog()
+	main._back_to_menu()
+	for _i in 25:
+		await process_frame
+
+	# 8. Тип 1 сразу после выхода из Типа 2 (чистое солнечное небо и зелень без осенне-пасмурного шлейфа)
+	var gw1 := await _launch_p10_world(main, seed_text, WorldTemplate.DEFAULT_ID)
+	if gw1 == null:
+		push_error("PHASE10_SHOTS: Type 1 GameWorld failed after Type 2")
+		main.queue_free()
+		GameContext.scope.cache.enabled = prev_cache
+		return false
+	gw1.hour = 14.0
+	var p1_start := Vector2(gw1.player.x, gw1.player.z)
+	var p1_center := Vector2(gw1.world.W * 0.5 * T, gw1.world.H * 0.5 * T)
+	var p1_dir := (p1_center - p1_start).normalized()
+	if p1_dir.length_squared() < 0.01:
+		p1_dir = Vector2(0.0, 1.0)
+	var p1_aim := p1_start + p1_dir * 65.0
+	var p1_pos := Vector3(p1_start.x, gw1.heights.ground_at(p1_start.x, p1_start.y) + 6.0, p1_start.y)
+	var p1_look := Vector3(p1_aim.x, gw1.heights.ground_at(p1_aim.x, p1_aim.y) + 7.5, p1_aim.y)
+	await _load_shot_view(gw1, p1_pos, 0.7)
+	gw1.camera.look_at_from_position(p1_pos, p1_look, Vector3.UP)
+	gw1.day._fog_time = NAN
+	gw1.day.apply(14.0, 100.0, true)
+	if gw1.local_mist != null:
+		gw1.local_mist.update(p1_pos, 0.5)
+	for _f in 18:
+		await process_frame
+	var img1 := root.get_viewport().get_texture().get_image()
+	var out1 := ProjectSettings.globalize_path(OUT.path_join("expedition_p10_type1_after%s.png" % tag))
+	img1.save_png(out1)
+	print("SHOT: ", out1)
+
+	main._free_game()
+	main.queue_free()
+	await process_frame
+	GameContext.scope.cache.enabled = prev_cache
+	return true

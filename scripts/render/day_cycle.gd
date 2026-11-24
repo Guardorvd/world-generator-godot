@@ -64,6 +64,7 @@ var env: Environment
 var light: DirectionalLight3D
 var sky_mat: ShaderMaterial
 var terrain_mats: Array = []   # материалы рельефа: солнечные пятна под пологом гаснут вместе с солнцем
+var atmosphere: WorldAtmosphereConfig = null # профиль пасмурности, тумана и света типа мира (null — прежний Тип 1)
 var sunlight := 1.0            # 0..1: насколько сейчас светит именно солнце
 var camera: Camera3D           # совместимость с игровыми и съёмочными инструментами
 var world_seed := 0            # сид мира: какие ночи с сиянием, кометой, звездопадом
@@ -260,40 +261,65 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	if light.visible:
 		# свет летит от светила к земле: -Z узла смотрит туда же
 		light.basis = Basis.looking_at(-src, Vector3.UP if absf(src.y) < 0.99 else Vector3.FORWARD)
-	env.fog_light_color = s[2]
+	var atm := atmosphere
+	var day_mask := (1.0 - smoothstep(0.15, 0.75, float(s[9]))) if atm != null else 0.0
+	var seed_phase := float(posmod(world_seed, 997)) * 0.13
+	var cover: float = s[11] + 0.12 * sin(time / 67.0 + seed_phase) + 0.06 * sin(time / 23.0 + 1.0 + seed_phase * 1.7)
+	if atm != null:
+		var wave := 0.5 + 0.5 * (0.65 * sin(time / 67.0 + seed_phase) + 0.35 * sin(time / 23.0 + 1.0 + seed_phase * 1.7))
+		var raw_cover := lerpf(atm.cloud_cover_min, atm.cloud_cover_max, clampf(wave, 0.0, 1.0))
+		cover = lerpf(clampf(cover, 0.05, 0.85), raw_cover, day_mask)
+	if cloud_cover_override >= 0.0:
+		cover = cloud_cover_override
+	cover = clampf(cover, 0.05, 0.98 if atm != null else 0.85)
+	var overcast := smoothstep(0.30, 0.65, cover) * sunlight
+	var atm_blend := (atm.sky_overcast_blend * day_mask) if atm != null else 0.0
+	var horizon_use: Color = Color(s[2]).lerp(atm.overcast_horizon, atm_blend) if atm != null else s[2]
+	var zenith_use: Color = Color(s[1]).lerp(atm.overcast_zenith, atm_blend) if atm != null else s[1]
+	var cloud_col_use: Color = Color(s[10]).lerp(atm.overcast_cloud_color, atm_blend) if atm != null else s[10]
+	var sun_col_use: Color = Color(s[3]).lerp(atm.overcast_sun_color, atm_blend * 0.75) if atm != null else s[3]
+	env.fog_light_color = horizon_use
 	env.ambient_light_color = s[5]
 	env.ambient_light_energy = s[6]
-	var haze: Color = s[2]
+	var haze: Color = horizon_use
 	_publish_global(&"style_haze", Vector3(haze.r, haze.g, haze.b))
 	_publish_global(&"sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
-	env.fog_sun_scatter = 0.06 + s[8] * 0.22   # низкое солнце светит сквозь дымку
+	env.fog_sun_scatter = 0.06 + float(s[8]) * 0.22 * (lerpf(1.0, atm.sun_halo_mul, day_mask) if atm != null else 1.0)
 	var mist: float = s[15]
 	env.adjustment_saturation = s[13]
 	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
-	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут), с фазой от сида мира
-	var seed_phase := float(posmod(world_seed, 997)) * 0.13
-	var cover: float = s[11] + 0.12 * sin(time / 67.0 + seed_phase) + 0.06 * sin(time / 23.0 + 1.0 + seed_phase * 1.7)
 	# свет через облака: чем гуще облачность, тем мягче и слабее прямое солнце, тем больше рассеянного света неба
-	if cloud_cover_override >= 0.0:
-		cover = cloud_cover_override
-	cover = clampf(cover, 0.05, 0.85)
-	var overcast := smoothstep(0.30, 0.65, cover) * sunlight
 	if sun.y > 0.0:
 		light.light_energy *= lerpf(1.12, 0.38, overcast)
 		light.light_color = light.light_color.lerp(Color(0.90, 0.94, 1.0), overcast * 0.7)
-	env.ambient_light_energy = s[6] * lerpf(0.86, 1.15, overcast)
+		if atm != null:
+			light.light_energy *= lerpf(1.0, atm.sun_energy_mul, day_mask)
+			light.light_color = light.light_color.lerp(atm.overcast_sun_color, atm_blend * 0.75)
+	env.ambient_light_energy = float(s[6]) * lerpf(0.86, 1.15, overcast) * (lerpf(1.0, atm.ambient_energy_mul, day_mask) if atm != null else 1.0)
 	var ambient: Color = s[5]
-	env.ambient_light_color = ambient.lerp(Color(0.72, 0.77, 0.85), overcast * 0.45)
-	env.fog_density = FOG * s[12] * lerpf(1.0, 1.45, overcast)
+	var ambient_col := ambient.lerp(Color(0.72, 0.77, 0.85), overcast * 0.45)
+	if atm != null:
+		ambient_col = ambient_col.lerp(atm.overcast_ambient, atm_blend * 0.70)
+	env.ambient_light_color = ambient_col
+	env.fog_density = FOG * float(s[12]) * lerpf(1.0, 1.45, overcast) * (lerpf(1.0, atm.fog_density_mul, 0.45 + 0.55 * day_mask) if atm != null else 1.0)
 	# Seconds of game time: pause freezes the atmosphere; time skips ease over 12 s.
 	var fog_blend := 1.0 if is_nan(_fog_time) else 1.0 - exp(-clampf(time - _fog_time, 0.0, 1.0) / 12.0)
 	_fog_time = time
-	local_mist = lerpf(local_mist, clampf(mist + overcast * 0.15, 0.0, 1.0), fog_blend)
-	env.fog_height_density = MIST_DENSITY * local_mist
-	_air_density = lerpf(_air_density, 0.00015 + 0.0004 * float(s[8]) + 0.00015 * overcast, fog_blend)
-	var mist_tint: Color = s[2]
+	var mist_target := clampf(mist + overcast * 0.15, 0.0, 1.0)
+	if atm != null:
+		mist_target = clampf(maxf(mist_target, atm.local_mist_floor * (0.65 + 0.35 * day_mask)), 0.0, 1.0)
+	local_mist = lerpf(local_mist, mist_target, fog_blend)
+	if atm != null:
+		env.fog_height = (camera.global_position.y if camera != null else MIST_TOP) + atm.fog_height_offset
+		env.fog_height_density = MIST_DENSITY * atm.fog_height_density_mul * local_mist
+	else:
+		env.fog_height = MIST_TOP
+		env.fog_height_density = MIST_DENSITY * local_mist
+	var air_target := (0.00015 + 0.0004 * float(s[8]) + 0.00015 * overcast) * (lerpf(1.0, atm.volumetric_density_mul, 0.45 + 0.55 * day_mask) if atm != null else 1.0)
+	_air_density = lerpf(_air_density, air_target, fog_blend)
+	var mist_tint: Color = horizon_use
 	if env.volumetric_fog_enabled:
-		mist_tint = Color(0.86, 0.90, 0.95).lerp(mist_tint, 0.12)
+		mist_tint = Color(0.86, 0.90, 0.95).lerp(mist_tint, 0.12 if atm == null else 0.48)
 		env.volumetric_fog_density = _air_density
 		env.volumetric_fog_albedo = mist_tint
 		light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
@@ -305,29 +331,32 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 		# w = 1: туман выключен в настройках; шейдеры с fog_disabled (ореол гирлянд) не гасят себя «своей дымкой»
 		_publish_global(&"mist_weather", MIST_OFF)
 	# 13.11: визуальный стиль подстраивает выдержку тонмаппера и насыщенность; база запоминается для смены стиля на паузе
-	VisualStyle.apply_day(env, s[7], lerpf(float(s[13]), 0.96, overcast))
+	var day_exp := float(s[7]) * (lerpf(1.0, atm.exposure_mul, day_mask) if atm != null else 1.0)
+	var day_sat := lerpf(float(s[13]), 0.96, overcast) * (lerpf(1.0, atm.day_saturation_mul, day_mask) if atm != null else 1.0)
+	VisualStyle.apply_day(env, day_exp, day_sat)
 	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)
 	# Soften contrast through direct/sky balance, not translucent shadows.
-	light.shadow_blur = lerpf(1.25, 2.0, overcast)
-	env.fog_aerial_perspective = lerpf(0.24, 0.40, maxf(overcast, s[8] * 0.6))
+	light.shadow_blur = lerpf(1.25, 2.0, overcast) + (atm.shadow_blur_add * day_mask if atm != null else 0.0)
+	env.fog_aerial_perspective = clampf(lerpf(0.24, 0.40, maxf(overcast, float(s[8]) * 0.6)) * (atm.aerial_perspective_mul if atm != null else 1.0), 0.0, 0.85)
 	# Облегчённая проекция: общие ветер, покрытие и сид; силуэты облаков приближённые.
 	var shadow_ofs := Vector2(seed_phase * 0.37, seed_phase * 0.61) * 160.0
-	var shadow_strength := CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75)
+	var shadow_strength := CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75) * (1.0 - (atm.overcast_deck * 0.55 * day_mask if atm != null else 0.0))
 	if shadow_strength > 0.0:
 		ensure_cloud_shadow_texture()
 	_publish_global(&"cloud_shadow", Vector4.ZERO if shadow_strength == 0.0 else
 		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, shadow_strength, cover))
-	var zenith: Color = s[1]
-	sky_mat.set_shader_parameter("zenith_color", zenith.lerp(s[2], overcast * 0.45))
-	sky_mat.set_shader_parameter("horizon_color", s[2])
+	var zenith: Color = zenith_use
+	sky_mat.set_shader_parameter("zenith_color", zenith.lerp(horizon_use, overcast * (0.45 if atm == null else 0.32)))
+	sky_mat.set_shader_parameter("horizon_color", horizon_use)
 	sky_mat.set_shader_parameter("sun_dir", sun)
-	sky_mat.set_shader_parameter("sun_color", s[3])
-	sky_mat.set_shader_parameter("halo", s[8])
+	sky_mat.set_shader_parameter("sun_color", sun_col_use)
+	sky_mat.set_shader_parameter("halo", float(s[8]) * (lerpf(1.0, atm.sun_halo_mul, day_mask) if atm != null else 1.0))
 	sky_mat.set_shader_parameter("moon_dir", moon)
 	sky_mat.set_shader_parameter("night", s[9])
-	sky_mat.set_shader_parameter("cloud_color", s[10])
+	sky_mat.set_shader_parameter("cloud_color", cloud_col_use)
 	sky_mat.set_shader_parameter("cloud_time", time)
 	sky_mat.set_shader_parameter("cloud_cover", cover)
+	sky_mat.set_shader_parameter("overcast_deck", atm.overcast_deck * day_mask if atm != null else 0.0)
 	sky_mat.set_shader_parameter("cloud_seed", seed_phase)
 	# редкие ночные явления, звёзды и фаза луны передаются только в сумерках и ночью
 	var dark := smoothstep(0.25, 0.85, s[9])
