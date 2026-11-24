@@ -535,14 +535,14 @@ public partial class FastGrid
 		double delta = Math.Clamp(target - baseHeight, -limit, limit);
 		double value = baseHeight + delta * influence * pin * power;
 		var kind = fit.Kinds != null ? fit.Kinds[segKind[selected]] : default;
-		if (kind.SupportCut > 0.0 && fitLen > 0 && power > 0.0 && dryPin > 0.0)
+		if (kind.HasShelf && fitLen > 0 && power > 0.0 && dryPin > 0.0)
 		{
 			Vector2 tangent = segDelta[selected].Normalized(), normal = new(tangent.Y, -tangent.X);
 			Vector2 axis = segA[selected] + segDelta[selected] * (float)u;
 			double cross = (RoadGround(ground, width, height, tile, axis.X + normal.X, axis.Y + normal.Y)
 				- RoadGround(ground, width, height, tile, axis.X - normal.X, axis.Y - normal.Y)) * 0.5;
 			// The metre triangles need support outside the visible tread edge too.
-			double shelf = 1.0 - RoadSmooth(half + step * 0.65, half + step * 1.9, distance);
+			double shelf = 1.0 - RoadSmooth(half + step * kind.SupportEdge.Min, half + step * kind.SupportEdge.Max, distance);
 			double bench = RoadSmooth(BenchLo, BenchHi, Math.Abs(cross));
 			double crossfall = Math.Clamp(cross * kind.NaturalCross, -kind.Max, kind.Max);
 			double correction = Math.Clamp(level + side * crossfall - baseHeight, -kind.SupportCut, kind.SupportCut);

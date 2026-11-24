@@ -173,6 +173,15 @@ public partial class FastGrid
 		return outH;
 	}
 
+	// Indices in WorldTypeConfig.relief_params(). Both samplers get the numbers from the same resource.
+	private const int ValleyMesoScale = 55, ValleyMesoAmp = 56, ValleyBankVariation = 57, ValleyFloorGully = 58;
+	private const int ValleyBankScaleX = 61, ValleyBankScaleY = 62, ValleyBankPhaseX = 63, ValleyBankPhaseY = 64;
+	private const int ValleyMesoSkew = 65, ValleyMesoAspect = 66, ValleyMesoPhaseX = 67, ValleyMesoPhaseY = 68;
+	private const int ValleyRidgeSkew = 69, ValleyRidgeScaleX = 70, ValleyRidgeScaleY = 71;
+	private const int ValleyRidgePhaseX = 72, ValleyRidgePhaseY = 73, ValleyRidgeMin = 74, ValleyRidgeMax = 75;
+	private const int ValleyRidgeCenter = 76, ValleyRidgeGain = 77, ValleyMesoDryStart = 78, ValleyMesoDryEnd = 79;
+	private const int ValleyFloorGullyStart = 80, ValleyFloorGullyEnd = 81;
+
 	private static double ValleyBaseAt(int[] warpX, int[] warpY, int[] ridge, int[] hill,
 		double x, double y, int roadSide, double ax, double ac, double fh, double rhw, double bd,
 		double sh, double sr, double osh, double osr, double wsr, double wsl,
@@ -195,7 +204,10 @@ public partial class FastGrid
 		}
 		else
 		{
-			double bank = rp[57] > 0.0 ? Noise(hill, X / 7.0 + 52.0, Y / 11.0) * rp[57] : 0.0;
+			double bank = 0.0;
+			if (rp[ValleyBankVariation] > 0.0)
+				bank = Noise(hill, X / rp[ValleyBankScaleX] + rp[ValleyBankPhaseX],
+					Y / rp[ValleyBankScaleY] + rp[ValleyBankPhaseY]) * rp[ValleyBankVariation];
 			dChan = rp[2] * (1.0 + bank) * (1.0 - Math.Exp(-(ad - rhw) / (rp[3] * (1.0 - bank))));
 		}
 		double landDamp = 1.0 - (1.0 - ReliefSmooth(rhw + rp[4], rhw + rp[5], ad)) * cf;
@@ -203,13 +215,17 @@ public partial class FastGrid
 		double hillsBroad = Fbm(hill, X / rp[7] + 32.4, Y / rp[7] - 18.6, 2);
 		double folds = rp[8] * hillsBroad + rp[9] * hillsFine;
 
-		if (rp[56] > 0.0)
+		if (rp[ValleyMesoAmp] > 0.0)
 		{
-			double scale = rp[55];
-			double m = Fbm(hill, (X + 0.31 * Y) / scale + 37.0, (Y - 0.31 * X) / (scale * 1.65) - 12.0, 2);
-			double crest = 1.0 - Math.Abs(Noise(ridge, (X - 0.4 * Y) / (scale * 0.77) + 20.0, (Y + X * 0.4) / (scale * 2.1) - 11.0));
-			double dryBand = ReliefSmooth(rhw + 2.2, rhw + 10.0, ad);
-			folds += rp[56] * dryBand * (m + 0.62 * (ReliefSmooth(0.55, 0.95, crest) - 0.42));
+			double scale = rp[ValleyMesoScale], skew = rp[ValleyMesoSkew], ridgeSkew = rp[ValleyRidgeSkew];
+			double m = Fbm(hill, (X + skew * Y) / scale + rp[ValleyMesoPhaseX],
+				(Y - skew * X) / (scale * rp[ValleyMesoAspect]) + rp[ValleyMesoPhaseY], 2);
+			double crest = 1.0 - Math.Abs(Noise(ridge,
+				(X - ridgeSkew * Y) / (scale * rp[ValleyRidgeScaleX]) + rp[ValleyRidgePhaseX],
+				(Y + X * ridgeSkew) / (scale * rp[ValleyRidgeScaleY]) + rp[ValleyRidgePhaseY]));
+			double ridgeShape = ReliefSmooth(rp[ValleyRidgeMin], rp[ValleyRidgeMax], crest) - rp[ValleyRidgeCenter];
+			double dryBand = ReliefSmooth(rhw + rp[ValleyMesoDryStart], rhw + rp[ValleyMesoDryEnd], ad);
+			folds += rp[ValleyMesoAmp] * dryBand * (m + rp[ValleyRidgeGain] * ridgeShape);
 		}
 		double roadD = Math.Max(0.0, sd - (rhw + rp[10]));
 		double benchRise = rp[11] * roadD + rp[12] * roadD * roadD;
@@ -246,7 +262,7 @@ public partial class FastGrid
 			wallTerm += mRelief * mGain * mountainHeight;
 		}
 		double floorCut = 0.0;
-		double floorGate = rp[58] * ReliefSmooth(rhw + 8.0, rhw + 34.0, ad);
+		double floorGate = rp[ValleyFloorGully] * ReliefSmooth(rhw + rp[ValleyFloorGullyStart], rhw + rp[ValleyFloorGullyEnd], ad);
 		if (rp[37] > 0.0 && (wall > rp[38] || floorGate > 0.0))
 		{
 			double gwMask = ReliefSmooth(rp[38], rp[39], wall);

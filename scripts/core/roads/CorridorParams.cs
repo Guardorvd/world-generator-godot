@@ -3,6 +3,18 @@ using Godot;
 
 namespace Roads;
 
+public readonly record struct CorridorBand(double Min, double Max)
+{
+	public bool IsValid => Max > Min;
+
+	internal static CorridorBand Read(Godot.Collections.Dictionary d, string key)
+	{
+		if (!d.TryGetValue(key, out var value)) return default;
+		var band = value.AsFloat64Array();
+		return band.Length == 2 ? new CorridorBand(band[0], band[1]) : default;
+	}
+}
+
 /// <summary>Числа одного вида пути для форм дорожного коридора (RoadRefinement.CORRIDOR, docs/ROAD_RELIEF.md):
 /// roll — пологие волны, bump — бугры, tilt/keep/max — перекос, dish/dishVar — выпуклость или корыто,
 /// hollow — продавленные места, ditch/lip — канава и вал у края, grade — предел добавленного продольного уклона.</summary>
@@ -11,6 +23,10 @@ public readonly struct CorridorKind
 	public readonly double Roll, Bump, Tilt, Keep, Max, Dish, DishVar, Hollow, Ditch, Lip, Grade, BenchScale, TurnBank, ProfileFit, CrossFit, NaturalCross, TechnicalRelief;
 	public readonly double SupportCut, TurnGradeScale;
 	public readonly Vector2 DirectionalGrades;
+	public readonly CorridorBand LedgeCrest, LedgeDescent, RutDepth, RutNoise, LedgeExposure, TurnGradeAngle, SupportEdge;
+	public readonly double LedgeSoilGain, RutGain, LedgeTurnWeight;
+	public readonly int LedgeSampleStations, LedgeTurnStations, TurnGradeStations;
+	public bool HasShelf => SupportCut > 0.0 && SupportEdge.IsValid;
 
 	public CorridorKind(Godot.Collections.Dictionary d)
 	{
@@ -26,6 +42,19 @@ public readonly struct CorridorKind
 		SupportCut = OptionalNum(d, "support_cut", 0.0);
 		TurnGradeScale = OptionalNum(d, "turn_grade_scale", 1.0);
 		DirectionalGrades = d.TryGetValue("directional_grades", out var grades) ? grades.AsVector2() : Vector2.Zero;
+		LedgeCrest = CorridorBand.Read(d, "ledge_crest_m");
+		LedgeDescent = CorridorBand.Read(d, "ledge_descent");
+		RutDepth = CorridorBand.Read(d, "rut_depth_m");
+		RutNoise = CorridorBand.Read(d, "rut_noise");
+		LedgeExposure = CorridorBand.Read(d, "ledge_exposure");
+		TurnGradeAngle = CorridorBand.Read(d, "turn_grade_angle_rad");
+		SupportEdge = CorridorBand.Read(d, "support_edge_steps");
+		LedgeSoilGain = OptionalNum(d, "ledge_soil_gain", 0.0);
+		RutGain = OptionalNum(d, "rut_gain", 0.0);
+		LedgeTurnWeight = OptionalNum(d, "ledge_turn_weight", 0.0);
+		LedgeSampleStations = (int)OptionalNum(d, "ledge_sample_stations", 0.0);
+		LedgeTurnStations = (int)OptionalNum(d, "ledge_turn_stations", 0.0);
+		TurnGradeStations = (int)OptionalNum(d, "turn_grade_stations", 0.0);
 	}
 
 	internal static double Num(Godot.Collections.Dictionary d, string key)

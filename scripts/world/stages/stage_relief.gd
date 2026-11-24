@@ -530,7 +530,10 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 		d_chan = -bd * (1.0 - u * u)
 	else:
 		var bank_var := rp[WorldTypeConfig.RP_BANK_VARIATION]
-		var bank := hill.noise(X / 7.0 + 52.0, Y / 11.0) * bank_var if bank_var > 0.0 else 0.0
+		var bank := 0.0
+		if bank_var > 0.0:
+			bank = hill.noise(X / rp[WorldTypeConfig.RP_BANK_SCALE_X] + rp[WorldTypeConfig.RP_BANK_PHASE_X],
+				Y / rp[WorldTypeConfig.RP_BANK_SCALE_Y] + rp[WorldTypeConfig.RP_BANK_PHASE_Y]) * bank_var
 		d_chan = rp[WorldTypeConfig.RP_BANK_HEIGHT] * (1.0 + bank) * (1.0 - exp(-(ad - rhw) / (rp[WorldTypeConfig.RP_BANK_DECAY] * (1.0 - bank))))
 	var land_damp := 1.0 - (1.0 - smoothstep(rhw + rp[WorldTypeConfig.RP_DAMP_START], rhw + rp[WorldTypeConfig.RP_DAMP_END], ad)) * cf
 	var hills_fine := hill.fbm(X / rp[WorldTypeConfig.RP_FOLDS_FINE_SCALE], Y / rp[WorldTypeConfig.RP_FOLDS_FINE_SCALE], 4)
@@ -539,10 +542,16 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 	var meso_amp := rp[WorldTypeConfig.RP_MESO_AMP]
 	if meso_amp > 0.0:
 		var scale := rp[WorldTypeConfig.RP_MESO_SCALE]
-		var m := hill.fbm((X + 0.31 * Y) / scale + 37.0, (Y - 0.31 * X) / (scale * 1.65) - 12.0, 2)
-		var crest := 1.0 - absf(ridge.noise((X - 0.4 * Y) / (scale * 0.77) + 20.0, (Y + X * 0.4) / (scale * 2.1) - 11.0))
-		var dry_band := smoothstep(rhw + 2.2, rhw + 10.0, ad)
-		folds += meso_amp * dry_band * (m + 0.62 * (smoothstep(0.55, 0.95, crest) - 0.42))
+		var skew := rp[WorldTypeConfig.RP_MESO_SKEW]
+		var ridge_skew := rp[WorldTypeConfig.RP_MESO_RIDGE_SKEW]
+		var m := hill.fbm((X + skew * Y) / scale + rp[WorldTypeConfig.RP_MESO_PHASE_X],
+			(Y - skew * X) / (scale * rp[WorldTypeConfig.RP_MESO_ASPECT]) + rp[WorldTypeConfig.RP_MESO_PHASE_Y], 2)
+		var crest := 1.0 - absf(ridge.noise(
+			(X - ridge_skew * Y) / (scale * rp[WorldTypeConfig.RP_MESO_RIDGE_SCALE_X]) + rp[WorldTypeConfig.RP_MESO_RIDGE_PHASE_X],
+			(Y + X * ridge_skew) / (scale * rp[WorldTypeConfig.RP_MESO_RIDGE_SCALE_Y]) + rp[WorldTypeConfig.RP_MESO_RIDGE_PHASE_Y]))
+		var ridge_shape := smoothstep(rp[WorldTypeConfig.RP_MESO_RIDGE_MIN], rp[WorldTypeConfig.RP_MESO_RIDGE_MAX], crest) - rp[WorldTypeConfig.RP_MESO_RIDGE_CENTER]
+		var dry_band := smoothstep(rhw + rp[WorldTypeConfig.RP_MESO_DRY_START], rhw + rp[WorldTypeConfig.RP_MESO_DRY_END], ad)
+		folds += meso_amp * dry_band * (m + rp[WorldTypeConfig.RP_MESO_RIDGE_GAIN] * ridge_shape)
 	var road_d := maxf(0.0, sd - (rhw + rp[WorldTypeConfig.RP_BENCH_START_PAD]))
 	var bench_rise := rp[WorldTypeConfig.RP_BENCH_RISE_LIN] * road_d + rp[WorldTypeConfig.RP_BENCH_RISE_QUAD] * road_d * road_d
 	var spur_lift := 0.0
@@ -573,7 +582,8 @@ static func _valley_base_at(warp_x: Simplex, warp_y: Simplex, ridge: Simplex, hi
 		var m_relief := mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, 1.0)
 		wall_term += m_relief * m_gain * mountain_height
 	var floor_cut := 0.0
-	var floor_gate := rp[WorldTypeConfig.RP_FLOOR_GULLY] * smoothstep(rhw + 8.0, rhw + 34.0, ad)
+	var floor_gate := rp[WorldTypeConfig.RP_FLOOR_GULLY] * smoothstep(
+		rhw + rp[WorldTypeConfig.RP_FLOOR_GULLY_START], rhw + rp[WorldTypeConfig.RP_FLOOR_GULLY_END], ad)
 	if rp[WorldTypeConfig.RP_GULLY_DEPTH] > 0.0 and (wall > rp[WorldTypeConfig.RP_GULLY_WALL_MIN] or floor_gate > 0.0):
 		var gw_mask := smoothstep(rp[WorldTypeConfig.RP_GULLY_WALL_MIN], rp[WorldTypeConfig.RP_GULLY_WALL_MAX], wall)
 		var g_warp := warp_y.fbm(X / 95.0 - 5.2, Y / 95.0 + 11.4, 2) * 38.0

@@ -4,7 +4,7 @@ extends Resource
 ## (resources/road_tuning.tres, docs/ROADS_CSHARP.md). Считает их только C#: правка здесь меняет мир, её видно в
 ## road_look / road_relief_test без сборки; road_golden после неё расходится — эталон переснимается осознанно.
 ## Значения по умолчанию нулевые нарочно: редактор не пишет в .tres значение, равное умолчанию, и правка умолчания в коде
-## тихо меняла бы числа в файле. Настоящие числа — только в resources/road_tuning.tres.
+## тихо меняла бы числа в файле. Настоящие числа — в дорожном ресурсе выбранного типа мира.
 
 @export_group("Полотно (RoadBed)")
 ## Сколько за краем полотна ещё ровно, м
@@ -69,6 +69,31 @@ func bed_params() -> PackedFloat64Array:
 @export var support_cut := 0.0
 ## Доля направленного предела уклона в тесном апексе после подгонки профиля.
 @export var turn_grade_scale := 1.0
+## Углы начала и полного смягчения продольного уклона в апексе, рад.
+@export var turn_grade_angle_rad := PackedFloat64Array()
+## Радиус оценки угла апекса в станциях сетки.
+@export var turn_grade_stations := 0
+## Отступы от видимого края, на которых влияние полки начинает и заканчивает спад, в шагах сетки.
+@export var support_edge_steps := PackedFloat64Array()
+
+@export_group("Бровки и промоины")
+## Диапазоны выпуклости в метрах и продольного уклона, на которых набирает высоту скальная бровка.
+@export var ledge_crest_m := PackedFloat64Array()
+@export var ledge_descent := PackedFloat64Array()
+## Доля высоты бровки на нескальном покрытии.
+@export var ledge_soil_gain := 0.0
+## Радиус оценки перегиба вдоль линии в станциях сетки.
+@export var ledge_sample_stations := 0
+## Диапазоны вогнутости в метрах и значения поля шума, на которых набирает глубину промоина.
+@export var rut_depth_m := PackedFloat64Array()
+@export var rut_noise := PackedFloat64Array()
+## Относительная амплитуда промоины.
+@export var rut_gain := 0.0
+## Диапазон суммарного риска из продольного уклона, крена и тесноты поворота; гасит бровку.
+@export var ledge_exposure := PackedFloat64Array()
+## Вклад одного радиана поворота в риск и радиус оценки угла в станциях сетки.
+@export var ledge_turn_weight := 0.0
+@export var ledge_turn_stations := 0
 
 
 ## Формы коридора с ключами Roads.CorridorParams.
@@ -86,7 +111,20 @@ func corridor() -> Dictionary:
 		out["natural_cross"] = natural_cross
 	if technical_relief > 0.0:
 		out["technical_relief"] = technical_relief
+		out["ledge_crest_m"] = ledge_crest_m
+		out["ledge_descent"] = ledge_descent
+		out["ledge_soil_gain"] = ledge_soil_gain
+		out["ledge_sample_stations"] = ledge_sample_stations
+		out["rut_depth_m"] = rut_depth_m
+		out["rut_noise"] = rut_noise
+		out["rut_gain"] = rut_gain
+		out["ledge_exposure"] = ledge_exposure
+		out["ledge_turn_weight"] = ledge_turn_weight
+		out["ledge_turn_stations"] = ledge_turn_stations
 	if support_cut > 0.0:
 		out["support_cut"] = support_cut
 		out["turn_grade_scale"] = turn_grade_scale
+		out["turn_grade_angle_rad"] = turn_grade_angle_rad
+		out["turn_grade_stations"] = turn_grade_stations
+		out["support_edge_steps"] = support_edge_steps
 	return out

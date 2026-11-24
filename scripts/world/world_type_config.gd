@@ -4,6 +4,8 @@ extends Resource
 ## Изменение любого параметра меняет ключ кэша этого типа; кэш Типа 1 не затрагивается.
 ## Для добавления третьего типа достаточно создать новый .tres этого класса и добавить строку в WorldTemplate._CATALOG.
 
+const AnchorTuning := preload("res://scripts/world/expedition_anchor_tuning.gd")
+
 ## Индексы массива relief_params() для единой передачи чисел в C# (FastGrid.ValleyReliefField) и GDScript (StageRelief).
 const RP_WARP_SCALE := 0
 const RP_WARP_AMP := 1
@@ -66,16 +68,61 @@ const RP_BANK_VARIATION := 57
 const RP_FLOOR_GULLY := 58
 const RP_MICRO_OPEN := 59
 const RP_MICRO_GAIN := 60
-const RP_COUNT := 61
+const RP_BANK_SCALE_X := 61
+const RP_BANK_SCALE_Y := 62
+const RP_BANK_PHASE_X := 63
+const RP_BANK_PHASE_Y := 64
+const RP_MESO_SKEW := 65
+const RP_MESO_ASPECT := 66
+const RP_MESO_PHASE_X := 67
+const RP_MESO_PHASE_Y := 68
+const RP_MESO_RIDGE_SKEW := 69
+const RP_MESO_RIDGE_SCALE_X := 70
+const RP_MESO_RIDGE_SCALE_Y := 71
+const RP_MESO_RIDGE_PHASE_X := 72
+const RP_MESO_RIDGE_PHASE_Y := 73
+const RP_MESO_RIDGE_MIN := 74
+const RP_MESO_RIDGE_MAX := 75
+const RP_MESO_RIDGE_CENTER := 76
+const RP_MESO_RIDGE_GAIN := 77
+const RP_MESO_DRY_START := 78
+const RP_MESO_DRY_END := 79
+const RP_FLOOR_GULLY_START := 80
+const RP_FLOOR_GULLY_END := 81
+const RP_COUNT := 82
 
 @export_group("Рельеф лесного дна долины")
 ## Масштаб холмов в клетках и амплитуда в долях высоты мира.
 @export var meso_scale := 14.0
 @export var meso_amp := 0.0
+## Наклон осей и отношение продольного масштаба холмов к поперечному.
+@export var meso_skew := 0.0
+@export var meso_aspect := 1.0
+## Сдвиг выборки шума холмов в координатах шума.
+@export var meso_phase := Vector2.ZERO
+## Наклон осей гребней и масштабы гребней относительно масштаба холмов.
+@export var meso_ridge_skew := 0.0
+@export var meso_ridge_scale_x := 1.0
+@export var meso_ridge_scale_y := 1.0
+@export var meso_ridge_phase := Vector2.ZERO
+## Диапазон усиления гребней, уровень отсчёта и относительная амплитуда.
+@export var meso_ridge_min := 0.0
+@export var meso_ridge_max := 1.0
+@export var meso_ridge_center := 0.0
+@export var meso_ridge_gain := 0.0
+## Отступы от воды, на которых холмы появляются и набирают полную силу, в клетках.
+@export var meso_dry_start := 0.0
+@export var meso_dry_end := 1.0
 ## Размах модуляции высоты и длины спада берега по полю суши.
 @export var bank_variation := 0.0
+## Масштаб пятен берега в клетках по x и y и сдвиг выборки в координатах шума.
+@export var bank_variation_scale := Vector2.ONE
+@export var bank_variation_phase := Vector2.ZERO
 ## Глубина распадка ниже предгорий, в долях высоты мира.
 @export var floor_gully := 0.0
+## Отступы от воды, на которых распадок появляется и набирает полную глубину, в клетках.
+@export var floor_gully_start := 0.0
+@export var floor_gully_end := 1.0
 ## Доля снятия ослабления микрорельефа в низинах и множитель амплитуды.
 @export var valley_micro := Vector2(0.0, 1.0)
 ## Верхний уклон клетки для технических якорей. Ноль сохраняет выбор террасы.
@@ -436,6 +483,8 @@ const RP_COUNT := 61
 @export var anchor_river_streak_chance := 0.30
 ## Дополнительный отступ траверса в лес от носа отрога (клетки). 0 — одиночные якоря.
 @export var anchor_traverse_reach := 0.0
+## Подбор площадок и форма связок через отроги.
+@export var anchor_tuning: AnchorTuning
 ## Допустимый зазор между коленами разворота (м).
 @export var anchor_turn_gap_m := Vector2.ZERO
 ## Перепад между коленами, при котором склон оправдывает разворот (м).
@@ -537,12 +586,35 @@ const RP_COUNT := 61
 func relief_params() -> PackedFloat64Array:
 	var p := PackedFloat64Array()
 	p.resize(RP_COUNT)
-	p[RP_MESO_SCALE] = meso_scale
+	# Positive divisors and ordered interpolation bands for both runtimes.
+	const EPS := 0.0001
+	p[RP_MESO_SCALE] = maxf(EPS, meso_scale)
 	p[RP_MESO_AMP] = meso_amp
 	p[RP_BANK_VARIATION] = bank_variation
 	p[RP_FLOOR_GULLY] = floor_gully
 	p[RP_MICRO_OPEN] = valley_micro.x
 	p[RP_MICRO_GAIN] = valley_micro.y
+	p[RP_BANK_SCALE_X] = maxf(EPS, bank_variation_scale.x)
+	p[RP_BANK_SCALE_Y] = maxf(EPS, bank_variation_scale.y)
+	p[RP_BANK_PHASE_X] = bank_variation_phase.x
+	p[RP_BANK_PHASE_Y] = bank_variation_phase.y
+	p[RP_MESO_SKEW] = meso_skew
+	p[RP_MESO_ASPECT] = maxf(EPS, meso_aspect)
+	p[RP_MESO_PHASE_X] = meso_phase.x
+	p[RP_MESO_PHASE_Y] = meso_phase.y
+	p[RP_MESO_RIDGE_SKEW] = meso_ridge_skew
+	p[RP_MESO_RIDGE_SCALE_X] = maxf(EPS, meso_ridge_scale_x)
+	p[RP_MESO_RIDGE_SCALE_Y] = maxf(EPS, meso_ridge_scale_y)
+	p[RP_MESO_RIDGE_PHASE_X] = meso_ridge_phase.x
+	p[RP_MESO_RIDGE_PHASE_Y] = meso_ridge_phase.y
+	p[RP_MESO_RIDGE_MIN] = meso_ridge_min
+	p[RP_MESO_RIDGE_MAX] = maxf(meso_ridge_min + EPS, meso_ridge_max)
+	p[RP_MESO_RIDGE_CENTER] = meso_ridge_center
+	p[RP_MESO_RIDGE_GAIN] = meso_ridge_gain
+	p[RP_MESO_DRY_START] = meso_dry_start
+	p[RP_MESO_DRY_END] = maxf(meso_dry_start + EPS, meso_dry_end)
+	p[RP_FLOOR_GULLY_START] = floor_gully_start
+	p[RP_FLOOR_GULLY_END] = maxf(floor_gully_start + EPS, floor_gully_end)
 	p[RP_WARP_SCALE] = warp_scale
 	p[RP_WARP_AMP] = warp_amp
 	p[RP_BANK_HEIGHT] = bank_height
@@ -655,4 +727,6 @@ func places_cache_digest() -> String:
 		site_shelters_count, site_benches_short, site_benches_full, site_opposite_farm_count,
 		fishing_search_back, fishing_search_fwd, fishing_min_dist, fishing_max_dist,
 	]
+	if anchor_tuning != null:
+		values.append(anchor_tuning.cache_values())
 	return var_to_str(values).sha256_text().left(16)

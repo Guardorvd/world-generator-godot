@@ -1,6 +1,33 @@
-[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=4 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
+[ext_resource type="Script" path="res://scripts/world/expedition_anchor_tuning.gd" id="2_anchors"]
+
+[sub_resource type="Resource" id="Resource_anchor_tuning"]
+script = ExtResource("2_anchors")
+entry = PackedFloat64Array(-0.76, 0.67)
+exit = PackedFloat64Array(0.80, 0.74)
+lower_exit = PackedFloat64Array(0.66, 0.58)
+turn_approach = PackedFloat64Array(-0.32, -4.0)
+turn_apex = PackedFloat64Array(0.39, 3.0)
+turn_return = PackedFloat64Array(0.12, -8.0)
+lower_traverse = PackedFloat64Array(0.14, 0.55)
+clearances = PackedFloat64Array(5.0, 12.0)
+turn_min_deg = 125.0
+backtrack_rows = 3.0
+search_half = Vector2i(9, 8)
+passage_spacing_m = 8.0
+tpi_radius = 4
+apex_radius = 2
+passage_grade_weights = PackedFloat64Array(3.2, 3.2)
+passage_tpi_weights = PackedFloat64Array(0.08, 0.26)
+passage_position_weights = PackedFloat64Array(0.06, 0.045)
+apex_slope_weight = 4.0
+terrace_slope_band = PackedFloat64Array(0.15, 0.6)
+terrace_tpi_band_m = PackedFloat64Array(0.25, 2.8)
+terrace_shoulder_band_m = PackedFloat64Array(0.4, 5.0)
+terrace_terrain_weights = PackedFloat64Array(0.57, 0.65, 0.33)
+terrace_position_weights = PackedFloat64Array(0.85, 0.95)
 
 [resource]
 script = ExtResource("1_cfg")
@@ -27,8 +54,25 @@ folds_broad_amp = 0.068
 folds_fine_amp = 0.041
 meso_scale = 13.0
 meso_amp = 0.036
+meso_skew = 0.31
+meso_aspect = 1.65
+meso_phase = Vector2(37, -12)
+meso_ridge_skew = 0.4
+meso_ridge_scale_x = 0.77
+meso_ridge_scale_y = 2.1
+meso_ridge_phase = Vector2(20, -11)
+meso_ridge_min = 0.55
+meso_ridge_max = 0.95
+meso_ridge_center = 0.42
+meso_ridge_gain = 0.62
+meso_dry_start = 2.2
+meso_dry_end = 10.0
 bank_variation = 0.55
+bank_variation_scale = Vector2(7, 11)
+bank_variation_phase = Vector2(52, 0)
 floor_gully = 0.022
+floor_gully_start = 8.0
+floor_gully_end = 34.0
 valley_micro = Vector2(0.70, 1.28)
 bench_start_pad = 3.0
 bench_rise_lin = 0.00015
@@ -182,6 +226,7 @@ anchor_inland_start_chance = 0.9
 anchor_inland_streak_chance = 0.79
 anchor_river_streak_chance = 0.3
 anchor_traverse_reach = 24.0
+anchor_tuning = SubResource("Resource_anchor_tuning")
 anchor_turn_gap_m = Vector2(22, 70)
 anchor_turn_drop_m = Vector2(5, 25)
 anchor_merge_rows = 55

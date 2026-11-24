@@ -7,6 +7,8 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
+## Keep the four-neighbour anchor samples within the plan.
+const ANCHOR_SAMPLE_MARGIN := 6
 
 var cfg: WorldTypeConfig
 var seed_num := 0
@@ -567,10 +569,13 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 	var best_score := -INF
 	var slope_caps := [max_slope, maxf(max_slope, 0.32)]
 	var exit_grade := StageTrails.ROAD_LIMIT
-	var tech := terrain_anchor and cfg.anchor_terrain_slope > 0.0
+	var tuning := cfg.anchor_tuning
+	var tech := terrain_anchor and cfg.anchor_terrain_slope > 0.0 and tuning != null and tuning.has_terrace_shape()
+	var d := 0
 	if tech:
 		slope_caps = [cfg.anchor_terrain_slope]
 		exit_grade = RoadTuning.for_world(w).routing.line_limits(exit_grade, 0.0).grade
+		d = clampi(tuning.tpi_radius, 1, ANCHOR_SAMPLE_MARGIN)
 	for cap: float in slope_caps:
 		for y in range(y0, y1 + 1, 2):
 			var ax := _axis_x[y]
@@ -578,8 +583,9 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 			var cos_t := maxf(_axis_cos[y], 0.25)
 			var lo := maxf(rhw + 3.2, sd_min)
 			var hi := maxf(lo + 1.0, sd_max)
-			var x_a := clampi(roundi(ax + (lo / cos_t) * float(side_sign)), 6, W - 7)
-			var x_b := clampi(roundi(ax + (hi / cos_t) * float(side_sign)), 6, W - 7)
+			var xmax_safe := W - 1 - ANCHOR_SAMPLE_MARGIN
+			var x_a := clampi(roundi(ax + (lo / cos_t) * float(side_sign)), ANCHOR_SAMPLE_MARGIN, xmax_safe)
+			var x_b := clampi(roundi(ax + (hi / cos_t) * float(side_sign)), ANCHOR_SAMPLE_MARGIN, xmax_safe)
 			var xmin := mini(x_a, x_b)
 			var xmax := maxi(x_a, x_b)
 			for x in range(xmin, xmax + 1, 2):
@@ -591,11 +597,16 @@ func find_terrace_cell(w: WorldData, y_min: int, y_max: int, sd_min: float, sd_m
 				var dsd_pen := absf(sd - psd) / maxf(8.0, hi - lo)
 				var score := -w.slope[i] * 6.0 - dy_pen * 0.45 - dsd_pen * 0.40
 				if tech:
-					var d := 4
 					var tpi := _anchor_tpi(w, i, d)
 					var shoulder := absf(w.h[i - d] + w.h[i + d] - w.h[i - d * W] - w.h[i + d * W]) * GameConfig.HS
-					score = smoothstep(0.15, 0.6, w.slope[i]) * 0.57 + smoothstep(0.25, 2.8, absf(tpi)) * 0.65
-					score += smoothstep(0.4, 5.0, shoulder) * 0.33 - dy_pen * 0.85 - dsd_pen * 0.95
+					var slope_band := tuning.terrace_slope_band
+					var tpi_band := tuning.terrace_tpi_band_m
+					var shoulder_band := tuning.terrace_shoulder_band_m
+					var weights := tuning.terrace_terrain_weights
+					score = smoothstep(slope_band[0], slope_band[1], w.slope[i]) * weights[0] \
+						+ smoothstep(tpi_band[0], tpi_band[1], absf(tpi)) * weights[1]
+					score += smoothstep(shoulder_band[0], shoulder_band[1], shoulder) * weights[2] \
+						- dy_pen * tuning.terrace_position_weights[0] - dsd_pen * tuning.terrace_position_weights[1]
 				if score > best_score:
 					best_score = score
 					best = i
@@ -703,36 +714,39 @@ func road_anchors(w: WorldData, start_cell: int, finish_cell: int) -> PackedInt3
 ## can lead back across its slope before the route descends to the exit.
 func road_anchor_groups(w: WorldData, start: int, finish: int) -> Array[Dictionary]:
 	var groups: Array[Dictionary] = []
-	if cfg.anchor_traverse_reach <= 0.0:
+	var tuning := cfg.anchor_tuning
+	if cfg.anchor_traverse_reach <= 0.0 or tuning == null or not tuning.has_passage_shape():
 		return groups
+	var turn_min := deg_to_rad(tuning.turn_min_deg)
 	for spur: Dictionary in spurs:
 		var y: float = spur.y
 		var span: float = spur.half_len
 		if y - span < start / W + cfg.anchor_end_margin or y + span > finish / W - cfg.anchor_end_margin:
 			continue
 		var reach: float = spur.reach
-		var inside := minf(reach + cfg.anchor_traverse_reach, cfg.wall_road_start + _wall_shift_r[roundi(y)] - 12.0)
-		var entry := _spur_passage(w, y - span * 0.76, reach * 0.67, -1, false)
-		var exit := _spur_passage(w, y + span * 0.80, reach * 0.74, -1, false)
+		var inside := minf(reach + cfg.anchor_traverse_reach, cfg.wall_road_start + _wall_shift_r[roundi(y)] - tuning.clearances[1])
+		var entry := _spur_passage(w, y + span * tuning.entry[0], reach * tuning.entry[1], -1, false)
+		var exit := _spur_passage(w, y + span * tuning.exit[0], reach * tuning.exit[1], -1, false)
 		var shoulder := _spur_passage(w, y, inside, entry, false)
 		if mini(mini(entry, exit), shoulder) < 0:
 			continue
 		var alternatives: Array[Dictionary] = []
-		var approach := _spur_passage(w, y - span * 0.32, inside - 4.0, entry, false)
-		var turn := _spur_passage(w, y + span * 0.39, inside + 3.0, approach, true)
-		var return_leg := _spur_passage(w, y + span * 0.12, inside - 8.0, turn, false)
+		var approach := _spur_passage(w, y + span * tuning.turn_approach[0], inside + tuning.turn_approach[1], entry, false)
+		var turn := _spur_passage(w, y + span * tuning.turn_apex[0], inside + tuning.turn_apex[1], approach, true)
+		var return_leg := _spur_passage(w, y + span * tuning.turn_return[0], inside + tuning.turn_return[1], turn, false)
 		if mini(mini(approach, turn), return_leg) >= 0:
 			var gap := _spur_point(approach).distance_to(_spur_point(return_leg)) * GameConfig.TILE
 			var drop := (w.h[approach] - w.h[return_leg]) * HS
 			var lead := _spur_point(turn) - _spur_point(approach)
 			var back := _spur_point(return_leg) - _spur_point(turn)
 			if gap >= cfg.anchor_turn_gap_m.x and gap <= cfg.anchor_turn_gap_m.y and drop >= cfg.anchor_turn_drop_m.x \
-					and drop <= cfg.anchor_turn_drop_m.y and lead.y > 0.0 and back.y < -3.0 \
-					and absf(lead.angle_to(back)) >= deg_to_rad(125.0):
+					and drop <= cfg.anchor_turn_drop_m.y and lead.y > 0.0 and back.y < -tuning.backtrack_rows \
+					and absf(lead.angle_to(back)) >= turn_min:
 				alternatives.append({shape = "switchback", cells = PackedInt32Array([entry, approach, turn, return_leg, exit])})
 		alternatives.append({shape = "traverse", cells = PackedInt32Array([entry, shoulder, exit])})
-		var lower := _spur_passage(w, y + span * 0.14, inside - cfg.anchor_traverse_reach * 0.55, entry, false)
-		var lower_exit := _spur_passage(w, y + span * 0.66, reach * 0.58, lower, false)
+		var lower_depth := inside - cfg.anchor_traverse_reach * tuning.lower_traverse[1]
+		var lower := _spur_passage(w, y + span * tuning.lower_traverse[0], lower_depth, entry, false)
+		var lower_exit := _spur_passage(w, y + span * tuning.lower_exit[0], reach * tuning.lower_exit[1], lower, false)
 		if lower >= 0 and lower != shoulder and lower_exit >= 0:
 			alternatives.append({shape = "lower_traverse", cells = PackedInt32Array([entry, lower, lower_exit])})
 		# The connected approaches can themselves form the shoulders of an arc.
@@ -756,6 +770,7 @@ static func _anchor_tpi(w: WorldData, i: int, reach: int) -> float:
 ## Search the shoulder or saddle itself. Prefer gentle continuation on contours
 ## and a broader, flatter patch where the route changes direction.
 func _spur_passage(w: WorldData, row: float, offset: float, previous: int, turning: bool) -> int:
+	var tuning := cfg.anchor_tuning
 	var river := w.river_cells()
 	var y0 := roundi(row)
 	var best := -1
@@ -763,29 +778,34 @@ func _spur_passage(w: WorldData, row: float, offset: float, previous: int, turni
 	var routing := RoadTuning.for_world(w).routing
 	var climb: float = routing.line_limits(StageTrails.ROAD_LIMIT, 0.0).grade
 	var descent := routing.expedition_grades.y if routing.expedition_grades.x > 0.0 and routing.expedition_grades.y > 0.0 else climb
-	for y in range(maxi(16, y0 - 8), mini(H - 16, y0 + 9), 2):
+	var tpi_radius := clampi(tuning.tpi_radius, 1, ANCHOR_SAMPLE_MARGIN)
+	var apex_radius := clampi(tuning.apex_radius, 1, ANCHOR_SAMPLE_MARGIN)
+	for y in range(maxi(16, y0 - tuning.search_half.y), mini(H - 16, y0 + tuning.search_half.y + 1), 2):
 		var cos_t := maxf(_axis_cos[y], 0.25)
-		var x0 := roundi(_axis_x[y] + maxf(_river_hw[y] + 5.0, offset) * road_side / cos_t)
-		for x in range(maxi(6, x0 - 9), mini(W - 6, x0 + 10), 2):
+		var x0 := roundi(_axis_x[y] + maxf(_river_hw[y] + tuning.clearances[0], offset) * road_side / cos_t)
+		var xmin := maxi(ANCHOR_SAMPLE_MARGIN, x0 - tuning.search_half.x)
+		var xmax := mini(W - ANCHOR_SAMPLE_MARGIN, x0 + tuning.search_half.x + 1)
+		for x in range(xmin, xmax, 2):
 			if not _road_cell_ok(w, river, x, y, cfg.anchor_terrain_slope, maxf(climb, descent)):
 				continue
 			var i := y * W + x
 			var contour_cost := 0.0
 			if previous >= 0:
 				var m := _spur_point(previous).distance_to(Vector2(x, y)) * GameConfig.TILE
-				if m < 8.0:
+				if m < tuning.passage_spacing_m or m <= 0.0:
 					continue
 				var pitch := (w.h[i] - w.h[previous]) * HS / m
 				var limit := climb if pitch > 0.0 else descent
 				if absf(pitch) > limit:
 					continue
-				contour_cost = absf(pitch) * 3.2
-			var tpi := _anchor_tpi(w, i, 4)
-			var patch_slope := maxf(maxf(w.slope[i - 2], w.slope[i + 2]), maxf(w.slope[i - 2 * W], w.slope[i + 2 * W]))
-			var score := -w.slope[i] * 3.2 - contour_cost - absf(tpi) * (0.26 if turning else 0.08)
-			score -= absf(float(y - y0)) * 0.045 + absf(float(x - x0)) * 0.06
+				contour_cost = absf(pitch) * tuning.passage_grade_weights[1]
+			var tpi := _anchor_tpi(w, i, tpi_radius)
+			var score := -w.slope[i] * tuning.passage_grade_weights[0] - contour_cost - absf(tpi) * tuning.passage_tpi_weights[int(turning)]
+			score -= absf(float(y - y0)) * tuning.passage_position_weights[1] + absf(float(x - x0)) * tuning.passage_position_weights[0]
 			if turning:
-				score -= patch_slope * 4.0
+				var d := apex_radius
+				var patch_slope := maxf(maxf(w.slope[i - d], w.slope[i + d]), maxf(w.slope[i - d * W], w.slope[i + d * W]))
+				score -= patch_slope * tuning.apex_slope_weight
 			if score > best_score:
 				best_score = score
 				best = i
