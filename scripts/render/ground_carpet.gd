@@ -92,6 +92,23 @@ const STONE_CHANCE := [Vector2.ZERO, Vector2(0.26, 0.16), Vector2(0.12, 0.06), V
 const STONE_SUB := 7        # ячеек россыпи на сторону плитки: 4 м / 7 = 0,57 м
 ## Венчики цветов: белый, жёлтый, лиловый, розовый
 const PETALS := [Color(1.0, 1.0, 0.94), Color(1.0, 0.84, 0.2), Color(0.66, 0.52, 0.98), Color(1.0, 0.6, 0.76)]
+## Параметры лесного ковра Фазы 8.2 (синхронизированы с FastGrid.RenderOffload.cs)
+const EXP_FOREST_MIX_FLOOR := 0.72
+const EXP_FOREST_MIX_ROCK_DAMP := 0.50
+const EXP_FOREST_CANOPY_RANGE := Vector2(0.10, 0.44)
+const EXP_FOREST_CFG_CANOPY_RANGE := Vector2(0.12, 0.48)
+const EXP_MIX_NOISE_M := 4.7
+const EXP_MIX_MOSS_END := 0.38
+const EXP_MIX_LEAVES_END := 0.68
+const EXP_MIX_BERRY_END := 0.87
+const EXP_MIX_PARCHED_SHIFT := Vector3(0.10, 0.10, 0.14)
+## [r_base, r_parched, g_base, g_parched, b_base, b_jitter] для CARPET_MOSS..CARPET_SEDGE
+const EXP_CARPET_PALETTE := [
+	[0.22, 0.06, 0.38, -0.05, 0.17, 0.03],
+	[0.42, 0.08, 0.31, -0.03, 0.16, 0.03],
+	[0.36, 0.10, 0.30, -0.04, 0.18, 0.04],
+	[0.31, 0.08, 0.38, -0.03, 0.20, 0.03],
+]
 
 var world: WorldData
 var heights: Heightfield
@@ -884,11 +901,11 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var shade := smoothstep(0.3, 0.6, surface.r)
 	var forest_mix := 0.0
 	if _expedition:
-		forest_mix = smoothstep(0.12, 0.46, surface.r) * (1.0 - 0.62 * surface.a)
+		forest_mix = smoothstep(EXP_FOREST_CANOPY_RANGE.x, EXP_FOREST_CANOPY_RANGE.y, surface.r) * (1.0 - 0.55 * surface.a)
 		if w.biome[k] in [Biomes.FOREST, Biomes.TAIGA]:
-			forest_mix = maxf(forest_mix, 0.24 * (1.0 - surface.a))
+			forest_mix = maxf(forest_mix, EXP_FOREST_MIX_FLOOR * (1.0 - EXP_FOREST_MIX_ROCK_DAMP * surface.a))
 		if _veg_cfg != null:
-			forest_mix = clampf(maxf(forest_mix, smoothstep(0.15, 0.52, surface.r) * (1.0 - 0.35 * surface.a)), 0.0, 1.0)
+			forest_mix = clampf(maxf(forest_mix, smoothstep(EXP_FOREST_CFG_CANOPY_RANGE.x, EXP_FOREST_CFG_CANOPY_RANGE.y, surface.r) * (1.0 - 0.35 * surface.a)), 0.0, 1.0)
 		else:
 			cover *= 1.0 - 0.28 * forest_mix
 	var flowers: bool = bd.get("flowers", false) and surface.r < 0.4 and forest_mix < 0.35
@@ -971,10 +988,15 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 			kind = Models.CARPET_DRY
 			dry = maxf(dry, 0.45)
 		if forest_mix > 0.0 and WGRandom.hash2(gx, gz, 295) < forest_mix:
-			var mix := 0.75 * VegetationLayer._value_noise(x / 4.7, z / 4.7, 297) + 0.25 * h2
-			kind = Models.CARPET_MOSS if mix < 0.39 - 0.14 * parched else Models.CARPET_WOODLAND_LEAVES
-			if mix > 0.69 - 0.13 * parched:
-				kind = Models.CARPET_SEDGE if mix > 0.84 - 0.19 * parched else Models.CARPET_BERRY
+			var mix := 0.75 * VegetationLayer._value_noise(x / EXP_MIX_NOISE_M, z / EXP_MIX_NOISE_M, 297) + 0.25 * h2
+			if mix < EXP_MIX_MOSS_END - EXP_MIX_PARCHED_SHIFT.x * parched:
+				kind = Models.CARPET_MOSS
+			elif mix < EXP_MIX_LEAVES_END - EXP_MIX_PARCHED_SHIFT.y * parched:
+				kind = Models.CARPET_WOODLAND_LEAVES
+			elif mix < EXP_MIX_BERRY_END - EXP_MIX_PARCHED_SHIFT.z * parched:
+				kind = Models.CARPET_BERRY
+			else:
+				kind = Models.CARPET_SEDGE
 		var sc := 0.85 + 0.45 * h1
 		var sy: float = sc * tall * (0.7 + 0.6 * h2) * low
 		var basis := Basis(Vector3.UP, h2 * TAU)
@@ -986,8 +1008,8 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		if kind == Models.CARPET_SHADE:
 			tint = Color(tint.r * 0.66, tint.g * 0.8, tint.b * 0.74, tint.a)
 		elif kind >= Models.CARPET_MOSS:
-			tint = Color(0.28 + 0.10 * parched, 0.39 - 0.04 * parched, 0.19 + 0.035 * h2, tint.a)
-			tint = Color(tint.r * lum, tint.g * lum, tint.b * lum, tint.a)
+			var pal: Array = EXP_CARPET_PALETTE[clampi(kind - Models.CARPET_MOSS, 0, EXP_CARPET_PALETTE.size() - 1)]
+			tint = Color((pal[0] + pal[1] * parched) * lum, (pal[2] + pal[3] * parched) * lum, (pal[4] + pal[5] * h2) * lum, tint.a)
 		_put(parts[kind], filled[kind], basis.scaled_local(Vector3(sc, sy, sc)), x, y, z, tint, WGRandom.hash2(gx, gz, 241), 0.3 * h1)
 		filled[kind] += 1
 		# Цветы — полянами ~5 м, цвет поляны общий (шум 14 м), изредка другой

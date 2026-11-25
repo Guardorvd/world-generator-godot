@@ -134,8 +134,8 @@ func seat_road_span(xf: Transform3D, span: Vector2, sink: float, tolerance: floa
 	return xf
 
 
-## Сажает лесной валежник по 7-точечной хорде на неровном рельефе, избегая воды и самой колеи.
-func seat_forest_log(xf: Transform3D, span: Vector2, sink: float, tolerance := 0.44, settle := 0.65) -> Transform3D:
+## Сажает лесной валежник по хорде на неровном рельефе, избегая воды и самой колеи.
+func seat_forest_log(xf: Transform3D, span: Vector2, sink: float, tolerance := 0.44, settle := 0.65, samples := 7) -> Transform3D:
 	var left := span.x
 	var right := span.y
 	var a := xf * Vector3(left, 0.0, 0.0)
@@ -147,8 +147,9 @@ func seat_forest_log(xf: Transform3D, span: Vector2, sink: float, tolerance := 0
 	var low := INF
 	var high := -INF
 	var refinement := heights.road_refinement
-	for j in 7:
-		var p := xf * Vector3(lerpf(left, right, j / 6.0), 0.0, 0.0)
+	var count := maxi(2, samples)
+	for j in count:
+		var p := xf * Vector3(lerpf(left, right, float(j) / float(count - 1)), 0.0, 0.0)
 		var inside := p.x >= 0 and p.z >= 0 and p.x < world.W * TILE and p.z < world.H * TILE
 		if (heights.depth_at(p.x, p.z) > 0.0 if inside else not region_dry(p.x, p.z)) or heights._cell_list(p.x, p.z) != null:
 			return Transform3D()

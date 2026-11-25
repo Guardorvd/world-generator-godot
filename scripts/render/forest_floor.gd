@@ -42,6 +42,9 @@ static func variant_kind(kind: int, variant: int) -> int:
 
 
 static func log_span(kind: int) -> Vector2:
+	if LARGE_LOGS.has(kind):
+		var seg: Array = LARGE_LOGS[kind][0]
+		return Vector2((seg[0] as Vector3).x, (seg[1] as Vector3).x)
 	if kind in [NURSE_LOG, NURSE_LOG_SPLIT]:
 		return Vector2(-2.65, 1.63 if kind == NURSE_LOG_SPLIT else 2.87)
 	return Vector2(-2.2, 0.9 if kind in [LOG_BROKEN, MOSS_LOG_BROKEN] else 2.1)

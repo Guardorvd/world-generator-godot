@@ -484,6 +484,18 @@ public partial class FastGrid
 		dst[o + 19] = 0.0f;
 	}
 
+	private const int CarpetMeadow = 0, CarpetDry = 1, CarpetShade = 2, CarpetMoss = 5, CarpetLeaves = 6, CarpetBerry = 7, CarpetSedge = 8;
+	private const float ExpMixNoiseM = 4.7f, ExpMixMossEnd = 0.38f, ExpMixLeavesEnd = 0.68f, ExpMixBerryEnd = 0.87f;
+	private const float ExpMixParchedMoss = 0.10f, ExpMixParchedLeaves = 0.10f, ExpMixParchedBerry = 0.14f;
+	// [rBase, rParched, gBase, gParched, bBase, bJitter] для CARPET_MOSS..CARPET_SEDGE (как GroundCarpet.EXP_CARPET_PALETTE)
+	private static readonly float[][] ExpCarpetPalette =
+	{
+		new[] { 0.22f, 0.06f, 0.38f, -0.05f, 0.17f, 0.03f },
+		new[] { 0.42f, 0.08f, 0.31f, -0.03f, 0.16f, 0.03f },
+		new[] { 0.36f, 0.10f, 0.30f, -0.04f, 0.18f, 0.04f },
+		new[] { 0.31f, 0.08f, 0.38f, -0.03f, 0.20f, 0.03f },
+	};
+
 	/// <summary>
 	/// Быстрая сборка буферов травяных куртинок 4м плитки GroundCarpet на C# поверх потокобезопасного RideGround.
 	/// </summary>
@@ -545,21 +557,26 @@ public partial class FastGrid
 			float dryPatch = Smoothstep(0.6f, 0.9f, CarpetValueNoise(x / 9.0f, z / 9.0f, 257));
 			float dry = Math.Clamp(straw * (0.5f + h2 * 1.1f) + 0.3f * dryPatch * (1.0f - 0.6f * surfaceR), 0.0f, 0.85f);
 
-			int kind = 0; // CARPET_MEADOW
+			int kind = CarpetMeadow;
 			if (WgHash2(gx, gz, 261) < shade)
-				kind = 2; // CARPET_SHADE
+				kind = CarpetShade;
 			else if (WgHash2(gx, gz, 263) < parched * (0.15f + 0.85f * dryPatch) + dry * 0.3f)
 			{
-				kind = 1; // CARPET_DRY
+				kind = CarpetDry;
 				dry = MathF.Max(dry, 0.45f);
 			}
 
 			if (forestMix > 0.0f && WgHash2(gx, gz, 295) < forestMix)
 			{
-				float mix = 0.75f * CarpetValueNoise(x / 4.7f, z / 4.7f, 297) + 0.25f * h2;
-				kind = mix < 0.39f - 0.14f * parched ? 5 : 6; // moss / woodland leaves
-				if (mix > 0.69f - 0.13f * parched)
-					kind = mix > 0.84f - 0.19f * parched ? 8 : 7; // sedge / berry
+				float mix = 0.75f * CarpetValueNoise(x / ExpMixNoiseM, z / ExpMixNoiseM, 297) + 0.25f * h2;
+				if (mix < ExpMixMossEnd - ExpMixParchedMoss * parched)
+					kind = CarpetMoss;
+				else if (mix < ExpMixLeavesEnd - ExpMixParchedLeaves * parched)
+					kind = CarpetLeaves;
+				else if (mix < ExpMixBerryEnd - ExpMixParchedBerry * parched)
+					kind = CarpetBerry;
+				else
+					kind = CarpetSedge;
 			}
 			float sc = 0.85f + 0.45f * h1;
 			float sy = sc * tall * (0.7f + 0.6f * h2);
@@ -572,17 +589,18 @@ public partial class FastGrid
 			float r = Mathf.Lerp(tcR * 0.9f, 0.6f, dry) * lum * 1.15f;
 			float g = Mathf.Lerp(tcG, 0.57f, dry) * lum * 1.15f;
 			float b = Mathf.Lerp(tcB, 0.32f, dry) * lum * 1.15f;
-			if (kind == 2)
+			if (kind == CarpetShade)
 			{
 				r *= 0.66f;
 				g *= 0.8f;
 				b *= 0.74f;
 			}
-			else if (kind >= 5)
+			else if (kind >= CarpetMoss)
 			{
-				r = (0.28f + 0.10f * parched) * lum;
-				g = (0.39f - 0.04f * parched) * lum;
-				b = (0.19f + 0.035f * h2) * lum;
+				float[] pal = ExpCarpetPalette[Math.Clamp(kind - CarpetMoss, 0, ExpCarpetPalette.Length - 1)];
+				r = (pal[0] + pal[1] * parched) * lum;
+				g = (pal[2] + pal[3] * parched) * lum;
+				b = (pal[4] + pal[5] * h2) * lum;
 			}
 			PutCarpetRow(partsBuf[kind], filled[kind]++, basis.ScaledLocal(new Vector3(sc, sy, sc)),
 				x, y, z, r, g, b, alpha, WgHash2(gx, gz, 241), 0.3f * h1);

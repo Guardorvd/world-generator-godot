@@ -7,6 +7,7 @@ extends RefCounted
 const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
 const CONVEXITY_GAIN := 0.45
+const CONVEXITY_NORM_M := 0.9 # перепад высоты на базе 8 м (м), соответствующий полной выпуклости/вогнутости ±1.0
 const MAX_CONVEXITY_FACTOR := 1.0 + CONVEXITY_GAIN
 const OUTCROP_CHANCE := 0.12
 const HILL_OUTCROP_CHANCE := 0.065

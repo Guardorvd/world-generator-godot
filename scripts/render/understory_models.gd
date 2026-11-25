@@ -16,6 +16,8 @@ const OPEN_FORMS := [MEADOW, FORBS, SEDGE, STIPA, FIREWEED]
 ## Растительные сообщества открытых мест (луга, степь, опушки, предгорья, берега).
 enum { C_LAWN, C_TALL, C_FORBS, C_SHRUB, C_WET, C_TURF }
 const COMMUNITIES := 6
+## Сообщества лесного подлеска Экспедиции: сырые ложбины, средние лесные склоны, сухие выпуклые рёбра.
+enum { E_FERN_HOLLOW, E_SHRUB_SLOPE, E_BERRY_RIDGE, EXPEDITION_COMMUNITIES }
 ## Вес каждой формы в сообществе (порядок форм как в enum). Кусты и подрост у опушек и в предгорьях,
 ## осока у воды, разнотравье на солнечных сухих местах, высокотравье в сырых ложбинах и у обочин.
 const COMMUNITY := [
@@ -1543,6 +1545,47 @@ static func communities(big: float, mid: float, moisture: float, light: float, s
 	for c in COMMUNITIES:
 		out[c] /= total
 	return out
+
+
+## Параметры гильдий лесного подлеска Экспедиции: папоротниковые ложбины, кустарниковые склоны, сухие ягодниковые рёбра.
+const EXP_COMMUNITY_FLOOR := 0.02
+const EXP_COMMUNITY_SHARPNESS := 2.2
+const EXP_PATCH_CENTER := 0.5
+const EXP_FERN_RANGE := Vector2(0.32, 0.78)
+const EXP_FERN_TOPO := Vector2(0.35, 0.22)
+const EXP_BERRY_RANGE := Vector2(0.24, 0.76)
+const EXP_BERRY_DRY_WEIGHT := 0.78
+const EXP_BERRY_TOPO := Vector2(0.42, 0.25)
+const EXP_SHRUB_MOIST_CENTER := 0.52
+const EXP_SHRUB_MOIST_WIDTH := 1.45
+const EXP_SHRUB_FLAT_FALLOFF := 0.65
+const EXP_SHRUB_RANGE := Vector2(0.18, 0.78)
+const EXP_SHRUB_MIX := Vector2(0.62, 0.38)
+const EXP_COMMUNITY_PATCH_JITTER := Vector3(0.24, 0.20, 0.22)
+
+
+## Чистый выбор долей лесных сообществ подлеска от влажности (0..1) и выпуклости (-1..1, <0 — ложбина, >0 — плечо).
+## При добавлении эрозии рельефа меняется только подача входов (moisture, convexity), не логика сообществ.
+static func expedition_forest_community(moisture: float, convexity: float, patch := EXP_PATCH_CENTER) -> PackedFloat32Array:
+	var m := clampf(moisture, 0.0, 1.0)
+	var c := clampf(convexity, -1.0, 1.0)
+	var hollow := clampf(-c, 0.0, 1.0)
+	var ridge := clampf(c, 0.0, 1.0)
+	var p := clampf(patch, 0.0, 1.0) - EXP_PATCH_CENTER
+	var fern := maxf(EXP_COMMUNITY_FLOOR, smoothstep(EXP_FERN_RANGE.x, EXP_FERN_RANGE.y,
+		m + EXP_FERN_TOPO.x * hollow - EXP_FERN_TOPO.y * ridge + EXP_COMMUNITY_PATCH_JITTER.x * p))
+	var berry := maxf(EXP_COMMUNITY_FLOOR, smoothstep(EXP_BERRY_RANGE.x, EXP_BERRY_RANGE.y,
+		(1.0 - m) * EXP_BERRY_DRY_WEIGHT + EXP_BERRY_TOPO.x * ridge - EXP_BERRY_TOPO.y * hollow - EXP_COMMUNITY_PATCH_JITTER.y * p))
+	var mid_m := 1.0 - absf(m - EXP_SHRUB_MOIST_CENTER) * EXP_SHRUB_MOIST_WIDTH
+	var flat_slope := 1.0 - absf(c) * EXP_SHRUB_FLAT_FALLOFF
+	var mid_patch := EXP_PATCH_CENTER - absf(p) * 2.0
+	var shrub := maxf(EXP_COMMUNITY_FLOOR, smoothstep(EXP_SHRUB_RANGE.x, EXP_SHRUB_RANGE.y,
+		mid_m * EXP_SHRUB_MIX.x + flat_slope * EXP_SHRUB_MIX.y + EXP_COMMUNITY_PATCH_JITTER.z * mid_patch))
+	var w0 := pow(fern, EXP_COMMUNITY_SHARPNESS)
+	var w1 := pow(shrub, EXP_COMMUNITY_SHARPNESS)
+	var w2 := pow(berry, EXP_COMMUNITY_SHARPNESS)
+	var sum := maxf(0.0001, w0 + w1 + w2)
+	return PackedFloat32Array([w0 / sum, w1 / sum, w2 / sum])
 
 
 ## Просветы внутри пятен, общие для куртин и их дальнего представления.

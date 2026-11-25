@@ -32,7 +32,20 @@ public partial class FastGrid
 	private const int AdultAge = 0, YoungAge = 1, OldAge = 2;
 	// StageVegetation
 	private const double VegVillageR = 7.0, VegHighLo = 0.12, VegHighHi = 0.26, VegLineLo = 0.28, VegLineHi = 0.50,
-		VegSteep = 0.6, VegShore = 3.0, VegSpread = 0.55, VegLowCrown = 0.3, VegGapK = 0.75;
+		VegSteep = 0.6, VegShore = 3.0, VegSpread = 0.55, VegLowCrown = 0.3, VegGapK = 0.75, VegClearCap = 12.0;
+	private const double VegConvexityNormM = 0.9;
+	private const double TrailEdgeBoostMinM = 0.5, TrailEdgeBoostFadeM = 2.5, TrailEdgeBoostMaxM = VegClearCap - 0.5;
+	private const double MugoSlopeMinRelElev = 0.14, MugoSlopeMinExposed = 0.32;
+	private const double HollowConvexityLo = -0.15, HollowConvexityHi = 0.55,
+		ShoulderConvexityLo = -0.10, ShoulderConvexityHi = 0.55;
+	private const double MapleBaseShare = 1.95, MapleInlandHollowLo = 0.35, MapleInlandHollowHi = 1.0,
+		MapleInlandMoistLo = 0.42, MapleInlandMoistHi = 0.72, MapleMoistLo = 0.34, MapleMoistHi = 0.70,
+		MapleHollowMulLo = 0.70, MapleHollowMulHi = 1.40;
+	private const double BirchStartAlongK = 0.65, AlderInlandHollowLo = 0.70, AlderInlandHollowHi = 1.35;
+	private const double RowanBaseShare = 0.09, RowanLightLo = 0.45, RowanLightHi = 1.0,
+		RowanShoulderLo = 0.60, RowanShoulderHi = 1.20, RowanElevLo = 0.22, RowanElevHi = 0.42,
+		RowanGroveLo = 0.60, RowanGroveHi = 1.40;
+	private const double ConiferTopoLo = 0.85, ConiferTopoHi = 1.15;
 	private const int VegLayer = 1;
 	private const double HutSearchRadius = 2.0;
 	// RockScatter
@@ -472,7 +485,7 @@ public partial class FastGrid
 	/// <summary>StageVegetation._kind</summary>
 	// StageVegetation.expedition_kind. Normalized 2D zonation (zero T_OAK).
 	private static int VegExpeditionKind(int kind, int bi, double roll, double elev, double moist, double water, double light, double stand,
-		double slope, double exposed, double along, double patchCoarse, double patchGrove, double[] p)
+		double slope, double exposed, double along, double patchCoarse, double patchGrove, double[] p, double convexity = 0.0)
 	{
 		if (bi is not (BForest or BTaiga or BGrass or BSwamp or BTundra or BRock) || kind is TRock or TMugo or TReed)
 			return kind;
@@ -480,8 +493,7 @@ public partial class FastGrid
 			return kind;
 		double headW = 1.0 - VegSs(p[VpHeadwaterEnd] * 0.5, p[VpLowerStart], along);
 		double lowW = VegSs(p[VpHeadwaterEnd], p[VpLowerStart], along);
-		double valleyFloor = VegLerp(p[VpValleyTopH], p[VpValleyBotH], along);
-		double relElev = VegMax(0.0, elev - valleyFloor);
+		double relElev = VegMax(0.0, elev - p[VpEcoBase]);
 		if (bi is BTundra or BRock)
 		{
 			if (kind is TOak or TPine or TBirch)
@@ -505,12 +517,11 @@ public partial class FastGrid
 			if (roll < 0.40) return TBush;
 			roll = (roll - 0.40) / 0.60;
 		}
-		if (kind == TRowan && light > 0.45 && water < 24.0)
-		{
-			if (roll < 0.35) return TRowan;
-			roll = (roll - 0.35) / 0.65;
-		}
-		double nearRiver = VegSs(1.0, 3.2, water) * (1.0 - VegSs(p[VpMapleDist] * 0.55, p[VpMapleDist], water));
+		double hollow = VegSs(HollowConvexityLo, HollowConvexityHi, -convexity);
+		double shoulder = VegSs(ShoulderConvexityLo, ShoulderConvexityHi, convexity);
+		double riverClear = VegSs(1.0, 3.2, water);
+		double nearRiver = riverClear * (1.0 - VegSs(p[VpMapleDist] * 0.55, p[VpMapleDist], water));
+		double mapleSite = VegMax(nearRiver, riverClear * VegLerp(MapleInlandHollowLo, MapleInlandHollowHi, hollow) * VegSs(MapleInlandMoistLo, MapleInlandMoistHi, moist));
 		double lowTerrace = 1.0 - VegSs(p[VpMapleElev] * 0.55, p[VpMapleElev], relElev);
 		double gentle = 1.0 - VegSs(p[VpMapleSlope] * 0.55, p[VpMapleSlope], slope);
 		double sheltered = 1.0 - VegSs(0.16, 0.52, exposed);
@@ -518,16 +529,21 @@ public partial class FastGrid
 		double grove = VegSs(gthresh - 0.14, gthresh + 0.20, patchGrove);
 		double alongMul = VegLerp(p[VpMapleHeadMul], p[VpMapleMidMul], VegSs(0.18, p[VpHeadwaterEnd] + 0.16, along));
 		alongMul = VegLerp(alongMul, p[VpMapleLowMul], lowW);
-		double wMaple = 1.85 * nearRiver * lowTerrace * gentle * sheltered * grove * VegSs(0.36, 0.72, moist) * alongMul;
-		double wBirch = p[VpLowerBirch] * lowW
+		double wMaple = MapleBaseShare * mapleSite * lowTerrace * gentle * sheltered * grove * VegSs(MapleMoistLo, MapleMoistHi, moist) * alongMul * VegLerp(MapleHollowMulLo, MapleHollowMulHi, hollow);
+		double birchAlong = VegSs(p[VpHeadwaterEnd] * BirchStartAlongK, p[VpLowerStart], along);
+		double wBirch = p[VpLowerBirch] * birchAlong
 			* (1.0 - VegSs(p[VpMapleElev], p[VpMapleElev] * 1.8, relElev))
 			* (0.4 + 0.6 * light) * (1.0 - 0.4 * VegSs(0.35, 0.70, stand));
 		double wAlderIn = p[VpInlandAlderShare] * VegSs(0.42, 0.78, moist)
-			* (1.0 - VegSs(0.06, 0.22, relElev)) * VegLerp(0.65, 1.35, 1.0 - patchCoarse) * (0.65 + 0.35 * (1.0 - light));
+			* (1.0 - VegSs(0.06, 0.22, relElev)) * VegLerp(0.65, 1.35, 1.0 - patchCoarse) * (0.65 + 0.35 * (1.0 - light))
+			* VegLerp(AlderInlandHollowLo, AlderInlandHollowHi, hollow);
+		double wRowan = RowanBaseShare * VegLerp(RowanLightLo, RowanLightHi, light) * VegLerp(RowanShoulderLo, RowanShoulderHi, shoulder)
+			* (1.0 - VegSs(RowanElevLo, RowanElevHi, relElev)) * VegLerp(RowanGroveLo, RowanGroveHi, patchGrove);
 		double rcMoist = p[VpRedcedarMoist];
 		double rcElev = p[VpRedcedarRelElev];
 		double wRedcedar = p[VpRedcedarShare] * VegSs(rcMoist - 0.16, rcMoist + 0.24, moist)
-			* (1.0 - VegSs(rcElev * 0.55, rcElev * 1.45, relElev)) * VegLerp(0.45, 1.35, patchCoarse) * VegLerp(0.35, 1.15, 1.0 - headW * 0.7);
+			* (1.0 - VegSs(rcElev * 0.55, rcElev * 1.45, relElev)) * VegLerp(0.45, 1.35, patchCoarse) * VegLerp(0.35, 1.15, 1.0 - headW * 0.7)
+			* VegLerp(ConiferTopoLo, ConiferTopoHi, hollow);
 		double wHemlock = p[VpHemlockShare] * VegSs(0.36, 0.74, moist)
 			* (1.0 - VegSs(0.10, 0.30, relElev)) * (0.55 + 0.45 * (1.0 - light)) * (0.60 + 0.40 * stand)
 			* VegLerp(0.40, 1.20, 1.0 - headW * 0.65);
@@ -536,16 +552,16 @@ public partial class FastGrid
 			* VegLerp(0.45, 1.25, 1.0 - headW * 0.55);
 		double crag = VegSs(0.15, 0.45, slope) * 0.5 + VegSs(0.10, 0.45, exposed) * 0.5;
 		double wSib = VegLerp(p[VpSibCedarSlope], p[VpSibCedarHead], headW)
-			* (0.55 + 0.45 * VegSs(0.02, 0.22, relElev) + 0.40 * crag) * VegLerp(1.25, 0.55, patchCoarse);
+			* (0.55 + 0.45 * VegSs(0.02, 0.22, relElev) + 0.40 * crag) * VegLerp(1.25, 0.55, patchCoarse) * VegLerp(ConiferTopoLo, ConiferTopoHi, shoulder);
 		double lLo = p[VpLarchElevLo];
 		double lHi = p[VpLarchElevHi];
 		double lSl = p[VpLarchSlope];
 		double larchBand = VegSs(lLo, lLo + 0.14, relElev) * VegLerp(1.0, 0.55, VegSs(lHi, lHi + 0.22, relElev));
 		double larchSun = (0.35 + 0.65 * light) * (0.45 + 0.55 * VegSs(lSl * 0.5, lSl + 0.25, slope)) * VegLerp(1.15, 0.45, moist);
-		double wLarch = VegLerp(p[VpLarchBaseShare], p[VpLarchHead], headW) * (0.20 + 0.25 * headW + 0.85 * larchBand) * larchSun;
+		double wLarch = VegLerp(p[VpLarchBaseShare], p[VpLarchHead], headW) * (0.20 + 0.25 * headW + 0.85 * larchBand) * larchSun * VegLerp(ConiferTopoLo, ConiferTopoHi, shoulder);
 		double wPine = p[VpPineDry] * (1.0 - VegSs(0.28, 0.60, moist)) * VegSs(0.50, 0.85, light) * VegSs(0.12, 0.45, VegMax(slope, exposed));
 		double wSpruce = VegMax(0.04, p[VpSpruceBase] * (0.65 + 0.55 * (1.0 - light)) * (0.65 + 0.45 * stand) * (0.75 + 0.35 * patchCoarse) * VegLerp(1.0, 0.65, headW * 0.5));
-		double wSum = wMaple + wBirch + wAlderIn + wRedcedar + wHemlock + wDouglas + wSib + wLarch + wPine + wSpruce;
+		double wSum = wMaple + wBirch + wAlderIn + wRowan + wRedcedar + wHemlock + wDouglas + wSib + wLarch + wPine + wSpruce;
 		double u = roll * wSum;
 		if (u < wMaple) return TMaple;
 		u -= wMaple;
@@ -553,6 +569,8 @@ public partial class FastGrid
 		u -= wBirch;
 		if (u < wAlderIn) return TAlder;
 		u -= wAlderIn;
+		if (u < wRowan) return TRowan;
+		u -= wRowan;
 		if (u < wRedcedar) return TWesternRedcedar;
 		u -= wRedcedar;
 		if (u < wHemlock) return THemlock;
@@ -649,6 +667,16 @@ public partial class FastGrid
 		var vp = f.VegParams;
 		double coarseScale = hasVeg ? vp[VpPatchCoarse] : 68.0;
 		double groveScale = hasVeg ? vp[VpPatchGrove] : 22.0;
+		List<double> defX = null, defY = null, defS = null;
+		List<int> defK = null, defV = null;
+		if (hasVeg)
+		{
+			defX = new List<double>();
+			defY = new List<double>();
+			defK = new List<int>();
+			defV = new List<int>();
+			defS = new List<double>();
+		}
 		for (int y = y0; y < y1; y++)
 		{
 			double along = Clamp01((double)y / Math.Max(1, f.H - 1));
@@ -724,8 +752,7 @@ public partial class FastGrid
 				double relE = 0.0;
 				if (hasVeg)
 				{
-					double valleyFloor = VegLerp(vp[VpValleyTopH], vp[VpValleyBotH], along);
-					relE = VegMax(0.0, e - valleyFloor);
+					relE = VegMax(0.0, e - vp[VpEcoBase]);
 					if (relE > vp[VpLineLo])
 						line = VegSs(vp[VpLineLo] + 0.05 * moistI, vp[VpLineHi] + 0.10 * moistI - 0.04 * light, relE);
 					dens *= 1.0 - 0.45 * exposed;
@@ -739,8 +766,8 @@ public partial class FastGrid
 					dens *= 1.0 - 0.65 * line;
 				if (sl > VegSteep)
 					dens /= 1.0 + (sl - VegSteep) * 1.5;
-				if (hasVeg && f.DistPath[i] > 5.0 && f.DistPath[i] < 22.0)
-					dens *= VegLerp(vp[VpTrailEdgeTreeBoost], 1.0, VegSs(7.0, 22.0, f.DistPath[i]));
+				if (hasVeg && f.DistPath[i] > TrailEdgeBoostMinM && f.DistPath[i] < TrailEdgeBoostMaxM)
+					dens *= VegLerp(vp[VpTrailEdgeTreeBoost], 1.0, VegSs(TrailEdgeBoostFadeM, TrailEdgeBoostMaxM, f.DistPath[i]));
 				double mugoFrom = double.PositiveInfinity;
 				if (hasVeg)
 				{
@@ -774,6 +801,7 @@ public partial class FastGrid
 				if (dens <= 0.0 && !reeds) continue;
 				rng.Reset(VegHashCell(seed, x, y, VegLayer));
 				double communityMoist = -1.0;
+				double dryShoulder = 0.0;
 				double patchCoarse = 0.5;
 				double patchGrove = 0.5;
 				for (int k = 0; k < 2; k++)
@@ -785,7 +813,7 @@ public partial class FastGrid
 						double py = y + 0.15 + rng.Next() * 0.8;
 						if (communityMoist < 0.0)
 						{
-							double dryShoulder = VegClamp(VegConvexity(f, i) / 0.9, -1.0, 1.0);
+							dryShoulder = VegClamp(VegConvexity(f, i) / VegConvexityNormM, -1.0, 1.0);
 							communityMoist = VegClamp(moistI + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dryShoulder, 0.0, 1.0);
 							if (hasVeg)
 							{
@@ -797,8 +825,10 @@ public partial class FastGrid
 						int kind = roll >= mugoFrom ? TMugo : VegKind(f, bi, rKind, e, communityMoist, sl, dw, f.Temp[i], light, interior, stand, exposed);
 						if (f.Expedition)
 						{
-							kind = VegExpeditionKind(kind, bi, VegHash2(x, y, seed ^ (8179 + k)), e, communityMoist, dw, light, stand, sl, exposed, along, patchCoarse, patchGrove, vp);
+							kind = VegExpeditionKind(kind, bi, VegHash2(x, y, seed ^ (8179 + k)), e, communityMoist, dw, light, stand, sl, exposed, along, patchCoarse, patchGrove, vp, dryShoulder);
 							if (hasVeg && kind != TAlder && kind != TMaple && kind != TMugo
+								&& kind != TRowan && kind != TBirch
+								&& (relE > MugoSlopeMinRelElev || exposed > MugoSlopeMinExposed)
 								&& sl > 0.20 && (exposed > 0.14 || sl > 0.32) && vp[VpMugoSlopeShare] > 0.0)
 							{
 								double mugoSlopeP = vp[VpMugoSlopeShare] * (VegSs(0.20, 0.45, sl) * 0.65 + VegSs(0.14, 0.42, exposed) * 0.35);
@@ -858,7 +888,18 @@ public partial class FastGrid
 						}
 						if (kind != TRock && (f.DistPath[i] > 5.0 || VegClearOfPath(f, px, py, kind, sc, treeAge))
 							&& (!hasCores || !VegCovers(f.Cores, coreFrom, coreTo, px, py, 0.2)))
-							store.Add(px, py, kind, v, sc);
+						{
+							if (hasVeg && f.BTree[kind] != 0 && (treeAge == YoungAge || kind == TMugo))
+							{
+								defX.Add(px);
+								defY.Add(py);
+								defK.Add(kind);
+								defV.Add(v);
+								defS.Add(sc);
+							}
+							else
+								store.Add(px, py, kind, v, sc);
+						}
 					}
 				}
 				if (reeds)
@@ -882,6 +923,11 @@ public partial class FastGrid
 					}
 				}
 			}
+		}
+		if (hasVeg)
+		{
+			for (int d = 0; d < defX.Count; d++)
+				store.Add(defX[d], defY[d], defK[d], defV[d], defS[d]);
 		}
 		PlaceRockChunk(f, store, c, x0, y0, x1, y1);
 	}

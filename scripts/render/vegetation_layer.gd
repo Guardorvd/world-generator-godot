@@ -104,7 +104,8 @@ const UNDERSTORY_SHADOW_FAR := 70.0
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
 const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
 ## 11.11.2026: рисунок коры в шейдере ствола — только у деревьев: 1 — пластины и борозды, 2 — берёза, 0 — нет.
-const BARK_PLATES := [Biomes.T_OAK, Biomes.T_PINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_SNOWPINE, Biomes.T_DEAD, Biomes.T_ACACIA, Biomes.T_MUGO, Biomes.T_SPRUCE, Biomes.T_LARCH, Biomes.T_SIBERIAN_CEDAR]
+const BARK_PLATES := [Biomes.T_OAK, Biomes.T_PINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_SNOWPINE, Biomes.T_DEAD, Biomes.T_ACACIA, Biomes.T_MUGO, Biomes.T_SPRUCE, Biomes.T_LARCH, Biomes.T_SIBERIAN_CEDAR,
+	Biomes.T_WESTERN_REDCEDAR, Biomes.T_HEMLOCK, Biomes.T_DOUGLAS_FIR, Biomes.T_MAPLE, Biomes.T_ALDER]
 
 
 static func bark_detail(kind: int) -> float:
@@ -149,10 +150,72 @@ const SOFT_TRAIL_FORMS := [
 	Understory.HERB, Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL,
 	Understory.MOSS, Understory.MOSS_MOUND,
 	Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.BERRY_SHRUB_TALL,
-	Understory.ALPINE_SHRUB_CREEPING, Understory.SALAL, Understory.DEVILS_CLUB,
+	Understory.ALPINE_SHRUB_CREEPING, Understory.SALAL, Understory.SALAL_TALL, Understory.DEVILS_CLUB, Understory.DEVILS_CLUB_TALL,
 	Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.FORBS,
 	Understory.SEDGE, Understory.STIPA, Understory.FIREWEED,
 ]
+## Наклон прибрежной ольхи к воде (расстояния в клетках, углы в радианах)
+const ALDER_LEAN_WATER_MIN := 0.8
+const ALDER_LEAN_WATER_FADE := 2.5
+const ALDER_LEAN_WATER_MAX_RATIO := 0.5
+const ALDER_LEAN_GRAD2_MIN := 0.01
+const ALDER_LEAN_RAD := Vector2(0.09, 0.20)
+const ALDER_LEAN_MIN_RAD := 0.02
+## Посадка лесного и крупного валежника (8,4–11 м) по изолинии склона
+const LARGE_LOG_MAX_SCALE := 1.0
+const LARGE_LOG_SLOPE_STEP_M := 1.5
+const LARGE_LOG_CONTOUR_MIN_SLOPE := 0.08
+const LARGE_LOG_CONTOUR_JITTER_RAD := 0.28
+const LARGE_LOG_GROUND_PRECHECK_R := 3.0
+const LARGE_LOG_EXTRA_SINK_M := 0.08
+const LARGE_LOG_SEAT_TOLERANCE_M := 0.88
+const LARGE_LOG_SEAT_SETTLE := 0.62
+const LARGE_LOG_SEAT_SAMPLES := 9
+const FOREST_LOG_SEAT_TOLERANCE_M := 0.44
+const FOREST_LOG_SEAT_SETTLE := 0.65
+const FOREST_LOG_SEAT_SAMPLES := 7
+## Гильдии подлеска Экспедиции (диапазоны множителей и добавок от долей сообществ)
+const EXP_COMMUNITY_PATCH_CELLS := 9.0
+const EXP_COMMUNITY_PATCH_SALT := 7309
+const EXP_COMMUNITY_PATCH_SEED_OFF := 17
+const EXP_VERGE_BOOST_MAX := 1.65
+const EXP_WET_DARK_RANGE := Vector2(0.25, 1.0)
+const EXP_ALPINE_BELT_START_K := 0.55
+const EXP_ALPINE_SLOPE := Vector2(0.22, 0.55)
+const EXP_ALPINE_EXPOSED_MUL := Vector2(0.45, 1.0)
+const EXP_MUSHROOM_HOLLOW_W := 0.55
+const EXP_HAZEL_SLOPE_W := Vector2(0.40, 0.18)
+const EXP_HAZEL_ROCK_DAMP := 0.6
+const EXP_THICKET_DAMP := Vector2(0.72, 0.75)
+const EXP_THICKET_BUSH_W := Vector3(0.14, 0.08, 0.08)
+const EXP_THICKET_SAPLING_BASE := 0.10
+const EXP_THICKET_SAPLING_MUL := Vector2(0.40, 1.20)
+const EXP_THICKET_PINE_BASE := 0.10
+const EXP_THICKET_PINE_MUL := Vector2(0.35, 1.25)
+const EXP_FLOOR_STUMP_BASE := 0.18
+const EXP_FLOOR_BOULDER_BASE := 0.22
+const EXP_FLOOR_BOULDER_SLOPE := 0.40
+const EXP_FLOOR_TWIG_MUL := 0.35
+const EXP_LEAF_LITTER_MUL := Vector2(0.95, 0.35)
+const EXP_OPEN_DEVILS_CLUB_W := 0.45
+const EXP_OPEN_SALAL_W := 0.35
+const EXP_OPEN_SALAL_MILD := 0.30
+const EXP_GUILD_MUL := {
+	Understory.SWORD_FERN: Vector2(0.45, 1.40),
+	Understory.FERN: Vector2(0.25, 0.70),
+	Understory.BROADLEAF_HERB: Vector2(0.40, 1.35),
+	Understory.BERRY_SHRUB: Vector2(0.40, 1.35),
+	Understory.SALAL: Vector2(0.45, 1.35),
+}
+const EXP_GUILD_ADD := {
+	Understory.SWORD_FERN: Vector2(0.14, 0.82),
+	Understory.BROADLEAF_HERB: Vector2(0.10, 0.66),
+	Understory.DEVILS_CLUB: Vector2(0.06, 0.52),
+	Understory.MOSS_MOUND: Vector2(0.12, 0.67),
+	Understory.SALAL: Vector2(0.08, 0.60),
+	Understory.BERRY_SHRUB: Vector2(0.10, 0.72),
+	Floor.FIRST + Floor.MOSS_LOG: Vector2(0.16, 0.40),
+}
 var heights: Heightfield
 var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 ## 18.11.2026: ключи veg по чанкам (Vector2i -> Array[Vector3i]). _drop и refresh проверяют чанки, а не тысячи
@@ -267,12 +330,14 @@ var drop_radius := load_radius + DROP_MARGIN
 ## Отдельное окно привала задаёт собственные дальности леса.
 var use_shared_forest_ranges := true
 var _autumn_strength := 0.0
+var _eco_base := 0.0
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
 	world = w
 	_expedition = w.template_id == WorldTemplate.EXPEDITION_ID
 	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
+	_eco_base = WorldTemplate.config(w.template_id).eco_base if _expedition else 0.0
 	var atm := WorldTemplate.atmosphere_config(w.template_id)
 	_autumn_strength = atm.autumn_strength if atm != null else 0.0
 	heights = h
@@ -1374,6 +1439,24 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
 			# Точный повёрнутый AABB вместо большой сферы вокруг всего вида.
 			var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3(s, sy, s)), pos)
+			var custom_xf := rock
+			if _expedition and _veg_cfg != null and kind % ForestModels.MODEL_STRIDE == Biomes.T_ALDER:
+				var cx := floori(ox)
+				var cy := floori(oy)
+				var max_lean_dw := _veg_cfg.water_alder_dist * ALDER_LEAN_WATER_MAX_RATIO
+				if cx >= 1 and cy >= 1 and cx < world.W - 1 and cy < world.H - 1:
+					var dw := world.dist_water[cy * world.W + cx]
+					if dw >= ALDER_LEAN_WATER_MIN and dw <= max_lean_dw and WGRandom.hash2(floori(ox * 43), floori(oy * 53), 19) < _veg_cfg.river_lean_chance:
+						var gwx := world.dist_water[cy * world.W + cx + 1] - world.dist_water[cy * world.W + cx - 1]
+						var gwz := world.dist_water[(cy + 1) * world.W + cx] - world.dist_water[(cy - 1) * world.W + cx]
+						if gwx * gwx + gwz * gwz > ALDER_LEAN_GRAD2_MIN:
+							var to_water := Vector3(-gwx, 0.0, -gwz).normalized()
+							var tilt_axis := Vector3.UP.cross(to_water).normalized()
+							var tilt := lerpf(ALDER_LEAN_RAD.x, ALDER_LEAN_RAD.y, WGRandom.hash2(floori(ox * 61), floori(oy * 59), 29)) \
+								* (1.0 - smoothstep(ALDER_LEAN_WATER_FADE, max_lean_dw, dw))
+							if tilt > ALDER_LEAN_MIN_RAD and tilt_axis.length_squared() > ALDER_LEAN_GRAD2_MIN:
+								xf.basis = Basis(tilt_axis, tilt) * xf.basis
+								custom_xf = true
 			if rock:
 				var normal: Vector3 = items.normals[o] if items.has("normals") else Vector3.UP
 				var shape := WGRandom.hash2(floori(ox * 127), floori(oy * 131), 15632)
@@ -1388,13 +1471,13 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			var box: AABB = xf * def.box
 			entry.bounds = box if n == 0 else entry.bounds.merge(box)
 			if entry.has("tbuf"):
-				if rock:
+				if custom_xf:
 					_put_transform(entry.tbuf, n * 12, xf)
 				else:
 					_put_xform(entry.tbuf, n * 12, pos.x, pos.y, pos.z, rot, s, sy)
 			if entry.has("cbuf"):
 				var buf: PackedFloat32Array = entry.cbuf
-				if rock:
+				if custom_xf:
 					_put_transform(buf, n * 16, xf)
 				else:
 					_put_xform(buf, n * 16, pos.x, pos.y, pos.z, rot, s, sy)
@@ -2626,28 +2709,53 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			weights[Understory.MEADOW] *= _veg_cfg.forest_flower_mul
 			weights[Understory.FORBS] *= _veg_cfg.forest_flower_mul
 			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
-			var verge_boost := lerpf(1.0, 1.65, _verge(i, j)) if _in_plan(i, j) else 1.0
-			var wet_dark := clampf(wet_patch * 0.65 + moisture * 0.35, 0.25, 1.0)
-			weights[Understory.SWORD_FERN] = weights[Understory.SWORD_FERN] * _veg_cfg.forest_fern_boost * verge_boost + 0.55 * wet_dark * verge_boost * _veg_cfg.forest_fern_boost
-			weights[Understory.FERN] *= _veg_cfg.forest_fern_boost * verge_boost * 0.45
-			weights[Understory.BROADLEAF_HERB] = weights[Understory.BROADLEAF_HERB] * _veg_cfg.forest_broadleaf_boost + 0.48 * wet_dark * (0.65 + 0.75 * bank) * _veg_cfg.forest_broadleaf_boost
-			weights[Understory.BERRY_SHRUB] = weights[Understory.BERRY_SHRUB] * _veg_cfg.forest_berry_boost + 0.50 * (1.0 - surface.a * 0.7) * _veg_cfg.forest_berry_boost
-			weights[Understory.SALAL] = weights[Understory.SALAL] * _veg_cfg.forest_berry_boost * 0.85 + 0.38 * wet_dark * _veg_cfg.forest_berry_boost
-			weights[Understory.DEVILS_CLUB] = weights[Understory.DEVILS_CLUB] * _veg_cfg.forest_broadleaf_boost + 0.34 * wet_dark * (0.45 + 0.85 * bank) * _veg_cfg.forest_broadleaf_boost
-			weights[Understory.ALPINE_SHRUB] += (0.28 * smoothstep(0.10, 0.55, slope) + 0.24 * (1.0 - ch[Understory.DARK] * 0.5) + 0.22 * verge_boost) * _veg_cfg.forest_alpine_shrub_boost
-			weights[Understory.MOSS_MOUND] = weights[Understory.MOSS_MOUND] * _veg_cfg.forest_moss_mound_boost + 0.42 * wet_dark * (1.0 - 0.4 * slope) * _veg_cfg.forest_moss_mound_boost
+			var verge_boost := lerpf(1.0, EXP_VERGE_BOOST_MAX, _verge(i, j)) if _in_plan(i, j) else 1.0
+			var wet_dark := clampf(wet_patch * 0.65 + moisture * 0.35, EXP_WET_DARK_RANGE.x, EXP_WET_DARK_RANGE.y)
+			var convexity := _cell_convexity(i, j)
+			var com_patch := _vnoise(i, j, EXP_COMMUNITY_PATCH_CELLS, (world.seed_num ^ EXP_COMMUNITY_PATCH_SALT) + EXP_COMMUNITY_PATCH_SEED_OFF)
+			var ec := Understory.expedition_forest_community(moisture, convexity, com_patch)
+			var c_fern := ec[Understory.E_FERN_HOLLOW]
+			var c_shrub := ec[Understory.E_SHRUB_SLOPE]
+			var c_berry := ec[Understory.E_BERRY_RIDGE]
+			var sf_mul: Vector2 = EXP_GUILD_MUL[Understory.SWORD_FERN]
+			var sf_add: Vector2 = EXP_GUILD_ADD[Understory.SWORD_FERN]
+			weights[Understory.SWORD_FERN] = (weights[Understory.SWORD_FERN] * lerpf(sf_mul.x, sf_mul.y, c_fern) + lerpf(sf_add.x, sf_add.y, c_fern) * wet_dark) * verge_boost * _veg_cfg.forest_fern_boost
+			var f_mul: Vector2 = EXP_GUILD_MUL[Understory.FERN]
+			weights[Understory.FERN] *= _veg_cfg.forest_fern_boost * verge_boost * lerpf(f_mul.x, f_mul.y, c_fern)
+			var bh_mul: Vector2 = EXP_GUILD_MUL[Understory.BROADLEAF_HERB]
+			var bh_add: Vector2 = EXP_GUILD_ADD[Understory.BROADLEAF_HERB]
+			weights[Understory.BROADLEAF_HERB] = (weights[Understory.BROADLEAF_HERB] * lerpf(bh_mul.x, bh_mul.y, c_fern) + lerpf(bh_add.x, bh_add.y, maxf(c_fern, bank * 0.85)) * wet_dark * (0.65 + 0.75 * bank)) * _veg_cfg.forest_broadleaf_boost
+			var bs_mul: Vector2 = EXP_GUILD_MUL[Understory.BERRY_SHRUB]
+			var bs_add: Vector2 = EXP_GUILD_ADD[Understory.BERRY_SHRUB]
+			weights[Understory.BERRY_SHRUB] = (weights[Understory.BERRY_SHRUB] * lerpf(bs_mul.x, bs_mul.y, c_berry) + lerpf(bs_add.x, bs_add.y, c_berry) * (1.0 - surface.a * 0.7)) * _veg_cfg.forest_berry_boost
+			var sl_mul: Vector2 = EXP_GUILD_MUL[Understory.SALAL]
+			var sl_add: Vector2 = EXP_GUILD_ADD[Understory.SALAL]
+			weights[Understory.SALAL] = (weights[Understory.SALAL] * lerpf(sl_mul.x, sl_mul.y, c_shrub) + lerpf(sl_add.x, sl_add.y, c_shrub) * wet_dark) * _veg_cfg.forest_berry_boost
+			var dc_add: Vector2 = EXP_GUILD_ADD[Understory.DEVILS_CLUB]
+			weights[Understory.DEVILS_CLUB] = (weights[Understory.DEVILS_CLUB] + lerpf(dc_add.x, dc_add.y, maxf(c_fern, bank)) * wet_dark * (0.45 + 0.95 * bank)) * _veg_cfg.forest_broadleaf_boost
+			var rel_alt := maxf(0.0, (world.elev[j * world.W + i] if _in_plan(i, j) else 0.0) - _eco_base)
+			var alpine_hi := _veg_cfg.treeline_line_lo
+			var alpine_lo := alpine_hi * EXP_ALPINE_BELT_START_K
+			var alpine_k := smoothstep(alpine_lo, alpine_hi, rel_alt) * lerpf(EXP_ALPINE_EXPOSED_MUL.x, EXP_ALPINE_EXPOSED_MUL.y, maxf(surface.a, smoothstep(EXP_ALPINE_SLOPE.x, EXP_ALPINE_SLOPE.y, slope)))
+			weights[Understory.ALPINE_SHRUB] += alpine_k * _veg_cfg.forest_alpine_shrub_boost
+			var mm_add: Vector2 = EXP_GUILD_ADD[Understory.MOSS_MOUND]
+			weights[Understory.MOSS_MOUND] = (weights[Understory.MOSS_MOUND] + lerpf(mm_add.x, mm_add.y, c_fern) * wet_dark * (1.0 - 0.35 * slope)) * _veg_cfg.forest_moss_mound_boost
+			weights[Understory.MUSHROOM] += EXP_MUSHROOM_HOLLOW_W * c_fern * wet_dark * (0.5 + 0.5 * old_patch)
 			var tw := _veg_cfg.forest_thicket_wall
-			weights[Understory.BUSH] = (weights[Understory.BUSH] + 0.16 * ch[Understory.DARK] + 0.14 * verge_boost) * tw
-			weights[Understory.SAPLING] = (weights[Understory.SAPLING] + 0.12) * tw
-			weights[Understory.YOUNG_PINE] = (weights[Understory.YOUNG_PINE] + 0.14 * surface.g) * tw
-			weights[Understory.PINE] = (weights[Understory.PINE] + 0.14 * surface.g) * tw
-			weights[Understory.HAZEL] *= tw
-			weights[Understory.HAZEL_TALL] *= tw
-			floor_weights[Floor.MOSS_LOG] = floor_weights[Floor.MOSS_LOG] * _veg_cfg.forest_nurse_log_mul + 0.26 * wet_dark * _veg_cfg.forest_nurse_log_mul
-			floor_weights[Floor.STUMP] = floor_weights[Floor.STUMP] * _veg_cfg.forest_root_stump_mul + 0.20 * _veg_cfg.forest_root_stump_mul
-			floor_weights[Floor.BOULDER] = floor_weights[Floor.BOULDER] * _veg_cfg.forest_boulder_mul + 0.22 * (surface.a + 0.4 * slope) * _veg_cfg.forest_boulder_mul
-			floor_weights[Floor.TWIG] *= 0.30
-			floor_weights[Floor.LEAVES] *= 0.30
+			weights[Understory.BUSH] = (weights[Understory.BUSH] + EXP_THICKET_BUSH_W.x * c_shrub + EXP_THICKET_BUSH_W.y * ch[Understory.DARK] + EXP_THICKET_BUSH_W.z * verge_boost) * tw * EXP_THICKET_DAMP.x
+			weights[Understory.SAPLING] = (weights[Understory.SAPLING] + EXP_THICKET_SAPLING_BASE * lerpf(EXP_THICKET_SAPLING_MUL.x, EXP_THICKET_SAPLING_MUL.y, c_shrub)) * tw * EXP_THICKET_DAMP.y
+			var pine_w := EXP_THICKET_PINE_BASE * surface.g * lerpf(EXP_THICKET_PINE_MUL.x, EXP_THICKET_PINE_MUL.y, c_berry)
+			weights[Understory.YOUNG_PINE] = (weights[Understory.YOUNG_PINE] + pine_w) * tw * EXP_THICKET_DAMP.x
+			weights[Understory.PINE] = (weights[Understory.PINE] + pine_w) * tw * EXP_THICKET_DAMP.x
+			var hazel_cover := hazel_k * (1.0 - surface.a * EXP_HAZEL_ROCK_DAMP)
+			weights[Understory.HAZEL] = (weights[Understory.HAZEL] + EXP_HAZEL_SLOPE_W.x * c_shrub * hazel_cover) * tw
+			weights[Understory.HAZEL_TALL] = (weights[Understory.HAZEL_TALL] + EXP_HAZEL_SLOPE_W.y * c_shrub * hazel_cover) * tw
+			var ml_add: Vector2 = EXP_GUILD_ADD[Floor.FIRST + Floor.MOSS_LOG]
+			floor_weights[Floor.MOSS_LOG] = (floor_weights[Floor.MOSS_LOG] + lerpf(ml_add.x, ml_add.y, c_fern) * wet_dark) * _veg_cfg.forest_nurse_log_mul
+			floor_weights[Floor.STUMP] = (floor_weights[Floor.STUMP] + EXP_FLOOR_STUMP_BASE) * _veg_cfg.forest_root_stump_mul
+			floor_weights[Floor.BOULDER] = (floor_weights[Floor.BOULDER] + EXP_FLOOR_BOULDER_BASE * (surface.a + EXP_FLOOR_BOULDER_SLOPE * slope)) * _veg_cfg.forest_boulder_mul
+			floor_weights[Floor.TWIG] *= EXP_FLOOR_TWIG_MUL
+			floor_weights[Floor.LEAVES] *= lerpf(EXP_LEAF_LITTER_MUL.x, EXP_LEAF_LITTER_MUL.y, surface.g)
 	weights.append_array(floor_weights)
 	var total := 0.0
 	for weight in weights:
@@ -2743,12 +2851,17 @@ func _sites(ctx) -> Array:
 	return _understory_sites if ctx == null else ctx.sites
 
 
+## Нормализованная выпуклость клетки плана в 8 м (-1 — ложбина, +1 — ребро/плечо).
+func _cell_convexity(i: int, j: int) -> float:
+	if not _in_plan(i, j):
+		return 0.0
+	return clampf(RockScatter.local_convexity(world.elev, j * world.W + i, world.W) / RockScatter.CONVEXITY_NORM_M, -1.0, 1.0)
+
+
 ## 17.11.2026: множитель лещины по месту: ложбина (вогнутость рельефа в 8 м) или низина у воды — до 1,6,
 ## ровное и выпуклое место — 0,3
 func _hazel_site(i: int, j: int, water: float) -> float:
-	var hollow := 0.0
-	if _in_plan(i, j):
-		hollow = clampf(-RockScatter.local_convexity(world.elev, j * world.W + i, world.W) / 0.9, 0.0, 1.0)
+	var hollow := clampf(-_cell_convexity(i, j), 0.0, 1.0)
 	return lerpf(0.3, 1.6, maxf(hollow, 1.0 - smoothstep(2.0, 10.0, water)))
 
 
@@ -2878,6 +2991,7 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		_move_weight(weights, Understory.SEDGE, Understory.BROADLEAF_HERB, wet_bank * 0.33)
 		if _veg_cfg != null:
 			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
+			weights[Understory.STIPA] = 0.0
 			var cool_shady := clampf(surface.r * 0.8 + surface.a * 0.6 + clampf((alt - 0.15) * 2.5, 0.0, 1.0), 0.0, 1.0)
 			var flower_keep := lerpf(maxf(_veg_cfg.forest_flower_mul, 0.08), _veg_cfg.forest_flower_mul, cool_shady)
 			weights[Understory.FLOWERS] *= flower_keep
@@ -2887,6 +3001,8 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 			if water < 8.0 or surface.b > 0.45:
 				weights[Understory.SWORD_FERN] += com[Understory.C_WET] * 0.65 * _veg_cfg.forest_fern_boost * 0.35
 				weights[Understory.BROADLEAF_HERB] += com[Understory.C_WET] * 0.55 * _veg_cfg.forest_broadleaf_boost * 0.32
+				weights[Understory.DEVILS_CLUB] += com[Understory.C_WET] * EXP_OPEN_DEVILS_CLUB_W * _veg_cfg.forest_broadleaf_boost * 0.32
+			weights[Understory.SALAL] += com[Understory.C_SHRUB] * EXP_OPEN_SALAL_W * _veg_cfg.forest_berry_boost * EXP_OPEN_SALAL_MILD
 			weights[Understory.BERRY_SHRUB] += 0.28 * _veg_cfg.forest_berry_boost * (1.0 - surface.a * 0.6)
 			weights[Understory.ALPINE_SHRUB] += (0.26 * rock_edge + 0.16 * smoothstep(0.15, 0.55, surface.a)) * _veg_cfg.forest_alpine_shrub_boost
 	for weight in weights:
@@ -3268,6 +3384,15 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var floor_form := kind - Floor.FIRST
 	var floor_kind := Floor.base_kind(floor_form)
 	var large_log := Floor.LARGE_LOGS.has(floor_form)
+	if large_log and not on_road:
+		scale = minf(scale, LARGE_LOG_MAX_SCALE)
+		var step_m := LARGE_LOG_SLOPE_STEP_M
+		var gx := placement.ground_at(x + step_m, z) - placement.ground_at(x - step_m, z)
+		var gz := placement.ground_at(x, z + step_m) - placement.ground_at(x, z - step_m)
+		var slope_min := LARGE_LOG_CONTOUR_MIN_SLOPE * step_m * 2.0
+		if gx * gx + gz * gz > slope_min * slope_min:
+			var jitter := lerpf(-LARGE_LOG_CONTOUR_JITTER_RAD, LARGE_LOG_CONTOUR_JITTER_RAD, fposmod(rot, PI) / PI)
+			rot = atan2(-gx, -gz) + (PI if rot > PI else 0.0) + jitter
 	var local_box: AABB = entry.box
 	# Проверка стволов должна видеть ту же длину, что меш и капсула столкновения.
 	var object_box := AABB(local_box.position * Vector3(stretch, 1.0, 1.0), local_box.size * Vector3(stretch, 1.0, 1.0))
@@ -3275,7 +3400,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var radius := Vector2(reach.x, reach.z).length()
 	# 16.0: куртина проверяет у полотна и воды свою сердцевину: края травы склоняются к кромке
 	var soft_verge := _veg_cfg != null and kind in SOFT_TRAIL_FORMS
-	var ground_r := radius * (_veg_cfg.soft_core_mul if soft_verge else (0.5 if kind in Understory.OPEN_FORMS else 1.0))
+	var ground_r := minf(radius, LARGE_LOG_GROUND_PRECHECK_R) if (large_log and not on_road) else radius * (_veg_cfg.soft_core_mul if soft_verge else (0.5 if kind in Understory.OPEN_FORMS else 1.0))
 	var verge_limit := _veg_cfg.soft_verge_mask if soft_verge else 0.08
 	# 16.0: у мест открытых клеток (key = клетка * 8 + место) проверка воды, путей, домов и стволов
 	# неизменна — считается один раз (бит «посчитано» и бит «можно»), а не в каждой раскладке.
@@ -3320,12 +3445,16 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 					xf = placement.seat_road_span(xf, Floor.log_span(kind - Floor.FIRST), sink, 0.34, 0.70)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
-		elif _expedition and not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG] and not large_log:
-			xf = placement.seat_forest_log(xf, Floor.log_span(kind - Floor.FIRST), sink)
+		elif _expedition and not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG]:
+			var log_sink := sink + (LARGE_LOG_EXTRA_SINK_M if large_log else 0.0)
+			var log_tol := LARGE_LOG_SEAT_TOLERANCE_M if large_log else FOREST_LOG_SEAT_TOLERANCE_M
+			var log_settle := LARGE_LOG_SEAT_SETTLE if large_log else FOREST_LOG_SEAT_SETTLE
+			var log_samples := LARGE_LOG_SEAT_SAMPLES if large_log else FOREST_LOG_SEAT_SAMPLES
+			xf = placement.seat_forest_log(xf, Floor.log_span(floor_form), log_sink, log_tol, log_settle, log_samples)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
 			pos = xf.origin
-		elif not placement.terrain_fits(xf, local_box, 0.34 if large_log else (0.25 if on_road and floor_kind == Floor.STONES else 0.18)):
+		elif not placement.terrain_fits(xf, local_box, 0.25 if on_road and floor_kind == Floor.STONES else 0.18):
 			return RoadPlacement.TERRAIN
 	elif _expedition and floor_kind in [Floor.STUMP, Floor.BOULDER] and (kind - Floor.FIRST) >= Floor.NURSE_LOG:
 		xf = placement.seat_embedded_solid(xf, local_box, sink)

@@ -60,6 +60,41 @@ const PATCH_COARSE_SALT := 0x41c64e6d
 const PATCH_GROVE_SALT := 0x6b43a9b5
 const SNAG_SALT := 9371
 const MUGO_SLOPE_SALT := 9733
+## Диапазон краевого усиления древостоя у тропы (строго ниже CLEAR_CAP, где dist_path задан явно)
+const TRAIL_EDGE_BOOST_MIN_M := 0.5
+const TRAIL_EDGE_BOOST_FADE_M := 2.5
+const TRAIL_EDGE_BOOST_MAX_M := CLEAR_CAP - 0.5
+## Нижний порог перехвата склонов стлаником (относительная высота > ~36 м или явная открытая скала)
+const MUGO_SLOPE_MIN_REL_ELEV := 0.14
+const MUGO_SLOPE_MIN_EXPOSED := 0.32
+## Топографические веса и пороги гильдий Экспедиции (строгий паритет с FastGrid.Vegetation.cs)
+const HOLLOW_CONVEXITY_LO := -0.15
+const HOLLOW_CONVEXITY_HI := 0.55
+const SHOULDER_CONVEXITY_LO := -0.10
+const SHOULDER_CONVEXITY_HI := 0.55
+const MAPLE_BASE_SHARE := 1.95
+const MAPLE_INLAND_HOLLOW_LO := 0.35
+const MAPLE_INLAND_HOLLOW_HI := 1.0
+const MAPLE_INLAND_MOIST_LO := 0.42
+const MAPLE_INLAND_MOIST_HI := 0.72
+const MAPLE_MOIST_LO := 0.34
+const MAPLE_MOIST_HI := 0.70
+const MAPLE_HOLLOW_MUL_LO := 0.70
+const MAPLE_HOLLOW_MUL_HI := 1.40
+const BIRCH_START_ALONG_K := 0.65
+const ALDER_INLAND_HOLLOW_LO := 0.70
+const ALDER_INLAND_HOLLOW_HI := 1.35
+const ROWAN_BASE_SHARE := 0.09
+const ROWAN_LIGHT_LO := 0.45
+const ROWAN_LIGHT_HI := 1.0
+const ROWAN_SHOULDER_LO := 0.60
+const ROWAN_SHOULDER_HI := 1.20
+const ROWAN_ELEV_LO := 0.22
+const ROWAN_ELEV_HI := 0.42
+const ROWAN_GROVE_LO := 0.60
+const ROWAN_GROVE_HI := 1.40
+const CONIFER_TOPO_LO := 0.85
+const CONIFER_TOPO_HI := 1.15
 
 
 static func run(w: WorldData, surface: Heightfield = null) -> void:
@@ -471,6 +506,11 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var plan_h: int = f.get("plan_h", w.H if w != null else y1)
 	var coarse_scale := vp[WorldVegetationConfig.VP_PATCH_COARSE] if has_veg else 68.0
 	var grove_scale := vp[WorldVegetationConfig.VP_PATCH_GROVE] if has_veg else 22.0
+	var def_x := PackedFloat64Array()
+	var def_y := PackedFloat64Array()
+	var def_k := PackedInt32Array()
+	var def_v := PackedInt32Array()
+	var def_s := PackedFloat64Array()
 	for y in range(y0, y1):
 		var along := clampf(float(y) / float(maxi(1, plan_h - 1)), 0.0, 1.0)
 		for x in range(x0, x1):
@@ -544,8 +584,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			var line := 0.0
 			var rel_e := 0.0
 			if has_veg:
-				var valley_floor := lerpf(vp[WorldVegetationConfig.VP_VALLEY_TOP_H], vp[WorldVegetationConfig.VP_VALLEY_BOT_H], along)
-				rel_e = maxf(0.0, e - valley_floor)
+				rel_e = maxf(0.0, e - vp[WorldVegetationConfig.VP_ECO_BASE])
 				if rel_e > vp[WorldVegetationConfig.VP_LINE_LO]:
 					line = _ss(vp[WorldVegetationConfig.VP_LINE_LO] + 0.05 * moist[i], vp[WorldVegetationConfig.VP_LINE_HI] + 0.10 * moist[i] - 0.04 * light, rel_e)
 				dens *= 1.0 - 0.45 * exposed
@@ -556,8 +595,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				dens *= 1.0 - 0.65 * line
 			if sl > STEEP:
 				dens /= 1.0 + (sl - STEEP) * 1.5
-			if has_veg and has_path and dist_path[i] > 5.0 and dist_path[i] < 22.0:
-				dens *= lerpf(vp[WorldVegetationConfig.VP_TRAIL_EDGE_TREE_BOOST], 1.0, _ss(7.0, 22.0, dist_path[i]))
+			if has_veg and has_path and dist_path[i] > TRAIL_EDGE_BOOST_MIN_M and dist_path[i] < TRAIL_EDGE_BOOST_MAX_M:
+				dens *= lerpf(vp[WorldVegetationConfig.VP_TRAIL_EDGE_TREE_BOOST], 1.0, _ss(TRAIL_EDGE_BOOST_FADE_M, TRAIL_EDGE_BOOST_MAX_M, dist_path[i]))
 			# Горная сосна (стланик): естественные куртины по горным склонам, предгорьям и переходной зоне к вершинам (не на скальных стенах и снегу).
 			# 17.11.2026: стланик дополняет древостой, а не вытесняет его: прежняя густота остаётся прежним видам,
 			# а прибавка до густоты пояса — только стланик (доля проверки rng выше mugo_from).
@@ -589,6 +628,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			# Берём соседей из всего плана или из полосы снимка OuterLand. Ложбины
 			# поддерживают влаголюбивые виды, на выпуклостях больше сухолюбивых.
 			var community_moist := -1.0
+			var dry_shoulder := 0.0
 			var patch_coarse := 0.5
 			var patch_grove := 0.5
 			# Числа rng на объект: проверка, x, y, вид, вариант, масштаб
@@ -598,7 +638,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
 					if community_moist < 0.0:
-						var dry_shoulder := clampf(RockScatter.local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
+						dry_shoulder = clampf(RockScatter.local_convexity(elev, i, stride) / RockScatter.CONVEXITY_NORM_M, -1.0, 1.0)
 						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
 						if has_veg:
 							patch_coarse = _patch_noise(x, y, coarse_scale, seed_num, PATCH_COARSE_SALT)
@@ -606,8 +646,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var r_kind := rng.next_float()
 					var kind := Biomes.T_MUGO if roll >= mugo_from else _kind(bi, b_kinds[bi], r_kind, e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
 					if expedition:
-						kind = expedition_kind(kind, bi, WGRandom.hash2(x, y, seed_num ^ (8179 + k)), e, community_moist, dw, light, stand, sl, exposed, along, patch_coarse, patch_grove, vp)
+						kind = expedition_kind(kind, bi, WGRandom.hash2(x, y, seed_num ^ (8179 + k)), e, community_moist, dw, light, stand, sl, exposed, along, patch_coarse, patch_grove, vp, dry_shoulder)
 						if has_veg and kind != Biomes.T_ALDER and kind != Biomes.T_MAPLE and kind != Biomes.T_MUGO \
+								and kind != Biomes.T_ROWAN and kind != Biomes.T_BIRCH \
+								and (rel_e > MUGO_SLOPE_MIN_REL_ELEV or exposed > MUGO_SLOPE_MIN_EXPOSED) \
 								and sl > 0.20 and (exposed > 0.14 or sl > 0.32) and vp[WorldVegetationConfig.VP_MUGO_SLOPE_SHARE] > 0.0:
 							var mugo_slope_p := vp[WorldVegetationConfig.VP_MUGO_SLOPE_SHARE] * (_ss(0.20, 0.45, sl) * 0.65 + _ss(0.14, 0.42, exposed) * 0.35)
 							if WGRandom.hash2(x, y, seed_num ^ (MUGO_SLOPE_SALT + k)) < mugo_slope_p:
@@ -657,7 +699,14 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					# клетка дальше 5 м от кромки (с запасом) — проверять нечего: самому большому стволу с ветвями ели хватает
 					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc, tree_age)) \
 							and (not has_cores or not RockMassif.covers(cores, px, py, 0.2)):
-						store.add(px, py, kind, v, sc)
+						if has_veg and b_tree[kind] != 0 and (tree_age == ForestModels.YOUNG_AGE or kind == Biomes.T_MUGO):
+							def_x.append(px)
+							def_y.append(py)
+							def_k.append(kind)
+							def_v.append(v)
+							def_s.append(sc)
+						else:
+							store.add(px, py, kind, v, sc)
 			if reeds:
 				# Старый RNG нужен только камышу. Вдали от воды и на кручах пустую
 				# проверку прежнего слоя камней больше не считаем. При sl < 0.5
@@ -675,6 +724,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 							and (not has_cores or not RockMassif.covers(cores, px, py, 0.0)):
 						store.add(px, py, Biomes.T_REED, v, sc)
 
+	for d in def_x.size():
+		store.add(def_x[d], def_y[d], def_k[d], def_v[d], def_s[d])
 
 	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store, massifs, cores)
 
@@ -844,7 +895,7 @@ static func _reedy(bi: int) -> bool:
 
 ## Вид объекта по местности с двумерным продольно-поперечным зонированием Экспедиции. Исключает T_OAK полностью.
 static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist: float, water: float, light: float, stand: float,
-		slope: float, exposed: float, along := 0.5, patch_coarse := 0.5, patch_grove := 0.5, vp := PackedFloat64Array()) -> int:
+		slope: float, exposed: float, along := 0.5, patch_coarse := 0.5, patch_grove := 0.5, vp := PackedFloat64Array(), convexity := 0.0) -> int:
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.GRASS, Biomes.SWAMP, Biomes.TUNDRA, Biomes.ROCK]:
 		return kind
 	if kind == Biomes.T_ROCK or kind == Biomes.T_MUGO or kind == Biomes.T_REED:
@@ -854,8 +905,7 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 		return kind
 	var head_w := 1.0 - _ss(p[WorldVegetationConfig.VP_HEADWATER_END] * 0.5, p[WorldVegetationConfig.VP_LOWER_START], along)
 	var low_w := _ss(p[WorldVegetationConfig.VP_HEADWATER_END], p[WorldVegetationConfig.VP_LOWER_START], along)
-	var valley_floor := lerpf(p[WorldVegetationConfig.VP_VALLEY_TOP_H], p[WorldVegetationConfig.VP_VALLEY_BOT_H], along)
-	var rel_elev := maxf(0.0, elev - valley_floor)
+	var rel_elev := maxf(0.0, elev - p[WorldVegetationConfig.VP_ECO_BASE])
 	if bi == Biomes.TUNDRA or bi == Biomes.ROCK:
 		if kind == Biomes.T_OAK or kind == Biomes.T_PINE or kind == Biomes.T_BIRCH:
 			return Biomes.T_SIBERIAN_CEDAR if roll < 0.55 else Biomes.T_LARCH
@@ -873,11 +923,11 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 		if roll < 0.40:
 			return Biomes.T_BUSH
 		roll = (roll - 0.40) / 0.60
-	if kind == Biomes.T_ROWAN and light > 0.45 and water < 24.0:
-		if roll < 0.35:
-			return Biomes.T_ROWAN
-		roll = (roll - 0.35) / 0.65
-	var near_river := _ss(1.0, 3.2, water) * (1.0 - _ss(p[WorldVegetationConfig.VP_MAPLE_DIST] * 0.55, p[WorldVegetationConfig.VP_MAPLE_DIST], water))
+	var hollow := _ss(HOLLOW_CONVEXITY_LO, HOLLOW_CONVEXITY_HI, -convexity)
+	var shoulder := _ss(SHOULDER_CONVEXITY_LO, SHOULDER_CONVEXITY_HI, convexity)
+	var river_clear := _ss(1.0, 3.2, water)
+	var near_river := river_clear * (1.0 - _ss(p[WorldVegetationConfig.VP_MAPLE_DIST] * 0.55, p[WorldVegetationConfig.VP_MAPLE_DIST], water))
+	var maple_site := maxf(near_river, river_clear * lerpf(MAPLE_INLAND_HOLLOW_LO, MAPLE_INLAND_HOLLOW_HI, hollow) * _ss(MAPLE_INLAND_MOIST_LO, MAPLE_INLAND_MOIST_HI, moist))
 	var low_terrace := 1.0 - _ss(p[WorldVegetationConfig.VP_MAPLE_ELEV] * 0.55, p[WorldVegetationConfig.VP_MAPLE_ELEV], rel_elev)
 	var gentle := 1.0 - _ss(p[WorldVegetationConfig.VP_MAPLE_SLOPE] * 0.55, p[WorldVegetationConfig.VP_MAPLE_SLOPE], slope)
 	var sheltered := 1.0 - _ss(0.16, 0.52, exposed)
@@ -886,16 +936,21 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 	var along_mul := lerpf(p[WorldVegetationConfig.VP_MAPLE_HEAD_MUL], p[WorldVegetationConfig.VP_MAPLE_MID_MUL],
 		_ss(0.18, p[WorldVegetationConfig.VP_HEADWATER_END] + 0.16, along))
 	along_mul = lerpf(along_mul, p[WorldVegetationConfig.VP_MAPLE_LOW_MUL], low_w)
-	var w_maple := 1.85 * near_river * low_terrace * gentle * sheltered * grove * _ss(0.36, 0.72, moist) * along_mul
-	var w_birch := p[WorldVegetationConfig.VP_LOWER_BIRCH] * low_w \
+	var w_maple := MAPLE_BASE_SHARE * maple_site * low_terrace * gentle * sheltered * grove * _ss(MAPLE_MOIST_LO, MAPLE_MOIST_HI, moist) * along_mul * lerpf(MAPLE_HOLLOW_MUL_LO, MAPLE_HOLLOW_MUL_HI, hollow)
+	var birch_along := _ss(p[WorldVegetationConfig.VP_HEADWATER_END] * BIRCH_START_ALONG_K, p[WorldVegetationConfig.VP_LOWER_START], along)
+	var w_birch := p[WorldVegetationConfig.VP_LOWER_BIRCH] * birch_along \
 		* (1.0 - _ss(p[WorldVegetationConfig.VP_MAPLE_ELEV], p[WorldVegetationConfig.VP_MAPLE_ELEV] * 1.8, rel_elev)) \
 		* (0.4 + 0.6 * light) * (1.0 - 0.4 * _ss(0.35, 0.70, stand))
 	var w_alder_in := p[WorldVegetationConfig.VP_INLAND_ALDER_SHARE] * _ss(0.42, 0.78, moist) \
-		* (1.0 - _ss(0.06, 0.22, rel_elev)) * lerpf(0.65, 1.35, 1.0 - patch_coarse) * (0.65 + 0.35 * (1.0 - light))
+		* (1.0 - _ss(0.06, 0.22, rel_elev)) * lerpf(0.65, 1.35, 1.0 - patch_coarse) * (0.65 + 0.35 * (1.0 - light)) \
+		* lerpf(ALDER_INLAND_HOLLOW_LO, ALDER_INLAND_HOLLOW_HI, hollow)
+	var w_rowan := ROWAN_BASE_SHARE * lerpf(ROWAN_LIGHT_LO, ROWAN_LIGHT_HI, light) * lerpf(ROWAN_SHOULDER_LO, ROWAN_SHOULDER_HI, shoulder) \
+		* (1.0 - _ss(ROWAN_ELEV_LO, ROWAN_ELEV_HI, rel_elev)) * lerpf(ROWAN_GROVE_LO, ROWAN_GROVE_HI, patch_grove)
 	var rc_moist := p[WorldVegetationConfig.VP_REDCEDAR_MOIST]
 	var rc_elev := p[WorldVegetationConfig.VP_REDCEDAR_REL_ELEV]
 	var w_redcedar := p[WorldVegetationConfig.VP_REDCEDAR_SHARE] * _ss(rc_moist - 0.16, rc_moist + 0.24, moist) \
-		* (1.0 - _ss(rc_elev * 0.55, rc_elev * 1.45, rel_elev)) * lerpf(0.45, 1.35, patch_coarse) * lerpf(0.35, 1.15, 1.0 - head_w * 0.7)
+		* (1.0 - _ss(rc_elev * 0.55, rc_elev * 1.45, rel_elev)) * lerpf(0.45, 1.35, patch_coarse) * lerpf(0.35, 1.15, 1.0 - head_w * 0.7) \
+		* lerpf(CONIFER_TOPO_LO, CONIFER_TOPO_HI, hollow)
 	var w_hemlock := p[WorldVegetationConfig.VP_HEMLOCK_SHARE] * _ss(0.36, 0.74, moist) \
 		* (1.0 - _ss(0.10, 0.30, rel_elev)) * (0.55 + 0.45 * (1.0 - light)) * (0.60 + 0.40 * stand) \
 		* lerpf(0.40, 1.20, 1.0 - head_w * 0.65)
@@ -904,16 +959,16 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 		* lerpf(0.45, 1.25, 1.0 - head_w * 0.55)
 	var crag := _ss(0.15, 0.45, slope) * 0.5 + _ss(0.10, 0.45, exposed) * 0.5
 	var w_sib := lerpf(p[WorldVegetationConfig.VP_SIB_CEDAR_SLOPE], p[WorldVegetationConfig.VP_SIB_CEDAR_HEAD], head_w) \
-		* (0.55 + 0.45 * _ss(0.02, 0.22, rel_elev) + 0.40 * crag) * lerpf(1.25, 0.55, patch_coarse)
+		* (0.55 + 0.45 * _ss(0.02, 0.22, rel_elev) + 0.40 * crag) * lerpf(1.25, 0.55, patch_coarse) * lerpf(CONIFER_TOPO_LO, CONIFER_TOPO_HI, shoulder)
 	var l_lo := p[WorldVegetationConfig.VP_LARCH_ELEV_LO]
 	var l_hi := p[WorldVegetationConfig.VP_LARCH_ELEV_HI]
 	var l_sl := p[WorldVegetationConfig.VP_LARCH_SLOPE]
 	var larch_band := _ss(l_lo, l_lo + 0.14, rel_elev) * lerpf(1.0, 0.55, _ss(l_hi, l_hi + 0.22, rel_elev))
 	var larch_sun := (0.35 + 0.65 * light) * (0.45 + 0.55 * _ss(l_sl * 0.5, l_sl + 0.25, slope)) * lerpf(1.15, 0.45, moist)
-	var w_larch := lerpf(p[WorldVegetationConfig.VP_LARCH_BASE_SHARE], p[WorldVegetationConfig.VP_LARCH_HEAD], head_w) * (0.20 + 0.25 * head_w + 0.85 * larch_band) * larch_sun
+	var w_larch := lerpf(p[WorldVegetationConfig.VP_LARCH_BASE_SHARE], p[WorldVegetationConfig.VP_LARCH_HEAD], head_w) * (0.20 + 0.25 * head_w + 0.85 * larch_band) * larch_sun * lerpf(CONIFER_TOPO_LO, CONIFER_TOPO_HI, shoulder)
 	var w_pine := p[WorldVegetationConfig.VP_PINE_DRY] * (1.0 - _ss(0.28, 0.60, moist)) * _ss(0.50, 0.85, light) * _ss(0.12, 0.45, maxf(slope, exposed))
 	var w_spruce := maxf(0.04, p[WorldVegetationConfig.VP_SPRUCE_BASE] * (0.65 + 0.55 * (1.0 - light)) * (0.65 + 0.45 * stand) * (0.75 + 0.35 * patch_coarse) * lerpf(1.0, 0.65, head_w * 0.5))
-	var w_sum := w_maple + w_birch + w_alder_in + w_redcedar + w_hemlock + w_douglas + w_sib + w_larch + w_pine + w_spruce
+	var w_sum := w_maple + w_birch + w_alder_in + w_rowan + w_redcedar + w_hemlock + w_douglas + w_sib + w_larch + w_pine + w_spruce
 	var u := roll * w_sum
 	if u < w_maple:
 		return Biomes.T_MAPLE
@@ -924,6 +979,9 @@ static func expedition_kind(kind: int, bi: int, roll: float, elev: float, moist:
 	if u < w_alder_in:
 		return Biomes.T_ALDER
 	u -= w_alder_in
+	if u < w_rowan:
+		return Biomes.T_ROWAN
+	u -= w_rowan
 	if u < w_redcedar:
 		return Biomes.T_WESTERN_REDCEDAR
 	u -= w_redcedar

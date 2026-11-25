@@ -592,9 +592,7 @@ static func _cover(w: WorldData, f: Dictionary, i: int, x: float, y: float, bias
 	var c := wood * 1.15 + bias + fine * 0.4
 	var altitude := 1.0 - smoothstep(0.35, 0.72, f.elev[i])
 	if has_veg:
-		var along := clampf(y / float(maxi(1, w.H - 1)), 0.0, 1.0)
-		var valley_floor := lerpf(vp[WorldVegetationConfig.VP_VALLEY_TOP_H], vp[WorldVegetationConfig.VP_VALLEY_BOT_H], along)
-		var rel_e := maxf(0.0, f.elev[i] - valley_floor)
+		var rel_e := maxf(0.0, f.elev[i] - vp[WorldVegetationConfig.VP_ECO_BASE])
 		altitude = 1.0 - smoothstep(vp[WorldVegetationConfig.VP_LINE_LO], vp[WorldVegetationConfig.VP_LINE_HI] + 0.14, rel_e)
 	if bi == Biomes.GRASS:
 		var stand := n.fbm(x / StageVegetation.STAND_SCALE + StageVegetation.STAND_OX,
