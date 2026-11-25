@@ -27,6 +27,11 @@ var nodes := {}
 var _node_lod := {}
 var _lod_at := Vector2.INF
 var _lod_cache := ByteLru.new()
+var _lod_task := -1
+var _lod_request := Vector3i.ZERO
+var _lod_out := {}
+var _lod_handoff := {}
+var stream_stats := {lod_builds = 0, crown_cells = 0}
 var pending: Array[Vector2i] = []
 var _evict_pending: Array[Vector2i] = []
 var _mesh_pool: Array[MeshInstance3D] = []
@@ -42,7 +47,8 @@ var _far_at := Vector2.INF
 var checked_at := Vector2.INF
 var _cache: WorldCache
 const FarForest := preload("res://scripts/render/distant_forest.gd")
-var _crown_wait := {} # tile key -> terrain node still waiting for its far crowns
+var _crown_wait := {} # tile key -> pending crown publication, split into local cells
+var crown_clock: RefCounted
 var _world: WorldData
 var _heights: Heightfield
 var _cpu := preload("res://scripts/core/byte_lru.gd").new()
@@ -145,6 +151,11 @@ func _arrays(key: Vector2i) -> Variant:
 func _exit_tree() -> void:
 	if relief_detail != null:
 		relief_detail.close()
+	if _lod_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_lod_task)
+		_lod_task = -1
+		_lod_out = {}
+	_clear_lod_handoff()
 	if _read_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -183,15 +194,25 @@ func _desired_lod_at(key: Vector2i, d: float, current_lod: int, immediate: bool)
 	return 2
 
 
-func _lod_arrays(key: Vector2i, lod: int) -> Array:
+func _lod_arrays(key: Vector2i, lod: int, immediate := true) -> Variant:
 	var cache_key := Vector3i(key.x, key.y, lod)
+	if _lod_handoff.get("key") == cache_key:
+		return _lod_handoff.arrays
 	var cached: Variant = _lod_cache.get_value(cache_key)
 	if cached is Array:
 		return cached
+	var step := LOD1_STEP if lod == 1 else LOD2_STEP
+	if morph_lod != null and not immediate:
+		if _lod_task == -1:
+			var detail: RefCounted = _heights.fine_relief
+			var out := _lod_out
+			_lod_request = cache_key
+			_lod_task = WorkerThreadPool.add_task(func() -> void:
+				out.arrays = detail.BuildMorphLod(key.x, key.y, step), false, "Рельеф LOD")
+		return null
 	var fast := Grid.fast_grid()
 	if fast == null:
 		return []
-	var step := LOD1_STEP if lod == 1 else LOD2_STEP
 	var skirt := step * GameConfig.TILE * 0.5
 	var arrays: Array
 	if morph_lod != null:
@@ -203,6 +224,29 @@ func _lod_arrays(key: Vector2i, lod: int) -> Array:
 	if not arrays.is_empty():
 		_lod_cache.put(cache_key, arrays)
 	return arrays
+
+
+func _poll_lod() -> void:
+	if _lod_task == -1 or not WorkerThreadPool.is_task_completed(_lod_task):
+		return
+	WorkerThreadPool.wait_for_task_completion(_lod_task)
+	_lod_task = -1
+	var arrays: Array = _lod_out.arrays
+	_lod_out = {}
+	stream_stats.lod_builds += 1
+	# Retain even an invalid result so an unsupported tile can use the base mesh.
+	if not _lod_cache.put(_lod_request, arrays):
+		_clear_lod_handoff()
+		var bytes := ByteLru.size_of(arrays)
+		_lod_handoff = {key = _lod_request, arrays = arrays, bytes = bytes}
+		if _lod_cache.budget != null:
+			_lod_cache.budget.reserve(bytes)
+
+
+func _clear_lod_handoff() -> void:
+	if not _lod_handoff.is_empty() and _lod_cache.budget != null:
+		_lod_cache.budget.release(_lod_handoff.bytes)
+	_lod_handoff.clear()
 
 
 func _step_lod(p: Vector2, near := INF, immediate := false) -> bool:
@@ -221,9 +265,14 @@ func _step_lod(p: Vector2, near := INF, immediate := false) -> bool:
 			continue
 		var node: MeshInstance3D = nodes[key]
 		if wanted > 0:
-			var lod_arrays := _lod_arrays(key, wanted)
+			var lod_arrays: Variant = _lod_arrays(key, wanted, immediate)
+			if lod_arrays == null:
+				waiting_io = true
+				continue
 			if lod_arrays.is_empty():
 				continue
+			if not immediate and frame_budget != null and not frame_budget.allows_work():
+				return false
 			var started := Time.get_ticks_usec()
 			_set_lod_mesh(node, key, wanted, p, lod_arrays)
 			_node_lod[key] = wanted
@@ -241,6 +290,8 @@ func _step_lod(p: Vector2, near := INF, immediate := false) -> bool:
 				var out := _read_out
 				_read_task = WorkerThreadPool.add_task(func() -> void: out.arrays = _read_arrays(key), false, "Чанк рельефа")
 			continue
+		if not immediate and frame_budget != null and not frame_budget.allows_work():
+			return false
 		var started := Time.get_ticks_usec()
 		_set_lod_mesh(node, key, 0, p, arrays)
 		_node_lod[key] = 0
@@ -253,7 +304,8 @@ func _step_lod(p: Vector2, near := INF, immediate := false) -> bool:
 			_uncached_key = null
 			_uncached_arrays = []
 		return true
-	if not waiting_io:
+	# A local arrival scan cannot settle the LODs of the rest of the loaded plan.
+	if not waiting_io and is_inf(near):
 		_lod_at = p
 	return false
 
@@ -271,6 +323,8 @@ func _terrain_mesh(key: Vector2i, arrays: Array) -> ArrayMesh:
 
 func _set_lod_mesh(node: MeshInstance3D, key: Vector2i, lod: int, p: Vector2, arrays: Array) -> void:
 	node.mesh = _terrain_mesh(key, arrays)
+	if _lod_handoff.get("key") == Vector3i(key.x, key.y, lod):
+		_clear_lod_handoff()
 	if morph_lod != null:
 		node.material_override = _material_for(key, p)
 		morph_lod.configure(node, key, lod)
@@ -310,22 +364,42 @@ func _release_mesh_node(node: MeshInstance3D) -> void:
 
 ## Far crown proxies join a terrain tile once their worker has finished; the tile itself never waits for them.
 ## allow — общий бюджет кадра разрешает публикацию; true в ответе — кадр занят передачей крон.
-func _attach_crowns(allow: bool) -> bool:
+func _attach_crowns(p: Vector2, allow: bool) -> bool:
+	var closest := INF
+	var next: Variant = null
+	var next_batches: Variant = null
 	for key: Vector2i in _crown_wait.keys():
-		var node: Variant = _crown_wait[key]
-		if not is_instance_valid(node) or nodes.get(key) != node:
+		var work: Dictionary = _crown_wait[key]
+		if not is_instance_valid(work.node) or nodes.get(key) != work.node:
 			_crown_wait.erase(key)
 			continue
-		var crowns: Variant = source.crowns(key)
-		if crowns == null:
-			source.request_crowns(key)
+		var distance := distance_to_chunk(key, p)
+		if distance > FarForest.far_end + SIDE:
 			continue
-		if not allow:
-			continue
-		FarForest.attach(node, crowns)
-		_crown_wait.erase(key)
-		return true # one tile per frame, counted as this frame's upload
-	return false
+		var crowns: Variant = null
+		if not work.has("cells"):
+			crowns = source.crowns(key)
+			if crowns == null:
+				source.request_crowns(key)
+				continue
+		if allow and distance < closest:
+			closest = distance
+			next = key
+			next_batches = crowns
+	if next == null:
+		return false
+	var work: Dictionary = _crown_wait[next]
+	if next_batches != null:
+		work.cells = FarForest.attachment_cells(next_batches, p)
+	if work.cells.is_empty():
+		_crown_wait.erase(next)
+		return false
+	var born: float = crown_clock.clock if crown_clock != null else 0.0
+	FarForest.attach_cell(work.node, work.cells.pop_back(), Vector2.ZERO, false, born)
+	stream_stats.crown_cells += 1
+	if work.cells.is_empty():
+		_crown_wait.erase(next)
+	return true
 
 
 func _material_for(key: Vector2i, p: Vector2) -> Material:
@@ -356,6 +430,8 @@ func _has_near_pending(p: Vector2, radius: float) -> bool:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
 	var p := Vector2(x, z)
+	if force:
+		_lod_at = Vector2.INF
 	if morph_lod != null and morph_lod.follow(p):
 		# A stationary arrival can still need the next finer level after recovery.
 		_lod_at = Vector2.INF
@@ -363,6 +439,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		relief_detail.follow(p, force, AHEAD, LOD_RECHECK)
 	if not force and frame_budget != null and not frame_budget.allows_work():
 		return false
+	_poll_lod()
 	var uploaded := false
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
@@ -420,7 +497,9 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		var arrays: Variant = null
 		var used_lod := 0
 		if wanted_lod > 0:
-			var lod_arrays := _lod_arrays(key, wanted_lod)
+			var lod_arrays: Variant = _lod_arrays(key, wanted_lod, force)
+			if lod_arrays == null:
+				break
 			if not lod_arrays.is_empty():
 				arrays = lod_arrays
 				used_lod = wanted_lod
@@ -448,9 +527,11 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		var node := _acquire_mesh_node(mesh, _material_for(key, p), shadow_mode)
 		if morph_lod != null:
 			morph_lod.configure(node, key, used_lod)
+		if _lod_handoff.get("key") == Vector3i(key.x, key.y, wanted_lod):
+			_clear_lod_handoff()
 		if water_layer < 0 and _world != null:
 			if source == null: FarForest.attach(node, FarForest.plan(_world, _heights, key))
-			else: _crown_wait[key] = node
+			else: _crown_wait[key] = {node = node}
 		nodes[key] = node
 		_node_lod[key] = used_lod
 		if used_lod == 0:
@@ -473,10 +554,10 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 			if nodes[key].material_override != wanted:
 				nodes[key].material_override = wanted
 	if (near == INF or relief_detail != null) and allow_apply and not uploaded and _lod_enabled() and p.distance_to(_lod_at) >= LOD_RECHECK and (frame_budget == null or frame_budget.allows_work()):
-		if _step_lod(p, near):
+		if _step_lod(p, near, force):
 			uploaded = true
 	# Кроны — после рельефа: только в кадре без передачи чанка и в пределах общего бюджета.
-	if (force or near == INF) and _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
+	if (force or near == INF) and _attach_crowns(p, allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
 		uploaded = true
 	if near == INF and allow_apply and not uploaded and not _evict_pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
 		var key: Vector2i = _evict_pending.pop_back()

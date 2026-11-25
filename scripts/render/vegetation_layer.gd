@@ -14,6 +14,7 @@ const DROP_MARGIN := 96.0 # гистерезис: не пересоздаём ч
 const RECHECK := 24.0
 const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолжение группы — в следующих кадрах
 const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
+const DETAIL_SECTORS_PER_SLICE := 8
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
 const ARRIVAL_TREE_RADIUS := 128.0
@@ -161,6 +162,9 @@ var _veg_keys := {}
 var grass: MultiMesh
 var _grass_node: MultiMeshInstance3D
 var _grass_sectors := {nodes = {}, pool = []}
+var _detail_slice := {}
+var detail_sector_changes := 0
+var _sector_deadline := 0
 var use_sector_details := true
 var use_split_understory_shadows := true
 var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
@@ -622,6 +626,7 @@ func set_draw(level: int) -> bool:
 	if clampi(level, 0, GameSettings.DRAW_LEVELS.size() - 1) == draw_level:
 		return false
 	_finish()
+	_clear_presentation()
 	snapshots.reset()
 	_set_radii(level)
 	grass.visible_instance_count = 0
@@ -750,7 +755,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	phase_started = _record_phase(0, phase_started)
 	if force:
 		_finish()
-		_present.clear()
+		_clear_presentation()
 		_clear_pending()
 		_built.clear()
 		snapshots.reset()
@@ -809,10 +814,9 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			_detail_frames.clear()
 	if not _present.is_empty():
 		if allow_upload and not uploaded and (frame_budget == null or frame_budget.allows_work()):
-			_present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US if frame_budget == null else frame_budget.deadline(DETAIL_UPLOAD_US))
+			uploaded = _present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US if frame_budget == null else frame_budget.deadline(DETAIL_UPLOAD_US))
 		else:
-			_present_next(-1)  # обязательная порция: одна группа
-		uploaded = true
+			uploaded = _present_next(-1)  # обязательная порция ближней растительности
 	phase_started = _record_phase(2, phase_started)
 	var lead := stream.lead()
 	if (frame_budget == null or frame_budget.allows_work()) and (last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK):
@@ -868,7 +872,7 @@ func busy() -> bool:
 ## затем отдаём ближайшие деревья и подлесок теми же порциями, что при езде.
 func travel_begin(p: Vector2, forward: Vector2) -> Callable:
 	_finish()
-	_present.clear()
+	_clear_presentation()
 	_clear_pending()
 	_built.clear()
 	snapshots.reset()
@@ -1482,15 +1486,19 @@ func refresh(rect: Rect2i) -> void:
 	# Unpublished groups belong to the old terrain. Keep only the live buffers
 	# and let the normal worker rebuild the snapshot under the frame budget.
 	if not _present.is_empty():
-		_present.clear()
+		if not _detail_slice.is_empty():
+			_remember_partial_grass()
+		_clear_presentation()
 		_detail_frames.clear()
 	# Published earthworks cannot leave old trees, rocks or undergrowth floating over the cut.
 	var box := Rect2(Vector2(rect.position) * TILE, Vector2(rect.size) * TILE)
 	_history_cuts.append(box)
 	var meshes: Array[MultiMesh] = []
+	var grass_history := {}
 	if grass != null: meshes.append(grass)
 	for part: Dictionary in _grass_sectors.nodes.values():
 		meshes.append(part.mm)
+		grass_history[part.mm] = part
 	if carpet != null: carpet.invalidate(rect)
 	for e: Dictionary in understory:
 		meshes.append(e.mm)
@@ -1501,7 +1509,8 @@ func refresh(rect: Rect2i) -> void:
 	for mm in meshes:
 		var bounds := mm.custom_aabb
 		if not Rect2(Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.size.x, bounds.size.z)).intersects(box): continue
-		var buffer := mm.buffer
+		var part: Dictionary = grass_history.get(mm, {})
+		var buffer: PackedFloat32Array = part.history if not part.is_empty() else mm.buffer
 		var end := mini(mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count, mm.instance_count) * STRIDE
 		# Пока ни один экземпляр не попал в вырез, буфер не переписывается и не возвращается в MultiMesh.
 		var first := 0
@@ -1514,6 +1523,8 @@ func refresh(rect: Rect2i) -> void:
 			kept += 1
 		mm.buffer = buffer
 		mm.visible_instance_count = kept
+		if not part.is_empty():
+			part.history = buffer
 	_refresh_details = true
 	obstacles = _without_region(obstacles, 7, box)
 	bumps = _without_region(bumps, 6, box)
@@ -1702,7 +1713,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0, immediate :
 
 
 func _apply_grass(immediate := false) -> void:
-	_present.clear()
+	_clear_presentation()
 	_present_group(-1, immediate)
 	for kind in understory.size():
 		_present_group(kind, immediate)
@@ -1712,12 +1723,17 @@ func _apply_grass(immediate := false) -> void:
 
 ## Готовый снимок передаётся по группам в пределах бюджета кадра.
 func _begin_present() -> void:
-	_present.clear()
+	_clear_presentation()
 	_present.append(-1)
 	var far_groups := _far_of.values()
 	for kind in understory.size():
 		if not far_groups.has(kind):
 			_present.append(kind)
+
+
+func _clear_presentation() -> void:
+	_present.clear()
+	_detail_slice.clear()
 
 
 func _accept_contacts() -> void:
@@ -1726,17 +1742,23 @@ func _accept_contacts() -> void:
 	obstacles_version += 1
 
 
-## deadline_usec = 0 — передать всё оставшееся сразу; > 0 — до срока, но хотя бы одну группу; < 0 — ровно одну группу.
-func _present_next(deadline_usec: int, immediate := false) -> void:
+## Пустые и уже опубликованные группы не расходуют очередь передач.
+func _present_next(deadline_usec: int, immediate := false) -> bool:
 	var pending := not _present.is_empty()
-	var groups_done := 0
-	while not _present.is_empty() and (deadline_usec == 0 or groups_done == 0 or (deadline_usec > 0 and Time.get_ticks_usec() < deadline_usec)):
-		groups_done += 1
-		var group: int = _present.pop_front()
-		_present_group(group, immediate)
+	var uploaded := false
+	while not _present.is_empty() and (deadline_usec == 0 or not uploaded or (deadline_usec > 0 and Time.get_ticks_usec() < deadline_usec)):
+		var group: int = _present.front()
+		# Paired forms and contact geometry are published together. Independent sectors can yield.
+		if deadline_usec != 0 and group < 0:
+			_sector_deadline = deadline_usec if deadline_usec > 0 else Time.get_ticks_usec()
+		uploaded = _present_group(group, immediate) or uploaded
+		_sector_deadline = 0
+		if not _detail_slice.is_empty():
+			break
+		_present.pop_front()
 		if _far_of.has(group):
 			# Both forms switch to the same snapshot and fade timestamp in this frame.
-			_present_group(_far_of[group], immediate)
+			uploaded = _present_group(_far_of[group], immediate) or uploaded
 		# Even a prepared worker snapshot can spend several frames in this queue.
 		if group == _last_contact_group and not immediate:
 			_accept_contacts()
@@ -1744,47 +1766,56 @@ func _present_next(deadline_usec: int, immediate := false) -> void:
 		_detail_frames.clear()
 		if pending and not immediate:
 			stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
+	return uploaded
 
 
-func _present_group(group: int, immediate: bool) -> void:
+func _present_group(group: int, immediate: bool) -> bool:
 	if group < 0:
-		_present_frame(-1, grass, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, immediate)
-		grass_at = _fill_at
-		grass_lead = _fill_lead
-		return
+		var uploaded := _present_frame(-1, grass, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, immediate)
+		if _detail_slice.is_empty():
+			grass_at = _fill_at
+			grass_lead = _fill_lead
+		return uploaded
 	var entry: Dictionary = understory[group]
 	var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
-	_present_frame(group, entry.mm, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, immediate)
+	return _present_frame(group, entry.mm, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, immediate)
 
 
-func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
-	var contact_rows: bool = group >= 0 and understory[group].has_contacts
-	var frame := snapshots.commit(group, _detail_frames[group], stream.clock) if _detail_frames.has(group) else snapshots.merge(group, source, count, bounds, radius, stream.clock, immediate, contact_rows)
+func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> bool:
 	var sectors: Variant = _grass_sectors if group < 0 and _grass_node != null else (understory[group].get("sectors") if group >= 0 and group < understory.size() else null)
+	if not _detail_slice.is_empty():
+		return _present_sectors(group, sectors, _detail_slice.frame)
+	var contact_rows: bool = group >= 0 and understory[group].has_contacts
+	var frame: Dictionary = _detail_frames[group] if _detail_frames.has(group) else snapshots.prepare(group, source, count, bounds, radius, stream.clock, immediate, contact_rows)
 	var mono_node: MultiMeshInstance3D = _grass_node if group < 0 else (understory[group].get("node") as MultiMeshInstance3D if group >= 0 and group < understory.size() else null)
+	var had_mono := mm != null and mm.visible_instance_count > 0
 	if not frame.has("sectors_packed") and use_sector_details and sectors is Dictionary and frame.count > 0:
 		var params := _group_sector_params(group, frame.count)
 		if params.enabled:
 			var fast: Variant = Grid.fast_grid()
 			if fast != null:
 				frame.sectors_packed = fast.PartitionDetailSectors(frame.buffer, frame.count, STRIDE, params.sector_size,
-					_fill_at.x, _fill_at.y, UNDERSTORY_SHADOW_FAR + SHADOW_SECTOR_MARGIN, params.split_shadows, radius, PackedFloat64Array())
+					_fill_at.x, _fill_at.y, UNDERSTORY_SHADOW_FAR + SHADOW_SECTOR_MARGIN, params.split_shadows, radius, frame.changes)
 				frame.split_shadows = params.split_shadows
 	if frame.has("sectors_packed") and sectors is Dictionary:
 		if mono_node != null:
 			mono_node.visible = false
 		if mm != null:
 			mm.visible_instance_count = 0
-		_present_sectors(group, sectors, frame.sectors_packed, frame.get("split_shadows", false))
-		return
-	if sectors is Dictionary and not sectors.nodes.is_empty():
+		return _present_sectors(group, sectors, frame) or had_mono
+	snapshots.commit(group, frame, stream.clock)
+	var had_sectors: bool = sectors is Dictionary and not sectors.nodes.is_empty()
+	if had_sectors:
 		_clear_sectors(sectors)
+	if frame.count == 0 and not had_mono:
+		return had_sectors
 	if mono_node != null:
 		mono_node.visible = true
 	if not frame.has("fitted"):
 		_fit_capacity(frame, mm)
 	_upload_instances(mm, frame.buffer, frame.count)
 	mm.custom_aabb = frame.bounds
+	return true
 
 
 func _sector_acquire(sectors: Dictionary, mesh: Mesh, mat: Material) -> Dictionary:
@@ -1817,6 +1848,7 @@ func _sector_release(sectors: Dictionary, part: Dictionary) -> void:
 	var smm: MultiMesh = part.mm
 	part.hash = 0
 	part.count = -1
+	part.erase("history")
 	smm.visible_instance_count = 0
 	node.visible = false
 	var pool: Array = sectors.pool
@@ -1835,7 +1867,9 @@ func _clear_sectors(sectors: Dictionary) -> void:
 	sectors.nodes.clear()
 
 
-func _present_sectors(group: int, sectors: Dictionary, packed: Dictionary, split_shadows: bool) -> void:
+func _present_sectors(group: int, sectors: Dictionary, frame: Dictionary) -> bool:
+	var packed: Dictionary = frame.sectors_packed
+	var split_shadows: bool = frame.split_shadows
 	var mesh: Mesh
 	var mat: Material
 	var shadow_cast := false
@@ -1853,50 +1887,86 @@ func _present_sectors(group: int, sectors: Dictionary, packed: Dictionary, split
 	var keys: PackedInt32Array = packed.keys
 	var counts: PackedInt32Array = packed.counts
 	if counts.is_empty():
-		if not active_nodes.is_empty():
+		var had_nodes := not active_nodes.is_empty()
+		if had_nodes:
 			_clear_sectors(sectors)
-		return
+		snapshots.remember(group, frame)
+		return had_nodes
 	var bounds_arr: PackedFloat32Array = packed.bounds
 	var hashes: PackedInt64Array = packed.get("hashes", PackedInt64Array())
 	var buffers: Array = packed.buffers
 	var sector_changes: Array = packed.changes
+	var source_changes: Array = packed.source_changes
+	var history: PackedFloat32Array = frame.buffer
 	var now := stream.clock
-	var next_nodes := {}
-	for i in counts.size():
+	var slice := _detail_slice
+	if slice.is_empty():
+		slice = {index = 0, previous = active_nodes.duplicate(), frame = frame}
+	var previous: Dictionary = slice.previous
+	var uploaded := false
+	var changes := 0
+	for i in range(slice.index, counts.size()):
+		if _sector_deadline != 0 and uploaded and (changes >= DETAIL_SECTORS_PER_SLICE or Time.get_ticks_usec() >= _sector_deadline):
+			frame.buffer = history
+			_detail_slice = slice
+			return true
+		slice.index = i + 1
 		var key := Vector3i(keys[i * 3], keys[i * 3 + 1], keys[i * 3 + 2])
+		previous.erase(key)
 		var part: Dictionary
 		if active_nodes.has(key):
 			part = active_nodes[key]
-			active_nodes.erase(key)
 		else:
 			part = _sector_acquire(sectors, mesh, mat)
+			active_nodes[key] = part
 		var node: MultiMeshInstance3D = part.node
+		var changed := false
 		var target_shadow := (shadow_mode if (key.z == 1 and shadow_cast) else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF) if split_shadows \
 			else (shadow_mode if shadow_cast else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 		if node.material_override != mat:
 			node.material_override = mat
+			changed = true
 		if node.cast_shadow != target_shadow:
 			node.cast_shadow = target_shadow
+			changed = true
 		if not node.visible:
 			node.visible = true
+			changed = true
 		var count_i := counts[i]
 		var hash_i := hashes[i] if i < hashes.size() else 0
 		var ch: PackedFloat64Array = sector_changes[i]
 		var smm: MultiMesh = part.mm
-		if ch.is_empty() and hash_i != 0 and part.get("count", -1) == count_i and part.get("hash", 0) == hash_i and smm.visible_instance_count == count_i:
-			next_nodes[key] = part
-			continue
+		if ch.is_empty() and hash_i != 0 and smm.visible_instance_count == count_i:
+			var matching: bool = part.count == count_i and part.hash == hash_i
+			# The first snapshot after a fade received its real timestamp on publication.
+			if matching or (group < 0 and part.has("history") and part.history == buffers[i]):
+				part.hash = hash_i
+				part.count = count_i
+				uploaded = uploaded or changed
+				changes += int(changed)
+				detail_sector_changes += int(changed)
+				continue
 		var buf: PackedFloat32Array = buffers[i]
+		var origins: PackedInt32Array = source_changes[i]
 		for c_at in range(0, ch.size(), 3):
 			var row_at := int(ch[c_at])
 			var mode := ch[c_at + 1]
 			var alpha := Snapshots.opacity(ch[c_at + 2], now)
-			buf[row_at + 19] = now if mode == 2 else (now - alpha * Snapshots.DURATION if mode == 1 else -(now - (1.0 - alpha) * Snapshots.DURATION))
+			var stamp := now if mode == 2 else (now - alpha * Snapshots.DURATION if mode == 1 else -(now - (1.0 - alpha) * Snapshots.DURATION))
+			buf[row_at + 19] = stamp
+			history[origins[c_at / 3] + 19] = stamp
+			if mode < 0:
+				frame.deadline = maxf(frame.deadline, -stamp + Snapshots.DURATION)
 		var cap := buf.size() / STRIDE
 		if smm.instance_count != cap:
 			smm.visible_instance_count = 0
 			smm.instance_count = cap
 		smm.buffer = buf
+		if group < 0:
+			part.history = buf
+		uploaded = true
+		changes += 1
+		detail_sector_changes += 1
 		smm.visible_instance_count = count_i
 		var b := i * 6
 		smm.custom_aabb = AABB(Vector3(bounds_arr[b], bounds_arr[b + 1], bounds_arr[b + 2]),
@@ -1907,10 +1977,36 @@ func _present_sectors(group: int, sectors: Dictionary, packed: Dictionary, split
 		else:
 			part.hash = 0
 			part.count = -1
-		next_nodes[key] = part
-	for old_key: Vector3i in active_nodes:
+	for old_key: Vector3i in previous.keys():
+		if _sector_deadline != 0 and uploaded and (changes >= DETAIL_SECTORS_PER_SLICE or Time.get_ticks_usec() >= _sector_deadline):
+			frame.buffer = history
+			_detail_slice = slice
+			return true
 		_sector_release(sectors, active_nodes[old_key])
-	sectors.nodes = next_nodes
+		active_nodes.erase(old_key)
+		previous.erase(old_key)
+		changes += 1
+		detail_sector_changes += 1
+		uploaded = true
+	_detail_slice = {}
+	frame.buffer = history
+	snapshots.remember(group, frame)
+	return uploaded
+
+
+## Регион может обновиться между порциями. Восстановить историю из CPU-буферов видимых секторов.
+func _remember_partial_grass() -> void:
+	var frame := {buffer = PackedFloat32Array(), count = 0, bounds = AABB(), deadline = 0.0}
+	for part: Dictionary in _grass_sectors.nodes.values():
+		var rows: PackedFloat32Array = part.history
+		var count: int = part.mm.visible_instance_count
+		for at in range(19, count * STRIDE, STRIDE):
+			if rows[at] < 0.0:
+				frame.deadline = maxf(frame.deadline, -rows[at] + Snapshots.DURATION)
+		frame.buffer.append_array(rows.slice(0, count * STRIDE))
+		frame.bounds = part.mm.custom_aabb if frame.count == 0 else frame.bounds.merge(part.mm.custom_aabb)
+		frame.count += count
+	snapshots.remember(-1, frame)
 
 
 func _shared_tree_material(def: Dictionary, part: String, level: int, small: bool) -> ShaderMaterial:

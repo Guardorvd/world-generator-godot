@@ -7,15 +7,27 @@ class ProbeLayer extends VegetationLayer:
 	var hold := false
 	var commits := 0
 	var invalid_commits := 0
+	var grass_publications := 0
+	var live_grass := PackedFloat32Array()
 	func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false, snapshot: Dictionary = {}) -> void:
 		if hold and not immediate:
 			gate.wait()
 		super._fill_details(px, pz, lead, epoch, clock, immediate, snapshot)
-	func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
-		super._present_frame(group, mm, source, count, bounds, radius, immediate)
+	func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> bool:
+		var uploaded := super._present_frame(group, mm, source, count, bounds, radius, immediate)
 		if group < 0:
-			if not immediate and _detail_epoch != _epoch: invalid_commits += 1
-			commits += 1
+			if _detail_slice.is_empty():
+				if not immediate and _detail_epoch != _epoch: invalid_commits += 1
+				commits += 1
+			if uploaded:
+				grass_publications += 1
+				live_grass = PackedFloat32Array()
+				if _grass_sectors.nodes.is_empty():
+					live_grass = snapshots.displayed[-1].slice(0, snapshots.shown[-1] * STRIDE)
+				else:
+					for part: Dictionary in _grass_sectors.nodes.values():
+						live_grass.append_array(part.history.slice(0, part.mm.visible_instance_count * STRIDE))
+		return uploaded
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 300)
@@ -44,7 +56,7 @@ func run() -> void:
 	root.add_child(veg)
 	veg.setup(w, h, Models.tree_defs(), Models.grass_mesh())
 	veg.update(512, 512, true, 1.0 / 60.0)
-	check(veg.grass.visible_instance_count == veg._grass_n, "Initial force publishes a complete snapshot")
+	check(veg.live_grass.size() == veg._grass_n * veg.STRIDE, "Initial force publishes a complete snapshot")
 	for entry: Dictionary in veg.understory:
 		check(entry.node.visibility_range_end == 0.0, "Understory distance is controlled per instance, not by batch center")
 	veg.hold = true
@@ -91,20 +103,20 @@ func run() -> void:
 		quit(1)
 		return
 	var route_start := veg.commits
-	var previous: PackedFloat32Array = veg.snapshots.displayed[-1].slice(0, veg.snapshots.shown[-1] * 20)
+	var previous := veg.live_grass
 	var continuity := true
 	var max_opacity_error := 0.0
 	var changed_rows := 0
 	# Compare several real publications while moving. The worker can need a full second per snapshot.
 	for i in 240:
 		await process_frame
-		var before := veg.commits
+		var before := veg.grass_publications
 		veg.update(632.0 + (i + 1) * 45.0 / 60.0, 512, false, 1.0 / 60.0)
-		if veg.commits != before:
+		if veg.grass_publications != before:
 			var old := {}
 			for at in range(0, previous.size(), 20):
 				old[veg.Snapshots.key(previous, at)] = previous[at + 19]
-			var current: PackedFloat32Array = veg.snapshots.displayed[-1].slice(0, veg.snapshots.shown[-1] * 20)
+			var current := veg.live_grass
 			for at in range(0, current.size(), 20):
 				var id := veg.Snapshots.key(current, at)
 				var alpha := veg.Snapshots.opacity(current[at + 19], veg.stream.clock)
@@ -143,7 +155,7 @@ func run() -> void:
 	veg.update(800, 800, true, 1.0 / 60.0)
 	check(veg._task == -1 and veg._tree_task == -1 and veg._pending.is_empty() and veg._queued.is_empty(), "Teleport joins both workers and clears queued data")
 	check(veg._fill_lead == Vector2.ZERO and veg.stream.velocity == Vector2.ZERO, "Teleport resets prediction")
-	check(veg.grass.visible_instance_count == veg._grass_n, "Teleport replaces outgoing history instead of retaining the old location")
+	check(veg.live_grass.size() == veg._grass_n * veg.STRIDE, "Teleport replaces outgoing history instead of retaining the old location")
 	var history: PackedFloat32Array = veg.snapshots.displayed[-1]
 	veg._refresh_details = true # same notification as publication of an outer tree chunk
 	veg.update(800, 800, false, 1.0 / 60.0)

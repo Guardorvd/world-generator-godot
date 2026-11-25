@@ -157,8 +157,12 @@ func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
 	# A queued group starts or reverses its fade when its buffer reaches the GPU.
 	if frame.get("stamped_at", -INF) != now:
 		stamp(frame, now)
+	remember(group, frame)
+	return frame
+
+
+func remember(group: int, frame: Dictionary) -> void:
 	displayed[group] = frame.buffer
 	shown[group] = frame.count
 	deadlines[group] = frame.deadline
 	_bounds[group] = frame.bounds
-	return frame

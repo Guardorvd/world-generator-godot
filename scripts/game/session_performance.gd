@@ -239,15 +239,31 @@ func _measure(game: Node) -> void:
 
 
 func _read_chunks(game: Node) -> void:
-	if game.chunk_source == null:
-		return
-	var stats: Dictionary = game.chunk_source.stats
-	for key: String in ["reads", "read_ms", "upload_ms", "upload_bytes", "repairs"]:
-		var value: float = stats[key]
-		var change := maxf(value - float(_previous_chunks.get(key, value)), 0.0)
-		_chunk_delta[key] = change
-		_previous_chunks[key] = value
-		_window.chunks[key] = _window.chunks.get(key, 0.0) + change
+	if game.chunk_source != null:
+		var stats: Dictionary = game.chunk_source.stats
+		for key: String in ["reads", "read_ms", "upload_ms", "upload_bytes", "repairs"]:
+			_chunk_counter(key, stats[key])
+	_chunk_counter("vegetation_sectors", game.vegetation.detail_sector_changes)
+	var terrain: PlanTerrain = game.terrain_stream
+	if terrain != null:
+		_chunk_counter("terrain_lod_builds", terrain.stream_stats.lod_builds)
+		_chunk_counter("plan_crown_cells", terrain.stream_stats.crown_cells)
+		if terrain.morph_lod != null:
+			_chunk_counter("terrain_lod_switches", terrain.morph_lod.stats.switches)
+			_chunk_counter("terrain_lod_late", terrain.morph_lod.stats.late)
+		if terrain.relief_detail != null:
+			_chunk_counter("relief_mesh_uploads", terrain.relief_detail.stats.uploads)
+			_chunk_counter("relief_switches", terrain.relief_detail.stats.switches)
+			_chunk_counter("relief_late", terrain.relief_detail.stats.late)
+	if game.outer != null:
+		_chunk_counter("outer_crown_cells", game.outer.crown_cells_published)
+
+
+func _chunk_counter(key: String, value: float) -> void:
+	var change := maxf(value - float(_previous_chunks.get(key, value)), 0.0)
+	_chunk_delta[key] = change
+	_previous_chunks[key] = value
+	_window.chunks[key] = _window.chunks.get(key, 0.0) + change
 
 
 func _monitor(key: String, value: Variant) -> void:

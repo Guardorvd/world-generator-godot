@@ -45,6 +45,7 @@ static func inspect(detail: Object, source: RefCounted, w: WorldData, focus: Vec
 
 static func resumes_after_recovery(h: Heightfield, source: RefCounted, key: Vector2i, point: Vector2) -> bool:
 	var stream := PlanTerrain.new()
+	Engine.get_main_loop().root.add_child(stream)
 	var material := ShaderMaterial.new()
 	material.shader = TerrainBuilder.SHADER
 	stream.setup({key: source.groups[0][key]}, material, null, h.world, h, source)
@@ -53,10 +54,17 @@ static func resumes_after_recovery(h: Heightfield, source: RefCounted, key: Vect
 	stream.nodes[key] = node
 	stream._node_lod[key] = 2
 	stream._set_lod_mesh(node, key, 2, point, stream._lod_arrays(key, 2))
+	var outside := point + Vector2(PlanTerrain.RADIUS * 2.0, 0.0)
+	var ok := not stream._step_lod(outside, 0.0) and stream._lod_at == Vector2.INF
 	# The first step from 16 m is late after a teleport. The second waits for its blend.
 	stream.update(point.x, point.y)
+	ok = ok and stream._node_lod[key] == 2 and stream._lod_task != -1 and stream._lod_at != point
+	var deadline := Time.get_ticks_msec() + 1000
+	while ok and not WorkerThreadPool.is_task_completed(stream._lod_task) and Time.get_ticks_msec() < deadline:
+		OS.delay_usec(250)
 	stream.update(point.x, point.y)
-	var ok: bool = stream._node_lod[key] == 1 and stream._lod_at == point and stream.morph_lod._recovering.has(key)
+	stream.update(point.x, point.y)
+	ok = ok and stream.stream_stats.lod_builds == 1 and stream._node_lod[key] == 1 and stream._lod_at == point and stream.morph_lod._recovering.has(key)
 	if ok:
 		var recovery: Array = stream.morph_lod._recovering[key]
 		recovery[1] -= ceili(h.fine_profile.lod_recover_s * 1000000.0) + 1

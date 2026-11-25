@@ -45,8 +45,28 @@ func run() -> void:
 	_check_form_ranges(false, Vector2.ZERO)
 	_check_form_ranges(true, Vector2.ZERO)
 	_check_form_ranges(false, Vector2(320.0, 1100.0))
+	_check_cell_publication()
 	print("distant_vegetation_test: %d errors" % failures)
 	quit(1 if failures > 0 else 0)
+
+
+func _check_cell_publication() -> void:
+	var buffer := PackedFloat32Array()
+	buffer.resize(20)
+	var batch := {count = 1, buffer = buffer, bounds = AABB(Vector3.ZERO, Vector3.ONE)}
+	var near := Vector2i.ZERO
+	var far := Vector2i(5, 2)
+	var batches := {f = {near: batch, far: batch}, c = {near: batch}}
+	var cells := Far.attachment_cells(batches, Vector2.ZERO)
+	var first: Array = cells.pop_back()
+	check(cells.size() == 1 and first.size() == 2 and first[0][1] == near and first[1][1] == near,
+		"The nearest crown cell is ready first with both sides of its LOD transition")
+	var parent := Node3D.new()
+	root.add_child(parent)
+	Far.attach_cell(parent, first, Vector2.ZERO, false, 8.0)
+	for node: MultiMeshInstance3D in parent.get_children():
+		check(node.get_instance_shader_parameter("distant_reveal") == Vector2(8.0, 0.5), "The whole cell starts fading in on its publication frame")
+	parent.free()
 
 
 static func _fields(origin: Vector2i) -> Dictionary:

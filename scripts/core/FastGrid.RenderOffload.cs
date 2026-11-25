@@ -29,6 +29,7 @@ public partial class FastGrid
 		public DetailSectorKey Key;
 		public readonly List<int> Offsets = new();
 		public readonly List<double> Changes = new();
+		public readonly List<int> SourceChanges = new();
 		public float MinX, MinY, MinZ, MaxX, MaxY, MaxZ;
 
 		public void Reset(int index, DetailSectorKey key)
@@ -37,6 +38,7 @@ public partial class FastGrid
 			Key = key;
 			Offsets.Clear();
 			Changes.Clear();
+			SourceChanges.Clear();
 			MinX = MinY = MinZ = float.PositiveInfinity;
 			MaxX = MaxY = MaxZ = float.NegativeInfinity;
 		}
@@ -66,6 +68,7 @@ public partial class FastGrid
 				["hashes"] = Array.Empty<long>(),
 				["buffers"] = new Godot.Collections.Array(),
 				["changes"] = new Godot.Collections.Array(),
+				["source_changes"] = new Godot.Collections.Array(),
 			};
 		}
 
@@ -76,6 +79,7 @@ public partial class FastGrid
 		{
 			prev.Offsets.Clear();
 			prev.Changes.Clear();
+			prev.SourceChanges.Clear();
 			pool.Push(prev);
 		}
 		buckets.Clear();
@@ -138,17 +142,27 @@ public partial class FastGrid
 					target.Changes.Add(_rowLocalAt[row]);
 					target.Changes.Add(changes[i + 1]);
 					target.Changes.Add(changes[i + 2]);
+					target.SourceChanges.Add(row * stride);
 				}
 			}
 		}
 
 		int sectorCount = order.Count;
+		// Publication can span several frames. Cover the ground nearest the player first.
+		if (spatial && !splitShadows && sectorCount > 1)
+		{
+			var player = new Vector2(playerX, playerZ);
+			float Distance(DetailSectorBucket bucket) => player.DistanceSquaredTo(
+				new Vector2((bucket.MinX + bucket.MaxX) * 0.5f, (bucket.MinZ + bucket.MaxZ) * 0.5f));
+			order.Sort((a, b) => Distance(a).CompareTo(Distance(b)));
+		}
 		var keys = new int[sectorCount * 3];
 		var counts = new int[sectorCount];
 		var bounds = new float[sectorCount * 6];
 		var hashes = new long[sectorCount];
 		var buffers = new Godot.Collections.Array();
 		var sectorChanges = new Godot.Collections.Array();
+		var sourceChanges = new Godot.Collections.Array();
 		var outBufs = _pow2OutBufs ??= new Dictionary<int, float[]>(8);
 
 		for (int idx = 0; idx < sectorCount; idx++)
@@ -199,6 +213,7 @@ public partial class FastGrid
 				Array.Clear(outBuf, activeFloats, totalFloats - activeFloats);
 			buffers.Add(outBuf);
 			sectorChanges.Add(bucket.Changes.Count > 0 ? bucket.Changes.ToArray() : Array.Empty<double>());
+			sourceChanges.Add(bucket.SourceChanges.Count > 0 ? bucket.SourceChanges.ToArray() : Array.Empty<int>());
 		}
 
 		return new Godot.Collections.Dictionary
@@ -209,6 +224,7 @@ public partial class FastGrid
 			["hashes"] = hashes,
 			["buffers"] = buffers,
 			["changes"] = sectorChanges,
+			["source_changes"] = sourceChanges,
 		};
 	}
 

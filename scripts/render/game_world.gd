@@ -247,6 +247,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	$Terrain.add_child(terrain_stream)
 	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights, chunk_source, loaded.high_relief_detail)
 	terrain_stream.far_material = services.terrain.far_material($Terrain.material_override)
+	terrain_stream.crown_clock = vegetation.stream
 	stream_coordinator.terrain_update = terrain_stream.update
 	terrain_stream.frame_budget = stream_coordinator.frame_budget
 	vegetation.frame_budget = stream_coordinator.frame_budget
@@ -384,6 +385,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		yaw = atan2(player.x - look_at.x, player.z - look_at.y)
 	outer = OuterTerrain.new()
 	outer.cpu_budget = services.cpu_budget
+	outer.crown_clock = vegetation.stream
 	outer.terrain_builder = services.terrain
 	outer.name = "OuterTerrain"
 	add_child(outer)

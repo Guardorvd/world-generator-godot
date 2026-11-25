@@ -43,6 +43,8 @@ var _far_tasks := {}     # номер дальнего куска -> {id, out}
 var _far_queue: Array[Vector2i] = []
 var _far_evict: Array[Vector2i] = []
 var _crown_wait := {}
+var crown_clock: RefCounted
+var crown_cells_published := 0
 var _checked_at := Vector2.INF
 var _redo: Array[Vector2i] = []   # 13.9: загруженные куски закреплённой области, пересчитать поверх старых
 var _stale := {}                  # куски, чей расчёт начат до закрепления: после него пересчитать снова
@@ -212,10 +214,17 @@ func update(x: float, z: float, allow_apply: bool = true, keep_current := false)
 		_far_tasks[key] = {id = id, out = out}
 	if not keep_current and allow_apply and not applied and not _crown_wait.is_empty() and _within_frame_budget():
 		var key: Vector2i = _crown_wait.keys()[0]
-		var crowns: Dictionary = _crown_wait[key]
-		_crown_wait.erase(key)
-		FarForest.attach(_nodes[key], crowns, Vector2.ZERO, true)
-		applied = true
+		var work: Dictionary = _crown_wait[key]
+		if not work.has("cells"):
+			work.cells = FarForest.attachment_cells(work.batches, Vector2(x, z))
+			work.erase("batches")
+		if not work.cells.is_empty():
+			var born: float = crown_clock.clock if crown_clock != null else 0.0
+			FarForest.attach_cell(_nodes[key], work.cells.pop_back(), Vector2.ZERO, true, born)
+			crown_cells_published += 1
+			applied = true
+		if work.cells.is_empty():
+			_crown_wait.erase(key)
 	if not keep_current and allow_apply and not applied and not _evict_pending.is_empty() and _within_frame_budget():
 		var key: Vector2i = _evict_pending.pop_back()
 		if _nodes.has(key) and _center(key).distance_to(Vector2(x, z)) > DROP:
@@ -355,7 +364,7 @@ func _add(key: Vector2i, built: Dictionary, defer_crowns := false) -> void:
 	var node := stage_chunk(key, built, not defer_crowns)
 	publish_chunks({key: built}, {key: node})
 	if defer_crowns and node != null and not built.get("crowns", {}).is_empty():
-		_crown_wait[key] = built.crowns
+		_crown_wait[key] = {batches = built.crowns}
 
 
 func publish_chunks(chunks: Dictionary, nodes: Dictionary) -> void:

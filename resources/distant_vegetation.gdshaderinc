@@ -30,3 +30,10 @@ float distant_veg_density(float dist, bool small) {
 float distant_veg_dither(vec2 pixel) {
 	return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 }
+global uniform float vegetation_clock;
+instance uniform vec2 distant_reveal = vec2(0.0);
+
+float distant_veg_reveal() {
+	return distant_reveal.y > 0.0
+		? smoothstep(distant_reveal.x, distant_reveal.x + distant_reveal.y, vegetation_clock) : 1.0;
+}

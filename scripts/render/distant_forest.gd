@@ -6,6 +6,7 @@ const PLANT_SHADER := preload("res://resources/distant_plant.gdshader")
 const Catalog := preload("res://scripts/render/asset_catalog.gd")
 const Understory := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const StreamPolicy := preload("res://scripts/render/vegetation_stream_policy.gd")
 const TILE := GameConfig.TILE
 const SIDE := 128.0 # Keep culling local, even when terrain tiles are 256 m wide.
 const SPLIT := 620.0 # fine -> coarse, m from the camera
@@ -363,7 +364,34 @@ static func _append(out: Dictionary, key: Variant, cell: Vector2i, at: Vector3, 
 	entry.count += 1
 
 static func attach(parent: Node3D, batches: Dictionary, local_range := Vector2.ZERO, outer := false) -> void:
-	if batches.is_empty(): return
+	for cell: Array in attachment_cells(batches):
+		attach_cell(parent, cell, local_range, outer)
+
+
+## Keep both sides of the distance fade in one publication unit.
+static func attachment_cells(batches: Dictionary, observer := Vector2.ZERO) -> Array:
+	var grouped := {}
+	for lod in PARTS.size():
+		var cells: Dictionary = batches.get(PARTS[lod], {})
+		for key in cells:
+			var at := Vector2i(key.x, key.y)
+			if not grouped.has(at):
+				grouped[at] = []
+			grouped[at].append([lod, key, cells[key]])
+	var order := grouped.keys()
+	order.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return observer.distance_squared_to(_cell_center(a)) > observer.distance_squared_to(_cell_center(b)))
+	var result := []
+	for at in order:
+		result.append(grouped[at])
+	return result
+
+
+static func _cell_center(cell: Vector2i) -> Vector2:
+	return (Vector2(cell) + Vector2.ONE * 0.5) * SIDE
+
+
+static func attach_cell(parent: Node3D, cell: Array, local_range := Vector2.ZERO, outer := false, born := 0.0) -> void:
 	if _meshes.is_empty():
 		_meshes = [lobe_mesh(FINE), lobe_mesh(COARSE), lobe_mesh(SCRUB)]
 		for form in Form.size():
@@ -376,33 +404,35 @@ static func attach(parent: Node3D, batches: Dictionary, local_range := Vector2.Z
 		plant.set_shader_parameter("leaves", textures[1])
 		plant.set_shader_parameter("needles", textures[2])
 		_materials = [proxy, plant]
-	for lod in PARTS.size():
-		var cells: Dictionary = batches.get(PARTS[lod], {})
-		for key in cells:
-			var entry: Dictionary = cells[key]
-			var plant := lod == PLANT
-			var node := MultiMeshInstance3D.new()
-			node.name = "VegetationLOD3" if plant else "DistantForest"
-			if local_range.y <= 0.0:
-				node.add_to_group("distant_forest")
-			node.set_meta("far_lod", lod)
-			node.set_meta("outer_terrain", outer)
-			if plant: node.set_meta("plant_form", key.z)
-			var mm := MultiMesh.new()
-			mm.transform_format = MultiMesh.TRANSFORM_3D
-			mm.use_colors = true
-			mm.use_custom_data = true
-			mm.mesh = _meshes[PLANT + key.z if plant else lod]
-			mm.instance_count = entry.count
-			mm.buffer = entry.buffer
-			mm.custom_aabb = entry.bounds
-			node.multimesh = mm
-			node.material_override = _materials[int(plant)]
-			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			apply_ranges(node, local_range)
-			parent.add_child(node)
-			var center := (Vector2(key.x, key.y) + Vector2.ONE * 0.5) * SIDE
-			node.global_position = Vector3(center.x, 0, center.y)
+	for item: Array in cell:
+		var lod: int = item[0]
+		var key: Variant = item[1]
+		var entry: Dictionary = item[2]
+		var plant := lod == PLANT
+		var node := MultiMeshInstance3D.new()
+		node.name = "VegetationLOD3" if plant else "DistantForest"
+		if local_range.y <= 0.0:
+			node.add_to_group("distant_forest")
+		node.set_meta("far_lod", lod)
+		node.set_meta("outer_terrain", outer)
+		if plant: node.set_meta("plant_form", key.z)
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.use_custom_data = true
+		mm.mesh = _meshes[PLANT + key.z if plant else lod]
+		mm.instance_count = entry.count
+		mm.buffer = entry.buffer
+		mm.custom_aabb = entry.bounds
+		node.multimesh = mm
+		node.material_override = _materials[int(plant)]
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if born > 0.0:
+			node.set_instance_shader_parameter("distant_reveal", Vector2(born, StreamPolicy.FADE_SECONDS))
+		apply_ranges(node, local_range)
+		parent.add_child(node)
+		var center := _cell_center(Vector2i(key.x, key.y))
+		node.global_position = Vector3(center.x, 0, center.y)
 
 ## Clusters of lobes in the unit box. Each lobe is a hexagonal bipyramid with an off-centre waist (12 triangles):
 ## a rounded top and a flatter underside. UV — lobe centre (x, z), UV2 — (lobe index, lobe-local height -1..1);

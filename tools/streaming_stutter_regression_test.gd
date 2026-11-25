@@ -14,8 +14,10 @@ class MemorySource extends Source:
 
 class CountingLayer extends VegetationLayer:
 	var presented := []
-	func _present_group(group: int, _immediate: bool) -> void:
+	var no_upload := -2
+	func _present_group(group: int, _immediate: bool) -> bool:
 		presented.append(group)
+		return group != no_upload
 
 class DelayedTerrain extends PlanTerrain:
 	func _arrays(key: Vector2i) -> Variant:
@@ -35,6 +37,7 @@ func run() -> void:
 	await _test_cancellation()
 	_test_pool_and_slices()
 	_test_deadlines()
+	_test_grass_slices()
 	_test_arrival()
 	_test_arrival_read_demand()
 	_test_carpet_publication()
@@ -143,6 +146,12 @@ func _test_deadlines() -> void:
 	check(layer.presented == [-1] and layer._present == [0], "expired shared deadline still publishes exactly one detail group")
 	layer._present_next(-1)
 	check(layer.presented == [-1, 0] and layer._present.is_empty(), "a mandatory slice without a grant publishes one group")
+	layer.no_upload = -1
+	layer._present.assign([-1, 0])
+	check(layer._present_next(-1) and layer.presented.slice(-2) == [-1, 0] and layer._present.is_empty(),
+		"unchanged groups leave the mandatory upload available to the next changed group")
+	layer._present.assign([-1])
+	check(not layer._present_next(-1) and layer._present.is_empty(), "a wholly unchanged detail frame leaves its grant to other streams")
 	var built := {chunk = Vector2i.ZERO, entries = [{kind = 0}]}
 	layer._defs[0] = {trunk = BoxMesh.new()}
 	check(not layer._apply_chunk(built, 1, budget.deadline_usec) and layer.node_stats.created == 0, "expired tree deadline leaves a resumable chunk without creating a node")
@@ -199,6 +208,44 @@ func _test_arrival() -> void:
 		"arrival can complete with distant geometry still queued")
 	check(terrain.update(at.x, at.y) and terrain.nodes.size() == 3, "normal streaming resumes the distant queue")
 	terrain.free()
+
+
+func _test_grass_slices() -> void:
+	var layer := VegetationLayer.new()
+	root.add_child(layer)
+	layer.grass = MultiMesh.new()
+	layer.grass.mesh = BoxMesh.new()
+	layer._grass_node = MultiMeshInstance3D.new()
+	layer.add_child(layer._grass_node)
+	var source := PackedFloat32Array()
+	source.resize(3 * layer.STRIDE)
+	for i in 3:
+		VegetationLayer._put_xform(source, i * layer.STRIDE, 130.0 * i, 0, 0, 0, 1, 1)
+	var frame := layer.snapshots.prepare(-1, source, 3, AABB(Vector3.ZERO, Vector3(260, 1, 1)), 1.0, 1.0)
+	frame.sectors_packed = Grid.fast_grid().PartitionDetailSectors(frame.buffer, frame.count, layer.STRIDE, 64.0, 0, 0, 0, false, 1.0, frame.changes)
+	frame.split_shadows = false
+	layer._detail_frames[-1] = frame
+	layer._present.append(-1)
+	layer.stream.clock = 2.0
+	check(layer._present_next(-1) and layer._grass_sectors.nodes.size() == 1 and not layer._detail_slice.is_empty(),
+		"expired deadline renders one grass sector and keeps the pending snapshot")
+	layer._remember_partial_grass()
+	check(layer.snapshots.shown[-1] == 1 and layer.snapshots.displayed[-1][19] == 2.0, "region refresh retains only the grass actually published")
+	layer.stream.clock = 2.1
+	layer._present_next(-1)
+	layer.stream.clock = 2.2
+	layer._present_next(-1)
+	var rows: PackedFloat32Array = layer.snapshots.displayed[-1]
+	check(layer._grass_sectors.nodes.size() == 3 and layer._present.is_empty() and layer._detail_slice.is_empty()
+		and is_equal_approx(rows[19], 2.0) and is_equal_approx(rows[39], 2.1) and is_equal_approx(rows[59], 2.2),
+		"grass fade history uses the actual frame of each sector publication")
+	var same := layer.snapshots.prepare(-1, source, 3, frame.bounds, 1.0, 2.3)
+	same.sectors_packed = Grid.fast_grid().PartitionDetailSectors(same.buffer, same.count, layer.STRIDE, 64.0, 0, 0, 0, false, 1.0, same.changes)
+	same.split_shadows = false
+	layer._detail_frames[-1] = same
+	layer._present.append(-1)
+	check(not layer._present_next(-1), "a stationary snapshot does not upload grass again after its timestamps were rebased")
+	layer.free()
 
 
 func _test_arrival_read_demand() -> void:

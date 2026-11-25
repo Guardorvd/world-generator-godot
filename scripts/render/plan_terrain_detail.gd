@@ -52,14 +52,12 @@ func follow(p: Vector2, force: bool, lookahead: float, recheck: float) -> void:
 	if _observer != p:
 		_observer = p
 		material.set_shader_parameter("relief_observer", p)
+	if not force and terrain.frame_budget != null and not terrain.frame_budget.allows_work():
+		return
 	if force or p.distance_to(_priority_at) >= recheck:
 		_ahead = p if force or not _priority_at.is_finite() else p + (p - _priority_at).normalized() * lookahead
 		_priority_at = p
 	var prefetch := enter_m + profile.prefetch_m
-	for key: Vector2i in entries.keys():
-		var distance: float = terrain.distance_to_chunk(key, p)
-		if distance > (_exit_m if active(key) else prefetch):
-			forget(key)
 	var candidates: Array = []
 	for key: Vector2i in terrain.nodes:
 		if terrain._node_lod[key] != 0 or active(key) or _failed.has(key):
@@ -77,10 +75,19 @@ func follow(p: Vector2, force: bool, lookahead: float, recheck: float) -> void:
 	source.retain_layer(Source.DETAIL_LAYER, _ordered)
 	if not force:
 		for i in mini(_ordered.size(), Source.MAX_QUEUED):
-			source.request(Source.DETAIL_LAYER, _ordered[i], candidates[i][2] - prefetch)
+			var distance: float = candidates[i][2]
+			# Base terrain and water share this queue. A speculative precise tile must
+			# not outrank a closer base chunk just because it belongs to another layer.
+			source.request(Source.DETAIL_LAYER, _ordered[i], distance + maxf(0.0, distance - enter_m))
 
 
 func step(p: Vector2, force: bool) -> bool:
+	# Returning to the base mesh and retiring fine pieces also touches the renderer.
+	for key: Vector2i in entries.keys():
+		var limit := _exit_m if active(key) else enter_m + profile.prefetch_m
+		if terrain.distance_to_chunk(key, p) > limit:
+			forget(key)
+			return true
 	for key: Vector2i in _ordered:
 		if active(key) or _failed.has(key):
 			continue
@@ -89,6 +96,7 @@ func step(p: Vector2, force: bool) -> bool:
 		if not entry.is_empty() and entry.parts.size() == entry.total:
 			if d <= enter_m:
 				_publish(key, entry, d, force)
+				return true
 			continue
 		var parts: Variant = source.ready(Source.DETAIL_LAYER, key)
 		if parts == null and force:

@@ -34,6 +34,7 @@ void vertex() {
 	keep_hi = distant_veg_end(dist, outer, scrub, small);
 	float density = distant_veg_density(dist, small);
 	keep_hi = min(keep_hi, 1.0 - smoothstep(rank, rank + 0.14, 1.0 - density));
+	keep_hi = mix(keep_lo, keep_hi, distant_veg_reveal());
 	material_kind = UV2.x;
 	plant_height = VERTEX.y;
 	cloud = 1.0;

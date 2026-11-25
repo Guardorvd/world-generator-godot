@@ -6,9 +6,10 @@ var fails := 0
 class ContactLayer extends VegetationLayer:
 	var version_at_upload := {}
 	var upload_order := []
-	func _present_group(group: int, _immediate: bool) -> void:
+	func _present_group(group: int, _immediate: bool) -> bool:
 		version_at_upload[group] = obstacles_version
 		upload_order.append(group)
+		return true
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)

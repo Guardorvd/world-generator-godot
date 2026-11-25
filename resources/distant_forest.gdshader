@@ -47,6 +47,7 @@ void vertex() {
 		keep_lo = near_keep;
 		keep_hi = far_keep;
 	}
+	keep_hi = mix(keep_lo, keep_hi, distant_veg_reveal());
 	// Lobe data: UV — lobe centre (x, z); UV2.x — index * 4 + centre y + 1; UV2.y — lobe-local height (-0.7..1).
 	float index = floor(UV2.x * 0.25);
 	bark = step(3.5, index);
