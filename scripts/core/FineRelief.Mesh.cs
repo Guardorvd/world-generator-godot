@@ -13,6 +13,8 @@ public partial class FineRelief
 		if (!ValidKey(cx, cz) || arrays.Count != (int)Mesh.ArrayType.Max || pieceCells <= 0 || _cells % pieceCells != 0)
 			return result;
 		var fine = _tiles[Index(cx, cz)].Value;
+		bool joinEdges = _lodErrors != null;
+		var bounds = joinEdges ? Layout(cx, cz).Whole : default;
 		int ox = cx * _cells, oz = cz * _cells;
 		var xyz = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
 		var normals = arrays[(int)Mesh.ArrayType.Normal].AsVector3Array();
@@ -30,7 +32,7 @@ public partial class FineRelief
 			float z0 = Math.Min(xyz[a].Z, Math.Min(xyz[b].Z, xyz[c].Z));
 			int x = (int)(x0 / _tile - 0.5), z = (int)(z0 / _tile - 0.5);
 			int part = (z - oz) / pieceCells * piecesPerSide + (x - ox) / pieceCells;
-			var piece = pieces[part] ??= new MeshPiece();
+			var piece = pieces[part] ??= new MeshPiece(joinEdges);
 			int ia = Copy(a, piece), ib = Copy(b, piece), ic = Copy(c, piece);
 			float dx = Math.Max(xyz[a].X, Math.Max(xyz[b].X, xyz[c].X)) - x0;
 			float dz = Math.Max(xyz[a].Z, Math.Max(xyz[b].Z, xyz[c].Z)) - z0;
@@ -63,7 +65,7 @@ public partial class FineRelief
 				n = Normal((int)fx * 2, (int)fz * 2);
 			}
 			target = piece.Add(p, n, uv[id], uv2.Length == 0 ? Vector2.Zero : uv2[id],
-				color.Length == 0 ? new Color(0, 0, 0, 0) : color[id], baseHeight, normals[id]);
+				color.Length == 0 ? new Color(0, 0, 0, 0) : color[id], baseHeight, normals[id], Edge(p));
 			piece.Vertices.Add(id, target);
 			return target;
 		}
@@ -86,10 +88,12 @@ public partial class FineRelief
 				p.Y = baseHeight;
 			target = piece.Add(p, n, (uv[a] + uv[b]) * 0.5f,
 				uv2.Length == 0 ? Vector2.Zero : (uv2[a] + uv2[b]) * 0.5f,
-				color.Length == 0 ? new Color(0, 0, 0, 0) : (color[a] + color[b]) * 0.5f, baseHeight, baseNormal);
+				color.Length == 0 ? new Color(0, 0, 0, 0) : (color[a] + color[b]) * 0.5f, baseHeight, baseNormal, Edge(p));
 			piece.Edges.Add(edge, target);
 			return target;
 		}
+
+		Vector4 Edge(Vector3 p) => joinEdges ? EdgeMorph(bounds, p) : Vector4.Zero;
 
 		Vector3 Normal(int x, int z)
 		{
@@ -107,9 +111,15 @@ public partial class FineRelief
 		private readonly List<Vector2> _uv = new(), _uv2 = new();
 		private readonly List<Color> _colors = new();
 		private readonly List<float> _coarse = new();
+		private readonly List<float> _edges;
 		private readonly List<int> _indices = new();
 
-		public int Add(Vector3 p, Vector3 n, Vector2 uv, Vector2 uv2, Color color, float y, Vector3 normal)
+		public MeshPiece(bool joinEdges = false)
+		{
+			if (joinEdges) _edges = new();
+		}
+
+		public int Add(Vector3 p, Vector3 n, Vector2 uv, Vector2 uv2, Color color, float y, Vector3 normal, Vector4 edge = default)
 		{
 			int id = _positions.Count;
 			_positions.Add(p);
@@ -121,6 +131,13 @@ public partial class FineRelief
 			_coarse.Add(normal.X);
 			_coarse.Add(normal.Y);
 			_coarse.Add(normal.Z);
+			if (_edges != null)
+			{
+				_edges.Add(edge.X);
+				_edges.Add(edge.Y);
+				_edges.Add(edge.Z);
+				_edges.Add(edge.W);
+			}
 			return id;
 		}
 
@@ -131,7 +148,7 @@ public partial class FineRelief
 			_indices.Add(c);
 		}
 
-		public MeshArrays Arrays()
+		public MeshArrays Arrays(bool morph = true)
 		{
 			var result = new MeshArrays();
 			result.Resize((int)Mesh.ArrayType.Max);
@@ -140,7 +157,8 @@ public partial class FineRelief
 			result[(int)Mesh.ArrayType.TexUV] = _uv.ToArray();
 			result[(int)Mesh.ArrayType.TexUV2] = _uv2.ToArray();
 			result[(int)Mesh.ArrayType.Color] = _colors.ToArray();
-			result[(int)Mesh.ArrayType.Custom0] = _coarse.ToArray();
+			if (morph) result[(int)Mesh.ArrayType.Custom0] = _coarse.ToArray();
+			if (_edges != null) result[(int)Mesh.ArrayType.Custom1] = _edges.ToArray();
 			result[(int)Mesh.ArrayType.Index] = _indices.ToArray();
 			return result;
 		}

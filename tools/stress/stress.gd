@@ -17,6 +17,7 @@ extends SceneTree
 ##   --compare <база.json> <новый.json> — только сравнить два отчёта (окно не нужно, ничего не меряется).
 ##   --travel-from-map — начать перенос с открытым атласом и проверить его закрытие при прибытии.
 ##   --fullscreen — весь экран вместо окна 1280×720; --settings <файл> — настройки игрока (копия, файл не меняется).
+##   --template river_expedition — проверка Типа 2; с --short-expedition используется короткий план.
 ##   20.11: world.off_res_90/res_80 — шаги адаптивного разрешения, world.res_switch — цена смены разрешения.
 ## 20.11.2026: world.board — сборка щита доски у камеры (с отбором заданий), OFFERS_MS —
 ##   цена отбора заданий по частям; world.play_map — карта (M) открывается и закрывается в игре без паузы.
@@ -743,6 +744,7 @@ func _forest(density: float) -> WorldData:
 
 func _group_world() -> void:
 	var seed_text := Dev.arg("world", "Север-1234")
+	var template_id := Dev.arg("template", "")
 	var size := WorldGenerator.START_SIZE
 	var settings := GameContext.scope.settings
 	# настройки — по умолчанию и в своём файле: профиль игрока не читается и не пишется.
@@ -765,6 +767,9 @@ func _group_world() -> void:
 	_unlock_frames()
 	# свой кэш мира: первый раз мир генерируется (или берётся готовый из папок DONORS), дальше грузится из кэша
 	var cache := GameContext.scope.cache
+	if not template_id.is_empty():
+		settings.set_active_template(template_id)
+		cache.set_template(template_id)
 	cache.dir = out.path_join("world_cache")
 	cache.enabled = true
 	settings.recent_seeds.assign([seed_text]) # иначе keep_only сотрёт кэш этого мира перед загрузкой
@@ -773,7 +778,7 @@ func _group_world() -> void:
 	_memory("menu", "Меню")
 	print("Мир %s@%d: %s" % [seed_text, size, "из кэша" if cached else "генерация (один раз)"])
 	var t0 := Time.get_ticks_msec()
-	main.start_game(seed_text, size)
+	main.start_game(seed_text, size, "", true, template_id)
 	while main.game == null or main.game.player == null or main.busy: # 15.1: main ещё держит заставку первые кадры
 		await process_frame
 		beat = Time.get_ticks_msec()

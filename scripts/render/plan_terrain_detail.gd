@@ -3,7 +3,6 @@ extends RefCounted
 
 const Source := preload("res://scripts/render/chunk_source.gd")
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
-const CUSTOM_FORMAT := Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
 
 var terrain: Node3D
 var source: RefCounted
@@ -24,7 +23,7 @@ func setup(owner: Node3D, h: Heightfield, chunks: RefCounted, mat: ShaderMateria
 	source = chunks
 	heights = h
 	profile = h.fine_profile
-	material = TerrainBuilder.fine_material(mat, profile)
+	material = TerrainBuilder.fine_material(mat, profile, h.fine_lod)
 
 
 func active(key: Vector2i) -> bool:
@@ -100,7 +99,8 @@ func step(p: Vector2, force: bool) -> bool:
 			entries[key] = entry
 		var started := Time.get_ticks_usec()
 		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, parts[entry.parts.size()], [], {}, CUSTOM_FORMAT)
+		var arrays: Array = parts[entry.parts.size()]
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, TerrainBuilder.relief_mesh_format(arrays))
 		var bounds := mesh.get_aabb()
 		var vertical_margin := maxf(profile.reconstruction_delta_m, profile.total_delta_m)
 		bounds.position.y -= vertical_margin
@@ -108,6 +108,8 @@ func step(p: Vector2, force: bool) -> bool:
 		mesh.custom_aabb = bounds
 		var shadow := GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if profile.cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var node: MeshInstance3D = terrain._acquire_mesh_node(mesh, material, shadow)
+		if terrain.morph_lod != null:
+			node.set_instance_shader_parameter("relief_chunk_bounds", terrain.morph_lod.bounds(key))
 		node.visible = false
 		entry.parts.append(node)
 		stats.uploads += 1

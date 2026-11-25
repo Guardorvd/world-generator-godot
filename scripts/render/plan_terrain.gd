@@ -55,6 +55,7 @@ var _uncached_arrays: Array = [] # one oversized block, released as soon as it i
 var source: RefCounted
 var frame_budget: RefCounted
 var relief_detail: RefCounted
+var morph_lod: RefCounted
 static var _recheck_frame := -1 # рельеф и два слоя воды пересчитывают очередь в разных кадрах
 
 
@@ -116,6 +117,9 @@ func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: Wor
 		if _lod_cache.budget != null:
 			_lod_cache.budget.register_owner(_lod_cache._owner_id, "terrain_lod")
 	if water_layer < 0 and h != null and h.fine_relief != null and source != null and mat is ShaderMaterial:
+		if h.fine_lod:
+			morph_lod = preload("res://scripts/render/plan_terrain_lod.gd").new()
+			morph_lod.setup(h, chunks.keys(), mat)
 		relief_detail = preload("res://scripts/render/plan_terrain_detail.gd").new()
 		relief_detail.setup(self, h, source, mat)
 
@@ -152,8 +156,13 @@ func _lod_enabled() -> bool:
 	return use_terrain_lod and water_layer < 0 and _world != null and _heights != null and _heights.hv.size() >= _world.W * _world.H and Grid.fast_grid() != null
 
 
-func _desired_lod(key: Vector2i, p: Vector2, current_lod: int) -> int:
-	var d := distance_to_chunk(key, p)
+func _desired_lod(key: Vector2i, p: Vector2, current_lod: int, immediate := false) -> int:
+	return _desired_lod_at(key, distance_to_chunk(key, p), current_lod, immediate)
+
+
+func _desired_lod_at(key: Vector2i, d: float, current_lod: int, immediate: bool) -> int:
+	if morph_lod != null:
+		return morph_lod.desired(key, d, current_lod, immediate)
 	if current_lod == 0:
 		if d > LOD2_DIST + LOD_HYSTERESIS:
 			return 2
@@ -184,7 +193,9 @@ func _lod_arrays(key: Vector2i, lod: int) -> Array:
 	var step := LOD1_STEP if lod == 1 else LOD2_STEP
 	var skirt := step * GameConfig.TILE * 0.5
 	var arrays: Array
-	if _heights.fine_medium:
+	if morph_lod != null:
+		arrays = _heights.fine_relief.BuildMorphLod(key.x, key.y, step)
+	elif _heights.fine_medium:
 		arrays = _heights.fine_relief.BuildCoarseLod(key.x, key.y, step, skirt)
 	else:
 		arrays = fast.BuildTerrainLod(_world.W, _world.H, GameConfig.TILE, key.x, key.y, CELLS, step, _heights.hv, _world.path_mask, skirt)
@@ -193,26 +204,30 @@ func _lod_arrays(key: Vector2i, lod: int) -> Array:
 	return arrays
 
 
-func _step_lod(p: Vector2, near := INF) -> bool:
+func _step_lod(p: Vector2, near := INF, immediate := false) -> bool:
 	var waiting_io := false
 	for key: Vector2i in nodes:
-		if near < INF and distance_to_chunk(key, p) > near:
+		var distance := distance_to_chunk(key, p)
+		if distance > near:
 			continue
 		if relief_detail != null and relief_detail.active(key):
 			continue
 		var current: int = _node_lod.get(key, 0)
-		var wanted := _desired_lod(key, p, current)
+		var wanted := _desired_lod_at(key, distance, current, immediate)
 		if wanted == current:
+			if morph_lod != null and morph_lod.wants_full(key, distance, current) and _arrays(key) == null:
+				source.request(water_layer, key, distance)
 			continue
 		var node: MeshInstance3D = nodes[key]
 		if wanted > 0:
 			var lod_arrays := _lod_arrays(key, wanted)
 			if lod_arrays.is_empty():
 				continue
-			var mesh := ArrayMesh.new()
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, lod_arrays)
-			node.mesh = mesh
+			var started := Time.get_ticks_usec()
+			_set_lod_mesh(node, key, wanted, p, lod_arrays)
 			_node_lod[key] = wanted
+			if morph_lod != null and not immediate:
+				morph_lod.record(node, key, distance, current, wanted, (Time.get_ticks_usec() - started) / 1000.0)
 			return true
 		var arrays: Variant = _arrays(key)
 		if arrays == null:
@@ -226,12 +241,13 @@ func _step_lod(p: Vector2, near := INF) -> bool:
 				_read_task = WorkerThreadPool.add_task(func() -> void: out.arrays = _read_arrays(key), false, "Чанк рельефа")
 			continue
 		var started := Time.get_ticks_usec()
-		var full_mesh := ArrayMesh.new()
-		full_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		node.mesh = full_mesh
+		_set_lod_mesh(node, key, 0, p, arrays)
 		_node_lod[key] = 0
+		var elapsed := (Time.get_ticks_usec() - started) / 1000.0
 		if source != null:
-			source.uploaded(water_layer, key, arrays, (Time.get_ticks_usec() - started) / 1000.0)
+			source.uploaded(water_layer, key, arrays, elapsed)
+		if morph_lod != null and not immediate:
+			morph_lod.record(node, key, distance, current, 0, elapsed)
 		if _uncached_key == key:
 			_uncached_key = null
 			_uncached_arrays = []
@@ -239,6 +255,24 @@ func _step_lod(p: Vector2, near := INF) -> bool:
 	if not waiting_io:
 		_lod_at = p
 	return false
+
+
+func _terrain_mesh(key: Vector2i, arrays: Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	if morph_lod == null:
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		return mesh
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, TerrainBuilder.relief_mesh_format(arrays))
+	# Include both morph endpoints in culling, including the shadow pass.
+	mesh.custom_aabb = morph_lod.mesh_bounds(key, mesh.get_aabb())
+	return mesh
+
+
+func _set_lod_mesh(node: MeshInstance3D, key: Vector2i, lod: int, p: Vector2, arrays: Array) -> void:
+	node.mesh = _terrain_mesh(key, arrays)
+	if morph_lod != null:
+		node.material_override = _material_for(key, p)
+		morph_lod.configure(node, key, lod)
 
 
 func _acquire_mesh_node(mesh: ArrayMesh, mat: Material, shadow_mode: GeometryInstance3D.ShadowCastingSetting) -> MeshInstance3D:
@@ -294,12 +328,17 @@ func _attach_crowns(allow: bool) -> bool:
 
 
 func _material_for(key: Vector2i, p: Vector2) -> Material:
+	if morph_lod != null:
+		return morph_lod.material_for(far_material as ShaderMaterial if distance_to_chunk(key, p) >= FAR_FROM else null)
 	return far_material if far_material != null and distance_to_chunk(key, p) >= FAR_FROM else material
 
 
 func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 	var corner := Vector2(key) * SIDE + Vector2.ONE * GameConfig.TILE * 0.5
-	return p.distance_to(p.clamp(corner, corner + Vector2.ONE * SIDE))
+	var last := corner + Vector2.ONE * SIDE
+	if morph_lod != null:
+		last = last.min((Vector2(_world.W, _world.H) - Vector2.ONE * 0.5) * GameConfig.TILE)
+	return p.distance_to(p.clamp(corner, last))
 
 
 func arrival_ready(p: Vector2, radius: float) -> bool:
@@ -316,6 +355,8 @@ func _has_near_pending(p: Vector2, radius: float) -> bool:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
 	var p := Vector2(x, z)
+	if morph_lod != null:
+		morph_lod.follow(p)
 	if relief_detail != null:
 		relief_detail.follow(p, force, AHEAD, LOD_RECHECK)
 	if not force and frame_budget != null and not frame_budget.allows_work():
@@ -354,11 +395,14 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 			pending.append(item[1])
 	if source != null:
 		if due:
-			if force or near == INF:
-				source.retain_layer(water_layer, pending)
-			else:
-				source.retain_layer(water_layer, pending.filter(func(key: Vector2i) -> bool:
-					return distance_to_chunk(key, p) <= near))
+			var requested: Array[Vector2i] = pending if force or near == INF else pending.filter(func(key: Vector2i) -> bool:
+				return distance_to_chunk(key, p) <= near)
+			if morph_lod != null:
+				requested = requested.duplicate()
+				for key: Vector2i in nodes:
+					if morph_lod.wants_full(key, distance_to_chunk(key, p), _node_lod[key]):
+						requested.append(key)
+			source.retain_layer(water_layer, requested)
 		for offset in mini(3, pending.size()):
 			var at: Vector2i = pending[pending.size() - 1 - offset]
 			if not force and near < INF and distance_to_chunk(at, p) > near: break
@@ -370,7 +414,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 	while _has_near_pending(p, near) and (force or allow_apply and not uploaded):
 		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		var key: Vector2i = pending.back()
-		var wanted_lod := _desired_lod(key, p, 0) if _lod_enabled() else 0
+		var wanted_lod := _desired_lod(key, p, 0, true) if _lod_enabled() else 0
 		var arrays: Variant = null
 		var used_lod := 0
 		if wanted_lod > 0:
@@ -397,10 +441,11 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		pending.pop_back()
 		var started := Time.get_ticks_usec()
-		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var mesh := _terrain_mesh(key, arrays)
 		var shadow_mode := GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var node := _acquire_mesh_node(mesh, _material_for(key, p), shadow_mode)
+		if morph_lod != null:
+			morph_lod.configure(node, key, used_lod)
 		if water_layer < 0 and _world != null:
 			if source == null: FarForest.attach(node, FarForest.plan(_world, _heights, key))
 			else: _crown_wait[key] = node
@@ -414,7 +459,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		uploaded = true
 	if force and allow_apply and relief_detail != null:
 		if _lod_enabled():
-			while _step_lod(p, minf(near, relief_detail.profile.transition_end_m + relief_detail.profile.enter_margin_m)):
+			while _step_lod(p, minf(near, relief_detail.profile.transition_end_m + relief_detail.profile.enter_margin_m), true):
 				pass
 		relief_detail.follow(p, true, AHEAD, LOD_RECHECK)
 		while relief_detail.step(p, true):
@@ -436,6 +481,8 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		if nodes.has(key) and distance_to_chunk(key, p) > DROP:
 			if relief_detail != null:
 				relief_detail.forget(key)
+			if morph_lod != null:
+				morph_lod.forget(key)
 			_release_mesh_node(nodes[key])
 			nodes.erase(key)
 			_node_lod.erase(key)

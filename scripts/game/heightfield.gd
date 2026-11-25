@@ -347,6 +347,7 @@ var _ride_rev := -1            # с какой версии опоры снят 
 var _ride_ok := false          # снимок удался (иначе до следующей смены опоры — GDScript)
 var fine_relief: Object
 var fine_medium := false
+var fine_lod := false
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
 var fine_profile: ReliefDetailConfig
 var _detail_revision := 0
@@ -362,7 +363,7 @@ func ground_changed(detail_only := false) -> void:
 
 
 ## После полотна, воды и генерации. Источник для маски — опубликованные игровые данные.
-func prepare_fine_relief(with_forms := true, with_mid := true) -> void:
+func prepare_fine_relief(with_forms := true, with_mid := true, with_lod := true) -> void:
 	var w := world
 	var profile := WorldTemplate.config(w.template_id).relief_detail
 	if fine_relief != null or profile == null or not profile.enabled:
@@ -423,6 +424,11 @@ func prepare_fine_relief(with_forms := true, with_mid := true) -> void:
 	fine_medium = fine_relief != null and fine_relief.HasMedium()
 	if fine_relief != null:
 		fine_profile = profile
+		fine_lod = with_lod and profile.lod_morph and profile.valid_lod(PlanTerrain.LOD_RECHECK)
+		if fine_lod:
+			fine_relief.PrepareLods(PlanTerrain.LOD1_STEP, PlanTerrain.LOD2_STEP)
+		elif with_lod and profile.lod_morph:
+			push_warning("Некорректные настройки плавных уровней рельефа: используются прежние пороги LOD")
 		ground_changed()
 	else:
 		push_warning("Точное поле не помещается в бюджет или входные поля неполны: используется исходная поверхность")

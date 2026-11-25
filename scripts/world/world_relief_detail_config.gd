@@ -43,6 +43,26 @@ enum {
 ## Дополнительная дальность подготовки меша до включения, м.
 @export var prefetch_m := 0.0
 
+@export_group("Средние и дальние уровни")
+## Включает плавную смену сеток 4, 8 и 16 м.
+@export var lod_morph := false
+## Минимальная дальность конца переходов 4→8 и 8→16, м.
+@export var lod_end_min_m := Vector2.ZERO
+## Максимальная дальность конца переходов, м.
+@export var lod_end_max_m := Vector2.ZERO
+## Ширина каждого плавного перехода, м.
+@export var lod_fade_m := Vector2.ZERO
+## Допустимое отношение вертикальной ошибки к расстоянию для обоих переходов.
+@export var lod_error_ratio := Vector2.ZERO
+## Переход к общему ребру соседних чанков, м от ребра.
+@export var lod_edge_fade_m := Vector2.ZERO
+## Запас за концом перехода для обратной подмены, м.
+@export var lod_load_margin_m := 0.0
+## Дополнительный гистерезис при удалении, м.
+@export var lod_hysteresis_m := 0.0
+## Длительность плавного восстановления, если поток опоздал к порогу, с.
+@export var lod_recover_s := 0.0
+
 @export_group("Маска")
 ## Неподвижная полоса вокруг дорожных патчей, м.
 @export var road_guard_m := 0.0
@@ -247,3 +267,12 @@ func valid(chunk_cells: int) -> bool:
 		and chunk_cells % piece_cells == 0 and full_m > 0.0 and transition_end_m > full_m \
 		and exit_margin_m >= enter_margin_m and enter_margin_m >= 0.0 and prefetch_m >= 0.0 \
 		and tile_mib > 0 and mesh_mib > 0
+
+
+func valid_lod(recheck_m: float) -> bool:
+	return lod_edge_fade_m.x >= transition_end_m and lod_edge_fade_m.y > lod_edge_fade_m.x \
+		and lod_end_min_m.x - lod_fade_m.x >= maxf(lod_edge_fade_m.y, transition_end_m + exit_margin_m) \
+		and lod_end_min_m.y - lod_fade_m.y >= lod_end_max_m.x + lod_load_margin_m + lod_hysteresis_m \
+		and lod_end_max_m.x >= lod_end_min_m.x and lod_end_max_m.y >= lod_end_min_m.y \
+		and lod_fade_m.x > 0.0 and lod_fade_m.y > 0.0 and lod_error_ratio.x > 0.0 and lod_error_ratio.y > 0.0 \
+		and lod_load_margin_m >= recheck_m and lod_hysteresis_m >= 0.0 and lod_recover_s > 0.0

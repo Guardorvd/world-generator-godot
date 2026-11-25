@@ -3,6 +3,7 @@ extends SceneTree
 
 const Fixture := preload("res://tools/relief_fine_fixture.gd")
 const Metrics := preload("res://tools/relief_fine_metrics.gd")
+const LodChecks := preload("res://tools/relief_fine_lod_checks.gd")
 const Profile := preload("res://scripts/world/world_relief_detail_config.gd")
 const Source := preload("res://scripts/render/chunk_source.gd")
 const GOLDEN := "res://tools/control/baseline/relief_fine.json"
@@ -129,6 +130,14 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 	var on := h.ride_snapshot()
 	var planted := h.ride_snapshot(true)
 	var sample: Vector3 = fixture.views[0].eye
+	var morph := LodChecks.inspect(detail, source, w, Vector2(sample.x, sample.z))
+	_check(h.fine_lod and morph.samples > 0 and morph.height_failures == 0 and morph.normal_failures == 0 \
+		and morph.seam_failures == 0 and morph.missing == 0, "совпадение концов морфинга 4/8/16 м и общих рёбер")
+	print("RELIEF_LOD ", w.seed_text, " ", JSON.stringify(morph))
+	var budget := LodChecks.budget(h, chunks, fixture.route)
+	_check(budget.samples > 0 and budget.switches > 0 and budget.new_peak <= budget.old_peak,
+		"пиковое число треугольников сеток 4/8/16 м на маршруте")
+	print("RELIEF_LOD_BUDGET ", w.seed_text, " ", JSON.stringify(budget))
 	_check(h.fine_medium, "поле 4 м со средними формами включено")
 	var projected := {}
 	var coarse_samples := 0

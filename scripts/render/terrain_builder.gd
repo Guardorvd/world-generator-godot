@@ -398,14 +398,37 @@ func outer_material(template_id := "") -> ShaderMaterial:
 	return mat
 
 
-static func fine_material(base: ShaderMaterial, profile: Resource) -> ShaderMaterial:
+static func fine_material(base: ShaderMaterial, profile: Resource, join_edges := false) -> ShaderMaterial:
+	var mat := _relief_morph_material(base, profile, "FINE_RELIEF_MORPH", join_edges)
+	mat.set_shader_parameter("relief_morph_range", Vector2(profile.full_m, profile.transition_end_m))
+	return mat
+
+
+static func coarse_morph_material(base: ShaderMaterial, profile: Resource) -> ShaderMaterial:
+	return _relief_morph_material(base, profile, "COARSE_RELIEF_MORPH", true)
+
+
+static func relief_mesh_format(arrays: Array) -> int:
+	var flags := 0
+	if arrays[Mesh.ARRAY_CUSTOM0] != null:
+		flags |= Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT
+	if arrays[Mesh.ARRAY_CUSTOM1] != null:
+		flags |= Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM1_SHIFT
+	return flags
+
+
+static func _relief_morph_material(base: ShaderMaterial, profile: Resource, feature: String, join_edges: bool) -> ShaderMaterial:
 	var shader := Shader.new()
-	shader.code = "#define FINE_RELIEF_MORPH\n" + base.shader.code
+	var defines := "#define " + feature + "\n"
+	if join_edges:
+		defines += "#define RELIEF_EDGE_MORPH\n"
+	shader.code = defines + base.shader.code
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
 	for uniform: Dictionary in base.shader.get_shader_uniform_list():
 		mat.set_shader_parameter(uniform.name, base.get_shader_parameter(uniform.name))
-	mat.set_shader_parameter("relief_morph_range", Vector2(profile.full_m, profile.transition_end_m))
+	if join_edges:
+		mat.set_shader_parameter("relief_edge_range", profile.lod_edge_fade_m)
 	return mat
 
 

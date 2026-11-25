@@ -32,9 +32,20 @@ uniform vec3 road_edge;
 // Сдвиг меша от мировых координат, м: у сохранённого участка Trail Lab (WorldData.world_origin), у мира ноль.
 // Деталь и кочки полотна остаются на своих мировых местах, как у колёс.
 uniform vec2 world_offset = vec2(0.0);
-#ifdef FINE_RELIEF_MORPH
+#if defined(FINE_RELIEF_MORPH) || defined(COARSE_RELIEF_MORPH)
 uniform vec2 relief_observer;
+#endif
+#ifdef FINE_RELIEF_MORPH
 uniform vec2 relief_morph_range;
+#endif
+#ifdef RELIEF_EDGE_MORPH
+uniform vec2 relief_edge_range;
+instance uniform vec4 relief_chunk_bounds;
+#endif
+#ifdef COARSE_RELIEF_MORPH
+// xy: переход по расстоянию до чанка, z: уровень сетки (0 — 4 м).
+instance uniform vec3 relief_chunk_lod;
+instance uniform vec2 relief_lod_recovery;
 #endif
 uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
@@ -121,6 +132,42 @@ void vertex() {
 	float relief_morph = smoothstep(relief_morph_range.x, relief_morph_range.y, distance(VERTEX.xz, relief_observer));
 	VERTEX.y = mix(VERTEX.y, CUSTOM0.x, relief_morph);
 	NORMAL = mix(NORMAL, CUSTOM0.yzw, relief_morph);
+#endif
+#ifdef RELIEF_EDGE_MORPH
+	bool edge_vertex = CUSTOM1.z > 0.0;
+#ifdef COARSE_RELIEF_MORPH
+	edge_vertex = edge_vertex && relief_chunk_lod.z == 0.0;
+#endif
+	if (edge_vertex) {
+		vec2 lo = relief_chunk_bounds.xy;
+		vec2 hi = relief_chunk_bounds.zw;
+		bool vertical = VERTEX.x == lo.x || VERTEX.x == hi.x;
+		bool horizontal = VERTEX.z == lo.y || VERTEX.z == hi.y;
+		vec2 edge_point = vertical ? vec2(VERTEX.x, clamp(relief_observer.y, lo.y, hi.y))
+			: vec2(clamp(relief_observer.x, lo.x, hi.x), VERTEX.z);
+		if (vertical && horizontal) {
+			edge_point = VERTEX.xz;
+		}
+		float edge_blend = smoothstep(relief_edge_range.x, relief_edge_range.y, distance(relief_observer, edge_point));
+		VERTEX.y = mix(VERTEX.y, CUSTOM1.x, edge_blend);
+		NORMAL = mix(NORMAL, CUSTOM1.yzw, edge_blend);
+	}
+#endif
+#ifdef COARSE_RELIEF_MORPH
+	if (relief_chunk_lod.z > 0.0) {
+		// Сохраняем линейную интерполяцию нормалей C даже на промежуточных вершинах ребра.
+		NORMAL = CUSTOM1.yzw;
+	}
+	if (relief_chunk_lod.y > relief_chunk_lod.x) {
+		vec2 nearest = clamp(relief_observer, relief_chunk_bounds.xy, relief_chunk_bounds.zw);
+		float fade = smoothstep(relief_chunk_lod.x, relief_chunk_lod.y, distance(relief_observer, nearest));
+		fade = mix(fade, relief_lod_recovery.x, relief_lod_recovery.y);
+		VERTEX.y = mix(VERTEX.y, CUSTOM0.x, fade);
+		NORMAL = mix(NORMAL, CUSTOM0.yzw, fade);
+		COLOR.a *= 1.0 - fade;
+	}
+#endif
+#if defined(FINE_RELIEF_MORPH) || defined(COARSE_RELIEF_MORPH)
 	wnormal = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
 #else
 	wnormal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);

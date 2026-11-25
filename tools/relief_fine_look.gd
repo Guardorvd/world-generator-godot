@@ -4,6 +4,7 @@ extends SceneTree
 ## --fine off|on|both выбирает поверхность, both пишет общий лист. --measure включает замер кадра при 1080p,
 ## --fine smooth оставляет только восстановление. --fine compare_forms добавляет к нему малые формы.
 ## --fine compare_mid сравнивает малые формы с полным полем. --fine small оставляет только малые.
+## --fine compare_lod сравнивает старые и новые LOD на одном поле. --fine legacy_lod пригоден для исходного заезда.
 ## --ride ведёт камеру по оси тропы 60 с со скоростью 22 м/с, --parity сверяет физику с мешем.
 
 const Fixture := preload("res://tools/relief_fine_fixture.gd")
@@ -59,9 +60,10 @@ func _run() -> void:
 		return
 	var comparison_modes: Array = {
 		"both": ["off", "on"], "compare_forms": ["smooth", "small"], "compare_mid": ["small", "on"],
+		"compare_lod": ["legacy_lod", "on"],
 	}.get(fine, [])
-	if DisplayServer.get_name() == "headless" or fine not in ["off", "on", "both", "smooth", "small", "compare_forms", "compare_mid"] or (not comparison_modes.is_empty() and args.has("--ride")):
-		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|both|smooth|small|compare_forms|compare_mid (заезд с одним вариантом)")
+	if DisplayServer.get_name() == "headless" or (comparison_modes.is_empty() and fine not in ["off", "on", "smooth", "small", "legacy_lod"]) or (not comparison_modes.is_empty() and args.has("--ride")):
+		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|both|smooth|small|legacy_lod|compare_forms|compare_mid|compare_lod (заезд с одним вариантом)")
 		quit(1)
 		return
 	var measure := args.has("--measure")
@@ -95,7 +97,7 @@ func _run() -> void:
 			_expect(false, "папка прогона %s: %s" % [folder, error_string(mkdir)])
 			continue
 		if mode != "off":
-			fixture.heights.prepare_fine_relief(mode != "smooth", mode == "on")
+			fixture.heights.prepare_fine_relief(mode != "smooth", mode in ["on", "legacy_lod"], mode == "on" and fine != "compare_mid")
 			if fixture.heights.fine_relief == null:
 				_expect(false, "точное поле не готово на " + seed)
 				continue
@@ -173,6 +175,8 @@ func _run() -> void:
 		if args.has("--ride"):
 			ride = await _ride(fixture.route)
 			_expect(not ride.is_empty(), "нет 1320 м непрерывной тропы для заезда")
+			if _terrain.morph_lod != null:
+				_expect(_terrain.morph_lod.stats.switches > 0, "заезд не пересёк пороги уровней 4/8/16 м")
 			print("RELIEF_RIDE ", seed, " ", JSON.stringify(ride))
 		var report := "relief_fine_ride_" if args.has("--ride") else "relief_fine_"
 		var file := FileAccess.open(folder.path_join(report + mode + ".json"), FileAccess.WRITE)
@@ -302,6 +306,7 @@ func _ride(route: PackedVector2Array) -> Dictionary:
 	var lod_changes := 0
 	var stream_frames := 0
 	var visible_peak := 0
+	var visible_total := 0
 	var lods: Dictionary = _terrain._node_lod.duplicate()
 	var upload_before: Dictionary = _source.snapshot()
 	var stream := preload("res://scripts/render/world_stream_coordinator.gd").new()
@@ -347,19 +352,24 @@ func _ride(route: PackedVector2Array) -> Dictionary:
 			var lod: int = _terrain._node_lod[key]
 			lod_changes += int(lods.has(key) and lods[key] != lod)
 		lods = _terrain._node_lod.duplicate()
-		visible_peak = maxi(visible_peak, _visible_triangles())
+		var triangles := _visible_triangles()
+		visible_peak = maxi(visible_peak, triangles)
+		visible_total += triangles
 	frames.sort()
 	var upload_after: Dictionary = _source.snapshot()
 	_provider.deadline_usec = 0
 	var result := {seconds = RIDE_SECONDS, speed_mps = RIDE_SPEED, frames = frames.size(), max_ms = frames[-1],
 		p99_ms = Frames.percentile(frames, 0.99), lod_changes = lod_changes, stream_frames = stream_frames,
-		peak_triangles = visible_peak, full_upload_bytes = upload_after.upload_bytes - upload_before.upload_bytes,
+		peak_triangles = visible_peak, mean_triangles = float(visible_total) / maxi(1, frames.size() - 1),
+		full_upload_bytes = upload_after.upload_bytes - upload_before.upload_bytes,
 		full_upload_ms = upload_after.upload_ms - upload_before.upload_ms, worst_frame = worst}
 	if _terrain.relief_detail != null:
 		result.detail = _terrain.relief_detail.stats
 		result.detail_publications = _heights._detail_revision
 		result.tile_bytes = _heights.fine_relief.Bytes()
 		result.mesh_cache_bytes = _source._fine_cpu.bytes
+	if _terrain.morph_lod != null:
+		result.coarse_lod = _terrain.morph_lod.stats
 	return result
 
 
