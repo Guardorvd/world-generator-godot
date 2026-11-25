@@ -44,6 +44,7 @@ func _initialize() -> void:
 	_stats()
 	_thumbs(folder)
 	_writer(folder.path_join("writer"))
+	_migration(folder.path_join("migration"))
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
 
@@ -124,6 +125,26 @@ func _writer(folder: String) -> void:
 	check(writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128), true, true) == OK, "режим разработки пропущен")
 	writer.finish()
 	check(feed.load_feed() == OK and feed.entries.size() == 1 and float(feed.entries[0].bike) == 300.0, "нет дубля после автосохранения")
+
+
+func _migration(folder: String) -> void:
+	var writer = Writer.new(folder)
+	var map := Image.create(32, 32, false, Image.FORMAT_RGB8)
+	var old := {start = 42.0, end = 50.0, time = 8.0, bike = 10.0, foot = 0.0, alt = 42.0,
+		photos = 0, quests = 0, places = ["old-id"], legs = [PackedVector2Array([Vector2(4, 4), Vector2(80, 80)])]}
+	var records := [{snapshot = old, names = ["Старое место"], photos = []}]
+	check(writer.migrate(records, "test", "seed", map, Vector2(128, 128)) == OK, "перенос старого короткого заезда")
+	writer.finish()
+	var feed = Feed.new(folder)
+	check(feed.load_feed() == OK and feed.entries.size() == 1 and not feed.entries[0].has("climb") and feed.entries[0].alt_max == 42.0, "старые неизвестные показатели не выдумываются")
+	var id: String = feed.entries[0].id
+	check(FileAccess.file_exists(feed.thumb_path(id)), "превью старого заезда")
+	check(writer.migrate(records, "test", "seed", map, Vector2(128, 128)) == OK, "повторный перенос безопасен")
+	writer.finish()
+	check(feed.load_feed() == OK and feed.entries.size() == 1 and feed.erase(id) == OK, "повтор не создаёт дубликат")
+	check(writer.migrate(records, "test", "seed", map, Vector2(128, 128)) == OK, "повторный перенос после удаления")
+	writer.finish()
+	check(feed.load_feed() == OK and feed.entries.is_empty(), "удалённая запись не возвращается")
 
 
 func check(ok: bool, message: String) -> void:

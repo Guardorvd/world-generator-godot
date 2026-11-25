@@ -47,6 +47,7 @@ const AdaptiveResolution = preload("res://scripts/render/adaptive_resolution.gd"
 const DisplayConfig = preload("res://scripts/game/display_config.gd")
 const RideFeedWriter = preload("res://scripts/game/ride_feed_writer.gd")
 var _ride_feed_writer
+var _legacy_rides_migrated := true
 var board_display: BoardDisplay  # щит ближней доски с картой и заданиями
 var bike_placement: BikePlacement
 var place_names: PlaceNames
@@ -510,6 +511,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		hud.visited = saved.visited.duplicate()
 		hud.map_journal.restore(saved.get("atlas", {}))
 		hud.ride_log.restore(saved.get("rides", {}))
+		_legacy_rides_migrated = hud.ride_log.entries.is_empty()
 		hud.explore.restore(saved.get("explore", {}))
 		if not quests.restore_state(saved.quest, places, Rect2i(0, 0, world.W, world.H), world):
 			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
@@ -716,6 +718,28 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 
 
 ## Итоговый снимок отделён от сохранения мира и не зависит от срока его жизни.
+func migrate_legacy_rides() -> void:
+	if _legacy_rides_migrated or world == null or QuickTrails.network() or WorldTemplate.cmdline_short() or (services.cache != null and services.cache.short_dev):
+		return
+	var records := []
+	for entry: Dictionary in hud.ride_log.entries:
+		var names := []
+		for id: String in entry.get("places", []):
+			var place: Dictionary = world.place(id)
+			names.append(str(place.get("name", id)))
+		var photos := []
+		for photo: Dictionary in hud.explore.personal_photos:
+			if float(photo.get("ride_start", -1.0)) == float(entry.start):
+				photos.append(str(photo.get("path", "")))
+		records.append({snapshot = entry, names = names, photos = photos})
+	if _ride_feed_writer == null:
+		_ride_feed_writer = RideFeedWriter.new()
+	var err: Error = _ride_feed_writer.migrate(records, world.template_id, world.seed_text, hud.map_preview, Vector2(world.W, world.H) * TILE)
+	_legacy_rides_migrated = err == OK
+	if err != OK:
+		push_warning("Старые поездки оставлены в сохранении: " + error_string(err))
+
+
 func save_ride_feed(force := false) -> void:
 	if world == null or hud == null or quests == null:
 		return
@@ -749,7 +773,6 @@ func save_state() -> Dictionary:
 	var state := {format = 1, seed = world.seed_text, template_id = world.template_id, saved_at = Time.get_unix_time_from_system(),
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		atlas = hud.map_journal.save_state(),
-		rides = hud.ride_log.save_state(hud.map_journal, hud.explore, quests.done),
 		explore = hud.explore.save_state(),
 		repairs = repairs.save_state(),
 		goal = hud.goal.get("key", ""),
@@ -757,6 +780,8 @@ func save_state() -> Dictionary:
 		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour,
 			clock_day = floori(_clock_hour / 24.0), sky_seconds = _sky_time_offset + time},
 		bike = {x = bike.x, z = bike.z, y = bike.y, heading = bike.heading, riding = bike.riding}}
+	if not _legacy_rides_migrated:
+		state.rides = {entries = hud.ride_log.entries.duplicate(true)}
 	# ID свободной метки общий: её положение отсутствует в каталоге мест мира.
 	if hud.goal.get("kind") == "marker":
 		state.goal_marker = Vector2(hud.goal.x, hud.goal.y)

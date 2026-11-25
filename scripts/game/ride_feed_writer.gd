@@ -43,6 +43,53 @@ static func make_entry(snapshot: Dictionary, template_id: String, seed: String, 
 	return entry
 
 
+## Старые заезды без новых полей остаются такими: интерфейс покажет прочерки.
+func migrate(records: Array, template_id: String, seed: String, map_image: Image, world_size: Vector2) -> Error:
+	finish()
+	var err: Error = feed.load_feed()
+	if err != OK:
+		return err
+	var jobs: Array = []
+	for item: Dictionary in records:
+		var snapshot: Dictionary = item.snapshot
+		var entry := make_entry(snapshot, template_id, seed, item.names, item.photos)
+		if entry.id in feed.deleted:
+			continue
+		var existing := false
+		for saved: Dictionary in feed.entries:
+			if saved.id == entry.id:
+				existing = true
+				break
+		var path: String = feed.thumb_path(entry.id)
+		if not existing:
+			if entry.has("alt"):
+				entry.alt_max = entry.alt
+			entry.thumb = Feed.thumb_name(entry.id) if map_image != null else ""
+			err = feed.upsert(entry)
+			if err != OK:
+				return err
+			if not feed.entries.any(func(saved: Dictionary) -> bool: return saved.id == entry.id):
+				continue
+		if map_image != null and not FileAccess.file_exists(path):
+			jobs.append({snapshot = snapshot.duplicate(true), path = path})
+	if not jobs.is_empty():
+		var result := {error = OK}
+		_result = result
+		_task = WorkerThreadPool.add_task(func() -> void:
+			for job: Dictionary in jobs:
+				var image: Image = Thumb.render(map_image, world_size, job.snapshot)
+				if image == null:
+					result.error = ERR_INVALID_DATA
+					continue
+				var temporary: String = job.path + ".tmp"
+				var save_err := image.save_png(temporary)
+				if save_err == OK:
+					save_err = DirAccess.rename_absolute(temporary, job.path)
+				if save_err != OK:
+					result.error = save_err, false, "Превью прежних заездов")
+	return OK
+
+
 func submit(snapshot: Dictionary, template_id: String, seed: String, names: Array, photo_paths: Array, map_image: Image, world_size: Vector2, force := false, development := false) -> Error:
 	if not Feed.accepts(snapshot, development):
 		return OK
@@ -51,6 +98,11 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 	elif _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		finish()
 	var entry := make_entry(snapshot, template_id, seed, names, photo_paths)
+	var load_err: Error = feed.load_feed()
+	if load_err != OK:
+		return load_err
+	if entry.id in feed.deleted:
+		return OK
 	var now := Time.get_ticks_msec() / 1000.0
 	var make_thumb := map_image != null and _task == -1 and (force or now - _last_thumb >= Config.thumb_interval)
 	var path: String = feed.thumb_path(entry.id)

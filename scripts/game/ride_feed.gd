@@ -3,11 +3,13 @@ extends RefCounted
 
 const CONFIG = preload("res://resources/ride_journal.tres")
 const VERSION := 1
+const FORMAT_VERSION := 2
 const DEFAULT_DIR := "user://ride_journal"
 
 var directory: String
 var config: Resource
 var entries: Array[Dictionary] = [] # новые первыми
+var deleted: Array[String] = [] # не переносить повторно удалённые старые заезды
 var _writable := true
 
 
@@ -36,6 +38,7 @@ func thumb_path(id: String) -> String:
 ## При повреждении сначала сохраняем оригинал. Если это не удалось, запись запрещена.
 func load_feed() -> Error:
 	entries.clear()
+	deleted.clear()
 	_writable = true
 	var path := directory.path_join("feed.json")
 	if not FileAccess.file_exists(path):
@@ -47,7 +50,11 @@ func load_feed() -> Error:
 	var parser := JSON.new()
 	var err := parser.parse(file.get_as_text())
 	file.close()
-	if err != OK or not parser.data is Array:
+	var content: Variant = parser.data
+	if err == OK and content is Dictionary and (content.get("version") is int or content.get("version") is float) and int(content.version) > FORMAT_VERSION:
+		_writable = false
+		return ERR_FILE_UNRECOGNIZED
+	if err != OK or not (content is Array or (content is Dictionary and content.get("entries") is Array and content.get("deleted") is Array)):
 		var bad := path + ".bad"
 		var suffix := 1
 		while FileAccess.file_exists(bad):
@@ -57,8 +64,13 @@ func load_feed() -> Error:
 		if err != OK:
 			_writable = false
 		return err
+	if content is Dictionary:
+		for id: Variant in content.deleted:
+			if id is String and not id in deleted:
+				deleted.append(id)
+		content = content.entries
 	var seen := {}
-	for item: Variant in parser.data:
+	for item: Variant in content:
 		if not item is Dictionary or not _valid(item):
 			continue
 		if seen.has(item.id):
@@ -73,6 +85,8 @@ func load_feed() -> Error:
 func upsert(entry: Dictionary) -> Error:
 	if not _valid(entry):
 		return ERR_INVALID_DATA
+	if entry.id in deleted:
+		return OK
 	var next: Array[Dictionary] = entries.duplicate(true)
 	for i in range(next.size() - 1, -1, -1):
 		if next[i].id == entry.id:
@@ -99,10 +113,13 @@ func erase(id: String) -> Error:
 			found = true
 	if not found:
 		return ERR_DOES_NOT_EXIST
+	deleted.append(id)
 	var err := _save(next)
 	if err == OK:
 		entries = next
 		_remove_thumb(id)
+	else:
+		deleted.erase(id)
 	return err
 
 
@@ -117,7 +134,7 @@ func _save(list: Array[Dictionary]) -> Error:
 	var file := FileAccess.open(temporary, FileAccess.WRITE)
 	if file == null:
 		return FileAccess.get_open_error()
-	file.store_string(JSON.stringify(list))
+	file.store_string(JSON.stringify({version = FORMAT_VERSION, entries = list, deleted = deleted}))
 	file.flush()
 	err = file.get_error()
 	file.close()

@@ -2129,6 +2129,8 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	if not loaded.error.is_empty():
 		_finish_load("Мир не подготовлен", loaded.error)
 		return
+	if _progress_enabled:
+		game.migrate_legacy_rides()
 	game.set_physics_process(false)
 	loaded.timings.game_start_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	# Рендер и стриминг работают под заставкой, физика ждёт начала перехода.
