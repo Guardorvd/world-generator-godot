@@ -63,7 +63,7 @@ func begin(journal, explore: Exploration, quests_done: int) -> void:
 	_last_fall_time = -INF
 	_last_fall_position = Vector2.INF
 	break_track()
-	_start = {at = Time.get_unix_time_from_system(), leg = journal.completed_legs, bike = journal.bike, foot = journal.foot,
+	_start = {at = Time.get_unix_time_from_system(), ticks = Time.get_ticks_msec(), leg = journal.completed_legs, bike = journal.bike, foot = journal.foot,
 		time = explore.play_s, photos = explore.photos, quests = quests_done}
 
 
@@ -189,6 +189,7 @@ func snapshot(journal, explore: Exploration, quests_done: int) -> Dictionary:
 	var bike_distance: float = maxf(0.0, journal.bike - float(_start.bike))
 	return {start = float(_start.at), end = Time.get_unix_time_from_system(),
 		time = maxf(0.0, explore.play_s - float(_start.time)),
+		session_time = maxf(0.0, float(Time.get_ticks_msec() - int(_start.ticks)) / 1000.0),
 		bike = bike_distance, foot = maxf(0.0, journal.foot - float(_start.foot)),
 		climb = climb, descent = descent, alt_min = alt_min if is_finite(alt_min) else 0.0,
 		alt_max = alt_max if is_finite(alt_max) else 0.0, speed_max = speed_max,

@@ -19,6 +19,7 @@ func _initialize() -> void:
 	check(feed.load_feed() == OK and feed.entries.is_empty(), "пустая лента")
 	check(not Feed.accepts({time = 59.0, bike = 100.0, foot = 99.0}), "короткая сессия исключена")
 	check(Feed.accepts({time = 60.0}) and Feed.accepts({bike = 200.0}), "пороги времени и пути")
+	check(Feed.accepts({time = 0.0, session_time = 60.0}), "полное время сессии учитывает паузы")
 	check(not Feed.accepts({time = 100.0}, true), "режим разработки исключён")
 	var first := {id = "world:one:1", version = 1, start = 1, bike = 200}
 	check(feed.upsert(first) == OK, "первая запись")
@@ -125,6 +126,13 @@ func _writer(folder: String) -> void:
 	check(writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128), true, true) == OK, "режим разработки пропущен")
 	writer.finish()
 	check(feed.load_feed() == OK and feed.entries.size() == 1 and float(feed.entries[0].bike) == 300.0, "нет дубля после автосохранения")
+	var second = Writer.new(folder)
+	snapshot.start = 124.0
+	check(second.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128)) == OK, "фоновый снимок начат")
+	var removed_id := Feed.ride_id("test", "seed", 124.0)
+	check(feed.load_feed() == OK and feed.erase(removed_id) == OK, "удаление во время построения")
+	second.finish()
+	check(not FileAccess.file_exists(feed.thumb_path(removed_id)), "удалённое превью не возвращается из потока")
 
 
 func _migration(folder: String) -> void:

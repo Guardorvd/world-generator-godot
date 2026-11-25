@@ -5,6 +5,7 @@ const CONFIG = preload("res://resources/ride_journal.tres")
 const VERSION := 1
 const FORMAT_VERSION := 2
 const DEFAULT_DIR := "user://ride_journal"
+static var _thumb_lock := Mutex.new()
 
 var directory: String
 var config: Resource
@@ -19,7 +20,7 @@ func _init(folder := DEFAULT_DIR, tuning: Resource = CONFIG) -> void:
 
 
 static func accepts(entry: Dictionary, development := false) -> bool:
-	return not development and (float(entry.get("time", 0.0)) >= CONFIG.min_time \
+	return not development and (float(entry.get("session_time", entry.get("time", 0.0))) >= CONFIG.min_time \
 		or float(entry.get("bike", 0.0)) + float(entry.get("foot", 0.0)) >= CONFIG.min_distance)
 
 
@@ -96,11 +97,13 @@ func upsert(entry: Dictionary) -> Error:
 	var removed: Array[Dictionary] = []
 	while next.size() > maxi(0, config.entries_limit):
 		removed.append(next.pop_back())
+	_thumb_lock.lock()
 	var err := _save(next)
 	if err == OK:
 		entries = next
 		for old: Dictionary in removed:
 			_remove_thumb(str(old.id))
+	_thumb_lock.unlock()
 	return err
 
 
@@ -113,6 +116,7 @@ func erase(id: String) -> Error:
 			found = true
 	if not found:
 		return ERR_DOES_NOT_EXIST
+	_thumb_lock.lock()
 	deleted.append(id)
 	var err := _save(next)
 	if err == OK:
@@ -120,6 +124,26 @@ func erase(id: String) -> Error:
 		_remove_thumb(id)
 	else:
 		deleted.erase(id)
+	_thumb_lock.unlock()
+	return err
+
+
+## Удаление записи и публикация готового PNG не должны обгонять друг друга.
+static func publish_thumb(folder: String, id: String, temporary: String, path: String) -> Error:
+	_thumb_lock.lock()
+	var current = load("res://scripts/game/ride_feed.gd").new(folder)
+	var err: Error = current.load_feed()
+	var found := false
+	if err == OK and not id in current.deleted:
+		for entry: Dictionary in current.entries:
+			if entry.id == id:
+				found = true
+				break
+	if err == OK and found:
+		err = DirAccess.rename_absolute(temporary, path)
+	elif FileAccess.file_exists(temporary):
+		DirAccess.remove_absolute(temporary)
+	_thumb_lock.unlock()
 	return err
 
 

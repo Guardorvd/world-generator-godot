@@ -22,6 +22,9 @@ func _init(folder := Feed.DEFAULT_DIR) -> void:
 ## ID и сериализация общие для текущих и перенесённых заездов.
 static func make_entry(snapshot: Dictionary, template_id: String, seed: String, names: Array, photo_paths: Array = []) -> Dictionary:
 	var entry := snapshot.duplicate(true)
+	if entry.has("session_time"):
+		entry.time = entry.session_time
+		entry.erase("session_time")
 	entry.id = Feed.ride_id(template_id, seed, float(snapshot.get("start", 0.0)))
 	entry.version = Feed.VERSION
 	entry.template_id = template_id
@@ -71,9 +74,10 @@ func migrate(records: Array, template_id: String, seed: String, map_image: Image
 			if not feed.entries.any(func(saved: Dictionary) -> bool: return saved.id == entry.id):
 				continue
 		if map_image != null and not FileAccess.file_exists(path):
-			jobs.append({snapshot = snapshot.duplicate(true), path = path})
+			jobs.append({snapshot = snapshot.duplicate(true), path = path, id = entry.id})
 	if not jobs.is_empty():
 		var result := {error = OK}
+		var folder: String = feed.directory
 		_result = result
 		_task = WorkerThreadPool.add_task(func() -> void:
 			for job: Dictionary in jobs:
@@ -84,7 +88,7 @@ func migrate(records: Array, template_id: String, seed: String, map_image: Image
 				var temporary: String = job.path + ".tmp"
 				var save_err := image.save_png(temporary)
 				if save_err == OK:
-					save_err = DirAccess.rename_absolute(temporary, job.path)
+					save_err = Feed.publish_thumb(folder, str(job.id), temporary, job.path)
 				if save_err != OK:
 					result.error = save_err, false, "Превью прежних заездов")
 	return OK
@@ -115,6 +119,8 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 		_last_thumb = now
 		var frozen := snapshot.duplicate(true)
 		var result := {error = OK}
+		var folder: String = feed.directory
+		var id: String = entry.id
 		_result = result
 		_task = WorkerThreadPool.add_task(func() -> void:
 			var image: Image = Thumb.render(map_image, world_size, frozen)
@@ -124,7 +130,7 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 			var temporary: String = path + ".tmp"
 			result.error = image.save_png(temporary)
 			if result.error == OK:
-				result.error = DirAccess.rename_absolute(temporary, path), false, "Превью заезда")
+				result.error = Feed.publish_thumb(folder, id, temporary, path), false, "Превью заезда")
 		if force:
 			finish()
 	return OK
