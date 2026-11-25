@@ -1691,6 +1691,7 @@ func _physics_process(dt: float) -> void:
 		crashed = bike_controller.recover(dt, player, bike, crash, world, heights)
 	elif bike.riding:
 		var h0 := bike.heading
+		var speed_before := bike.speed
 		services.controls.read_bike_body(bike, not _opening and not input_lock)
 		fw = bike_controller.ride(dt, player, bike, world, heights, fw, st, Input.is_action_pressed("run") and not map_lock, jump, _opening)
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
@@ -1698,9 +1699,12 @@ func _physics_process(dt: float) -> void:
 		camera_controller.follow_bike(bike, bike.heading - h0, time, dt)
 		_bike_impacts()
 		crashed = bike.crashed
+		if not _opening:
+			hud.ride_log.bike_events(bike.landing_info, crashed, Vector2(player.x, player.z), speed_before, time)
 		if crashed:
 			_crash()
 	else:
+		hud.ride_log.bike_events({}, false, Vector2(player.x, player.z), 0.0, time)
 		# с фотоаппаратом у глаз — медленный шаг, без бега и прыжков
 		var aiming := photo.active
 		var running := Input.is_action_pressed("run") and not aiming
@@ -1736,8 +1740,11 @@ func _physics_process(dt: float) -> void:
 		hud.map_journal.record(Vector2(player.x, player.z), dt, bike.riding)
 		hud.explore.tick(dt, player.feet)
 		hud.ride_log.tick(player.feet)
+		var ground := heights.ground_at(player.x, player.z) if hud.map_journal.sample_recorded else NAN
+		hud.ride_log.track_tick(hud.map_journal, ground, dt, bike.riding)
 	else:
 		hud.map_journal.end_trip()
+		hud.ride_log.break_track()
 		# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
 	# радиус открытия — 2,5 клетки (10 м), за 0,1 с даже на спуске игрок проезжает 1–2 м
 	_discovery_tick += 1

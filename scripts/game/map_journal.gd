@@ -15,6 +15,10 @@ var bike := 0.0   # проехано на велосипеде, м
 var distance: float:   # весь путь (подпись на карте)
 	get: return foot + bike
 var revision := 0
+## Результат последнего record: для статистики без повторного измерения пути.
+var sample_recorded := false
+var record_broken := false
+var record_step := 0.0
 var completed_legs := 0
 var legs: Array[Dictionary] = []
 var current := PackedVector2Array()
@@ -29,16 +33,24 @@ func reveal(places: Array) -> void:
 
 
 func record(at: Vector2, dt: float, riding := false) -> void:
+	sample_recorded = false
+	record_broken = false
+	record_step = 0.0
 	if not at.is_finite():
 		return
 	if current.is_empty():
 		_begin(at)
+		sample_recorded = true
+		record_broken = true
 		return
 	var step := _position.distance_to(at)
 	if step >= MAX_STEP:
 		end_trip()
 		_begin(at)
+		sample_recorded = true
+		record_broken = true
 		return
+	record_step = step
 	if riding:
 		bike += step
 	else:
@@ -49,6 +61,7 @@ func record(at: Vector2, dt: float, riding := false) -> void:
 		return
 	_elapsed = fmod(_elapsed, SAMPLE_TIME)
 	if current[-1].distance_squared_to(at) >= MIN_STEP * MIN_STEP:
+		sample_recorded = true
 		_add_point(at)
 		current_bounds = current_bounds.expand(at)
 		revision += 1

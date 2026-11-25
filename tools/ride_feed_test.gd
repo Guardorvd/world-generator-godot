@@ -3,6 +3,9 @@ extends SceneTree
 
 const Feed = preload("res://scripts/game/ride_feed.gd")
 const Config = preload("res://resources/ride_journal.tres")
+const RideLog = preload("res://scripts/game/ride_log.gd")
+const Journal = preload("res://scripts/game/map_journal.gd")
+const Explore = preload("res://scripts/game/exploration.gd")
 var failures := 0
 
 
@@ -36,8 +39,47 @@ func _initialize() -> void:
 	file.close()
 	check(reload.load_feed() == OK and reload.entries.is_empty() and FileAccess.file_exists(folder.path_join("feed.json.bad")), "повреждённый файл сохранён")
 	check(reload.upsert(first) == OK, "запись после восстановления")
+	_stats()
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
+
+
+func _stats() -> void:
+	var journal = Journal.new()
+	var explore = Explore.new()
+	var ride = RideLog.new()
+	ride.begin(journal, explore, 0)
+	# Движение 5 м/с и рельеф с дрожью менее порога гистерезиса.
+	for i in 200:
+		journal.record(Vector2(i * 0.5, 0), 0.1, true)
+		ride.track_tick(journal, 100.0 + (0.5 if i % 2 == 0 else -0.5), 0.1, true)
+	var before: float = ride.speed_max
+	journal.record(Vector2(10000, 0), 0.1, true)
+	ride.track_tick(journal, 200.0, 0.1, true)
+	for i in 20:
+		journal.record(Vector2(10000 + i * 0.5, 0), 0.1, true)
+		ride.track_tick(journal, 200.0, 0.1, true)
+	check(ride.climb == 0.0 and ride.descent == 0.0, "дрожь высоты и перенос не дают набора")
+	check(absf(before - 5.0) < 0.01 and ride.speed_max < 5.1, "скорость за секунду не растёт от переноса")
+	ride.bike_events({air = 0.39}, false, Vector2.ZERO, 5.0, 0.0)
+	ride.bike_events({air = 0.4, speed = 7.0}, true, Vector2.ZERO, 5.0, 1.0)
+	ride.bike_events({}, true, Vector2.ZERO, 5.0, 1.1)
+	ride.bike_events({}, false, Vector2.ZERO, 5.0, 1.2)
+	ride.bike_events({}, true, Vector2(1, 0), 5.0, 2.0)
+	ride.bike_events({}, false, Vector2.ZERO, 5.0, 2.1)
+	ride.bike_events({}, true, Vector2(20, 0), 5.0, 3.0)
+	check(ride.jumps == 1 and ride.air_max == 0.4, "учитывается прыжок от 0,4 секунды")
+	check(ride.falls == 2 and ride.fall_marks.size() == 2 and ride.fall_marks[0].speed == 7.0, "фронты и склейка падений")
+	var snapshot: Dictionary = ride.snapshot(journal, explore, 0)
+	check(snapshot.profile.size() <= Config.profile_limit and snapshot.fall_marks[0].progress <= 1.0, "ограниченный профиль и положение падения")
+	var hill = RideLog.new()
+	var hill_journal = Journal.new()
+	hill.begin(hill_journal, explore, 0)
+	for i in 25:
+		hill_journal.record(Vector2(i * 4, 0), 1.0, true)
+		var elevation := float(i) if i <= 12 else float(24 - i)
+		hill.track_tick(hill_journal, elevation, 1.0, true)
+	check(hill.climb == 12.0 and hill.descent == 12.0 and hill.alt_min == 0.0 and hill.alt_max == 12.0, "набор, сброс и пределы высоты")
 
 
 func check(ok: bool, message: String) -> void:

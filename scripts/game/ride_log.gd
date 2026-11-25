@@ -8,11 +8,34 @@ const MAX_ENTRIES := 40        # хранится последних заезд�
 const MAX_POINTS := 6000       # точек трека на заезд в сохранении (дальше прореживается)
 const MIN_TIME := 5.0          # с: заезд короче и без пути не записывается (вход и сразу выход)
 const MIN_DISTANCE := 5.0      # м
+const CONFIG = preload("res://resources/ride_journal.tres")
 
 var entries: Array[Dictionary] = []  # прошлые заезды, старые первыми
 var places := {}                     # id места -> true: где игрок побывал в этом заезде (PlayerState.check_discoveries)
 var alt := 0.0                       # высшая точка заезда, м
 var _start := {}                     # счётчики на начало заезда
+var climb := 0.0
+var descent := 0.0
+var alt_min := INF
+var alt_max := -INF
+var speed_max := 0.0
+var moving_time := 0.0
+var bike_moving_time := 0.0
+var jumps := 0
+var air_max := 0.0
+var falls := 0
+var fall_marks: Array[Dictionary] = []
+var _anchor_alt := NAN
+var _speed_samples: Array[Vector2] = [] # (длительность, путь)
+var _speed_duration := 0.0
+var _speed_distance := 0.0
+var _speed_riding := false
+var _speed_mode_set := false
+var _profile_samples: Array[Vector2] = [] # (путь, высота земли)
+var _distance := 0.0
+var _crashed := false
+var _last_fall_time := -INF
+var _last_fall_position := Vector2.INF
 
 
 func session_start() -> float:
@@ -23,6 +46,23 @@ func session_start() -> float:
 func begin(journal, explore: Exploration, quests_done: int) -> void:
 	places = {}
 	alt = -INF
+	alt_min = INF
+	alt_max = -INF
+	climb = 0.0
+	descent = 0.0
+	speed_max = 0.0
+	moving_time = 0.0
+	bike_moving_time = 0.0
+	jumps = 0
+	air_max = 0.0
+	falls = 0
+	fall_marks.clear()
+	_profile_samples.clear()
+	_distance = 0.0
+	_crashed = false
+	_last_fall_time = -INF
+	_last_fall_position = Vector2.INF
+	break_track()
 	_start = {at = Time.get_unix_time_from_system(), leg = journal.completed_legs, bike = journal.bike, foot = journal.foot,
 		time = explore.play_s, photos = explore.photos, quests = quests_done}
 
@@ -30,6 +70,99 @@ func begin(journal, explore: Exploration, quests_done: int) -> void:
 func tick(feet: float) -> void:
 	if feet > alt:
 		alt = feet
+
+
+## После MapJournal.record; высота земли нужна только когда тот записал точку.
+func track_tick(journal, ground: float, dt: float, riding: bool) -> void:
+	if journal.record_broken:
+		break_track()
+	if _speed_mode_set and riding != _speed_riding:
+		_clear_speed()
+	_speed_mode_set = true
+	_speed_riding = riding
+	var step: float = journal.record_step
+	_distance += step
+	if dt > 0.0:
+		_speed_samples.append(Vector2(dt, step))
+		_speed_duration += dt
+		_speed_distance += step
+		var window := maxf(CONFIG.speed_window, 0.001)
+		while not _speed_samples.is_empty() and _speed_duration > window:
+			var oldest: Vector2 = _speed_samples[0]
+			var cut := minf(oldest.x, _speed_duration - window)
+			var distance_cut := oldest.y * cut / oldest.x
+			_speed_duration -= cut
+			_speed_distance -= distance_cut
+			if cut >= oldest.x - 0.000001:
+				_speed_samples.pop_front()
+			else:
+				_speed_samples[0] = Vector2(oldest.x - cut, oldest.y - distance_cut)
+		if _speed_duration >= window - 0.000001 and riding:
+			speed_max = maxf(speed_max, _speed_distance / _speed_duration)
+		if step / dt > CONFIG.moving_speed:
+			moving_time += dt
+			if riding:
+				bike_moving_time += dt
+	if journal.sample_recorded and is_finite(ground):
+		alt_min = minf(alt_min, ground)
+		alt_max = maxf(alt_max, ground)
+		if not is_finite(_anchor_alt):
+			_anchor_alt = ground
+		var change := ground - _anchor_alt
+		if absf(change) >= CONFIG.altitude_hysteresis:
+			climb += maxf(change, 0.0)
+			descent += maxf(-change, 0.0)
+			_anchor_alt = ground
+		_profile_samples.append(Vector2(_distance, ground))
+		if _profile_samples.size() > maxi(2, CONFIG.profile_limit) * 2:
+			_profile_samples = _resample_profile(_profile_samples, maxi(2, CONFIG.profile_limit))
+
+
+func break_track() -> void:
+	_anchor_alt = NAN
+	_clear_speed()
+	_speed_mode_set = false
+
+
+func _clear_speed() -> void:
+	_speed_samples.clear()
+	_speed_duration = 0.0
+	_speed_distance = 0.0
+
+
+## Вызывается до очистки landing_info и сброса crashed контроллером.
+func bike_events(landing: Dictionary, crashed: bool, at: Vector2, speed: float, now: float) -> void:
+	var air := float(landing.get("air", 0.0))
+	if air >= CONFIG.jump_air_time:
+		jumps += 1
+		air_max = maxf(air_max, air)
+	if crashed and not _crashed:
+		if now - _last_fall_time >= CONFIG.fall_merge_time or at.distance_to(_last_fall_position) >= CONFIG.fall_merge_distance:
+			falls += 1
+			if fall_marks.size() < CONFIG.fall_marks_limit:
+				fall_marks.append({x = at.x, z = at.y, speed = absf(float(landing.get("speed", speed))), distance = _distance})
+		_last_fall_time = now
+		_last_fall_position = at
+	_crashed = crashed
+
+
+static func _resample_profile(samples: Array[Vector2], limit: int) -> Array[Vector2]:
+	if samples.size() <= 1:
+		return samples.duplicate()
+	limit = mini(limit, samples.size())
+	var out: Array[Vector2] = []
+	var first := samples[0].x
+	var span := samples[-1].x - first
+	var j := 0
+	for i in limit:
+		var distance := first + span * float(i) / float(limit - 1)
+		while j + 1 < samples.size() - 1 and samples[j + 1].x < distance:
+			j += 1
+		var a := samples[j]
+		var b := samples[j + 1]
+		var t := (distance - a.x) / (b.x - a.x) if b.x > a.x else 0.0
+		out.append(Vector2(distance, lerpf(a.y, b.y, t)))
+	return out
 
 
 ## Текущий заезд как запись: те же поля, что у прошлых. Пусто, если заезд не начат
@@ -43,9 +176,22 @@ func snapshot(journal, explore: Exploration, quests_done: int) -> Dictionary:
 			legs.append(journal.legs[i].points)
 	if journal.current.size() > 1:
 		legs.append(journal.current.duplicate())
+	var profile := []
+	for point: Vector2 in _resample_profile(_profile_samples, maxi(2, CONFIG.profile_limit)):
+		profile.append(point.y)
+	var marks := fall_marks.duplicate(true)
+	for mark: Dictionary in marks:
+		mark.progress = float(mark.distance) / _distance if _distance > 0.0 else 0.0
+		mark.erase("distance")
+	var bike_distance: float = maxf(0.0, journal.bike - float(_start.bike))
 	return {start = float(_start.at), end = Time.get_unix_time_from_system(),
 		time = maxf(0.0, explore.play_s - float(_start.time)),
-		bike = maxf(0.0, journal.bike - float(_start.bike)), foot = maxf(0.0, journal.foot - float(_start.foot)),
+		bike = bike_distance, foot = maxf(0.0, journal.foot - float(_start.foot)),
+		climb = climb, descent = descent, alt_min = alt_min if is_finite(alt_min) else 0.0,
+		alt_max = alt_max if is_finite(alt_max) else 0.0, speed_max = speed_max,
+		speed_avg = bike_distance / bike_moving_time if bike_moving_time > 0.0 else 0.0,
+		moving_time = moving_time, jumps = jumps, air_max = air_max, falls = falls,
+		fall_marks = marks, profile = profile,
 		alt = alt if is_finite(alt) else 0.0, photos = maxi(0, explore.photos - int(_start.photos)),
 		quests = maxi(0, quests_done - int(_start.quests)), places = places.keys(), legs = legs}
 
