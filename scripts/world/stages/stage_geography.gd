@@ -8,6 +8,8 @@ extends RefCounted
 
 const PROGRESS := 0.34
 const LABEL := "Высоты, уклоны и берега"
+## Шкала нормированного уклона w.slope: перепад нормированной высоты на клетку × 60 (= FastGrid.SlopeUnits).
+const SLOPE_UNITS := 60.0
 
 
 static func run(w: WorldData, parallel := true) -> void:
@@ -52,7 +54,7 @@ static func _run_script(w: WorldData) -> void:
 			var d := elev[mini(H - 1, y + 1) * W + x]
 			var gx := r - l
 			var gy := d - u
-			slope[y * W + x] = sqrt(gx * gx + gy * gy) * 0.5 * 60.0
+			slope[y * W + x] = sqrt(gx * gx + gy * gy) * 0.5 * SLOPE_UNITS
 	w.dist_water = dist_water
 	w.elev = elev
 	w.slope = slope

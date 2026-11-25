@@ -89,11 +89,13 @@ static func restore(seed_text: String) -> Dictionary:
 	var h := Surface.restore(w, saved.surface, "final")
 	if h == null or h.road_refinement.patches.is_empty():
 		return {}
+	# Дальние виды — по полю до эрозии, чтобы камера не переезжала при подборе эрозии.
+	var far := far_views(w, h, saved.route)
 	Erosion.run(h)
 	w.clear_noise_fields()
 	# Ближние виды — как сохранены (по ним сверяются эталоны), дальние — отдельным ключом для стенда.
 	# Пустой список дальних видов не мешает эталонам; стенд считает это ошибкой сам.
-	return {world = w, heights = h, route = saved.route, views = saved.views, far_views = far_views(w, h, saved.route)}
+	return {world = w, heights = h, route = saved.route, views = saved.views, far_views = far}
 
 
 static func view_names() -> Array:

@@ -158,6 +158,26 @@ terrace_position_weights = PackedFloat64Array(0.85, 0.95)
 
 [sub_resource type="Resource" id="Resource_relief_generation"]
 script = ExtResource("7_relief_gen")
+erosion_enabled = true
+grid_factor = 2
+iterations = 40
+transition_grade = 0.3
+max_change_m = 5.0
+incision_rate = 0.3
+reference_area_m2 = 20000.0
+channel_area_m2 = 1500.0
+roughness_m = 0.6
+roughness_wavelength_m = 24.0
+area_exponent = 0.5
+min_width_m = 12.0
+edge_inflow_m = 150.0
+repose_grade = 0.55
+creep_rate = 0.5
+diffusion = 0.02
+capacity_m3 = 2500.0
+deposition_rate = 0.1
+wet_index = Vector2(3, 12)
+wet_moist_gain = 0.3
 road_guard_m = 4.0
 road_fade_m = 8.0
 water_clearance_m = 0.5

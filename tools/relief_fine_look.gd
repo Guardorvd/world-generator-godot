@@ -118,6 +118,8 @@ func _run() -> void:
 		if mkdir != OK:
 			_expect(false, "папка прогона %s: %s" % [folder, error_string(mkdir)])
 			continue
+		var erosion := Metrics.erosion_report(fixture.heights, folder.path_join("erosion_map.png"))
+		print("RELIEF_EROSION ", seed, " ", erosion)
 		var prepare_ms := 0.0
 		if mode != "off":
 			var prepare_started := Time.get_ticks_usec()

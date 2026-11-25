@@ -5,6 +5,12 @@ const SIDE := 128 # отсчёты через метр; измеряем вол�
 const BANDS := [2, 4, 8, 16, 32, 64, SIDE]
 const CREASES := [1.0, 2.0, 5.0, 10.0, 20.0]
 const TOLERANCE_M := 0.001
+## Изменение высоты, начиная с которого узел считается затронутым эрозией (отчёт), м.
+const EROSION_VISIBLE_M := 0.1
+## Изменение высоты, при котором карта эрозии насыщается: красное — снято, синее — насыпано, м.
+const EROSION_MAP_M := 3.0
+## Свет отмывки: с северо-запада под 45° (единичный вектор, 1/√3 по каждой оси).
+const SHADE_LIGHT := Vector3(-1.0, 1.0, -1.0) * 0.57735
 
 
 static func spectrum(h: Heightfield, focus: Vector2) -> Dictionary:
@@ -214,3 +220,60 @@ static func near_view(key: Vector2i, eye: Vector2, focus: Vector2) -> bool:
 	var corner := Vector2(key) * PlanTerrain.SIDE + Vector2.ONE * GameConfig.TILE * 0.5
 	var opposite := corner + Vector2.ONE * PlanTerrain.SIDE
 	return focus.distance_to(focus.clamp(corner, opposite)) <= SIDE * 0.8 or eye.distance_to(eye.clamp(corner, opposite)) <= 50.0
+
+
+## Эрозия на фикстуре (ReliefErosion в Fixture.restore): время, глубины и карта плана сверху — отмывка до, после,
+## изменение высот и водосбор. По карте видно, ветвится ли сеть стока и сливаются ли лощины. Пусто без эрозии.
+static func erosion_report(h: Heightfield, map_path: String) -> Dictionary:
+	var delta := h.erosion_delta
+	if delta.size() != h.hv.size():
+		return {}
+	var cut := 0.0
+	var fill := 0.0
+	var moved := 0
+	for d: float in delta:
+		cut = minf(cut, d)
+		fill = maxf(fill, d)
+		moved += int(absf(d) > EROSION_VISIBLE_M)
+	# Врезание по руслам: медиана и 90-я доля снятого там, где водосбор больше порога лощины (карта area — 8 ступеней
+	# на удвоение площади клетки).
+	var cfg := WorldTemplate.config(h.world.template_id).relief_generation
+	var head := roundi(8.0 * log(cfg.channel_area_m2 / (GameConfig.TILE * GameConfig.TILE)) / log(2.0)) if cfg != null and cfg.channel_area_m2 > 0.0 else 0
+	var channel := PackedFloat32Array()
+	for i in delta.size():
+		if h.relief_flow.area[i] >= head and delta[i] < 0.0:
+			channel.append(-delta[i])
+	channel.sort()
+	var w := h.world
+	var before := h.hv.duplicate()
+	for i in before.size():
+		before[i] -= delta[i]
+	var sheet := Image.create_empty(w.W * 5, w.H, false, Image.FORMAT_RGB8)
+	var allowed := h.erosion_allowed
+	var area: PackedByteArray = h.relief_flow.area
+	var top := 1
+	for value: int in area:
+		top = maxi(top, value)
+	for z in range(1, w.H - 1):
+		for x in range(1, w.W - 1):
+			var i := z * w.W + x
+			sheet.set_pixel(x, z, _shade(before, i, w.W))
+			sheet.set_pixel(w.W + x, z, _shade(h.hv, i, w.W))
+			var d := clampf(delta[i] / EROSION_MAP_M, -1.0, 1.0)
+			sheet.set_pixel(2 * w.W + x, z, Color(1.0, 1.0 + d, 1.0 + d) if d < 0.0 else Color(1.0 - d, 1.0 - d, 1.0))
+			sheet.set_pixel(3 * w.W + x, z, Color.from_hsv(0.58, 0.8, float(area[i]) / top))
+			if allowed.size() == delta.size():
+				var a := clampf(allowed[i] / EROSION_MAP_M, 0.0, 1.0)
+				sheet.set_pixel(4 * w.W + x, z, Color(a, a, a))
+	return {ms = h.path_timings.get("erosion_native_ms", 0.0), phases_ms = h.path_timings.get("erosion_phase_ms", []), sinks = h.path_timings.get("erosion_sinks", 0),
+		max_area_m2 = h.path_timings.get("erosion_max_area_m2", 0.0),
+		max_cut_m = -cut, max_fill_m = fill, channel_cells = channel.size(),
+		channel_cut_m = [channel[channel.size() / 2], channel[channel.size() * 9 / 10]] if not channel.is_empty() else [], moved_share = float(moved) / delta.size(), map_saved = sheet.save_png(map_path) == OK}
+
+
+## Отмывка рельефа: нормаль по центральным разностям, свет SHADE_LIGHT.
+static func _shade(heights: PackedFloat32Array, i: int, stride: int) -> Color:
+	var gx := (heights[i + 1] - heights[i - 1]) / (2.0 * GameConfig.TILE)
+	var gz := (heights[i + stride] - heights[i - stride]) / (2.0 * GameConfig.TILE)
+	var v := clampf(Vector3(-gx, 1.0, -gz).normalized().dot(SHADE_LIGHT), 0.0, 1.0)
+	return Color(v, v, v)

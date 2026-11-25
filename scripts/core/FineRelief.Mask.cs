@@ -22,17 +22,27 @@ public sealed class ReliefMask
 	public readonly float[] Weight;
 	/// <summary>Узел дальше полосы перехода от воды (берег не защищён).</summary>
 	public readonly bool[] ClearOfWater;
+	/// <summary>Только для эрозии: расстояние до ближайшей защищённой зоны (дорога за своей полосой, вода, место,
+	/// сооружение, край плана за своей полосой), м. Эрозия меняет высоту не больше чем на это расстояние × уклон перехода.</summary>
+	public readonly float[] ProtectM;
+	/// <summary>Только для эрозии: доля «не скалы» 0..1 по полю породы (RockRelief).</summary>
+	public readonly float[] RockFree;
 
-	private ReliefMask(int width, int height, double tile)
+	private ReliefMask(int width, int height, double tile, bool erosion)
 	{
 		Width = width;
 		Height = height;
 		Tile = tile;
 		Weight = new float[width * height];
 		ClearOfWater = new bool[Weight.Length];
+		ProtectM = erosion ? new float[Weight.Length] : null;
+		RockFree = erosion ? new float[Weight.Length] : null;
+		if (erosion)
+			Array.Fill(ProtectM, float.MaxValue);
 	}
 
-	internal static ReliefMask Build(Inputs input, double[] profile)
+	/// <summary>erosion — заполнить ещё ProtectM и RockFree (эрозия генерации); вес поля 2 м от этого не меняется.</summary>
+	internal static ReliefMask Build(Inputs input, double[] profile, bool erosion = false)
 	{
 		if (profile.Length != (int)Parameter.Count)
 			return null;
@@ -51,7 +61,7 @@ public sealed class ReliefMask
 		if (width < 2 || height < 2 || tile <= 0.0 || heights.Length != count || water.Length != count || wet.Length != count
 			|| lake.Length != count || rock.Length != count)
 			return null;
-		var mask = new ReliefMask(width, height, tile);
+		var mask = new ReliefMask(width, height, tile, erosion);
 		var weight = mask.Weight;
 		Array.Fill(weight, 1.0f);
 		double At(int x, int z) => heights[Math.Clamp(z, 0, height - 1) * width + Math.Clamp(x, 0, width - 1)];
@@ -107,9 +117,16 @@ public sealed class ReliefMask
 		for (int x = 0; x < width; x++)
 		{
 			int k = z * width + x;
-			if (weight[k] == 0.0f)
+			if (weight[k] == 0.0f && !erosion)
 				continue;
 			int edge = Math.Min(Math.Min(x, width - 1 - x), Math.Min(z, height - 1 - z));
+			if (erosion)
+			{
+				mask.ProtectM[k] = (float)Math.Max(0.0, Math.Min(mask.ProtectM[k], edge * tile - edgeGuard));
+				mask.RockFree[k] = (float)(1.0 - Smooth(rockFrom, rockTo, rock[k] / (double)byte.MaxValue));
+			}
+			if (weight[k] == 0.0f)
+				continue;
 			// Центральная разность высот: уклон узла, м/м.
 			double sx = (At(x + 1, z) - At(x - 1, z)) / (2.0 * tile);
 			double sz = (At(x, z + 1) - At(x, z - 1)) / (2.0 * tile);
@@ -120,7 +137,8 @@ public sealed class ReliefMask
 		return mask;
 	}
 
-	public long Bytes() => (long)Weight.Length * sizeof(float) + ClearOfWater.LongLength;
+	public long Bytes() => (long)Weight.Length * sizeof(float) + ClearOfWater.LongLength
+		+ (ProtectM == null ? 0L : 2L * ProtectM.Length * sizeof(float));
 
 	private void ResetDistance(int[] distance) => Array.Fill(distance, Math.Max(Width, Height));
 
@@ -139,7 +157,11 @@ public sealed class ReliefMask
 	{
 		DistanceToGuard(d);
 		for (int k = 0; k < d.Length; k++)
+		{
 			Weight[k] *= (float)Smooth(guard, guard + fade, d[k] * Tile);
+			if (ProtectM != null)
+				ProtectM[k] = (float)Math.Min(ProtectM[k], Math.Max(0.0, d[k] * Tile - guard));
+		}
 	}
 
 	private void DistanceToGuard(int[] d)

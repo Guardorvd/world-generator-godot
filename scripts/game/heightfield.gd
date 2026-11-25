@@ -350,6 +350,12 @@ var _ride_rev := -1            # с какой версии опоры снят 
 var _ride_ok := false          # снимок удался (иначе до следующей смены опоры — GDScript)
 var fine_relief: Object
 var fine_lod := false
+## Карты стока эрозии (ReliefErosion): area, deposit, wet — PackedByteArray по узлам 4 м. Пусто без эрозии.
+var relief_flow := {}
+## Изменение высот эрозией, м, — только до растительности при генерации (в кэш не идёт; загрузчик сбрасывает).
+var erosion_delta := PackedFloat32Array()
+## Предел изменения высот эрозией по узлам, м (маска × уклон перехода × глубина формы) — для отчёта стенда.
+var erosion_allowed := PackedFloat32Array()
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
 const ReliefErosion := preload("res://scripts/world/relief_erosion.gd")
 var fine_profile: ReliefDetailConfig
@@ -361,8 +367,9 @@ func ground_changed() -> void:
 
 
 ## Входы общей маски рельефа (ReliefMask): что защищено от изменения высот — полотно дорог, вода, места,
-## сооружения, скалы. Одни для эрозии генерации и для поля 2 м.
-func relief_mask_inputs() -> Dictionary:
+## сооружения, скалы. Одни для эрозии генерации и для поля 2 м. with_objects — ещё скальные выходы из объектов плана:
+## у эрозии их нет (при генерации объекты ставятся позже, вход должен быть одним на всех путях).
+func relief_mask_inputs(with_objects := true) -> Dictionary:
 	var w := world
 	var footprints := PackedFloat64Array()
 	for place: SettlementData in w.settlements:
@@ -373,7 +380,7 @@ func relief_mask_inputs() -> Dictionary:
 		footprints.append_array([place.x * TILE, place.y * TILE, place.clear * TILE])
 		for hut: HutData in place.huts:
 			footprints.append_array([hut.x * TILE, hut.y * TILE, PlayerState.hut_half(hut).length()])
-	var kinds := w.obj_k
+	var kinds := w.obj_k if with_objects else PackedInt32Array()
 	var variants := w.obj_v
 	var xs := w.obj_x
 	var zs := w.obj_y

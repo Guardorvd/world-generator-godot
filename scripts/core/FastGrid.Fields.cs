@@ -4,6 +4,9 @@ using Godot;
 
 public partial class FastGrid
 {
+	/// <summary>Шкала нормированного уклона w.slope: перепад нормированной высоты на клетку × 60 (= StageGeography.SLOPE_UNITS).</summary>
+	internal const double SlopeUnits = 60.0;
+
 	/// <summary>StageGeography: normalize water sources and elevations, then read that elevation snapshot for slopes.
 	/// A missing dist_water key tells the caller to copy its existing ocean distance field.</summary>
 	public Godot.Collections.Dictionary GeographyFields(int width, int height, float[] heights, float[] filled,
@@ -33,7 +36,7 @@ public partial class FastGrid
 				int i = row + x;
 				double gx = (double)elev[x == width - 1 ? i : i + 1] - elev[x == 0 ? i : i - 1];
 				double gy = (double)elev[down + x] - elev[up + x];
-				slope[i] = (float)(Math.Sqrt(gx * gx + gy * gy) * 0.5 * 60.0);
+				slope[i] = (float)(Math.Sqrt(gx * gx + gy * gy) * 0.5 * SlopeUnits);
 			}
 		});
 		var result = new Godot.Collections.Dictionary { ["elev"] = elev, ["slope"] = slope };

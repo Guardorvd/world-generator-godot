@@ -10,7 +10,7 @@ static func capture(h: Heightfield, stage: String) -> Dictionary:
 		patches = r.patches.duplicate(true) if r != null else {},
 		gaps = r.gaps.duplicate(true) if r != null else [],
 		shaping = r.trail_shaping.duplicate(true) if r != null else {},
-		baked = r.trail_elements_baked if r != null else false}
+		baked = r.trail_elements_baked if r != null else false, flow = h.relief_flow.duplicate()}
 
 static func restore(w: WorldData, data: Dictionary, stage: String) -> Heightfield:
 	if not valid(w, data, stage): return null
@@ -24,12 +24,25 @@ static func restore(w: WorldData, data: Dictionary, stage: String) -> Heightfiel
 	h._deck_keys = data.decks
 	h.index_ribbons()
 	h.index_structures()
+	var flow: Variant = data.get("flow", {})
+	if flow is Dictionary and _flow_valid(flow, w.N):
+		h.relief_flow = flow
 	if stage == "final":
 		h.road_refinement = RoadRefinement.from_patches(data.patches, w.H, w.template_id)
 		h.road_refinement.gaps.assign(data.get("gaps", []))
 		h.road_refinement.trail_shaping = data.shaping
 		h.road_refinement.trail_elements_baked = data.baked
 	return h
+
+## Карты стока необязательны (без эрозии их нет); если есть — три байтовых поля по узлам.
+static func _flow_valid(flow: Dictionary, n: int) -> bool:
+	if flow.is_empty():
+		return true
+	for field: String in ["area", "deposit", "wet"]:
+		if not flow.get(field) is PackedByteArray or flow[field].size() != n:
+			return false
+	return true
+
 
 static func valid(w: WorldData, d: Dictionary, stage: String) -> bool:
 	if d.get("version") != VERSION or d.get("stage") != stage or d.get("width") != w.W or d.get("height") != w.H: return false

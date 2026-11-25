@@ -220,6 +220,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		r.trail = StageTrailPlan.prepare(r.heights)
 	else: StageTrailPlan.restore_technical(r.heights, r.trail)
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
+	# Изменение высот эрозией нужно только раскладке леса при генерации; в игре держим лишь карты стока.
+	r.heights.erosion_delta = PackedFloat32Array()
+	r.heights.erosion_allowed = PackedFloat32Array()
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
 	r.timings.trail_ms = r.trail.get("ms", 0.0)
 	for message: String in r.trail.errors:

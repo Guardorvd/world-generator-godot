@@ -102,7 +102,7 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	if surface != null and surface.road_refinement != null:
 		for gap: Dictionary in surface.road_refinement.gaps:
 			bypasses.append(gap.bypass)
-	var f := fields(w, bypasses)
+	var f := fields(w, bypasses, surface)
 	var part_us := Time.get_ticks_usec()
 	if surface != null:
 		f.massifs = RockMassif.seated(f.massifs, surface)
@@ -292,7 +292,8 @@ class EngineTrig:
 
 
 ## Поля стартовой области для place_chunk (stride W, угол 0, 0)
-static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
+## surface с эрозией (ReliefErosion) даёт копии elev/slope/moist по новому полю; без неё — поля мира как есть.
+static func fields(w: WorldData, bypasses: Array = [], surface: Heightfield = null) -> Dictionary:
 	var started := Time.get_ticks_usec()
 	var W := w.W
 	var H := w.H
@@ -348,6 +349,11 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 	if w.generation.surface_rock.size() != N:
 		w.generation.surface_rock = Surface.field(elev, slope, moist)
 	w.generation_profile.forest_noise_ms = (Time.get_ticks_usec() - noise_started) / 1000.0
+	var eroded := _eroded_fields(w, surface)
+	if not eroded.is_empty():
+		elev = eroded.elev
+		slope = eroded.slope
+		moist = eroded.moist
 	var out := {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
 		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
@@ -360,6 +366,20 @@ static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 	w.generation_profile.veg_massif_sites_ms = (Time.get_ticks_usec() - sites_us) / 1000.0
 	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return out
+
+
+## Поля выбора леса по полю после эрозии (часть 2 плана рельефа, задача 3.8): лощины, рёбра и влажность стока.
+## Пусто, если эрозии не было; мир не меняется — копии живут только в раскладке.
+static func _eroded_fields(w: WorldData, surface: Heightfield) -> Dictionary:
+	if surface == null or surface.erosion_delta.size() != w.N or surface.relief_flow.is_empty():
+		return {}
+	var cfg := WorldTemplate.config(w.template_id).relief_generation
+	var fast := Grid.fast_grid()
+	if cfg == null or fast == null:
+		return {}
+	var got: Variant = fast.ErodedVegetationFields(w.elev, w.slope, w.moist, surface.erosion_delta, surface.relief_flow.wet,
+		w.W, w.H, GameConfig.HS, cfg.wet_moist_gain)
+	return got if got is Dictionary else {}
 
 
 ## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и RoadSection. Тот же расчёт у плана

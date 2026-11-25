@@ -61,7 +61,7 @@ static func prepare(h: Heightfield) -> Dictionary:
 
 static func copy_surface(h: Heightfield, ready: Heightfield) -> void:
 	for field in ["hv", "hv_raw", "water_level", "ribbons", "_river_cells", "_seg_pts", "_pair_cells", "_pair_segs",
-		"structures", "_cells", "_deck_keys", "road_refinement", "path_timings"]:
+		"structures", "_cells", "_deck_keys", "road_refinement", "path_timings", "relief_flow"]:
 		h.set(field, ready.get(field))
 
 
