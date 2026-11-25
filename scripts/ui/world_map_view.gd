@@ -848,9 +848,10 @@ func _draw_track() -> void:
 		_track.draw_polyline(points, RIDE_INK, 4.2 / _stroke_scale, true)
 	for mark: Dictionary in ride_fall_marks:
 		var at := Vector2(float(mark.get("x", 0.0)), float(mark.get("z", 0.0)))
-		var radius := 6.0 / _stroke_scale
-		_track.draw_line(at + Vector2(-radius, -radius), at + Vector2(radius, radius), Color.RED, 2.5 / _stroke_scale)
-		_track.draw_line(at + Vector2(-radius, radius), at + Vector2(radius, -radius), Color.RED, 2.5 / _stroke_scale)
+		var config = preload("res://resources/ride_journal.tres")
+		var radius: float = config.map_fall_radius / _stroke_scale
+		_track.draw_line(at + Vector2(-radius, -radius), at + Vector2(radius, radius), config.map_fall_color, config.map_fall_width / _stroke_scale)
+		_track.draw_line(at + Vector2(-radius, radius), at + Vector2(radius, -radius), config.map_fall_color, config.map_fall_width / _stroke_scale)
 
 
 func _draw_leg(points: PackedVector2Array, faded := false) -> void:

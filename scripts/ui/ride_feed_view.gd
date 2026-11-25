@@ -8,6 +8,7 @@ const Feed = preload("res://scripts/game/ride_feed.gd")
 const Card = preload("res://scripts/ui/ride_card.gd")
 const RideLog = preload("res://scripts/game/ride_log.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
+const Config = preload("res://resources/ride_journal.tres")
 
 var feed = Feed.new()
 var settings
@@ -25,10 +26,10 @@ func setup(game_settings, seed := "", template_id := "") -> void:
 	world_seed = seed
 	world_template = template_id
 	_only_world = not seed.is_empty()
-	add_theme_constant_override("separation", 8)
+	add_theme_constant_override("separation", Config.feed_spacing)
 	var title := Label.new()
 	title.text = "ЖУРНАЛ ЗАЕЗДОВ"
-	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_font_size_override("font_size", Config.feed_title_font)
 	add_child(title)
 	if not world_seed.is_empty():
 		var filter := CheckButton.new()
@@ -47,7 +48,7 @@ func setup(game_settings, seed := "", template_id := "") -> void:
 		refresh())
 	add_child(walks)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.y = 260
+	scroll.custom_minimum_size.y = Config.feed_list_height
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(scroll)
@@ -108,10 +109,10 @@ func _show_detail(entry: Dictionary) -> void:
 		_dialog.queue_free()
 	_dialog = AcceptDialog.new()
 	_dialog.title = "Поездка · " + RideLog.date_text(float(entry.get("start", 0.0)))
-	_dialog.min_size = Vector2i(520, 500)
+	_dialog.min_size = Config.detail_min_size
 	add_child(_dialog)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(500, 440)
+	scroll.custom_minimum_size = Config.detail_scroll_size
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_dialog.add_child(scroll)
 	var box := VBoxContainer.new()
@@ -125,12 +126,12 @@ func _show_detail(entry: Dictionary) -> void:
 			preview.texture = ImageTexture.create_from_image(image)
 			preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			preview.custom_minimum_size = Vector2(0, 240)
+			preview.custom_minimum_size = Vector2(0, Config.detail_preview_height)
 			box.add_child(preview)
 	var profile := Profile.new()
 	profile.values = entry.get("profile", [])
 	profile.marks = entry.get("fall_marks", [])
-	profile.custom_minimum_size.y = 100
+	profile.custom_minimum_size.y = Config.detail_profile_height
 	box.add_child(profile)
 	var labels := [
 		["Велосипед", Util.distance_text(float(entry.get("bike", 0.0)))],
@@ -146,7 +147,7 @@ func _show_detail(entry: Dictionary) -> void:
 	]
 	var grid := GridContainer.new()
 	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 20)
+	grid.add_theme_constant_override("h_separation", Config.detail_grid_gap)
 	box.add_child(grid)
 	for item: Array in labels:
 		var line := Label.new()
@@ -162,13 +163,13 @@ func _show_detail(entry: Dictionary) -> void:
 		if FileAccess.file_exists(path):
 			var photo_image := Image.load_from_file(path)
 			if photo_image != null and not photo_image.is_empty():
-				if photo_image.get_width() > 800:
-					photo_image.resize(800, maxi(1, roundi(float(photo_image.get_height()) * 800.0 / photo_image.get_width())), Image.INTERPOLATE_BILINEAR)
+				if photo_image.get_width() > Config.detail_photo_width:
+					photo_image.resize(Config.detail_photo_width, maxi(1, roundi(float(photo_image.get_height()) * Config.detail_photo_width / photo_image.get_width())), Image.INTERPOLATE_BILINEAR)
 				var photo := TextureRect.new()
 				photo.texture = ImageTexture.create_from_image(photo_image)
 				photo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 				photo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-				photo.custom_minimum_size.y = 160
+				photo.custom_minimum_size.y = Config.detail_photo_height
 				box.add_child(photo)
 	var remove := Button.new()
 	remove.text = "Удалить запись"
@@ -186,7 +187,7 @@ func _show_detail(entry: Dictionary) -> void:
 				_dialog.hide()
 				refresh())
 		confirm.popup_centered())
-	_dialog.popup_centered(Vector2i(620, 650))
+	_dialog.popup_centered(Config.detail_window_size)
 
 
 static func _metric(entry: Dictionary, key: String, unit: String) -> String:
@@ -210,11 +211,12 @@ class Profile extends Control:
 		var span := maxf(high - low, 1.0)
 		var points := PackedVector2Array()
 		for i in values.size():
-			points.append(Vector2(float(i) / float(values.size() - 1) * size.x, size.y - (float(values[i]) - low) / span * (size.y - 12.0) - 6.0))
-		draw_polyline(points, HudStyle.MINT, 2.0, true)
+			points.append(Vector2(float(i) / float(values.size() - 1) * size.x, size.y - (float(values[i]) - low) / span * (size.y - Config.profile_padding * 2.0) - Config.profile_padding))
+		draw_polyline(points, HudStyle.MINT, Config.profile_line_width, true)
 		for mark: Dictionary in marks:
 			var x := clampf(float(mark.get("progress", 0.0)), 0.0, 1.0) * (values.size() - 1)
 			var index := mini(floori(x), values.size() - 2)
 			var p := points[index].lerp(points[index + 1], x - index)
-			draw_line(p + Vector2(-4, -4), p + Vector2(4, 4), Color.RED, 2.0)
-			draw_line(p + Vector2(-4, 4), p + Vector2(4, -4), Color.RED, 2.0)
+			var radius: float = Config.profile_fall_radius
+			draw_line(p + Vector2(-radius, -radius), p + Vector2(radius, radius), Config.map_fall_color, Config.profile_fall_width)
+			draw_line(p + Vector2(-radius, radius), p + Vector2(radius, -radius), Config.map_fall_color, Config.profile_fall_width)

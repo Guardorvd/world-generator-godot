@@ -27,6 +27,12 @@ extends Resource
 @export var fall_merge_distance := 5.0
 ## Увеличение сохраняет больше отметок падений.
 @export var fall_marks_limit := 64
+## Увеличение делает кресты падений на большой карте крупнее.
+@export var map_fall_radius := 6.0
+## Увеличение делает кресты падений на большой карте толще.
+@export var map_fall_width := 2.5
+## Более яркий цвет делает падения на карте и профиле заметнее.
+@export var map_fall_color := Color.RED
 @export_group("Превью")
 ## Увеличение делает превью шире.
 @export var thumb_width := 320
@@ -56,6 +62,49 @@ extends Resource
 @export var finish_color := Color(1.0, 0.8, 0.2)
 ## Более светлый цвет осветляет поля за границей карты.
 @export var background_color := Color(0.12, 0.15, 0.16)
+@export_group("Лента")
+## Увеличение делает карточки ленты выше.
+@export var card_height := 132.0
+## Увеличение делает миниатюру в карточке больше.
+@export var card_thumb_size := Vector2(82, 62)
+## Увеличение добавляет внутренние поля карточки.
+@export var card_padding := 8.0
+## Увеличение делает значок типа мира крупнее.
+@export var card_icon_size := 16.0
+## Увеличение делает дату в карточке крупнее.
+@export var card_title_font := 14
+## Увеличение делает подписи карточки крупнее.
+@export var card_text_font := 12
+## Увеличение раздвигает элементы ленты.
+@export var feed_spacing := 8
+## Увеличение делает заголовок ленты крупнее.
+@export var feed_title_font := 18
+## Увеличение оставляет больше места списку поездок.
+@export var feed_list_height := 260.0
+## Увеличение задаёт больший минимальный размер окна поездки.
+@export var detail_min_size := Vector2i(520, 500)
+## Увеличение задаёт большую область прокрутки поездки.
+@export var detail_scroll_size := Vector2(500, 440)
+## Увеличение открывает подробную поездку в более крупном окне.
+@export var detail_window_size := Vector2i(620, 650)
+## Увеличение делает крупное превью выше.
+@export var detail_preview_height := 240.0
+## Увеличение делает график высоты выше.
+@export var detail_profile_height := 100.0
+## Увеличение сохраняет больше деталей загруженного снимка.
+@export var detail_photo_width := 800
+## Увеличение делает снимки в карточке выше.
+@export var detail_photo_height := 160.0
+## Увеличение раздвигает столбцы статистики.
+@export var detail_grid_gap := 20
+## Увеличение добавляет поля у графика высоты.
+@export var profile_padding := 6.0
+## Увеличение делает линию графика толще.
+@export var profile_line_width := 2.0
+## Увеличение делает отметки падений на графике крупнее.
+@export var profile_fall_radius := 4.0
+## Увеличение делает отметки падений на графике толще.
+@export var profile_fall_width := 2.0
 @export_group("Хранилище")
 ## Увеличение сохраняет больше последних записей.
 @export var entries_limit := 200
