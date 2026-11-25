@@ -7,6 +7,8 @@ extends SceneTree
 ## --fine compare_lod сравнивает старые и новые LOD на одном поле. --fine legacy_lod пригоден для исходного заезда.
 ## --fine ordinary использует обычную детализацию; --fine compare_quality сравнивает её с высокой.
 ## --ride ведёт камеру по оси тропы 60 с со скоростью 22 м/с, --parity сверяет физику с мешем.
+## Лист: верхний ряд — свет стенда, нижний — свет «для формы» (серая глина, низкое солнце сбоку).
+## Виды: пять ближних из фикстуры и дальние Fixture.FAR_VIEW_NAMES (план части 2, этап 0).
 
 const Fixture := preload("res://tools/relief_fine_fixture.gd")
 const Metrics := preload("res://tools/relief_fine_metrics.gd")
@@ -20,6 +22,19 @@ const RIDE_SECONDS := 60.0
 const SHOT_SIZE := Vector2i(640, 360)
 const MEASURE_FRAMES := 45
 const MEASURE_WINDOW_US := 600_000
+## Свет «для формы»: высота солнца над горизонтом, оно светит сбоку от взгляда; тени до дальних видов.
+const FORM_SUN_ELEVATION_DEG := 20.0
+const FORM_SHADOW_M := 600.0
+const FORM_AMBIENT_ENERGY := 0.22
+## Глина: ровный серый цвет вместо материалов, без затенения впадин (cavity_tex), микротеней и рисунка нормалей.
+## Остаётся только геометрия: по такому кадру отвечаем на контрольный вопрос плана части 2.
+const FORM_ALBEDO := 0.4
+const CLAY_LINES := {
+	"ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));": "ALBEDO = vec3(%s);",
+	"AO = sky * (use_vertex_color ? 1.0 : texture(cavity_tex, UV).r);": "AO = 1.0;",
+	"BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);": "BACKLIGHT = vec3(1.0, 0.0, 0.0);",
+	"NORMAL_MAP = detail_n;": "NORMAL_MAP = vec3(0.5, 0.5, 1.0);",
+}
 
 var _scene: Node3D
 var _camera: Camera3D
@@ -29,10 +44,13 @@ var _source: RefCounted
 var _heights: Heightfield
 var _provider := FrameBudget.new()
 var _failures := 0
+var _env: Environment
+var _clay_shaders := {}
+var _clay_materials := {}
 
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 240 if "--save-fixture" in OS.get_cmdline_user_args() else (90 if "--ride" in OS.get_cmdline_user_args() else 60))
+	preload("res://tools/watchdog.gd").arm(self, 240 if "--save-fixture" in OS.get_cmdline_user_args() else (90 if "--ride" in OS.get_cmdline_user_args() else 150))
 	_run.call_deferred()
 
 
@@ -111,10 +129,13 @@ func _run() -> void:
 				continue
 		_build_scene(fixture.world, fixture.heights, mode != "ordinary")
 		var rows: Array = []
-		var capture_views: Array = [] if args.has("--ride") else fixture.views
-		var sheet := Image.create_empty(SHOT_SIZE.x * Fixture.VIEW_NAMES.size(), SHOT_SIZE.y, false, Image.FORMAT_RGB8)
-		for i in capture_views.size():
-			var view: Dictionary = fixture.views[i]
+		var names := Fixture.view_names()
+		var capture_views: Array = [] if args.has("--ride") else fixture.views + fixture.far_views
+		if not args.has("--ride"):
+			_expect(capture_views.size() == names.size(), "дальние виды не найдены: " + seed)
+		var sheet := Image.create_empty(SHOT_SIZE.x * names.size(), SHOT_SIZE.y * 2, false, Image.FORMAT_RGB8)
+		for i in mini(capture_views.size(), names.size()):
+			var view: Dictionary = capture_views[i]
 			var eye: Vector3 = view.eye
 			var target: Vector3 = view.target
 			var focus: Vector2 = view.focus
@@ -138,7 +159,7 @@ func _run() -> void:
 				for node: MeshInstance3D in nodes:
 					pieces.append(node.mesh.surface_get_arrays(0))
 			var row := Metrics.mesh_stats(pieces, _heights, eye, focus, parity)
-			row.name = Fixture.VIEW_NAMES[i]
+			row.name = names[i]
 			row.eye = eye
 			row.target = target
 			row.energy_pct = Metrics.spectrum(_heights, focus)
@@ -163,6 +184,10 @@ func _run() -> void:
 			_expect(shot.save_png(folder.path_join("%02d_%s.png" % [i + 1, mode])) == OK, "запись снимка: " + str(i))
 			shot.resize(SHOT_SIZE.x, SHOT_SIZE.y, Image.INTERPOLATE_LANCZOS)
 			sheet.blit_rect(shot, Rect2i(Vector2i.ZERO, SHOT_SIZE), Vector2i(i * SHOT_SIZE.x, 0))
+			var form := await _grab_form(eye, target)
+			_expect(form.save_png(folder.path_join("%02d_%s_form.png" % [i + 1, mode])) == OK, "запись снимка формы: " + str(i))
+			form.resize(SHOT_SIZE.x, SHOT_SIZE.y, Image.INTERPOLATE_LANCZOS)
+			sheet.blit_rect(form, Rect2i(Vector2i.ZERO, SHOT_SIZE), Vector2i(i * SHOT_SIZE.x, SHOT_SIZE.y))
 			rows.append(row)
 			print("RELIEF_VIEW ", seed, " ", mode, " ", JSON.stringify(row))
 		var setup_ms := Time.get_ticks_msec() - started
@@ -210,6 +235,8 @@ func _build_scene(w: WorldData, h: Heightfield, high_relief_detail: bool) -> voi
 	root.msaa_3d = Viewport.MSAA_DISABLED
 	_scene = Node3D.new()
 	root.add_child(_scene)
+	_clay_shaders.clear()
+	_clay_materials.clear()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color("b3c4d4")
@@ -218,6 +245,7 @@ func _build_scene(w: WorldData, h: Heightfield, high_relief_detail: bool) -> voi
 	env.ambient_light_energy = 0.38
 	var weather := WorldEnvironment.new()
 	weather.environment = env
+	_env = env
 	_scene.add_child(weather)
 	_sun = DirectionalLight3D.new()
 	_sun.rotation_degrees = Vector3(-33.0, -56.0, 0.0)
@@ -273,6 +301,54 @@ func _place_camera(eye: Vector3, target: Vector3, near := PlanTerrain.RADIUS) ->
 	var snapshot: Dictionary = _source.snapshot()
 	snapshot.detail_prewarm_ms = detail_prewarm_ms
 	return snapshot
+
+
+## Кадр «для формы»: глина на всех частях рельефа, низкое солнце слева от взгляда, длинные тени.
+func _grab_form(eye: Vector3, target: Vector3) -> Image:
+	var flat := Vector3(target.x - eye.x, 0.0, target.z - eye.z).normalized()
+	var right := flat.cross(Vector3.UP)
+	var elevation := deg_to_rad(FORM_SUN_ELEVATION_DEG)
+	var sun_basis := _sun.basis
+	var shadow_on := _sun.shadow_enabled
+	var shadow_m := _sun.directional_shadow_max_distance
+	var ambient := _env.ambient_light_energy
+	_sun.basis = Basis.looking_at(right * cos(elevation) + Vector3.DOWN * sin(elevation))
+	_sun.shadow_enabled = not OS.get_cmdline_user_args().has("--form-no-shadow")
+	_sun.directional_shadow_max_distance = FORM_SHADOW_M
+	_env.ambient_light_energy = FORM_AMBIENT_ENERGY
+	RenderingServer.global_shader_parameter_set("sun_dir", _sun.basis.z)
+	var swapped := {}
+	for node: GeometryInstance3D in _terrain.find_children("*", "GeometryInstance3D", true, false):
+		if node.material_override is ShaderMaterial:
+			swapped[node] = node.material_override
+			node.material_override = _clay(node.material_override)
+	var image := await _grab()
+	image.convert(Image.FORMAT_RGB8)
+	for node: GeometryInstance3D in swapped:
+		node.material_override = swapped[node]
+	_sun.basis = sun_basis
+	_sun.shadow_enabled = shadow_on
+	_sun.directional_shadow_max_distance = shadow_m
+	_env.ambient_light_energy = ambient
+	RenderingServer.global_shader_parameter_set("sun_dir", _sun.basis.z)
+	return image
+
+
+func _clay(source: ShaderMaterial) -> ShaderMaterial:
+	if _clay_materials.has(source):
+		return _clay_materials[source]
+	if not _clay_shaders.has(source.shader):
+		var code := source.shader.code
+		for line: String in CLAY_LINES:
+			_expect(code.count(line) == 1, "строка глины не найдена в шейдере рельефа: " + line)
+			code = code.replace(line, CLAY_LINES[line] % str(FORM_ALBEDO) if "%s" in CLAY_LINES[line] else CLAY_LINES[line])
+		var shader := Shader.new()
+		shader.code = code
+		_clay_shaders[source.shader] = shader
+	var clay := source.duplicate() as ShaderMaterial
+	clay.shader = _clay_shaders[source.shader]
+	_clay_materials[source] = clay
+	return clay
 
 
 func _check_coarse_shadows() -> void:
