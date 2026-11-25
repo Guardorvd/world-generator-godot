@@ -311,20 +311,7 @@ static func fields(w: WorldData, bypasses: Array = [], surface: Heightfield = nu
 	var clear_us := Time.get_ticks_usec()
 	var dist_path := path_clearance(W, H, lines, w.tunnels, w.template_id)
 	w.generation_profile.veg_clearance_ms = (Time.get_ticks_usec() - clear_us) / 1000.0
-	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
-	var village := PackedByteArray()
-	village.resize(N)
-	for s: SettlementData in w.settlements:
-		for y in range(maxi(0, ceili(s.y - VILLAGE_R)), mini(H - 1, floori(s.y + VILLAGE_R)) + 1):
-			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
-				village[y * W + x] = 1
-	# Поляны у хуторов, домов и вышек (с 9.3); руины остаются в лесу
-	for s: SiteData in w.sites:
-		var r: float = s.clear
-		for y in range(maxi(0, ceili(s.y - r)), mini(H - 1, floori(s.y + r)) + 1):
-			for x in range(maxi(0, ceili(s.x - r)), mini(W - 1, floori(s.x + r)) + 1):
-				if Grid.hypot(x + 0.5 - s.x, y + 0.5 - s.y) < r:
-					village[y * W + x] = 1
+	var village := village_mask(w)
 	# С 12.2 освещённость склона и возраст леса — готовыми полями, как за краем карты (OuterLand):
 	# чанки идут в нескольких потоках, а общий шум и вызовы чужого класса на каждой клетке их тормозят
 	var light_job := func(y0: int, y1: int) -> PackedFloat32Array:
@@ -349,11 +336,6 @@ static func fields(w: WorldData, bypasses: Array = [], surface: Heightfield = nu
 	if w.generation.surface_rock.size() != N:
 		w.generation.surface_rock = Surface.field(elev, slope, moist)
 	w.generation_profile.forest_noise_ms = (Time.get_ticks_usec() - noise_started) / 1000.0
-	var eroded := _eroded_fields(w, surface)
-	if not eroded.is_empty():
-		elev = eroded.elev
-		slope = eroded.slope
-		moist = eroded.moist
 	var out := {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
 		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
@@ -362,10 +344,42 @@ static func fields(w: WorldData, bypasses: Array = [], surface: Heightfield = nu
 	out.expedition = w.template_id == WorldTemplate.EXPEDITION_ID
 	out.veg_params = WorldTemplate.veg_params(w.template_id, H)
 	out.plan_h = H
+	# Массивы — по полям мира до эрозии: эрозия заранее знает эти места (massif_sites) и не трогает их.
 	out.massifs = RockMassif.sites(w.seed_num, 0, 0, W, H, out, 0, 0, W, w.path_mask)
 	w.generation_profile.veg_massif_sites_ms = (Time.get_ticks_usec() - sites_us) / 1000.0
+	var eroded := _eroded_fields(w, surface)
+	if not eroded.is_empty():
+		out.elev = eroded.elev
+		out.slope = eroded.slope
+		out.moist = eroded.moist
 	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return out
+
+
+## Окрестности поселений (квадрат ±VILLAGE_R клеток) и поляны мест (с 9.3; руины остаются в лесу): 1 — занято.
+static func village_mask(w: WorldData) -> PackedByteArray:
+	var W := w.W
+	var H := w.H
+	var village := PackedByteArray()
+	village.resize(w.N)
+	for s: SettlementData in w.settlements:
+		for y in range(maxi(0, ceili(s.y - VILLAGE_R)), mini(H - 1, floori(s.y + VILLAGE_R)) + 1):
+			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
+				village[y * W + x] = 1
+	for s: SiteData in w.sites:
+		var r: float = s.clear
+		for y in range(maxi(0, ceili(s.y - r)), mini(H - 1, floori(s.y + r)) + 1):
+			for x in range(maxi(0, ceili(s.x - r)), mini(W - 1, floori(s.x + r)) + 1):
+				if Grid.hypot(x + 0.5 - s.x, y + 0.5 - s.y) < r:
+					village[y * W + x] = 1
+	return village
+
+
+## Места скальных массивов плана — те же, что fields() → RockMassif.sites (поля мира до эрозии, маска путей).
+static func massif_sites(w: WorldData) -> PackedFloat32Array:
+	var f := {elev = w.elev, slope = w.slope, biome = w.biome, dw = w.dist_water, rock = RockRelief.field_of(w),
+		river = w.river_cells(), village = village_mask(w)}
+	return RockMassif.sites(w.seed_num, 0, 0, w.W, w.H, f, 0, 0, w.W, w.path_mask)
 
 
 ## Поля выбора леса по полю после эрозии (часть 2 плана рельефа, задача 3.8): лощины, рёбра и влажность стока.

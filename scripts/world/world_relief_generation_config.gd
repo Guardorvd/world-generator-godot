@@ -15,7 +15,7 @@ enum {
 enum {
 	RE_ITERATIONS, RE_TRANSITION_GRADE, RE_MAX_CHANGE_M, RE_INCISION_RATE, RE_REFERENCE_AREA_M2,
 	RE_AREA_EXPONENT, RE_REPOSE_GRADE, RE_CREEP_RATE, RE_DIFFUSION, RE_CAPACITY_M3, RE_DEPOSITION_RATE, RE_EDGE_INFLOW_M,
-	RE_MIN_WIDTH_M, RE_WET_LOW, RE_WET_HIGH, RE_CHANNEL_AREA_M2, RE_ROUGHNESS_M, RE_ROUGHNESS_WAVELENGTH_M, RE_GRID_FACTOR, RE_COUNT,
+	RE_MIN_WIDTH_M, RE_WET_LOW, RE_WET_HIGH, RE_CHANNEL_AREA_M2, RE_ROUGHNESS_M, RE_ROUGHNESS_WAVELENGTH_M, RE_GRID_FACTOR, RE_ROCK_SHARE, RE_COUNT,
 }
 
 ## Эрозия — последний шаг поверхности Типа 2 (ReliefErosion.run в Heightfield.finish_paths, TerrainErosion в C#).
@@ -31,6 +31,12 @@ enum {
 ## Уклон перехода от защищённых зон (дороги, вода, места, край плана), м/м: изменение высоты в узле не больше
 ## расстояния до зоны × этот уклон. Так лощина мельчает к дороге и не оставляет пьедесталов и стенок.
 @export var transition_grade := 0.0
+## Доля эрозии на склонах, которые поле породы (RockRelief.field_of) считает скалой, 0..1. Пласты RockRelief и места
+## скальных массивов защищены полностью.
+@export var rock_erosion_share := 0.0
+## Пласт RockRelief, который эрозия не трогает: узлы, сдвинутые им больше чем на столько, м. Мелкий сдвиг —
+## общий наклон пластов по склону, не уступ.
+@export var strata_protect_m := 0.0
 ## Наибольшая глубина формы, м: эрозия снимает или насыпает не больше. Лощины в плане 1–5 м; так отроги
 ## и склоны не «тают», а меняется только сеть стока.
 @export var max_change_m := 0.0
@@ -106,7 +112,7 @@ func erosion_params() -> PackedFloat64Array:
 		iterations, transition_grade, max_change_m, incision_rate, reference_area_m2,
 		area_exponent, repose_grade, creep_rate, diffusion, capacity_m3, deposition_rate, edge_inflow_m,
 		min_width_m, wet_index.x, wet_index.y, channel_area_m2,
-		roughness_m, roughness_wavelength_m, grid_factor,
+		roughness_m, roughness_wavelength_m, grid_factor, rock_erosion_share,
 	])
 
 
@@ -122,11 +128,12 @@ func valid_erosion() -> bool:
 		and capacity_m3 >= 0.0 and deposition_rate >= 0.0 and deposition_rate <= 1.0 and edge_inflow_m >= 0.0 \
 		and min_width_m >= 0.0 and wet_index.y > wet_index.x \
 		and channel_area_m2 >= 0.0 and channel_area_m2 < reference_area_m2 \
-		and roughness_m >= 0.0 and roughness_wavelength_m >= 0.0 and grid_factor >= 1
+		and roughness_m >= 0.0 and roughness_wavelength_m >= 0.0 and grid_factor >= 1 \
+		and rock_erosion_share >= 0.0 and rock_erosion_share <= 1.0 and strata_protect_m >= 0.0
 
 
 ## Хеш для ключа кэша: всё, что меняет высоты 4 м. Пусто, пока эрозия выключена (высоты не меняются).
 func cache_digest() -> String:
 	if not erosion_enabled:
 		return ""
-	return var_to_str([erosion_enabled, Array(mask_params()), Array(erosion_params()), wet_moist_gain]).sha256_text().left(16)
+	return var_to_str([erosion_enabled, Array(mask_params()), Array(erosion_params()), wet_moist_gain, strata_protect_m]).sha256_text().left(16)

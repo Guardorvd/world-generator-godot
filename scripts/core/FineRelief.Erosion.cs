@@ -14,7 +14,8 @@ using Inputs = Godot.Collections.Dictionary;
 ///    там, где уклон падает;
 /// 6) склон: диффузия выше голов лощин (выпуклые бровки, сглаженный шум междуречий) и сползание всего, что круче max(угол устойчивости, исходный уклон),
 ///    — борта лощин не круче угла устойчивости, а исходные крутые стены генератора остаются;
-/// 7) предел: |изменение| ≤ min(расстояние до защиты × уклон перехода, наибольшая глубина формы) × доля «не скалы».
+/// 7) предел: |изменение| ≤ min(расстояние до защиты × уклон перехода, наибольшая глубина формы), на «скальных»
+///    по полю породы склонах — с долей rock_erosion_share; пласты RockRelief и места массивов — защита.
 /// Считается на своей сетке: блоки grid_factor × grid_factor узлов 4 м (среднее), изменение возвращается на 4 м
 /// билинейно. Так сток ведёт форма склона, а не мелкий шум генератора, и расчёт в factor² раз дешевле.
 /// Последовательные шаги (сток, порядок, врезание, наносы) однопоточны — результат не зависит от числа потоков.
@@ -27,7 +28,7 @@ public static class TerrainErosion
 	{
 		Iterations, TransitionGrade, MaxChange, IncisionRate, ReferenceArea, AreaExponent,
 		ReposeGrade, CreepRate, Diffusion, Capacity, DepositionRate, EdgeInflow, MinWidth, WetLow, WetHigh,
-		ChannelArea, Roughness, RoughnessWavelength, GridFactor, Count
+		ChannelArea, Roughness, RoughnessWavelength, GridFactor, RockShare, Count
 	}
 
 	// Порядок восьми соседей; одинаковый порядок обхода — одинаковый выбор при равных падениях на любом ПК.
@@ -65,7 +66,10 @@ public static class TerrainErosion
 		var lake = input["lake"].AsByteArray();
 		var allowed = new double[n];
 		for (int k = 0; k < n; k++)
-			allowed[k] = Math.Min(mask.ProtectM[k] * P(Parameter.TransitionGrade), P(Parameter.MaxChange)) * mask.RockFree[k];
+			// Склоны, которые поле породы считает скалой, размываются с долей rock_erosion_share; пласты RockRelief
+			// и места массивов защищены маской (ProtectM).
+			allowed[k] = Math.Min(mask.ProtectM[k] * P(Parameter.TransitionGrade), P(Parameter.MaxChange))
+				* (1.0 - (1.0 - P(Parameter.RockShare)) * (1.0 - mask.RockFree[k]));
 
 		// Сетка эрозии: блоки factor × factor узлов 4 м. Высота блока — среднее (мелкий шум генератора не ведёт сток),
 		// предел — наименьший в блоке (у защиты не больше, чем у самого защищённого узла), устье — если есть хоть одно.
@@ -607,6 +611,17 @@ public partial class FastGrid
 	/// <summary>Эрозия плана (ReliefErosion.run): hv, delta, карты area/deposit/wet байтами, номера изменённых узлов.</summary>
 	public Godot.Collections.Dictionary ErodeRelief(Inputs input, double[] maskParameters, double[] parameters)
 		=> TerrainErosion.Run(input, maskParameters, parameters);
+
+	/// <summary>Узлы, где высота изменилась больше чем на threshold, м (ReliefErosion.strata_mask: пласты RockRelief).</summary>
+	public byte[] ChangedMask(float[] before, float[] after, double threshold)
+	{
+		if (before.Length != after.Length)
+			return Array.Empty<byte>();
+		var mask = new byte[before.Length];
+		for (int i = 0; i < before.Length; i++)
+			mask[i] = Math.Abs(after[i] - (double)before[i]) > threshold ? (byte)1 : (byte)0;
+		return mask;
+	}
 
 	/// <summary>Копии полей выбора леса после эрозии (StageVegetation.fields): w.elev + delta / heightScale, w.slope
 	/// заново по той же формуле там, где сдвинулась высота узла или соседа, w.moist + moistGain × (W − 1/2).

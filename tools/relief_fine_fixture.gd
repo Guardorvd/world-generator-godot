@@ -37,7 +37,7 @@ const FAR_MARGIN_M := 80.0
 const SIZE := Vector2i(384, 1024)
 const Erosion := preload("res://scripts/world/relief_erosion.gd")
 const TILE := GameConfig.TILE
-const VERSION := 1
+const VERSION := 2 # 2: маска пластов RockRelief для эрозии
 
 
 static func save(seed_text: String) -> Error:
@@ -66,7 +66,7 @@ static func _save(seed_text: String) -> Error:
 		world[field] = EntityCodec.encode(w.get(field))
 	var file := DIR.path_join(seed_text + ".fixture.bin")
 	return Files.replace(file, var_to_bytes({version = VERSION, world = world,
-		surface = Surface.capture(h, "final"), route = route, views = views}))
+		surface = Surface.capture(h, "final"), strata = h.rock_strata, route = route, views = views}))
 
 
 static func restore(seed_text: String) -> Dictionary:
@@ -91,6 +91,7 @@ static func restore(seed_text: String) -> Dictionary:
 		return {}
 	# Дальние виды — по полю до эрозии, чтобы камера не переезжала при подборе эрозии.
 	var far := far_views(w, h, saved.route)
+	h.rock_strata = saved.get("strata", PackedByteArray())
 	Erosion.run(h)
 	w.clear_noise_fields()
 	# Ближние виды — как сохранены (по ним сверяются эталоны), дальние — отдельным ключом для стенда.

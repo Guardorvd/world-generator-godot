@@ -101,6 +101,15 @@ public sealed class ReliefMask
 			int x = cell % width, z = cell / width;
 			mask.Mark(distance, x - 1, z - 1, x + 1, z + 1);
 		}
+		// Эрозия: пласты RockRelief (узлы, которые он сдвинул) защищены как сооружения.
+		if (erosion && input.ContainsKey("strata"))
+		{
+			var strata = input["strata"].AsByteArray();
+			if (strata.Length == count)
+				for (int k = 0; k < count; k++)
+					if (strata[k] != 0)
+						mask.Mark(distance, k % width, k / width, k % width, k / width);
+		}
 		double[] sites = input["places"].AsFloat64Array();
 		// Тройки (x, z, радиус) в метрах; клетка (x, z) — узел на (x + 0,5) * tile.
 		for (int k = 0; k + 2 < sites.Length; k += 3)

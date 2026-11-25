@@ -14,6 +14,20 @@ extends RefCounted
 
 ## Стенды отключают шаг, чтобы хранить поле до эрозии и прогонять её сами (relief_fine_fixture.gd).
 static var allowed := true
+## Поле радиуса пятна в записи массива RockMassif (STRIDE: x, y, вид, масштаб, оттенок, радиус пятна в клетках, …).
+const MASSIF_RADIUS := 5
+
+
+## Нужна ли маска пластов RockRelief (эрозия включена у типа мира; стенды сохраняют её и при выключенном шаге).
+static func wants_strata(w: WorldData) -> bool:
+	var cfg := WorldTemplate.config(w.template_id).relief_generation
+	return cfg != null and cfg.erosion_enabled and Grid.fast_grid() != null
+
+
+## Узлы, которые RockRelief заметно сдвинул (пласты, уступы): байт 1 — защищены от эрозии.
+static func strata_mask(w: WorldData, before: PackedFloat32Array, after: PackedFloat32Array) -> PackedByteArray:
+	var cfg := WorldTemplate.config(w.template_id).relief_generation
+	return Grid.fast_grid().ChangedMask(before, after, cfg.strata_protect_m)
 
 
 static func run(h: Heightfield) -> PackedInt32Array:
@@ -26,6 +40,15 @@ static func run(h: Heightfield) -> PackedInt32Array:
 		return PackedInt32Array()
 	var started := Time.get_ticks_usec()
 	var inputs := h.relief_mask_inputs(false)
+	# Скальные массивы встанут при раскладке растительности; их места известны заранее (те же поля мира, что у
+	# StageVegetation.fields), и эрозия их не трогает. Пласты RockRelief — тоже.
+	var massifs := StageVegetation.massif_sites(h.world)
+	var places: PackedFloat64Array = inputs.places
+	for at in range(0, massifs.size(), RockMassif.STRIDE):
+		# Радиус пятна массива (клетки) — его собственный, а не наибольший охват модели.
+		places.append_array([massifs[at] * GameConfig.TILE, massifs[at + 1] * GameConfig.TILE, massifs[at + MASSIF_RADIUS] * GameConfig.TILE])
+	inputs.places = places
+	inputs.strata = h.rock_strata
 	inputs.erosion_seed = int(WorldGenerator.noise_rng(h.world.seed_num, "relief_erosion").next_float() * (WGRandom.MASK + 1))
 	inputs.origin = h.world.world_origin
 	var out: Variant = fast.ErodeRelief(inputs, cfg.mask_params(), cfg.erosion_params())

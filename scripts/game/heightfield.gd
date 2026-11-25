@@ -312,7 +312,10 @@ func finish_paths() -> PackedInt32Array:
 	# 09.11.2026: скальный рельеф склонов — после маршрутов, вдали от путей (RockRelief); меш берёт его через
 	# список изменённых клеток загрузчика, физика и опоры — из тех же hv.
 	if allow_rock_relief:
+		var before_rock := hv if ReliefErosion.wants_strata(world) else PackedFloat32Array()
 		path_timings.rock_relief_cells = RockRelief.apply(self)
+		if not before_rock.is_empty():
+			rock_strata = ReliefErosion.strata_mask(world, before_rock, hv)
 		path_timings.rock_relief_ms = (Time.get_ticks_usec() - t) / 1000.0
 		t = Time.get_ticks_usec()
 	var changed := RoadBed.refine(self)
@@ -354,6 +357,8 @@ var fine_lod := false
 var relief_flow := {}
 ## Изменение высот эрозией, м, — только до растительности при генерации (в кэш не идёт; загрузчик сбрасывает).
 var erosion_delta := PackedFloat32Array()
+## Узлы, где RockRelief положил пласты (1), — эрозия их не трогает. Только при генерации с эрозией.
+var rock_strata := PackedByteArray()
 ## Предел изменения высот эрозией по узлам, м (маска × уклон перехода × глубина формы) — для отчёта стенда.
 var erosion_allowed := PackedFloat32Array()
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")

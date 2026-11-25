@@ -223,6 +223,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# Изменение высот эрозией нужно только раскладке леса при генерации; в игре держим лишь карты стока.
 	r.heights.erosion_delta = PackedFloat32Array()
 	r.heights.erosion_allowed = PackedFloat32Array()
+	r.heights.rock_strata = PackedByteArray()
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
 	r.timings.trail_ms = r.trail.get("ms", 0.0)
 	for message: String in r.trail.errors:
