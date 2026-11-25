@@ -227,6 +227,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	# 15.11: опора и вода для физики на C# (RideGround): только главный поток, вне плана — прежний GDScript
 	heights.native_ride = true
 	hud = hud_node
+	if not hud.journal_panel.feed_opening.is_connected(_on_ride_feed_opening):
+		hud.journal_panel.feed_opening.connect(_on_ride_feed_opening)
 	hud.settlement_panel.closed.connect(_close_settlement)
 	hud.settlement_panel.travel_requested.connect(_board_travel)
 	hud.settlement_panel.bike_requested.connect(_recall_bike)
@@ -720,6 +722,11 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 ## Итоговый снимок отделён от сохранения мира и не зависит от срока его жизни.
 func _ride_feed_development() -> bool:
 	return QuickTrails.network() or WorldTemplate.cmdline_short() or (services.cache != null and services.cache.short_dev)
+
+
+func _on_ride_feed_opening() -> void:
+	if services.cache != null and services.cache.enabled:
+		save_ride_feed()
 
 
 func _ride_feed_item(snapshot: Dictionary) -> Dictionary:
@@ -1881,6 +1888,8 @@ func _light_night(pos: Vector3, t: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if _ride_feed_writer != null:
+		_ride_feed_writer.poll()
 	if player == null or travel_active():
 		if hud != null: hud.note_interaction_target("")
 		return

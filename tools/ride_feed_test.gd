@@ -45,7 +45,9 @@ func _initialize() -> void:
 	_stats()
 	_thumbs(folder)
 	_writer(folder.path_join("writer"))
+	_busy_writer(folder.path_join("busy"))
 	_migration(folder.path_join("migration"))
+	_walk_setting(folder.path_join("settings.cfg"))
 	var args := OS.get_cmdline_user_args()
 	var before := args.find("--before")
 	if before >= 0 and before + 1 < args.size():
@@ -101,6 +103,24 @@ func _thumbs(folder: String) -> void:
 	var elapsed := Time.get_ticks_usec() - start
 	var same: Image = Thumb.render(map, Vector2(1024, 1024), entry)
 	check(square != null and square.get_size() == Vector2i(Config.thumb_width, Config.thumb_height) and square.get_data() == same.get_data(), "квадратная карта: размер и повторяемость превью")
+	var colors := {outline = false, bike = false, foot = false, fall = false}
+	for y in square.get_height():
+		for x in square.get_width():
+			var pixel := square.get_pixel(x, y)
+			colors.outline = colors.outline or _near_color(pixel, Config.track_outline_color)
+			colors.bike = colors.bike or _near_color(pixel, Config.bike_color)
+			colors.foot = colors.foot or _near_color(pixel, Config.foot_color)
+			colors.fall = colors.fall or _near_color(pixel, Config.fall_color)
+	check(colors.outline and colors.bike and colors.foot and colors.fall, "обводка, пеший и велосипедный пути и падение видны на карте")
+	var joints := PackedVector2Array([Vector2(100, 100), Vector2(220, 180), Vector2(370, 280), Vector2(500, 410)])
+	var joint_entry := {legs = [joints]}
+	var joint_image: Image = Thumb.render(map, Vector2(1024, 1024), joint_entry)
+	var joint_frame: Rect2 = RideLog.framed_bounds(RideLog.bounds(joint_entry), float(Config.thumb_width) / Config.thumb_height)
+	var solid := true
+	for i in range(1, joints.size() - 1):
+		var pixel: Vector2i = Thumb._pixel(joints[i], joint_frame, Vector2(Config.thumb_width, Config.thumb_height))
+		solid = solid and _near_color(joint_image.get_pixelv(pixel), Config.bike_color)
+	check(solid, "стыки отрезков не перекрывают светлую линию обводкой")
 	check(square.save_png(folder.path_join("square.png")) == OK, "PNG квадратной карты")
 	var elongated: Image = Thumb.render(map, Vector2(1024, 4096), entry)
 	check(elongated != null and elongated.save_png(folder.path_join("elongated.png")) == OK, "PNG вытянутой карты")
@@ -112,6 +132,10 @@ func _thumbs(folder: String) -> void:
 	var long_image: Image = Thumb.render(map, Vector2(1024, 1024), {legs = [long_track]})
 	print("Превью 6000 точек: %.2f мс" % (float(Time.get_ticks_usec() - start) / 1000.0))
 	check(long_image != null, "превью длинного трека")
+
+
+func _near_color(a: Color, b: Color) -> bool:
+	return absf(a.r - b.r) < 0.01 and absf(a.g - b.g) < 0.01 and absf(a.b - b.b) < 0.01
 
 
 func _writer(folder: String) -> void:
@@ -157,6 +181,36 @@ func _migration(folder: String) -> void:
 	check(writer.migrate(records, "test", "seed", map, Vector2(128, 128)) == OK, "повторный перенос после удаления")
 	writer.finish()
 	check(feed.load_feed() == OK and feed.entries.is_empty(), "удалённая запись не возвращается")
+
+
+func _busy_writer(folder: String) -> void:
+	var writer = Writer.new(folder)
+	var gate := Semaphore.new()
+	writer._result = {error = OK}
+	writer._task = WorkerThreadPool.add_task(func() -> void: gate.wait())
+	var map := Image.create(32, 32, false, Image.FORMAT_RGB8)
+	var snapshot := {start = 222.0, time = 70.0, bike = 250.0, foot = 0.0,
+		legs = [PackedVector2Array([Vector2(10, 10), Vector2(90, 90)])]}
+	var id := Feed.ride_id("test", "seed", 222.0)
+	var err: Error = writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128))
+	check(err == OK and not FileAccess.file_exists(writer.feed.thumb_path(id)), "превью ждёт занятого рабочего потока")
+	gate.post()
+	writer.finish()
+	check(FileAccess.file_exists(writer.feed.thumb_path(id)), "ожидающее превью строится после освобождения потока")
+
+
+func _walk_setting(path: String) -> void:
+	var settings := GameSettings.new()
+	settings.settings_path = path
+	check(not settings.show_walks, "пешие прогулки по умолчанию скрыты")
+	settings.show_walks = true
+	var err := settings.save_settings()
+	var restored := GameSettings.new()
+	restored.settings_path = path
+	restored.load_settings()
+	check(err == OK and restored.show_walks, "переключатель прогулок переживает перезапуск")
+	restored.reset_defaults()
+	check(not restored.show_walks, "сброс настроек скрывает прогулки")
 
 
 func _compare_before(folder: String, source_folder: String) -> void:

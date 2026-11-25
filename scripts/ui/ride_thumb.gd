@@ -43,9 +43,19 @@ static func render(map_image: Image, world_size: Vector2, entry: Dictionary) -> 
 		if not first.is_finite():
 			first = points[0]
 		last = points[-1]
-		var phase := 0
-		for i in range(1, points.size()):
-			phase = _line(canvas, _pixel(points[i - 1], frame, Vector2(width, height)), _pixel(points[i], frame, Vector2(width, height)), CONFIG.bike_color if riding else CONFIG.foot_color, not riding, phase)
+		var outline := maxi(0, CONFIG.track_outline_width)
+		# Сначала вся подложка, затем вся светлая линия: стыки не перекрывают её обводкой.
+		for pass_index in 2:
+			if pass_index == 0 and outline == 0:
+				continue
+			var phase := 0
+			var ink: Color = CONFIG.track_outline_color if pass_index == 0 else (CONFIG.bike_color if riding else CONFIG.foot_color)
+			var line_width: int = CONFIG.track_width + outline * 2 if pass_index == 0 else CONFIG.track_width
+			for i in range(1, points.size()):
+				var from := _pixel(points[i - 1], frame, Vector2(width, height))
+				var to := _pixel(points[i], frame, Vector2(width, height))
+				if from != to:
+					phase = _line(canvas, from, to, ink, not riding, phase, line_width)
 	if first.is_finite():
 		_marker(canvas, _pixel(first, frame, Vector2(width, height)), CONFIG.start_color, false)
 		_marker(canvas, _pixel(last, frame, Vector2(width, height)), CONFIG.finish_color, false)
@@ -63,11 +73,11 @@ static func _put(image: Image, point: Vector2i, color: Color) -> void:
 		image.set_pixelv(point, color)
 
 
-static func _line(image: Image, a: Vector2i, b: Vector2i, color: Color, dashed: bool, phase: int) -> int:
+static func _line(image: Image, a: Vector2i, b: Vector2i, color: Color, dashed: bool, phase: int, line_width: int) -> int:
 	var delta := b - a
 	var steps := maxi(absi(delta.x), absi(delta.y))
 	var dash := maxi(1, CONFIG.foot_dash)
-	var width := maxi(1, CONFIG.track_width)
+	var width := maxi(1, line_width)
 	for i in range(steps + 1):
 		if not dashed or (phase / dash) % 2 == 0:
 			var point := a if steps == 0 else Vector2i((Vector2(a) + Vector2(delta) * float(i) / float(steps)).round())

@@ -44,6 +44,10 @@ extends Resource
 @export var frame_min_margin := 60.0
 ## Увеличение делает линию трека толще.
 @export var track_width := 2
+## Увеличение делает тёмную обводку маршрута шире.
+@export var track_outline_width := 1
+## Более тёмный цвет сильнее отделяет маршрут от светлой карты.
+@export var track_outline_color := Color(0.18, 0.27, 0.23)
 ## Увеличение удлиняет штрихи пешего трека.
 @export var foot_dash := 6
 ## Увеличение делает отметки начала, конца и падений крупнее.
@@ -61,12 +65,20 @@ extends Resource
 ## Более светлый цвет делает конец пути заметнее.
 @export var finish_color := Color(1.0, 0.8, 0.2)
 ## Более светлый цвет осветляет поля за границей карты.
-@export var background_color := Color(0.12, 0.15, 0.16)
+@export var background_color := Color(0.91, 0.886, 0.812)
 @export_group("Лента")
 ## Увеличение делает карточки ленты выше.
 @export var card_height := 132.0
 ## Увеличение делает миниатюру в карточке больше.
 @export var card_thumb_size := Vector2(82, 62)
+## Увеличение делает карточки главного меню выше.
+@export var card_wide_height := 150.0
+## Увеличение делает карту в карточке главного меню крупнее.
+@export var card_wide_thumb_size := Vector2(156, 98)
+## Увеличение делает дату в карточке главного меню крупнее.
+@export var card_wide_title_font := 16
+## Увеличение делает подписи в карточке главного меню крупнее.
+@export var card_wide_text_font := 13
 ## Увеличение добавляет внутренние поля карточки.
 @export var card_padding := 8.0
 ## Увеличение делает значок типа мира крупнее.
@@ -79,8 +91,16 @@ extends Resource
 @export var feed_spacing := 8
 ## Увеличение делает заголовок ленты крупнее.
 @export var feed_title_font := 18
+## Увеличение делает заголовок общего журнала крупнее.
+@export var feed_wide_title_font := 24
 ## Увеличение оставляет больше места списку поездок.
 @export var feed_list_height := 260.0
+## Увеличение быстрее заполняет длинную ленту, но добавляет работы в кадре.
+@export var feed_cards_per_frame := 2
+## Увеличение реже проверяет появление готового превью в открытой ленте.
+@export var pending_preview_interval := 1.0
+## Увеличение продлевает ожидание фонового превью в открытой ленте.
+@export var pending_preview_timeout := 30.0
 ## Увеличение задаёт больший минимальный размер окна поездки.
 @export var detail_min_size := Vector2i(520, 500)
 ## Увеличение задаёт большую область прокрутки поездки.
@@ -92,9 +112,11 @@ extends Resource
 ## Увеличение делает график высоты выше.
 @export var detail_profile_height := 100.0
 ## Увеличение сохраняет больше деталей загруженного снимка.
-@export var detail_photo_width := 800
+@export var detail_photo_width := 320
 ## Увеличение делает снимки в карточке выше.
 @export var detail_photo_height := 160.0
+## Увеличение показывает больше снимков за одно нажатие.
+@export var detail_photos_per_batch := 6
 ## Увеличение раздвигает столбцы статистики.
 @export var detail_grid_gap := 20
 ## Увеличение добавляет поля у графика высоты.

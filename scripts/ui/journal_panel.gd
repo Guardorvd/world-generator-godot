@@ -5,6 +5,7 @@ signal closed
 signal goal_requested(place: Dictionary)
 signal cover_requested(key: String, path: String)
 signal controls_created(root: Node)
+signal feed_opening
 
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
@@ -538,6 +539,7 @@ func _select(tab: Tab) -> void:
 	if tab in [Tab.PATH, Tab.ALBUM] and _data.is_empty() and data_provider.is_valid():
 		_data = data_provider.call()
 	if tab == Tab.PATH and _path_page.get_child_count() == 0:
+		feed_opening.emit()
 		_fill_path(_data)
 	elif tab == Tab.PATH and _feed_view != null and _feed_view.same_world(_feed_view._selected):
 		_select_feed_ride(_feed_view._selected, false)
