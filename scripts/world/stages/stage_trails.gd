@@ -58,6 +58,7 @@ const CROSS_GAP := 8.0      # 10.4: вода ближе стольких кле�
 const Section := preload("res://scripts/world/road_section.gd")
 ## Стенды могут на время запуска заменить таблицы turn_costs, bend_costs, straighten и line_relax.
 static var routing_overrides := {}
+static var trace_expedition_route := false
 ## 21.11.2026: дорожная сеть V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md) — петли и ответвления после остова V1.
 static var network_v2 := true
 const RoadNetworkV2 := preload("res://scripts/world/road_network_v2.gd")
@@ -154,6 +155,10 @@ static func run(w: WorldData, step: Callable) -> void:
 ## единая публикация через _add_trail → reshape_axes (V2) → _fit_sections → раскладка домов.
 static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable, started_us: int,
 		route_kind := "") -> void:
+	var native := finder.fast()
+	if native == null:
+		# Pathfinder has already reported the missing native build.
+		return
 	if route_kind.is_empty():
 		route_kind = WorldTemplate.expedition_route_kind(w.template_id)
 	step.call(0.66, "Прокладка дороги вдоль долины")
@@ -166,10 +171,17 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 	var climb_cost := float(routing.climb_costs.get(route_kind, routing.climb_costs.road))
 	var turn_cost := float(routing.turn_costs.get(route_kind, routing.turn_costs.road))
 	var bend_cost := float(routing.bend_costs.get(route_kind, routing.bend_costs.road))
-	var search_cost := w.cost
+	if routing.expedition_grades.x > 0.0:
+		finder.max_cross_grade = routing.expedition_cross
+		native.DownhillGrade = routing.expedition_grades.y
+		native.DescentWeight = routing.expedition_descent_weight
+		native.EdgeGradeWeight = routing.expedition_edge_grade
+		native.TurnTerrainWeight = routing.expedition_turn_terrain
+	var raw_cost := _expedition_shore_cost(w, routing.expedition_shore_avoid)
+	var search_cost := raw_cost
 	var h_scale := 1.0
-	if network_v2 and finder.fast() != null:
-		var ch: Dictionary = finder.fast().CharacterCosts(w.cost, on_axis, route_kind)
+	if network_v2:
+		var ch: Dictionary = native.CharacterCosts(raw_cost, on_axis, route_kind)
 		search_cost = ch.cost
 		h_scale = float(ch.heuristic_scale)
 	var cost_v := finder.next_cost_version()
@@ -183,36 +195,29 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 		var start_i: int = w.settlements[0].i
 		var finish_i: int = w.settlements[1].i
 		var mid := axis.road_anchors(w, start_i, finish_i)
-		anchors_total = mid.size()
-		var waypoints := PackedInt32Array([start_i])
-		waypoints.append_array(mid)
-		waypoints.append(finish_i)
-		var cur := waypoints[0]
-		for k in range(1, waypoints.size()):
-			var target := waypoints[k]
-			var is_first := k == 1
-			var is_last := k == waypoints.size() - 1
-			var seg := _expedition_segment(w, finder, search_cost, cost_v, w.cost, raw_v,
-				cur, target, climb_cost, turn_cost, bend_cost, h_scale, is_first, is_last)
-			if seg.size() < 2 and is_last and cur != start_i:
-				stitched = PackedInt32Array()
-				anchors_used = 0
-				seg = _expedition_segment(w, finder, search_cost, cost_v, w.cost, raw_v,
-					start_i, target, climb_cost, turn_cost, bend_cost, h_scale, true, true)
-			if seg.size() < 2:
-				if not is_last:
-					continue
-				push_error("StageTrails (expedition): failed to connect %d -> %d" % [cur, target])
-				break
-			stitched = _stitch_expedition_cells(stitched, seg)
-			cur = seg[seg.size() - 1]
-			if not is_last:
-				anchors_used += 1
+		var groups := axis.road_anchor_groups(w, start_i, finish_i)
+		var search := {cost = search_cost, cost_v = cost_v, raw = raw_cost, raw_v = raw_v, climb = climb_cost,
+			turn = turn_cost, bend = bend_cost, h_scale = h_scale}
+		var result := _expedition_chain(w, finder, start_i, finish_i, mid, groups, search)
+		stitched = result.path
+		anchors_total = result.total
+		anchors_used = result.used
+		w.generation_profile.expedition_groups = result.groups
+		w.generation_profile.expedition_fallbacks = result.fallbacks
 	finder.window = Rect2i()
 	w.generation_profile.expedition_anchors_total = anchors_total
 	w.generation_profile.expedition_anchors_used = anchors_used
 	if stitched.size() >= 2:
+		if trace_expedition_route:
+			var raw_line: Array = []
+			var width: float = RoadTuning.for_world(w).section.widths[route_kind]
+			for cell: int in stitched:
+				var p := _cell_centre(cell, w.W)
+				raw_line.append({x = p.x, y = p.y, w = width})
+			w.generation_profile.expedition_astar = raw_line
 		_add_trail(w, stitched, route_kind, PackedFloat32Array(), on_axis, surface)
+		if trace_expedition_route and not w.trails.is_empty():
+			w.generation_profile.expedition_line = w.trails[0].pts
 	step.call(0.76, "Сглаживание и профиль дороги")
 	if network_v2 and not w.trails.is_empty():
 		RoadNetworkV2.reshape_axes(w, surface, on_axis, w.trails.size())
@@ -236,12 +241,167 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 		push_error(issue)
 
 
-static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: PackedFloat32Array, char_v: int,
-		raw_cost: PackedFloat32Array, raw_v: int, a: int, b: int, climb: float, turn: float, bend: float,
-		h_scale: float, is_first: bool, must_connect: bool) -> PackedInt32Array:
+## The river is a landmark. Charge for following its banks, with short approaches at both camps.
+static func _expedition_shore_cost(w: WorldData, avoid: Vector3) -> PackedFloat32Array:
+	if avoid.x <= 0.0 or avoid.y <= 0.0 or w.settlements.size() < 2:
+		return w.cost
+	var axis := ValleyAxis.for_world(w)
+	var cost := w.cost.duplicate()
+	var tile := GameConfig.TILE
+	var start_row := float(w.settlements[0].i / w.W)
+	var finish_row := float(w.settlements[1].i / w.W)
+	var reach := avoid.x / tile
+	for y in w.H:
+		var from_camp := minf(absf(y - start_row), absf(y - finish_row)) * tile
+		var gain := avoid.y * smoothstep(0.0, maxf(avoid.z, 1.0), from_camp)
+		var river := axis.axis_x_at(y)
+		var normal := axis.axis_cos_at(y)
+		var half := axis.river_hw_at(y)
+		var band := (half + reach) / normal
+		var left := maxi(0, floori(river - band))
+		var right := mini(w.W - 1, ceili(river + band))
+		for x in range(left, right + 1):
+			var distance := absf(float(x) + 0.5 - river) * normal - half
+			cost[y * w.W + x] += gain * (1.0 - smoothstep(0.0, reach, distance))
+	return cost
+
+
+static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, finish: int, anchors: PackedInt32Array,
+		groups: Array[Dictionary], search: Dictionary) -> Dictionary:
+	var events := groups.duplicate()
+	var fallbacks := []
+	var committed := []
+	var cfg := WorldTemplate.config(w.template_id)
+	var routing := RoadTuning.for_world(w).routing
+	var primary := Vector4(routing.expedition_grades.x, routing.expedition_grades.y, routing.expedition_cross, routing.expedition_edge_grade)
+	var reserve: Vector4 = routing.expedition_connector_limits
+	var path := _expedition_backbone(w, finder, start, finish, search, primary.x)
+	if path.is_empty() and reserve.x > 0.0:
+		_set_expedition_grade(finder, reserve)
+		path = _expedition_backbone(w, finder, start, finish, search, reserve.x)
+		_set_expedition_grade(finder, primary)
+		fallbacks.append({from_y = start / w.W, to_y = finish / w.W, choice = "connector_limits"})
+	if path.is_empty():
+		push_error("StageTrails (expedition): failed to connect %d -> %d" % [start, finish])
+		return {path = path, total = 0, used = 0, groups = committed, fallbacks = fallbacks}
+	var total := 0
+	var passes: Array[Vector4] = [primary]
+	if reserve.x > 0.0:
+		passes.append(reserve)
+	for cell: int in anchors:
+		var y := cell / w.W
+		var nearest := cfg.anchor_merge_rows
+		var event := {}
+		for group: Dictionary in groups:
+			var gap := absi(y - int(group.y))
+			if gap < nearest:
+				nearest = gap
+				event = group
+		var option := {shape = "anchor", cells = PackedInt32Array([cell])}
+		if event.is_empty():
+			events.append({y = y, options = [option]})
+		else:
+			event.options.append(option)
+	events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.y < b.y)
+	var prefix := 0
+	for event: Dictionary in events:
+		var first: PackedInt32Array = event.options[0].cells
+		total += first.size()
+		var from := _expedition_row(path, first[0] / w.W - cfg.anchor_approach_rows, w.W, prefix)
+		var to := _expedition_row(path, first[-1] / w.W + cfg.anchor_approach_rows, w.W, from)
+		var accepted := false
+		if to > from:
+			var outside := {}
+			for j in path.size():
+				if j < from or j > to:
+					outside[path[j]] = true
+			for limits: Vector4 in passes:
+				if accepted:
+					break
+				_set_expedition_grade(finder, limits)
+				for option: Dictionary in event.options:
+					var cells: PackedInt32Array = option.cells
+					if limits == primary and reserve.x > 0.0 and option.shape == "anchor" and event.options.size() > 1:
+						continue
+					var leg := _expedition_landform_path(w, finder, search, path[from], path[to], cells, outside, limits.x)
+					if leg.is_empty():
+						continue
+					var next := path.slice(0, from)
+					next.append_array(leg)
+					prefix = next.size() - 1
+					next.append_array(path.slice(to + 1))
+					path = next
+					if option != event.options[0] or limits == reserve:
+						fallbacks.append({from_y = path[from] / w.W, to_y = path[prefix] / w.W, choice = option.shape,
+							connector_limits = limits == reserve})
+					committed.append({y = event.y, shape = option.shape, cells = cells, entry = path[from], exit = path[prefix]})
+					accepted = true
+					break
+			_set_expedition_grade(finder, primary)
+		if not accepted:
+			fallbacks.append({from_y = path[from] / w.W, to_y = path[to] / w.W, choice = "backbone"})
+	var used := 0
+	for group: Dictionary in committed:
+		used += group.cells.size()
+	return {path = path, total = total, used = used, groups = committed, fallbacks = fallbacks}
+
+
+static func _set_expedition_grade(finder: Pathfinder, limits: Vector4) -> void:
+	var directed := limits.x > 0.0
+	finder.max_cross_grade = limits.z if directed else BENCH_CROSS
+	finder.fast().DownhillGrade = limits.y if directed else 0.0
+	finder.fast().EdgeGradeWeight = limits.w if directed else 1.0
+
+
+static func _expedition_row(path: PackedInt32Array, row: int, width: int, from: int) -> int:
+	for i in range(from, path.size()):
+		if path[i] / width >= row:
+			return i
+	return path.size() - 1
+
+
+static func _expedition_landform_path(w: WorldData, finder: Pathfinder, search: Dictionary, entry: int, exit: int,
+		cells: PackedInt32Array, outside: Dictionary, grade: float) -> PackedInt32Array:
+	var targets := cells.duplicate()
+	targets.append(exit)
+	var cost: PackedFloat32Array = search.cost.duplicate()
+	for cell: int in outside:
+		cost[cell] = INF
+	if grade <= 0.0:
+		grade = ROAD_LIMIT
+	var leg := PackedInt32Array([entry])
+	for b: int in targets:
+		var a: int = leg[-1]
+		if a == b:
+			continue
+		# Reserve the exit until the last leg and leave already used cells unavailable.
+		cost[exit] = search.cost[exit] if b == exit else INF
+		finder.window = _expedition_landform_window(w, a, b)
+		var seg := finder.find_path(cost, a, b, search.climb, grade, -1, search.turn, search.bend, search.h_scale)
+		if seg.size() < 2:
+			return PackedInt32Array()
+		for j in range(seg.size() - 1):
+			cost[seg[j]] = INF
+		leg.append_array(seg.slice(1))
+	return leg
+
+
+static func _expedition_landform_window(w: WorldData, a: int, b: int) -> Rect2i:
+	var cfg := WorldTemplate.config(w.template_id)
+	var pa := Vector2i(a % w.W, a / w.W)
+	var pb := Vector2i(b % w.W, b / w.W)
+	var bounds := Rect2i(pa.min(pb), (pa - pb).abs() + Vector2i.ONE)
+	var margins := Vector2i(cfg.segment_win_x / 2, cfg.segment_win_y / 2)
+	return Rect2i(bounds.position - margins, bounds.size + margins * 2).intersection(Rect2i(0, 0, w.W, w.H))
+
+
+static func _expedition_backbone(w: WorldData, finder: Pathfinder, a: int, b: int, search: Dictionary, technical: float) -> PackedInt32Array:
+	if a == b:
+		return PackedInt32Array()
 	var W := w.W
 	var H := w.H
 	var cfg := WorldTemplate.config(w.template_id)
+	var grades := [technical] if technical > 0.0 else [ROAD_GRADE, ROAD_LIMIT, TRAIL_GRADE]
 	var ax := a % W
 	var ay := a / W
 	var bx := b % W
@@ -263,59 +423,22 @@ static func _expedition_segment(w: WorldData, finder: Pathfinder, char_cost: Pac
 	var x0 := maxi(0, min_x - cfg.segment_win_x)
 	var x1 := mini(W, max_x + cfg.segment_win_x + 1)
 	# На выходе со старта не петляем вверх за лагерь, на заходе к финишу не уходим за базу в поворот.
-	var y0 := maxi(0, y_lo - (cfg.segment_end_y_cap if is_first else cfg.segment_win_y))
-	var y1 := mini(H, y_hi + (cfg.segment_end_y_cap + 1 if must_connect else cfg.segment_win_y + 1))
+	var y0 := maxi(0, y_lo - cfg.segment_end_y_cap)
+	var y1 := mini(H, y_hi + cfg.segment_end_y_cap + 1)
 	finder.window = Rect2i(x0, y0, x1 - x0, y1 - y0)
 	# Сначала держим дорожные уклоны; TRAIL_GRADE спасает цепочку на редких коротких перепадах рельефа.
-	for g: float in [ROAD_GRADE, ROAD_LIMIT, TRAIL_GRADE]:
-		var seg := finder.find_path(char_cost, a, b, climb, g, char_v, turn, bend, h_scale)
+	for g: float in grades:
+		var seg := finder.find_path(search.cost, a, b, search.climb, g, search.cost_v, search.turn, search.bend, search.h_scale)
 		if seg.size() >= 2:
 			return seg
-	# Если сама клетка якоря попала на локальную складку коридора — пробуем сдвиг на 3 клетки.
-	if not must_connect:
-		for off: Vector2i in [Vector2i(-3, 0), Vector2i(3, 0), Vector2i(0, -3), Vector2i(0, 3)]:
-			var nx := clampi(bx + off.x, 4, W - 5)
-			var ny := clampi(by + off.y, 14, H - 15)
-			var nb := ny * W + nx
-			if not is_finite(char_cost[nb]):
-				continue
-			var seg := finder.find_path(char_cost, a, nb, climb, ROAD_LIMIT, char_v, turn, bend, h_scale)
-			if seg.size() >= 2:
-				return seg
-	if must_connect:
-		var wy0 := maxi(0, y_lo - 72)
-		var wy1 := mini(H, y_hi + 73)
-		finder.window = Rect2i(0, wy0, W, wy1 - wy0)
-		for g: float in [ROAD_LIMIT, TRAIL_GRADE, MOUNTAIN_GRADE]:
-			var seg := finder.find_path(raw_cost, a, b, climb * 0.5, g, raw_v, turn * 0.5, 0.0, 1.0)
-			if seg.size() >= 2:
-				return seg
+	var wy0 := maxi(0, y_lo - 72)
+	var wy1 := mini(H, y_hi + 73)
+	finder.window = Rect2i(0, wy0, W, wy1 - wy0)
+	for g: float in ([technical] if technical > 0.0 else [ROAD_LIMIT, TRAIL_GRADE, MOUNTAIN_GRADE]):
+		var seg := finder.find_path(search.raw, a, b, search.climb, g, search.raw_v, search.turn, search.bend, 1.0)
+		if seg.size() >= 2:
+			return seg
 	return PackedInt32Array()
-
-
-## Склейка двух сегментов клеток в одну непрерывную цепочку без дубля стыка и микро-петель у якоря.
-static func _stitch_expedition_cells(acc: PackedInt32Array, seg: PackedInt32Array) -> PackedInt32Array:
-	if acc.is_empty():
-		return seg.duplicate()
-	var tail_span := mini(acc.size(), 48)
-	var head_span := mini(seg.size(), 48)
-	var cut_acc := acc.size()
-	var start_seg := 1 if seg[0] == acc[acc.size() - 1] else 0
-	var tail_start := acc.size() - tail_span
-	# Если начало нового сегмента возвращается на клетку хвоста предыдущего — срезаем микро-петлю.
-	var tail_pos := {}
-	for i in range(tail_start, acc.size()):
-		tail_pos[acc[i]] = i
-	for j in range(head_span - 1, -1, -1):
-		var c := seg[j]
-		if tail_pos.has(c):
-			cut_acc = int(tail_pos[c]) + 1
-			start_seg = j + 1
-			break
-	var out := acc.slice(0, cut_acc)
-	if start_seg < seg.size():
-		out.append_array(seg.slice(start_seg))
-	return out
 
 
 ## Keep inherited plan marks and protected structure footprints when the final tread replaces the search ribbon.
@@ -379,13 +502,7 @@ static func _at_mouth(w: WorldData, x: int, y: int) -> bool:
 static func _build_cost(w: WorldData) -> void:
 	var cost_n := w.noise_field("cost")
 	var fast := Grid.fast_grid()
-	if fast != null:
-		var biome_cost := PackedFloat64Array()
-		for biome: Dictionary in Biomes.LIST:
-			biome_cost.append(float(biome.get("cost", 2.0)))
-		w.cost = fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, cost_n, biome_cost, FORD_SLOPE)
-	else:
-		w.cost = cost_reference(w, cost_n)
+	w.cost = cost_native(fast, w, cost_n) if fast != null else cost_reference(w, cost_n)
 	var cost := w.cost
 	for y in w.H:
 		var row_gap := mini(y, w.H - 1 - y)
@@ -415,8 +532,30 @@ static func _plan_edge_gap(w: WorldData, i: int) -> int:
 	return mini(mini(x, w.W - 1 - x), mini(y, w.H - 1 - y))
 
 
+static func _path_cost_parameters(w: WorldData) -> Dictionary:
+	var tuning := RoadTuning.for_world(w).routing
+	var table := PackedFloat64Array()
+	for biome: Dictionary in Biomes.LIST:
+		table.append(float(biome.get("cost", 2.0)))
+	if tuning.expedition_grades.x > 0.0:
+		var weights: Vector3 = tuning.expedition_cell_cost
+		table[Biomes.ROCK] = weights.y
+		return {biomes = table, slope = weights.x, noise = weights.z}
+	return {biomes = table, slope = 7.0, noise = 0.9}
+
+
+static func cost_native(fast: Object, w: WorldData, cost_n: PackedFloat64Array) -> PackedFloat32Array:
+	var params := _path_cost_parameters(w)
+	return fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, cost_n,
+		params.biomes, FORD_SLOPE, params.slope, params.noise)
+
+
 ## Исходный цикл: запасной путь и эталон численных правил.
 static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFloat32Array:
+	var params := _path_cost_parameters(w)
+	var table: PackedFloat64Array = params.biomes
+	var slope_weight: float = params.slope
+	var noise_weight: float = params.noise
 	var W := w.W
 	var H := w.H
 	var cost := PackedFloat32Array()
@@ -428,8 +567,8 @@ static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFl
 			if w.ocean[i] != 0 or w.lake[i] != 0 or river[i] != 0 and (_at_mouth(w, x, y) or w.slope[i] > FORD_SLOPE):
 				cost[i] = INF
 				continue
-			var bc: float = Biomes.LIST[w.biome[i]].get("cost", 2.0)
-			cost[i] = bc + w.slope[i] * 7.0 + (cost_n[i] * 0.5 + 0.5) * 0.9 + (12.0 if river[i] != 0 else 0.0)
+			var bc := table[w.biome[i]]
+			cost[i] = bc + w.slope[i] * slope_weight + (cost_n[i] * 0.5 + 0.5) * noise_weight + (12.0 if river[i] != 0 else 0.0)
 	return cost
 
 

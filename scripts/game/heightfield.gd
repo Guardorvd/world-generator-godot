@@ -93,7 +93,7 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 			var hm := (maxf(-GameConfig.OCEAN_DEPTH, wh[i] * GameConfig.OCEAN_DEPTH) - 0.5) if wo[i] != 0 else wh[i] * HS
 			hv_raw[i] = hm
 			hv[i] = hm
-		ribbons = [ValleyAxis.for_world(w).build_river_ribbon()]
+		ribbons = [ValleyAxis.for_world(w).build_river_ribbon(base_ground_at)]
 		index_ribbons()
 		path_timings.ribbons_ms = (Time.get_ticks_usec() - t_v) / 1000.0
 		path_timings.carve_ms = 0.0

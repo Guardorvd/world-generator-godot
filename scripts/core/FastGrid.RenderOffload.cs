@@ -471,23 +471,25 @@ public partial class FastGrid
 	/// </summary>
 	public Godot.Collections.Dictionary BuildCarpetGrassTile(RideGround ride, int tileI, int tileJ, float tileSize, int sub,
 		float cover, float shade, float parched, float straw, float tall, float grow, bool flowers,
-		float tcR, float tcG, float tcB, float surfaceR)
+		float tcR, float tcG, float tcB, float surfaceR, float forestMix, bool expedition)
 	{
 		if (ride == null || !ride.Ready() || sub <= 0)
 			return new Godot.Collections.Dictionary { ["ok"] = false };
 
 		const int stride = 20;
 		int maxRows = sub * sub;
+		// The first five slots match GroundCarpet; stones are filled in GDScript.
+		const int kinds = 9;
 		var partsBuf = _carpetParts;
 		if (partsBuf == null || partsBuf[0].Length < maxRows * stride)
 		{
-			partsBuf = new float[4][];
-			for (int k = 0; k < 4; k++)
+			partsBuf = new float[kinds][];
+			for (int k = 0; k < kinds; k++)
 				partsBuf[k] = new float[maxRows * stride];
 			_carpetParts = partsBuf;
 		}
-		var filled = _carpetFilled ??= new int[4];
-		Array.Clear(filled, 0, 4);
+		var filled = _carpetFilled ??= new int[kinds];
+		Array.Clear(filled);
 
 		float step = tileSize / sub;
 		float alpha = 1.0f - surfaceR;
@@ -534,6 +536,13 @@ public partial class FastGrid
 				dry = MathF.Max(dry, 0.45f);
 			}
 
+			if (forestMix > 0.0f && WgHash2(gx, gz, 295) < forestMix)
+			{
+				float mix = 0.75f * CarpetValueNoise(x / 4.7f, z / 4.7f, 297) + 0.25f * h2;
+				kind = mix < 0.39f - 0.14f * parched ? 5 : 6; // moss / woodland leaves
+				if (mix > 0.69f - 0.13f * parched)
+					kind = mix > 0.84f - 0.19f * parched ? 8 : 7; // sedge / berry
+			}
 			float sc = 0.85f + 0.45f * h1;
 			float sy = sc * tall * (0.7f + 0.6f * h2);
 			var basis = new Basis(Vector3.Up, h2 * Mathf.Tau);
@@ -551,10 +560,16 @@ public partial class FastGrid
 				g *= 0.8f;
 				b *= 0.74f;
 			}
+			else if (kind >= 5)
+			{
+				r = (0.28f + 0.10f * parched) * lum;
+				g = (0.39f - 0.04f * parched) * lum;
+				b = (0.19f + 0.035f * h2) * lum;
+			}
 			PutCarpetRow(partsBuf[kind], filled[kind]++, basis.ScaledLocal(new Vector3(sc, sy, sc)),
 				x, y, z, r, g, b, alpha, WgHash2(gx, gz, 241), 0.3f * h1);
 
-			if (flowers && kind != 2)
+			if (flowers && kind < 2)
 			{
 				float bloom = Smoothstep(0.52f, 0.78f, CarpetValueNoise(x / 5.0f, z / 5.0f, 269)) * (1.0f - 0.7f * parched);
 				if (WgHash2(gx, gz, 271) < 0.16f * bloom)
@@ -573,12 +588,12 @@ public partial class FastGrid
 			if (y > yHigh) yHigh = y;
 		}
 
-		bool any = (filled[0] | filled[1] | filled[2] | filled[3]) > 0;
-		if (!any)
+		if (float.IsPositiveInfinity(yLow))
 			return new Godot.Collections.Dictionary { ["ok"] = true, ["any"] = false };
 
 		var parts = new Godot.Collections.Array();
-		for (int k = 0; k < 4; k++)
+		int activeKinds = expedition ? kinds : 5;
+		for (int k = 0; k < activeKinds; k++)
 		{
 			int n = filled[k];
 			if (n > 0)
@@ -592,7 +607,6 @@ public partial class FastGrid
 				parts.Add(Array.Empty<float>());
 			}
 		}
-		parts.Add(Array.Empty<float>()); // CARPET_STONES
 
 		return new Godot.Collections.Dictionary
 		{

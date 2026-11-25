@@ -35,12 +35,12 @@ const SHORE := Vector2(1.0, 2.5) # у воды (клеток до неё, w.dist
 ## по весам (раньше побеждал один путь — ступень или вал вдоль стыка). Порядок: дороги, тропы, горные тропы.
 ## 16.11.2026: без C# (сборка .NET, dotnet build) полотно не строится — сообщение об ошибке и пустой список; w.outer не
 ## учитывается (в игре полотно строится до подключения OuterLand, в Trail Lab его нет).
-static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()) -> PackedInt32Array:
+static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray(), tuning: RoadTuning = null) -> PackedInt32Array:
 	var fast := Grid.native_grid()
 	if fast == null:
 		push_error("RoadBed: полотно дорог считается только на C#: нужна сборка Godot .NET и dotnet build")
 		return PackedInt32Array()
-	var native: Variant = _refine_native(fast, heights, frozen, only)
+	var native: Variant = _refine_native(fast, heights, frozen, only, tuning if tuning != null else RoadTuning.for_world(heights.world))
 	if native == null:
 		push_error("RoadBed: C# не построил полотно (исключение внутри расчёта или неполный патч опоры), hv не тронут")
 		return PackedInt32Array()
@@ -48,10 +48,9 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 
 
 ## Весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами: hv правится на месте.
-static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray, only := {}) -> Variant:
+static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray, only: Dictionary, tuning: RoadTuning) -> Variant:
 	var w := heights.world
 	var names: Array = KINDS.keys()
-	var tuning := RoadTuning.for_world(w)
 	var params := PackedFloat64Array()
 	for name: String in names:
 		params.append_array(tuning.kind(name).bed_params())

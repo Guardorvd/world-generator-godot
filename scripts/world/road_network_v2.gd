@@ -505,7 +505,9 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		push_error("Сеть V2: линия на C# требует земли и воды на C# (Heightfield.fast_water)")
 		return StageTrails.RoadLine.build(w, pts, on_axis, surface, kind, joins, Callable(), smooth_kind)
 	var routing := RoadTuning.for_world(w).routing
+	routing.configure_line_probe(water)
 	var design := kind if smooth_kind.is_empty() else smooth_kind
+	var limits := routing.line_limits(StageTrails.TRAIL_GRADE, StageTrails.BENCH_CROSS, StageTrails.RoadLine.TURN_SPEED[design])
 	var relaxation: Dictionary = StageTrails.routing_overrides.get("line_relax", routing.line_relax)
 	var straightening: Dictionary = StageTrails.routing_overrides.get("straighten", routing.straighten)
 	var xs := PackedFloat64Array()
@@ -517,8 +519,8 @@ static func line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: He
 		ws.append(p.w)
 	var data := {x = xs, y = ys, w = ws, axis = on_axis, W = w.W, H = w.H, kind = kind, smooth = smooth_kind,
 		relax = float(relaxation.get(design, 0.0)), tolerance = float(straightening.get(design, 0.0)),
-		road_limit = StageTrails.ROAD_LIMIT, trail_grade = StageTrails.TRAIL_GRADE, mountain_grade = StageTrails.MOUNTAIN_GRADE,
-		bench_cross = StageTrails.BENCH_CROSS, speed = StageTrails.RoadLine.TURN_SPEED[design], accel = StageTrails.RoadLine.TURN_ACCEL[design],
+		road_limit = StageTrails.ROAD_LIMIT, trail_grade = limits.grade, mountain_grade = StageTrails.MOUNTAIN_GRADE,
+		bench_cross = limits.cross, speed = limits.speed, accel = StageTrails.RoadLine.TURN_ACCEL[design],
 		smooth_line = smooth_lines, biharmonic = smooth_biharmonic, profile_base = StageTrails.RoadLine.PROFILE_BASE}
 	if smooth_lines:
 		data.line_shape = routing.line_shape
@@ -592,6 +594,7 @@ static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByte
 	if water == null:
 		push_error("Сеть V2: форме оси нужна поверхность C#")
 		return
+	routing.configure_line_probe(water)
 	if _line_core == null: _line_core = Grid.native_grid()
 	var anchors := {}
 	for t: Dictionary in w.trails:
@@ -604,7 +607,9 @@ static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByte
 		for leg: Dictionary in ride.legs:
 			(legs.get_or_add(leg.section, []) as Array).append(leg)
 	var input := {on_axis = on_axis, W = w.W, H = w.H, protection_m = routing.axis_protection_m, min_radius_m = routing.axis_min_radius_m,
-		profile_base = StageTrails.RoadLine.PROFILE_BASE, bench_cross = StageTrails.BENCH_CROSS, reach = RoadRefinement.REACH}
+		profile_base = StageTrails.RoadLine.PROFILE_BASE,
+		bench_cross = routing.line_limits(StageTrails.TRAIL_GRADE, StageTrails.BENCH_CROSS).cross,
+		reach = RoadRefinement.REACH}
 	if routing.arc_bends_enabled:
 		_align_sections(w, water, input.merged(arc_settings(routing)), anchors, legs, primary_end, false)
 	if routing.axis_meander_enabled:
@@ -644,6 +649,7 @@ static func _align_sections(w: WorldData, water: Object, input: Dictionary, anch
 				noise.append(lerpf(lerpf(world_noise[a], world_noise[b], fx), lerpf(world_noise[c], world_noise[d], fx), fy))
 				dry.append(GameConfig.TILE * lerpf(lerpf(dist_water[a], dist_water[b], fx), lerpf(dist_water[c], dist_water[d], fx), fy))
 		var grade := StageTrails.ROAD_LIMIT if r < primary_end or t.kind == "road" else StageTrails.TRAIL_GRADE
+		grade = routing.line_limits(grade, StageTrails.BENCH_CROSS).grade
 		var data := input.merged({axis = packed, pins = pins, route_index = r, grade = grade})
 		if meander: data.merge(options[t.kind].merged({noise = noise, water_m_at_station = dry}))
 		var result: Dictionary = _line_core.ShapeRoadAxis(data, water)

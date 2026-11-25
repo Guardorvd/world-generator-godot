@@ -111,7 +111,7 @@ public sealed class GeometryValidator
 			along[k] = run;
 			heights[k] = _water.GroundAt(pts[2 * k] * T, pts[2 * k + 1] * T);
 		}
-		return FirstProfileFailure(along, heights, skip, T, baseLen, grade) < 0;
+		return FirstProfileFailure(along, heights, skip, T, baseLen, grade, downhillRatio: _water.RoadDownhillRatio) < 0;
 	}
 
 	/// <summary>RoadLine uses float32 positions and distances. Preserve that sampling before checking the same windows.</summary>
@@ -127,12 +127,12 @@ public sealed class GeometryValidator
 			along[k] = run;
 			heights[k] = water.GroundAt((double)points[k].X * tile, (double)points[k].Y * tile);
 		}
-		return FirstProfileFailure(along, heights, skip, tile, window, grade);
+		return FirstProfileFailure(along, heights, skip, tile, window, grade, downhillRatio: water.RoadDownhillRatio);
 	}
 
 	/// <summary>Check grade in the trailing window. A clipped range starts only after a full window or a deck.</summary>
 	internal static int FirstProfileFailure(ReadOnlySpan<double> along, ReadOnlySpan<double> heights, ReadOnlySpan<byte> skip,
-		double tile, double window, double grade, bool atStart = true)
+		double tile, double window, double grade, bool atStart = true, double downhillRatio = 1.0)
 	{
 		int first = 0;
 		bool allowShortWindow = atStart;
@@ -147,7 +147,9 @@ public sealed class GeometryValidator
 			while (first + 1 < k && along[k] - along[first + 1] >= window) first++;
 			double length = along[k] - along[first];
 			if (!allowShortWindow && length < window) continue;
-			if (Math.Abs(heights[k] - heights[first]) > grade * length * tile + 0.00001) return k;
+			double rise = heights[k] - heights[first];
+			double limit = rise < 0.0 ? grade * downhillRatio : grade;
+			if (Math.Abs(rise) > limit * length * tile + 0.00001) return k;
 		}
 		return -1;
 	}

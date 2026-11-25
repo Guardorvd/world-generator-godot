@@ -57,6 +57,10 @@ func run() -> void:
 			level[i] = level[i] * 4.0 if level[i] > -INF else -INF
 		f.set_world_corridor(meters, level, ocean, lake, ocean, 4.0, 0.6), 8.0, 0.6)
 	_unreach()
+	if not _directional_grade():
+		print("FAIL directional grade (A*, Reach or cached result)")
+		quit(1)
+		return
 	_finish(save)
 
 
@@ -138,6 +142,25 @@ func _unreach() -> void:
 		var path := f.find_path(costs, from, inside, 8.0, 0.6)
 		lines["unreach.%d" % from] = var_to_bytes([path, f.search_budget, reach]).hex_encode().sha256_text()
 	f.release()
+
+
+func _directional_grade() -> bool:
+	var hs := PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 2.8, 2.1, 1.4, 0.7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+	var cost := PackedFloat32Array()
+	cost.resize(hs.size())
+	cost.fill(INF)
+	for i in range(5, 10):
+		cost[i] = 1.0
+	var f := Pathfinder.new(5, 3, hs)
+	f.use_corridor = false
+	var v := f.next_cost_version()
+	f.fast().DownhillGrade = 0.85
+	var descends := f.find_path(cost, 5, 9, 0.0, 0.53, v).size() == 5 and f.can_reach(cost, 5, 9, 0.0, 0.53)
+	var rejects_climb := f.find_path(cost, 9, 5, 0.0, 0.53, v).is_empty() and not f.can_reach(cost, 9, 5, 0.0, 0.53)
+	f.fast().DownhillGrade = 0.6
+	var rejects_descent := f.find_path(cost, 5, 9, 0.0, 0.53, v).is_empty() and not f.can_reach(cost, 5, 9, 0.0, 0.53)
+	f.release()
+	return descends and rejects_climb and rejects_descent
 
 
 func _finish(save: bool) -> void:

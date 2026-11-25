@@ -5,7 +5,7 @@ extends RefCounted
 
 enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE, STIPA, FIREWEED, HAZEL, HAZEL_TALL,
 	SWORD_FERN, ALPINE_SHRUB, BERRY_SHRUB, BROADLEAF_HERB, MOSS_MOUND,
-	SWORD_FERN_TALL, ALPINE_SHRUB_CREEPING, BERRY_SHRUB_SPREAD, BROADLEAF_HERB_TALL, COUNT }
+	SWORD_FERN_TALL, ALPINE_SHRUB_CREEPING, BERRY_SHRUB_SPREAD, BROADLEAF_HERB_TALL, SALAL, SALAL_TALL, DEVILS_CLUB, DEVILS_CLUB_TALL, BERRY_SHRUB_TALL, COUNT }
 const EXPEDITION_FIRST := SWORD_FERN
 ## 16.0: групповые формы открытых мест. Одна куртина — десятки травинок на 1,5–2 м: густой массив
 ## получается из сотен экземпляров, а не из тысяч мелких пучков. Видны дальше травы (как кусты).
@@ -138,7 +138,8 @@ static func build_meshes() -> Array[Mesh]:
 
 	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed, hazel, hazel_tall,
 		_sword_fern(false, false), _low_shrub(false, false, false), _low_shrub(true, false, false), _broadleaf_herb(false, false), _moss_mound(false),
-		_sword_fern(false, true), _low_shrub(false, false, true), _low_shrub(true, false, true), _broadleaf_herb(false, true)]
+		_sword_fern(false, true), _low_shrub(false, false, true), _low_shrub(true, false, true), _broadleaf_herb(false, true),
+		_salal(false, false), _salal(false, true), _devils_club(false, false), _devils_club(false, true), _low_shrub(true, false, true, true)]
 
 
 ## 15.0: упрощённые формы для дальнего подлеска (дальше FAR_FORM_R от игрока), ключ - номер формы.
@@ -168,7 +169,9 @@ static func build_far_meshes() -> Dictionary:
 		SWORD_FERN: _sword_fern(true, false), ALPINE_SHRUB: _low_shrub(false, true, false), BERRY_SHRUB: _low_shrub(true, true, false),
 		BROADLEAF_HERB: _broadleaf_herb(true, false), MOSS_MOUND: _moss_mound(true),
 		SWORD_FERN_TALL: _sword_fern(true, true), ALPINE_SHRUB_CREEPING: _low_shrub(false, true, true),
-		BERRY_SHRUB_SPREAD: _low_shrub(true, true, true), BROADLEAF_HERB_TALL: _broadleaf_herb(true, true)}
+		BERRY_SHRUB_SPREAD: _low_shrub(true, true, true), BROADLEAF_HERB_TALL: _broadleaf_herb(true, true),
+		SALAL: _salal(true, false), SALAL_TALL: _salal(true, true), DEVILS_CLUB: _devils_club(true, false),
+		DEVILS_CLUB_TALL: _devils_club(true, true), BERRY_SHRUB_TALL: _low_shrub(true, true, true, true)}
 
 
 ## Две розетки: широкая дуга внешних вай и тесный пучок поднятых внутренних.
@@ -253,12 +256,12 @@ static func _broadleaf_herb(far: bool, upright: bool) -> ArrayMesh:
 
 
 ## Карликовая берёза: низкие колена ветвей. Ягодник: короткие побеги из разнесённых куртин.
-static func _low_shrub(berry: bool, far: bool, spreading: bool) -> ArrayMesh:
+static func _low_shrub(berry: bool, far: bool, spreading: bool, tall := false) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var dots: Array = []
 	var leaves: Array = []
-	var count := 7 if berry or spreading else 5
+	var count := 11 if tall else (7 if berry or spreading else 5)
 	var bark := Color("6b6850") if berry else Color("665340")
 	for n in count:
 		var a := n * 2.399
@@ -269,6 +272,9 @@ static func _low_shrub(berry: bool, far: bool, spreading: bool) -> ArrayMesh:
 		var height := (0.34 if berry else (0.57 if spreading else 0.81)) * (0.8 + 0.22 * cos(n * 2.6))
 		var knee := root + dir * reach * 0.65 + side * reach * 0.18 + Vector3.UP * height * 0.50
 		var tip := root + dir * reach + Vector3.UP * height
+		if tall:
+			knee = root + (knee - root) * Vector3(2.3, 3.6, 2.3)
+			tip = root + (tip - root) * Vector3(2.7, 4.4 + 0.6 * sin(n * 1.4), 2.7)
 		if not far:
 			_add_open_branch(st, root, knee, 0.016 if berry else 0.046, 0.009 if berry else 0.028, 4, bark)
 			_add_open_branch(st, knee, tip, 0.009 if berry else 0.028, 0.005 if berry else 0.011, 4, bark)
@@ -296,6 +302,78 @@ static func _low_shrub(berry: bool, far: bool, spreading: bool) -> ArrayMesh:
 	return st.commit()
 
 
+## Салал: овальные кожистые листья ярусами вдоль коленчатых, расходящихся побегов.
+static func _salal(far: bool, tall: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var leaves: Array = []
+	for n in (10 if tall else 8):
+		var a := n * 2.399
+		var out := Vector3(cos(a), 0, sin(a))
+		var base := out * (0.17 + 0.012 * n)
+		var h := (1.35 if tall else 0.66) * (0.56 + 0.37 * absf(cos(n * 2.6)))
+		var knee := base + out * (0.26 + 0.11 * sin(n * 1.9)) + Vector3.UP * h * 0.47
+		var top := knee + out * (0.29 if tall else 0.43) + Vector3.UP * h * 0.53
+		_add_open_branch(st, base, knee, 0.032, 0.019, 3, Color("514c31"))
+		_add_open_branch(st, knee, top, 0.019, 0.007, 3, Color("5f5631"))
+		var count := 5 if far else 9
+		for k in count:
+			var t := (k + 0.5) / count
+			var at := knee.lerp(top, t) if k > 0 else base.lerp(knee, 0.80)
+			var phi := a + k * 2.31
+			var forward := Vector3(cos(phi), 0.22 + 0.55 * cos(k * 1.7), sin(phi))
+			var side := Vector3(-sin(phi), 0, cos(phi))
+			var length := (0.28 + 0.085 * sin(n + k * 1.9)) * (1.22 if far else 1.0)
+			var end := at + forward * length
+			var mid := at.lerp(end, 0.56) + Vector3.UP * length * 0.18
+			var width := length * 0.35
+			if far:
+				leaves.append([at, mid + side * width, end, mid - side * width])
+			else:
+				leaves.append([at, mid - forward * length * 0.19 + side * width * 0.86, mid + side * width,
+					end, mid - side * width, mid - forward * length * 0.19 - side * width * 0.86])
+	st.index()
+	st.append_from(_leaves(leaves, Color("48683a") if tall else Color("536e36"), leaves.size() / 3), 0, Transform3D.IDENTITY)
+	st.index()
+	return st.commit()
+
+
+## Оплопанакс: неровные трости с длинными черешками и широкими пальчатыми листьями.
+static func _devils_club(far: bool, tall: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var leaves: Array = []
+	for n in (5 if tall else 4):
+		var a := n * 2.399 + 0.6
+		var out := Vector3(cos(a), 0, sin(a))
+		var root := out * (0.10 + n * 0.047)
+		var h := (1.64 if tall else 1.02) * (0.54 + 0.45 * absf(sin(n * 2.9 + 0.9)))
+		var cane := root + out * (0.22 + 0.09 * n) + Vector3.UP * h
+		var knee := root.lerp(cane, 0.45) - out * 0.09
+		_add_open_branch(st, root, knee, 0.036, 0.028, 4, Color("8c784e"))
+		_add_open_branch(st, knee, cane, 0.028, 0.017, 4, Color("8a8250"))
+		for k in (2 if far else 3):
+			var angle := a + k * 2.3
+			var forward := Vector3(cos(angle), 0, sin(angle))
+			var side := Vector3(-forward.z, 0, forward.x)
+			var at := cane.lerp(knee, k * 0.32)
+			var joint := at + forward * (0.28 + k * 0.075) + Vector3.UP * (0.13 + k * 0.018)
+			_add_open_branch(st, at, joint, 0.017, 0.009, 3, Color("84964e"))
+			var blade: Array = [joint]
+			var length := (0.27 + 0.07 * cos(n * 2.2 + k)) * (1.13 if far else 1.0)
+			var lobes := 5 if far else 7
+			for l in range(lobes * 2 + 1):
+				var t := float(l) / (lobes * 2)
+				var phi := lerpf(-2.1, 2.1, t)
+				var reach := length * (0.68 + 0.32 * sin(t * PI)) * (1.0 if l % 2 == 1 else 0.58)
+				blade.append(joint + (forward * cos(phi) + side * sin(phi)) * reach + Vector3.UP * (0.035 - 0.19 * reach))
+			leaves.append(blade)
+	st.index()
+	st.append_from(_leaves(leaves, Color("678441"), 0), 0, Transform3D.IDENTITY)
+	st.index()
+	return st.commit()
+
+
 static func _moss_mound(far: bool) -> ArrayMesh:
 	# Несколько сросшихся куртин с неровным гребнем и низкими, расползающимися по земле краями.
 	var pads: Array = [
@@ -310,12 +388,16 @@ static func _moss_mound(far: bool) -> ArrayMesh:
 
 
 static func expedition_variant(kind: int, roll: float) -> int:
+	if kind == BERRY_SHRUB and roll > 0.76:
+		return BERRY_SHRUB_TALL
 	if roll > 0.55:
 		match kind:
 			SWORD_FERN: return SWORD_FERN_TALL
 			ALPINE_SHRUB: return ALPINE_SHRUB_CREEPING
 			BERRY_SHRUB: return BERRY_SHRUB_SPREAD
 			BROADLEAF_HERB: return BROADLEAF_HERB_TALL
+			SALAL: return SALAL_TALL
+			DEVILS_CLUB: return DEVILS_CLUB_TALL
 	return kind
 
 

@@ -18,7 +18,7 @@ const FREE_US := 800 # удаление ушедших узлов за кадр:
 const TREE_NODES_PER_SLICE := 4
 const ARRIVAL_TREE_RADIUS := 128.0
 const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO,
-	Biomes.T_SPRUCE, Biomes.T_LARCH, Biomes.T_ALDER, Biomes.T_WESTERN_REDCEDAR, Biomes.T_SIBERIAN_CEDAR]
+	Biomes.T_SPRUCE, Biomes.T_LARCH, Biomes.T_ALDER, Biomes.T_WESTERN_REDCEDAR, Biomes.T_SIBERIAN_CEDAR, Biomes.T_HEMLOCK, Biomes.T_DOUGLAS_FIR]
 const FAR_FORM_R := 24.0 # м: дальше от центра раскладки мох, папоротник, корни и камни рисуются упрощённой формой
 ## 15.0: на самом дальнем уровне все силуэты вида одного чанка рисуются одним узлом с мешом первого силуэта
 ## (высота выровнена по ряду Y): у дерева за 160 м силуэт различим меньше, чем стоит лишний draw call.
@@ -124,6 +124,8 @@ const WIND := {
 	Biomes.T_WESTERN_REDCEDAR: [0.12, 0.013, 0.64, 0.73, 0.18],
 	Biomes.T_SIBERIAN_CEDAR: [0.12, 0.009, 0.67, 0.73, 0.13],
 	Biomes.T_MAPLE: [0.23, 0.044, 0.79, 0.74, 0.38],
+	Biomes.T_HEMLOCK: [0.15, 0.020, 0.70, 0.69, 0.25],
+	Biomes.T_DOUGLAS_FIR: [0.11, 0.013, 0.62, 0.78, 0.19],
 	Biomes.T_PALM: [0.3, 0.08, 0.7, 0.8, 0.35],
 	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.65, 0.25],
 	Biomes.T_ACACIA: [0.1, 0.03, 0.7, 0.7, 0.25],
@@ -145,7 +147,8 @@ const SOFT_TRAIL_FORMS := [
 	Understory.FERN, Understory.SWORD_FERN, Understory.SWORD_FERN_TALL,
 	Understory.HERB, Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL,
 	Understory.MOSS, Understory.MOSS_MOUND,
-	Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.ALPINE_SHRUB_CREEPING,
+	Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.BERRY_SHRUB_TALL,
+	Understory.ALPINE_SHRUB_CREEPING, Understory.SALAL, Understory.DEVILS_CLUB,
 	Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.FORBS,
 	Understory.SEDGE, Understory.STIPA, Understory.FIREWEED,
 ]
@@ -364,7 +367,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var has_contacts := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER, Floor.BRANCH, Floor.STONES, Floor.ROOT_SPAN]
 		if has_contacts:
 			_last_contact_group = maxi(_last_contact_group, base)
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or base in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL, Understory.ALPINE_SHRUB, Understory.ALPINE_SHRUB_CREEPING]
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or base in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL]
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM, Understory.MOSS_MOUND]
 		var wind := CALM if still else _plant_wind(base)
@@ -2283,6 +2286,8 @@ func _prepare_open_cache() -> void:
 func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2: float, n: int, path: int, regions := {}, ctx = null) -> int:
 	var buf: PackedFloat32Array = grass_buf if ctx == null else ctx.grass
 	var w := world
+	if _expedition:
+		lush *= 1.0 - 0.82 * smoothstep(0.15, 0.63, surface.r)
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
 	if _veg_cfg != null and surface.r > 0.15:
 		cnt = floori(float(cnt) * lerpf(0.75, _veg_cfg.grass_forest_density_mul, smoothstep(0.15, 0.50, surface.r)))
@@ -2504,6 +2509,14 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		old_patch = ch[Understory.DARK] * 0.6 + age * 0.4
 		_move_weight(weights, Understory.FERN, Understory.SWORD_FERN, minf(0.88, wet_patch * 1.25))
 		_move_weight(weights, Understory.HERB, Understory.BROADLEAF_HERB, minf(0.90, wet_patch * (0.64 + 0.76 * bank)))
+		var closure := smoothstep(0.18, 0.58, canopy)
+		var thicket := wet_patch * closure
+		_move_weight(weights, Understory.FLOWERS, Understory.HERB, closure * 0.91)
+		_move_weight(weights, Understory.FIREWEED, Understory.HERB, closure * 0.87)
+		_move_weight(weights, Understory.BUSH, Understory.SALAL, minf(0.82, thicket * 2.2))
+		_move_weight(weights, Understory.HIGH_GRASS, Understory.SALAL, thicket * 0.58)
+		_move_weight(weights, Understory.BROADLEAF_HERB, Understory.DEVILS_CLUB,
+			minf(0.82, wet_patch * (0.32 + 1.25 * maxf(bank, 1.0 - smoothstep(2.0, 9.0, water)))))
 		_move_weight(weights, Understory.MOSS, Understory.MOSS_MOUND, wet_patch * 0.50 * (1.0 - 0.5 * slope))
 		var berry := (1.0 - _berry_ground(surface)) * lerpf(0.9, 1.6, patch)
 		_move_weight(weights, Understory.GRASS, Understory.BERRY_SHRUB, berry)
@@ -2521,6 +2534,8 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			weights[Understory.FERN] *= _veg_cfg.forest_fern_boost * verge_boost * 0.45
 			weights[Understory.BROADLEAF_HERB] = weights[Understory.BROADLEAF_HERB] * _veg_cfg.forest_broadleaf_boost + 0.48 * wet_dark * (0.65 + 0.75 * bank) * _veg_cfg.forest_broadleaf_boost
 			weights[Understory.BERRY_SHRUB] = weights[Understory.BERRY_SHRUB] * _veg_cfg.forest_berry_boost + 0.50 * (1.0 - surface.a * 0.7) * _veg_cfg.forest_berry_boost
+			weights[Understory.SALAL] = weights[Understory.SALAL] * _veg_cfg.forest_berry_boost * 0.85 + 0.38 * wet_dark * _veg_cfg.forest_berry_boost
+			weights[Understory.DEVILS_CLUB] = weights[Understory.DEVILS_CLUB] * _veg_cfg.forest_broadleaf_boost + 0.34 * wet_dark * (0.45 + 0.85 * bank) * _veg_cfg.forest_broadleaf_boost
 			weights[Understory.ALPINE_SHRUB] += (0.28 * smoothstep(0.10, 0.55, slope) + 0.24 * (1.0 - ch[Understory.DARK] * 0.5) + 0.22 * verge_boost) * _veg_cfg.forest_alpine_shrub_boost
 			weights[Understory.MOSS_MOUND] = weights[Understory.MOSS_MOUND] * _veg_cfg.forest_moss_mound_boost + 0.42 * wet_dark * (1.0 - 0.4 * slope) * _veg_cfg.forest_moss_mound_boost
 			var tw := _veg_cfg.forest_thicket_wall
@@ -2569,7 +2584,7 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			var keep := ground_keep
 			if kind in [Understory.MOSS, Understory.MOSS_MOUND]:
 				keep = moss_keep
-			elif kind in [Understory.BUSH, Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL]:
+			elif kind in [Understory.BUSH, Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL, Understory.SALAL, Understory.SALAL_TALL, Understory.DEVILS_CLUB, Understory.DEVILS_CLUB_TALL, Understory.BERRY_SHRUB_TALL]:
 				keep = woody_keep
 			if roll > density * lerpf(keep, 1.0, bank):
 				continue
@@ -2666,14 +2681,16 @@ func _autumn_understory_hue(kind: int, patch: float, u: float, autumn: float, ba
 	if autumn <= 0.0:
 		return base
 	var mix_k := clampf(autumn * lerpf(0.42, 0.96, smoothstep(0.15, 0.85, patch * 0.55 + u * 0.45)), 0.0, 1.0)
-	if kind == Understory.BERRY_SHRUB or kind == Understory.BERRY_SHRUB_SPREAD:
+	if kind in [Understory.BERRY_SHRUB, Understory.BERRY_SHRUB_SPREAD, Understory.BERRY_SHRUB_TALL]:
 		var target := Color(1.20, 0.68, 0.52) if u < 0.6 else Color(1.08, 0.56, 0.48)
 		return base * Color.WHITE.lerp(target, mix_k)
+	if kind in [Understory.SALAL, Understory.SALAL_TALL]:
+		return base * Color.WHITE.lerp(Color(1.02, 0.88, 0.72), mix_k * 0.55)
 	if kind == Understory.ALPINE_SHRUB or kind == Understory.ALPINE_SHRUB_CREEPING:
 		return base * Color.WHITE.lerp(Color(1.08, 0.82, 0.58), mix_k * 0.85)
 	if kind == Understory.SWORD_FERN or kind == Understory.SWORD_FERN_TALL:
 		return base * Color.WHITE.lerp(Color(1.06, 0.90, 0.64), mix_k * 0.72)
-	if kind in [Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL, Understory.HERB, Understory.MEADOW]:
+	if kind in [Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL, Understory.DEVILS_CLUB, Understory.DEVILS_CLUB_TALL, Understory.HERB, Understory.MEADOW]:
 		return base * Color.WHITE.lerp(Color(1.09, 0.91, 0.62), mix_k * 0.78)
 	if kind in [Understory.HAZEL, Understory.HAZEL_TALL]:
 		return base * Color.WHITE.lerp(Color(1.18, 0.96, 0.58), autumn * lerpf(0.30, 0.75, u))
@@ -3150,7 +3167,9 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		else:
 			fill_capped += 1
 			return RoadPlacement.CAPACITY
-	var floor_kind := Floor.base_kind(kind - Floor.FIRST)
+	var floor_form := kind - Floor.FIRST
+	var floor_kind := Floor.base_kind(floor_form)
+	var large_log := Floor.LARGE_LOGS.has(floor_form)
 	var local_box: AABB = entry.box
 	# Проверка стволов должна видеть ту же длину, что меш и капсула столкновения.
 	var object_box := AABB(local_box.position * Vector3(stretch, 1.0, 1.0), local_box.size * Vector3(stretch, 1.0, 1.0))
@@ -3203,11 +3222,11 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 					xf = placement.seat_road_span(xf, Floor.log_span(kind - Floor.FIRST), sink, 0.34, 0.70)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
-		elif not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG]:
+		elif not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG] and not large_log:
 			xf = placement.seat_forest_log(xf, Floor.log_span(kind - Floor.FIRST), sink)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
-		elif not placement.terrain_fits(xf, local_box, 0.25 if on_road and floor_kind == Floor.STONES else 0.18):
+		elif not placement.terrain_fits(xf, local_box, 0.34 if large_log else (0.25 if on_road and floor_kind == Floor.STONES else 0.18)):
 			return RoadPlacement.TERRAIN
 	elif _expedition and floor_kind in [Floor.STUMP, Floor.BOULDER] and (kind - Floor.FIRST) >= Floor.NURSE_LOG:
 		xf = placement.seat_embedded_solid(xf, local_box, sink)
@@ -3235,7 +3254,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.count += 1
 	var twin_offset := _put_twin(understory[twin], entry, offset, xf, scale) if twin >= 0 else -1
 	# The roots of one tree fan out from a shared base. Their boxes may overlap.
-	if kind == Understory.HAZEL or kind == Understory.HAZEL_TALL:
+	if kind in [Understory.HAZEL, Understory.HAZEL_TALL, Understory.SALAL, Understory.SALAL_TALL]:
 		# 17.11.2026: лещина занимает место пучком стволов, а не всей кроной (до 5 м): под краем кроны растут
 		# трава и куртины, иначе каждый куст вычищал под собой луг
 		var core := Vector3(box.size.x * HAZEL_CORE, box.size.y, box.size.z * HAZEL_CORE)
@@ -3249,7 +3268,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		return RoadPlacement.VISUAL
 	if floor_kind == Floor.LOG or floor_kind == Floor.MOSS_LOG:
 		# бревно — капсула вдоль ствола (меш: от -2,2 до 2,1 м по X, толщина 0,23 м), верх ~0,45 м
-		var span := Floor.log_span(kind - Floor.FIRST)
+		var span := Floor.log_span(floor_form)
 		var a := xf * Vector3(span.x, 0.0, 0.0)
 		var b := xf * Vector3(span.y, 0.0, 0.07)
 		if on_road:
@@ -3265,14 +3284,31 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 				var taper := lerpf(1.0, 0.72, (j + 0.5) / pieces)
 				_obstacles_next.append_array([start.x, start.z, end.x, end.z, cap_r * taper, center_y, center_y + cap_h * taper])
 		else:
-			var nurse := kind - Floor.FIRST in [Floor.NURSE_LOG, Floor.NURSE_LOG_SPLIT]
-			_obstacles_next.append_array([a.x, a.z, b.x, b.z, (0.31 if nurse else 0.2) * scale, pos.y,
-				pos.y + (0.60 if nurse else 0.42) * scale])
+			var nurse := floor_form in [Floor.NURSE_LOG, Floor.NURSE_LOG_SPLIT]
+			if not large_log:
+				_obstacles_next.append_array([a.x, a.z, b.x, b.z, (0.31 if nurse else 0.2) * scale, pos.y,
+					pos.y + (0.60 if nurse else 0.42) * scale])
+			else:
+				for trunk: Array in Floor.LARGE_LOGS[floor_form]:
+					for n in 4:
+						var t0 := n / 4.0
+						var t1 := (n + 1) / 4.0
+						var mid := (t0 + t1) * 0.5
+						var start := xf * (trunk[0] as Vector3).lerp(trunk[1], t0)
+						var finish := xf * (trunk[0] as Vector3).lerp(trunk[1], t1)
+						var width := lerpf(trunk[2], trunk[3], mid) * scale
+						_obstacles_next.append_array([start.x, start.z, finish.x, finish.z, width,
+							minf(start.y, finish.y) - width, maxf(start.y, finish.y) + width])
 	elif floor_kind == Floor.SNAG:
 		_obstacles_next.append_array([x, z, x, z, 0.16 * scale, pos.y, INF])
 	elif floor_kind == Floor.STUMP:
-		var large := kind - Floor.FIRST in [Floor.ROOT_STUMP, Floor.ROOT_PLATE, Floor.ROOT_UPTURNED]
-		_obstacles_next.append_array([x, z, x, z, (0.43 if large else 0.3) * scale, pos.y, box.end.y if large else pos.y + 0.45 * scale])
+		if floor_form in [Floor.ROOT_PLATE, Floor.ROOT_UPTURNED]:
+			var left := xf * Vector3(-0.16, 0.0, -0.63)
+			var right := xf * Vector3(-0.16, 0.0, 0.63)
+			_obstacles_next.append_array([left.x, left.z, right.x, right.z, 0.38 * scale, pos.y, box.end.y])
+		else:
+			var large := floor_form == Floor.ROOT_STUMP
+			_obstacles_next.append_array([x, z, x, z, (0.43 if large else 0.3) * scale, pos.y, box.end.y if large else pos.y + 0.45 * scale])
 	elif floor_kind == Floor.BOULDER:
 		_obstacles_next.append_array([x, z, x, z, maxf(reach.x, reach.z), box.position.y, box.end.y])
 	elif on_road and floor_kind in [Floor.BRANCH, Floor.STONES, Floor.ROOT_SPAN]: # не держат, а встряхивают колесо

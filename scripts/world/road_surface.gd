@@ -32,7 +32,6 @@ const LIST := [
 ]
 
 const VILLAGE_R := 7.0    # ближе этого к костру (клеток) дорога укатана
-const STONE_SLOPE := 0.19 # средняя крутизна окружения, а не отдельный камень в клетке
 const ORDER := ["mountain", "trail", "road"]   # кто кого перекрывает в w.road_surface (дорога сверху)
 const RoadRecords := preload("res://scripts/world/road_records.gd")
 static var allow_fast := true # the scalar pick() remains the reference and small authored-route API
@@ -82,7 +81,8 @@ static func _assign_native(w: WorldData, fast: Object) -> void:
 	for s: SettlementData in w.settlements: villages.append_array(PackedFloat64Array([s.x, s.y]))
 	var biomes := PackedInt32Array([Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.ROCK, Biomes.PEAK,
 		Biomes.SNOW, Biomes.STONESHORE, Biomes.BEACH, Biomes.DESERT, Biomes.GRASS])
-	var values: PackedByteArray = fast.PickRoadSurfaces(xs, ys, kinds, w.W, w.H, w.biome, w.slope, w.moist, villages, biomes, VILLAGE_R, STONE_SLOPE)
+	var stone_slope := RoadTuning.for_world(w).stone_slope
+	var values: PackedByteArray = fast.PickRoadSurfaces(xs, ys, kinds, w.W, w.H, w.biome, w.slope, w.moist, villages, biomes, VILLAGE_R, stone_slope)
 	var at := 0
 	for t: Dictionary in included:
 		t.surf = values.slice(at, at + t.pts.size())
@@ -100,9 +100,10 @@ static func assign_route(w: WorldData, t: Dictionary) -> void:
 		t.surf.resize(t.pts.size())
 		t.surf.fill(authored)
 		return
+	var stone_slope := RoadTuning.for_world(w).stone_slope
 	for n: int in t.pts.size():
 		var p: Dictionary = t.pts[n]
-		t.surf.append(pick(w, t.kind, p.x, p.y, 0.0))
+		t.surf.append(_pick(w, t.kind, p.x, p.y, stone_slope))
 
 
 ## Rebuild the cell map from assigned point surfaces (also used by authored trails).
@@ -134,6 +135,10 @@ static func _route_less(a: Dictionary, b: Dictionary) -> bool:
 ## Bilinear samples avoid a material decision tied to crossing a world-grid cell.
 ## v is retained for callers of the former hash-based API; it has no physical meaning.
 static func pick(w: WorldData, kind: String, x: float, y: float, _v := 0.0) -> int:
+	return _pick(w, kind, x, y, RoadTuning.for_world(w).stone_slope)
+
+
+static func _pick(w: WorldData, kind: String, x: float, y: float, stone_slope: float) -> int:
 	var wooded := 0.0
 	var rocky := 0.0
 	var sandy := 0.0
@@ -166,8 +171,8 @@ static func pick(w: WorldData, kind: String, x: float, y: float, _v := 0.0) -> i
 			if absf(s.x - x) < VILLAGE_R and absf(s.y - y) < VILLAGE_R and Grid.hypot(s.x - x, s.y - y) < VILLAGE_R:
 				return PACKED
 		# A maintained road keeps its aggregate through forest/meadow and moderate slopes.
-		return STONE if rocky > 0.6 and slope > STONE_SLOPE + 0.04 else GRAVEL
-	if rocky > 0.55 or slope > STONE_SLOPE:
+		return STONE if rocky > 0.6 and slope > stone_slope + 0.04 else GRAVEL
+	if rocky > 0.55 or slope > stone_slope:
 		return STONE
 	if wooded > 0.45:
 		return FOREST

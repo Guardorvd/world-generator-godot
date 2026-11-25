@@ -54,7 +54,7 @@ func run() -> void:
 	ui.add_child(title)
 	var plants := Plants.meshes()
 	var floor_meshes := Floor.meshes()
-	if "--expedition" in OS.get_cmdline_user_args():
+	if "--expedition" in OS.get_cmdline_user_args() or "--phase82" in OS.get_cmdline_user_args():
 		await expedition_gallery(plants, floor_meshes, sun)
 		quit()
 		return
@@ -95,6 +95,7 @@ func run() -> void:
 
 func expedition_gallery(plants: Array[Mesh], floor_meshes: Array[Mesh], sun: DirectionalLight3D) -> void:
 	var catalog := preload("res://scripts/render/asset_catalog.gd").get_catalog()
+	var phase82 := "--phase82" in OS.get_cmdline_user_args()
 	var rows := [
 		["Папоротник и мечевидные вайи", "fern", [Plants.FERN, Plants.SWORD_FERN, Plants.SWORD_FERN_TALL], 2.35, 4.8],
 		["Куст и горные формы", "alpine", [Plants.BUSH, Plants.ALPINE_SHRUB, Plants.ALPINE_SHRUB_CREEPING], 2.35, 4.8],
@@ -106,6 +107,16 @@ func expedition_gallery(plants: Array[Mesh], floor_meshes: Array[Mesh], sun: Dir
 			Floor.FIRST + Floor.ROOT_PLATE, Floor.FIRST + Floor.ROOT_UPTURNED], 3.35, 8.0],
 		["Валуны", "stone", [Floor.FIRST + Floor.BOULDER, Floor.FIRST + Floor.MOSS_BOULDER, Floor.FIRST + Floor.MOSS_BOULDER_LOW], 3.3, 7.1],
 	]
+	if phase82:
+		rows = [
+			["Гаультерия, низкая и высокая формы", "salal", [Plants.SALAL, Plants.SALAL_TALL, Plants.SWORD_FERN], 2.4, 5.1],
+			["Оплопанакс и лесной ягодник", "club", [Plants.DEVILS_CLUB, Plants.DEVILS_CLUB_TALL, Plants.BERRY_SHRUB_TALL], 3.0, 6.3],
+			["Цельный ствол, полое бревно и пара стволов", "large_logs",
+				[Floor.FIRST + Floor.NURSE_LOG_LONG, Floor.FIRST + Floor.NURSE_LOG_HOLLOW, Floor.FIRST + Floor.NURSE_LOG_PAIR], 11.7, 21.0],
+			["Пень, два выворотня и замшелый валун", "upturned",
+				[Floor.FIRST + Floor.ROOT_STUMP, Floor.FIRST + Floor.ROOT_PLATE, Floor.FIRST + Floor.ROOT_UPTURNED,
+					Floor.FIRST + Floor.MOSS_BOULDER], 3.4, 8.4],
+		]
 	for row: Array in rows:
 		var forms: Array = row[2]
 		var spacing: float = row[3]
@@ -129,13 +140,35 @@ func expedition_gallery(plants: Array[Mesh], floor_meshes: Array[Mesh], sun: Dir
 			meter.position = Vector3(-(forms.size() - 1) * 0.5 * spacing, 0.5, -0.8)
 			stand.add_child(meter)
 			title.text = "%s · %s · стойка 1 м" % [row[0], "ближний вид" if level == 0 else "дальний меш"]
-			sun.rotation_degrees = Vector3(-45, -30, 0) if level == 0 else Vector3(-12, -67, 0)
+			sun.rotation_degrees = Vector3(-45, -30, 0) if level == 0 or phase82 else Vector3(-12, -67, 0)
 			view(Vector3(0, size * 0.31, size * 1.3), Vector3(0, 0.35, 0), size)
 			await shot("phase8_%s_%s" % [name, "near" if level == 0 else "far"])
 			if level == 0:
 				view(Vector3(size * 0.63, size * 0.49, size * 1.16), Vector3(0, 0.35, 0), size)
 				await shot("phase8_%s_angle" % name)
 		print("phase8 %s triangles (near, far): %s" % [name, counts])
+	if phase82:
+		clear()
+		add(floor_meshes[Floor.NURSE_LOG_HOLLOW], Floor.FIRST + Floor.NURSE_LOG_HOLLOW, 0.0)
+		view(Vector3(-9.0, 2.2, 2.3), Vector3(-3.5, 0.51, 0.0), 2.65)
+		title.text = "Полое бревно · торец и обломанная древесина"
+		await shot("phase82_hollow")
+		await carpet_gallery()
+
+
+func carpet_gallery() -> void:
+	var variants := [Models.CARPET_MEADOW, Models.CARPET_MOSS, Models.CARPET_WOODLAND_LEAVES, Models.CARPET_BERRY, Models.CARPET_SEDGE]
+	for far in 2:
+		clear()
+		for i in variants.size():
+			var kind: int = variants[i]
+			var mesh := Models.build_carpet_mesh(kind, far == 1)
+			var tint := Color(0.51, 0.61, 0.32) if i == 0 else Color(0.30, 0.39, 0.21)
+			add(mesh, -1, (i - 2) * 1.65, 15, tint)
+			print("carpet form ", kind, " LOD", far, " triangles=", _triangles(mesh))
+		view(Vector3(0, 3.5, 7.8), Vector3(0, 0.1, 0.55), 5.2)
+		title.text = "Луг · мох · мелколистный ковёр · ягодник · лесная осока · LOD%d" % far
+		await shot("phase82_carpet_%d" % far)
 
 
 func _triangles(mesh: Mesh) -> int:

@@ -1,10 +1,11 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 17 # 17: клён крупнолистный и его общий атлас листвы
+const VERSION := 18 # Фаза 8.2: хвойные, подлесок, валежник и ковёр экспедиции
 const PATH := "res://resources/catalog/standard.res"
 @export var version := 0 # Запекание записывает версию явно; ResourceSaver пропускает значение по умолчанию.
 @export var trees: Dictionary = {}
 @export var grass: ArrayMesh
+@export var forest_carpet: Dictionary = {}
 @export var understory: Array[Mesh] = []
 @export var floor_meshes: Array[Mesh] = []
 @export var textures: Array[Texture2D] = [] # bark, leaf, needle, ground detail, ground normal

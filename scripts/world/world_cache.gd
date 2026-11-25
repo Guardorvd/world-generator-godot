@@ -100,6 +100,8 @@ func layer_keys() -> PackedStringArray:
 			suffixes["geo"] = WorldTemplate.geo_cache_suffix(template_id)
 			suffixes["places"] = str(suffixes.get("places", "")) + WorldTemplate.places_cache_suffix(template_id)
 			suffixes["nature"] = str(suffixes.get("nature", "")) + WorldTemplate.nature_cache_suffix(template_id)
+		if template_id == WorldTemplate.EXPEDITION_ID:
+			suffixes["nature"] = str(suffixes.get("nature", "")) + "|expedition-vegetation-3"
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
 			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]),
 			suffixes)
@@ -111,7 +113,7 @@ func layer_keys() -> PackedStringArray:
 ## Зависимости начинаются со слоя, который впервые читает эти настройки.
 static func _road_layer_suffixes(tuning: RoadTuning, prepared_paths: bool) -> Dictionary:
 	var bed := tuning.bed_cache_suffix()
-	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix()
+	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix() + tuning.surface_cache_suffix()
 	if prepared_paths:
 		places += bed + tuning.tread_cache_suffix()
 	return {"places": places, "nature": bed + tuning.clearance_cache_suffix()}

@@ -705,7 +705,7 @@ internal sealed class LineShaper
 			skip[cnt] = blocked[k + 1];
 			cnt++;
 		}
-		return GeometryValidator.FirstProfileFailure(along[..cnt], h[..cnt], skip[..cnt], Tile, ProfileBase, grade, from == 0) < 0;
+		return GeometryValidator.FirstProfileFailure(along[..cnt], h[..cnt], skip[..cnt], Tile, ProfileBase, grade, from == 0, _probe.RoadDownhillRatio) < 0;
 	}
 
 	private static P Midpoint(P a, P b) => new((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, a.W);
@@ -930,7 +930,7 @@ internal sealed class LineShaper
 			stSkip.Add(skip[k]);
 		}
 		return GeometryValidator.FirstProfileFailure(CollectionsMarshal.AsSpan(along), CollectionsMarshal.AsSpan(heights),
-			CollectionsMarshal.AsSpan(stSkip), Tile, ProfileBase, grade, atStart) < 0;
+			CollectionsMarshal.AsSpan(stSkip), Tile, ProfileBase, grade, atStart, _probe.RoadDownhillRatio) < 0;
 	}
 
 	private bool WholeProfileOk(List<P> pts, double grade)

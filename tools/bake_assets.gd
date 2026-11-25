@@ -7,6 +7,9 @@ func _initialize() -> void:
 	ForestModels.baking = true
 	catalog.trees = Models.build_tree_defs()
 	catalog.grass = Models.build_grass_mesh()
+	for kind in range(Models.CARPET_MOSS, Models.CARPET_KINDS):
+		for far in 2:
+			catalog.forest_carpet[kind * 2 + far] = Models.build_carpet_mesh(kind, far == 1)
 	catalog.understory = preload("res://scripts/render/understory_models.gd").build_meshes()
 	catalog.floor_meshes = preload("res://scripts/render/forest_floor.gd").build_meshes()
 	var Plants := preload("res://scripts/render/understory_models.gd")
@@ -73,6 +76,9 @@ func _initialize() -> void:
 			ok = ok and same_mesh(before[k], after[k])
 	for pair: Array in [[catalog.grass, restored.grass]]:
 		ok = ok and same_mesh(pair[0], pair[1])
+	ok = ok and restored.forest_carpet.keys() == catalog.forest_carpet.keys()
+	for k: int in catalog.forest_carpet:
+		ok = ok and same_mesh(catalog.forest_carpet[k], restored.forest_carpet[k])
 	for k: int in catalog.far_forms:
 		ok = ok and same_mesh(catalog.far_forms[k], restored.far_forms[k])
 	for group: String in ["understory", "floor_meshes"]:

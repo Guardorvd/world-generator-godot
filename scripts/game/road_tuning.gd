@@ -13,6 +13,7 @@ const BASELINE_ROUTING_DIGEST := "e7cfb205deaa"
 const BASELINE_WIDTH_DIGEST := "2f05a2e55136"
 const BASELINE_CLEARANCE_DIGEST := "1a9220c8b0d0"
 const BASELINE_TREAD_DIGEST := "8bc1a25b1f49"
+const DEFAULT_STONE_SLOPE := 0.19
 
 @export var routing: Routing
 @export var section: Section
@@ -30,6 +31,8 @@ const BASELINE_TREAD_DIGEST := "8bc1a25b1f49"
 @export var character := PackedFloat64Array()
 ## Доля выравнивания спокойных участков
 @export var level_surface := PackedFloat64Array()
+## Mean slope over 16 m that turns an otherwise soil-covered trail into stone.
+@export_range(0.0, 0.4) var stone_slope := DEFAULT_STONE_SLOPE
 
 @export_group("Общие")
 ## Радиус выравнивания спокойных участков, м
@@ -138,6 +141,10 @@ func digest() -> String:
 func routing_cache_suffix() -> String:
 	var key := _digest_values(routing.cache_values())
 	return "" if key == BASELINE_ROUTING_DIGEST else "|routing=" + key
+
+
+func surface_cache_suffix() -> String:
+	return "" if stone_slope == DEFAULT_STONE_SLOPE else "|surface=" + _digest_values([stone_slope])
 
 
 func bed_cache_suffix() -> String:

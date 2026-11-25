@@ -55,10 +55,12 @@ var _bumps := PackedVector4Array(RoadBump.LIST)
 ## Индекс, подгонка, формы коридора и патчи собирает FastGrid.BuildRoadRefinement,
 ## в том числе при only. Без C# или при ошибке внутри него — сообщение и пустая сетка (патчей нет, дороги без метровой сетки).
 ## w.outer не учитывается (в игре сетка строится до подключения OuterLand, в Trail Lab его нет).
-static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false) -> RoadRefinement:
+static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false, tuning: RoadTuning = null) -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r._height = heights.world.H
-	r._section = RoadTuning.for_world(heights.world).section
+	if tuning == null:
+		tuning = RoadTuning.for_world(heights.world)
+	r._section = tuning.section
 	r._bumps = RoadBump.surface_list(heights.world.template_id)
 	var fast := Grid.native_grid()
 	if fast == null:
@@ -72,7 +74,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps 
 		var t: Dictionary = heights.world.trails[route]
 		return t.has("trail_id") and (t.get("formation", Vector3.ZERO) as Vector3).x > 0.0):
 		r._reach = REACH
-	if not r._build_native(fast, heights, fit_road, only, with_gaps):
+	if not r._build_native(fast, heights, fit_road, only, with_gaps, tuning):
 		push_error("RoadRefinement: C# не построил метровую сетку (исключение внутри расчёта)")
 		return r
 	r._drop_mountain_fits(heights.world)
@@ -137,7 +139,7 @@ static func pin_coarse_edges(h: Heightfield, patches: Dictionary, keys: Array) -
 
 
 ## Путь передаётся столбцами один раз. Индекс, профили и коридор используются на стороне C# до публикации результата.
-func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dictionary, with_gaps: bool) -> bool:
+func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dictionary, with_gaps: bool, tuning: RoadTuning) -> bool:
 	var w := heights.world
 	var started_us := Time.get_ticks_usec()
 	var ids := PackedInt32Array()
@@ -149,7 +151,6 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 	var ws := PackedFloat64Array()
 	var surf := PackedInt32Array()
 	var authored := PackedByteArray()
-	var tuning := RoadTuning.for_world(w)
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
 		var is_authored := t.has("trail_id")
@@ -195,7 +196,7 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 	noise.frequency = 1.0
 	noise.fractal_octaves = 2
 	_section = tuning.section
-	var settings := corridor_params(w.template_id) if fit_road else {}
+	var settings := corridor_params(w.template_id, tuning) if fit_road else {}
 	var input_ms := (Time.get_ticks_usec() - started_us) / 1000.0
 	var out: Variant = fast.BuildRoadRefinement(w.W, w.H, TILE, DIV, _reach, heights.hv, heights.hv_raw, heights.water_level,
 		w.dist_water, starts, xs, ys, ws, surf, kinds, scales, ids, authored, local_routes, noise, Vector2(w.world_origin) * TILE,
@@ -264,13 +265,17 @@ static func code_version() -> int:
 ## fade, gap — включение форм и зазор между полотнами; stride — чисел на станцию; level_r — радиус выравнивания, rhythm_span —
 ## размах ритма. Без landscape_character — прежние характер и ритм (множители 1, ритм по шуму, выравнивания нет).
 ## 16.11.2026: числа форм, характера, выравнивания и зазоров — из файла параметров RoadTuning.
-static func corridor_params(template_id := "") -> Dictionary:
-	var tuning := RoadTuning.for_template(template_id)
+static func corridor_params(template_id := "", tuning: RoadTuning = null) -> Dictionary:
+	if tuning == null:
+		tuning = RoadTuning.for_template(template_id)
 	var kinds: Array = []
 	var level_kind := PackedFloat64Array()
 	for name: String in CORRIDOR_KINDS:
 		var k := tuning.kind(name)
-		kinds.append(k.corridor())
+		var kind := k.corridor()
+		if k.support_cut > 0.0:
+			kind["directional_grades"] = tuning.routing.expedition_grades
+		kinds.append(kind)
 		level_kind.append(k.level if landscape_character else 0.0)
 	var character := PackedFloat64Array()
 	for v: float in tuning.character:

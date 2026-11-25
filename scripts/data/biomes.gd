@@ -45,17 +45,19 @@ const T_ALDER := 16
 const T_WESTERN_REDCEDAR := 17
 const T_SIBERIAN_CEDAR := 18
 const T_MAPLE := 19
-const EXPEDITION_TREES := [T_SPRUCE, T_LARCH, T_ALDER, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_MAPLE]
+const T_HEMLOCK := 20
+const T_DOUGLAS_FIR := 21
+const EXPEDITION_TREES := [T_SPRUCE, T_LARCH, T_ALDER, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_MAPLE, T_HEMLOCK, T_DOUGLAS_FIR]
 const EXPEDITION_CROWN := {
 	T_SPRUCE: Color("426e48"), T_LARCH: Color("88a451"), T_ALDER: Color("689343"),
 	T_WESTERN_REDCEDAR: Color("416e46"), T_SIBERIAN_CEDAR: Color("4b7952"),
-	T_MAPLE: Color("6b963f"),
+	T_MAPLE: Color("6b963f"), T_HEMLOCK: Color("365c43"), T_DOUGLAS_FIR: Color("4b6741"),
 }
 
 # Приблизительный радиус кроны/объекта в клетках (клетка 4 м), по Models.
 # Общий для размещения и оценки полога; масштаб экземпляра применяется отдельно.
 # 11.11.2026: высокий лес — дуб, сосна, снежная ель и берёза в номинальном размере (ForestModels.NOMINAL).
-const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.68, 0.52, 0.85, 0.73, 0.74, 1.07, 1.10, 1.22]
+const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.68, 0.52, 1.01, 0.73, 0.74, 1.32, 1.37, 1.22, 1.36, 1.64]
 # Поля записи биома (индекс в массиве = номер биома):
 #   name       — название для интерфейса
 #   color      — цвет на карте и в текстуре рельефа, [r, g, b]
@@ -107,7 +109,7 @@ static func is_tree(kind: int) -> bool:
 
 
 static func is_conifer(kind: int) -> bool:
-	return kind in [T_PINE, T_SNOWPINE, T_MUGO, T_SPRUCE, T_LARCH, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR]
+	return kind in [T_PINE, T_SNOWPINE, T_MUGO, T_SPRUCE, T_LARCH, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_HEMLOCK, T_DOUGLAS_FIR]
 
 
 ## 12.11.2026: конец лета. Тон кроны одного дерева — общий для ближних моделей и дальних крон (DistantForest):
@@ -132,7 +134,7 @@ static func leaf_tone(kind: int, col: Color, x: float, y: float, autumn := 0.0) 
 			out_a = out_a.lerp(Color("8f6e30") if own_a > 0.45 else Color("787038"), smoothstep(0.32, 0.84, turn_a) * 0.68 * autumn)
 		elif kind == T_BIRCH:
 			out_a = col.lerp(Color("c69c32") if own_a > 0.4 else Color("a8782e"), smoothstep(0.24, 0.78, turn_a) * 0.90 * autumn)
-		elif kind in [T_SPRUCE, T_PINE, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_MUGO]:
+		elif kind in [T_SPRUCE, T_PINE, T_WESTERN_REDCEDAR, T_SIBERIAN_CEDAR, T_MUGO, T_HEMLOCK, T_DOUGLAS_FIR]:
 			out_a = col.lerp(Color(col.r * 0.82, col.g * 0.89, col.b * 0.88), autumn * 0.45)
 		elif kind == T_BUSH or kind == T_ROWAN:
 			out_a = col.lerp(Color("9c4a26") if own_a < 0.5 else Color("a8762c"), smoothstep(0.28, 0.82, turn_a) * 0.78 * autumn)

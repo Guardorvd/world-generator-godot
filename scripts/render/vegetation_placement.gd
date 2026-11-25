@@ -59,7 +59,8 @@ func region_clear(x: float, z: float) -> bool:
 static func priority(kind: int) -> int:
 	if Floor.base_kind(kind - Floor.FIRST) in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STONES, Floor.STUMP, Floor.BOULDER]:
 		return 0
-	if kind in [Plants.BUSH, Plants.SAPLING, Plants.PINE, Plants.YOUNG, Plants.YOUNG_PINE, Plants.HAZEL, Plants.HAZEL_TALL, Plants.ALPINE_SHRUB, Plants.ALPINE_SHRUB_CREEPING]:
+	if kind in [Plants.BUSH, Plants.SAPLING, Plants.PINE, Plants.YOUNG, Plants.YOUNG_PINE, Plants.HAZEL, Plants.HAZEL_TALL, Plants.ALPINE_SHRUB, Plants.ALPINE_SHRUB_CREEPING,
+			Plants.SALAL, Plants.SALAL_TALL, Plants.DEVILS_CLUB, Plants.DEVILS_CLUB_TALL, Plants.BERRY_SHRUB_TALL]:
 		return 1
 	return 2
 

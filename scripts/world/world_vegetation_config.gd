@@ -52,7 +52,9 @@ const VP_YOUNG_SHARE := 45
 const VP_INLAND_ALDER_SHARE := 46
 const VP_MUGO_SLOPE_SHARE := 47
 const VP_LARCH_BASE_SHARE := 48
-const VP_COUNT := 49
+const VP_HEMLOCK_SHARE := 49
+const VP_DOUGLAS_FIR_SHARE := 50
+const VP_COUNT := 51
 
 @export_group("Крона и зонирование")
 ## Минимальный базовый покров глухого таёжного полога внутри леса, исключающий 300-метровые луга.
@@ -133,6 +135,10 @@ const VP_COUNT := 49
 @export_range(0.0, 0.60, 0.01) var pine_dry_spur_share: float = 0.20
 ## Доля кряжистого стланика (T_MUGO) на крутых каменистых склонах и скальных уступах ниже верхней границы леса.
 @export_range(0.0, 1.0, 0.01) var mugo_rocky_slope_share: float = 0.24
+## Доля теневыносливой тсуги (T_HEMLOCK) на влажных участках и под пологом долины.
+@export_range(0.0, 2.0, 0.02) var hemlock_share: float = 0.62
+## Доля высокой дугласии (T_DOUGLAS_FIR) на укрытых и умеренно освещённых склонах.
+@export_range(0.0, 2.0, 0.02) var douglas_fir_share: float = 0.56
 
 @export_group("Формы и масштаб деревьев")
 ## Множитель высоты старых деревьев глухой долины.
@@ -272,6 +278,8 @@ func veg_params(eco_base: float, valley_bot_h := 0.07, valley_top_h := 0.22) -> 
 	p[VP_INLAND_ALDER_SHARE] = inland_alder_share
 	p[VP_MUGO_SLOPE_SHARE] = mugo_rocky_slope_share
 	p[VP_LARCH_BASE_SHARE] = larch_base_share
+	p[VP_HEMLOCK_SHARE] = hemlock_share
+	p[VP_DOUGLAS_FIR_SHARE] = douglas_fir_share
 	return p
 
 

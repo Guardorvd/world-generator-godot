@@ -118,7 +118,7 @@ public partial class FastGrid
 		RunRows(rows, parallel, DetailNormRow);
 		if (microPad == 0)
 			return norm;
-		var withMicro = ReliefMicro(norm, microNoise, x0, y0, W, H, microPad, heightScale, tile, parallel);
+		var withMicro = ReliefMicro(norm, microNoise, x0, y0, W, H, microPad, heightScale, tile, parallel, rp[59], rp[60]);
 		// Гасим мелкую рябь внутри русла и на кромке берега (по нормали к руслу).
 		void DampMicroRow(int j)
 		{
@@ -173,6 +173,15 @@ public partial class FastGrid
 		return outH;
 	}
 
+	// Indices in WorldTypeConfig.relief_params(). Both samplers get the numbers from the same resource.
+	private const int ValleyMesoScale = 55, ValleyMesoAmp = 56, ValleyBankVariation = 57, ValleyFloorGully = 58;
+	private const int ValleyBankScaleX = 61, ValleyBankScaleY = 62, ValleyBankPhaseX = 63, ValleyBankPhaseY = 64;
+	private const int ValleyMesoSkew = 65, ValleyMesoAspect = 66, ValleyMesoPhaseX = 67, ValleyMesoPhaseY = 68;
+	private const int ValleyRidgeSkew = 69, ValleyRidgeScaleX = 70, ValleyRidgeScaleY = 71;
+	private const int ValleyRidgePhaseX = 72, ValleyRidgePhaseY = 73, ValleyRidgeMin = 74, ValleyRidgeMax = 75;
+	private const int ValleyRidgeCenter = 76, ValleyRidgeGain = 77, ValleyMesoDryStart = 78, ValleyMesoDryEnd = 79;
+	private const int ValleyFloorGullyStart = 80, ValleyFloorGullyEnd = 81;
+
 	private static double ValleyBaseAt(int[] warpX, int[] warpY, int[] ridge, int[] hill,
 		double x, double y, int roadSide, double ax, double ac, double fh, double rhw, double bd,
 		double sh, double sr, double osh, double osr, double wsr, double wsl,
@@ -195,13 +204,29 @@ public partial class FastGrid
 		}
 		else
 		{
-			dChan = rp[2] * (1.0 - Math.Exp(-(ad - rhw) / rp[3]));
+			double bank = 0.0;
+			if (rp[ValleyBankVariation] > 0.0)
+				bank = Noise(hill, X / rp[ValleyBankScaleX] + rp[ValleyBankPhaseX],
+					Y / rp[ValleyBankScaleY] + rp[ValleyBankPhaseY]) * rp[ValleyBankVariation];
+			dChan = rp[2] * (1.0 + bank) * (1.0 - Math.Exp(-(ad - rhw) / (rp[3] * (1.0 - bank))));
 		}
 		double landDamp = 1.0 - (1.0 - ReliefSmooth(rhw + rp[4], rhw + rp[5], ad)) * cf;
 		double hillsFine = Fbm(hill, X / rp[6], Y / rp[6], 4);
 		double hillsBroad = Fbm(hill, X / rp[7] + 32.4, Y / rp[7] - 18.6, 2);
 		double folds = rp[8] * hillsBroad + rp[9] * hillsFine;
 
+		if (rp[ValleyMesoAmp] > 0.0)
+		{
+			double scale = rp[ValleyMesoScale], skew = rp[ValleyMesoSkew], ridgeSkew = rp[ValleyRidgeSkew];
+			double m = Fbm(hill, (X + skew * Y) / scale + rp[ValleyMesoPhaseX],
+				(Y - skew * X) / (scale * rp[ValleyMesoAspect]) + rp[ValleyMesoPhaseY], 2);
+			double crest = 1.0 - Math.Abs(Noise(ridge,
+				(X - ridgeSkew * Y) / (scale * rp[ValleyRidgeScaleX]) + rp[ValleyRidgePhaseX],
+				(Y + X * ridgeSkew) / (scale * rp[ValleyRidgeScaleY]) + rp[ValleyRidgePhaseY]));
+			double ridgeShape = ReliefSmooth(rp[ValleyRidgeMin], rp[ValleyRidgeMax], crest) - rp[ValleyRidgeCenter];
+			double dryBand = ReliefSmooth(rhw + rp[ValleyMesoDryStart], rhw + rp[ValleyMesoDryEnd], ad);
+			folds += rp[ValleyMesoAmp] * dryBand * (m + rp[ValleyRidgeGain] * ridgeShape);
+		}
 		double roadD = Math.Max(0.0, sd - (rhw + rp[10]));
 		double benchRise = rp[11] * roadD + rp[12] * roadD * roadD;
 		double spurLift = 0.0;
@@ -236,7 +261,9 @@ public partial class FastGrid
 			double mRelief = Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, 1.0);
 			wallTerm += mRelief * mGain * mountainHeight;
 		}
-		if (rp[37] > 0.0 && wall > rp[38])
+		double floorCut = 0.0;
+		double floorGate = rp[ValleyFloorGully] * ReliefSmooth(rhw + rp[ValleyFloorGullyStart], rhw + rp[ValleyFloorGullyEnd], ad);
+		if (rp[37] > 0.0 && (wall > rp[38] || floorGate > 0.0))
 		{
 			double gwMask = ReliefSmooth(rp[38], rp[39], wall);
 			double gWarp = Fbm(warpY, X / 95.0 - 5.2, Y / 95.0 + 11.4, 2) * 38.0;
@@ -244,7 +271,9 @@ public partial class FastGrid
 			double gv = (Y - 0.28 * ad + gWarp) / rp[35];
 			double gn = Math.Abs(Fbm(ridge, gu + 19.3, gv - 7.1, 2));
 			double gT = Clamp01(1.0 - gn / Math.Max(1e-4, rp[36]));
-			wallTerm -= gwMask * rp[37] * (1.0 - 0.55 * outerWall) * (gT * gT * (3.0 - 2.0 * gT));
+			double gShape = gT * gT * (3.0 - 2.0 * gT);
+			wallTerm -= gwMask * rp[37] * (1.0 - 0.55 * outerWall) * gShape;
+			floorCut = floorGate * gShape * (1.0 - wall);
 		}
 		if (rp[43] > 0.0 && wall > rp[47])
 		{
@@ -261,7 +290,7 @@ public partial class FastGrid
 			}
 		}
 		if (wallTerm < 0.0) wallTerm = 0.0;
-		double h = fh + dChan * cf + rp[30] * (1.0 - cf) + landDamp * (benchRise + folds * (1.0 - rp[29] * wall) + spurLift + oppSpurLift + wallTerm);
+		double h = fh + dChan * cf + rp[30] * (1.0 - cf) + landDamp * (benchRise + folds * (1.0 - rp[29] * wall) + spurLift + oppSpurLift + wallTerm - floorCut);
 		if (h < rp[31]) h = rp[31];
 		return h;
 	}
@@ -303,7 +332,7 @@ public partial class FastGrid
 	private const double TopRaw = 1.05; // StageRelief.TOP_RAW
 
 	/// <summary>Копия StageRelief.add_micro. Вход — нормированные высоты с полосой соседей.</summary>
-	private static float[] ReliefMicro(float[] heights, int[] noise, int x0, int y0, int width, int height, int pad, double heightScale, double tile, bool parallel)
+	private static float[] ReliefMicro(float[] heights, int[] noise, int x0, int y0, int width, int height, int pad, double heightScale, double tile, bool parallel, double open = 0.0, double gain = 1.0)
 	{
 		int stride = width + 2 * pad;
 		int d = pad * stride;
@@ -341,7 +370,7 @@ public partial class FastGrid
 							strength = 1.0 + (varied - 1.0) * weight;
 						}
 					}
-					h = Math.Max(1e-4, h + Fbm(noise, x / 9.0, y / 9.0, 2) * 0.006 * Math.Min(1.0, h * 40.0) * strength);
+					h = Math.Max(1e-4, h + Fbm(noise, x / 9.0, y / 9.0, 2) * 0.006 * Math.Min(1.0, h * 40.0) * (strength + (1.0 - strength) * open) * gain);
 				}
 				output[j * width + i] = (float)h;
 			}
