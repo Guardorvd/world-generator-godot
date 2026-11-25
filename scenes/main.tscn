@@ -321,6 +321,14 @@ theme_type_variation = &"MenuLink"
 text = "Экипировка"
 alignment = 0
 
+[node name="OpenRides" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 44)
+layout_mode = 2
+theme_type_variation = &"MenuLink"
+text = "Журнал заездов"
+alignment = 0
+
 [node name="MenuSettings" type="Button" parent="UI/Root/Menu/Panel/Actions"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(320, 44)

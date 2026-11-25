@@ -1,11 +1,13 @@
-[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
+[ext_resource type="Texture2D" path="res://resources/icons/place_peak.svg" id="2_icon"]
 
 [resource]
 script = ExtResource("1_cfg")
 id = "mountain_valley"
 title = "Горная долина"
+icon = ExtResource("2_icon")
 available = true
 plan_width = 768
 plan_heights = PackedInt32Array(768)

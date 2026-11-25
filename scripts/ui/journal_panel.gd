@@ -62,10 +62,7 @@ var _tab_map: Button
 var _seed: Label
 var _goal_badge: Label # 20.11: цель покупки в шапке дневника на всех вкладках: «Цель: Ледник · 35 / 50»
 var _shop_profile: ShopPanel.Progress
-var _rides: Array = []            # заезды открытой вкладки (Hud._ride_rows)
-var _ride_buttons: Array[Button] = []
-var _ride_info: VBoxContainer
-var _selected_ride := 0
+var _feed_view
 const SHORT_GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночь", "Обелиски"]
 
 var _box: VBoxContainer
@@ -149,10 +146,7 @@ func clear() -> void:
 		_path_page.remove_child(child)
 		child.queue_free()
 	_shown_quest = {}
-	_rides = []
-	_ride_buttons.clear()
-	_ride_info = null
-	_selected_ride = 0
+	_feed_view = null
 	map_view.show_ride([], Rect2())
 	_lightbox_return_focus = null
 	_cache.clear()
@@ -545,9 +539,8 @@ func _select(tab: Tab) -> void:
 		_data = data_provider.call()
 	if tab == Tab.PATH and _path_page.get_child_count() == 0:
 		_fill_path(_data)
-	elif tab == Tab.PATH and not _rides.is_empty():
-		var ride: Dictionary = _rides[_selected_ride]
-		map_view.show_ride(ride.legs, ride.bounds, false)
+	elif tab == Tab.PATH and _feed_view != null and _feed_view.same_world(_feed_view._selected):
+		_select_feed_ride(_feed_view._selected, false)
 	if tab == Tab.ALBUM and _album_scroll == null:
 		_fill_album(_data)
 	if tab == Tab.ALBUM and not _card_jobs.is_empty():
@@ -652,47 +645,13 @@ func _fill_checklist(data: Dictionary) -> void:
 		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 
-## 20.11.2026: вкладка «Заезды» — история игровых сессий (RideLog): список, у выбранного трек на карте, счётчики
-## и места; ниже — итог за всю игру (прежняя сводка пути)
+## Общая лента и прежний итог для открытого мира.
 func _fill_path(data: Dictionary) -> void:
-	_rides = data.get("rides", [])
-	_ride_buttons.clear()
-	_label("ИСТОРИЯ ПУТЕШЕСТВИЙ", 12, _path_page, ACCENT)
-	_label("Ваши поездки", 22, _path_page, HudStyle.CREAM)
-	_label("Одна запись — время от входа в мир до выхода. Хранятся последние 40 поездок.", 13, _path_page, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	if _rides.is_empty():
-		_label("Заездов пока нет", 14, _path_page, MUTED)
-	var group := ButtonGroup.new()
-	var ride_scroll := ScrollContainer.new()
-	ride_scroll.custom_minimum_size.y = 150
-	ride_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	ride_scroll.follow_focus = true
-	_path_page.add_child(ride_scroll)
-	var ride_list := VBoxContainer.new()
-	ride_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ride_scroll.add_child(ride_list)
-	for i in _rides.size():
-		var ride: Dictionary = _rides[i]
-		var button := Button.new()
-		button.toggle_mode = true
-		button.button_group = group
-		button.text = "%s
-%s" % [ride.title, ride.summary]
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.custom_minimum_size.y = 64
-		button.add_theme_font_size_override("font_size", 15)
-		button.add_theme_stylebox_override("normal", HudStyle.panel(Color("#213631"), LINE, 0, Vector2(12, 8), false))
-		button.add_theme_stylebox_override("hover", HudStyle.panel(Color("#314a40"), ACCENT, 0, Vector2(12, 8), false))
-		button.add_theme_stylebox_override("pressed", HudStyle.panel(Color("#435b49"), ACCENT, 0, Vector2(12, 8), false))
-		button.add_theme_stylebox_override("hover_pressed", HudStyle.panel(Color("#4b6350"), ACCENT, 0, Vector2(12, 8), false))
-		button.tooltip_text = "Показать заезд на карте"
-		button.pressed.connect(_select_ride.bind(i))
-		ride_list.add_child(button)
-		_ride_buttons.append(button)
-	_ride_info = VBoxContainer.new()
-	_ride_info.add_theme_constant_override("separation", 4)
-	_path_page.add_child(_ride_info)
-
+	_feed_view = preload("res://scripts/ui/ride_feed_view.gd").new()
+	_path_page.add_child(_feed_view)
+	_feed_view.ride_selected.connect(_select_feed_ride)
+	_feed_view.controls_created.connect(func(root: Node) -> void: controls_created.emit(root))
+	_feed_view.setup(GameContext.scope.settings, str(data.get("seed", "")), str(data.get("template_id", "")))
 	_path_page.add_child(HSeparator.new())
 	_label("ИТОГО ЗА ПУТЕШЕСТВИЕ", 12, _path_page, ACCENT)
 	_label("Велосипед · %s   Пешком · %s" % [Util.distance_text(data.get("bike", 0.0)), Util.distance_text(data.get("foot", 0.0))],
@@ -710,83 +669,25 @@ func _fill_path(data: Dictionary) -> void:
 	if data.get("thanks", []).is_empty():
 		for name: Variant in data.get("helped", []):
 			_label(str(name), 13, _path_page, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	if not _rides.is_empty():
-		_ride_buttons[0].set_pressed_no_signal(true)
-		_select_ride.call_deferred(0) # карта уже разложена: вид подгоняется под трек заезда
 	controls_created.emit(_path_page)
 
 
-## Выбранный заезд: трек на карте, вид на него, счётчики и места
-func _select_ride(index: int, frame := true) -> void:
-	if index < 0 or index >= _rides.size() or _ride_info == null or active_tab != Tab.PATH:
-		return
-	_selected_ride = index
-	var ride: Dictionary = _rides[index]
-	for i in _ride_buttons.size():
-		_ride_buttons[i].set_pressed_no_signal(i == index)
-	for child: Node in _ride_info.get_children():
-		_ride_info.remove_child(child)
-		child.queue_free()
-	_label("ВЫБРАННАЯ ПОЕЗДКА", 12, _ride_info, ACCENT)
-	_label(ride.title + (" · идёт сейчас" if ride.current else ""), 17, _ride_info, HudStyle.CREAM)
-	var metrics := GridContainer.new()
-	metrics.columns = 2
-	metrics.add_theme_constant_override("h_separation", 8)
-	metrics.add_theme_constant_override("v_separation", 6)
-	_ride_info.add_child(metrics)
-	_metric(metrics, "ВЕЛОСИПЕД", Util.distance_text(ride.bike))
-	_metric(metrics, "ПЕШКОМ", Util.distance_text(ride.foot))
-	_metric(metrics, "В ПУТИ", _duration(ride.time))
-	_metric(metrics, "ВЫСШАЯ ТОЧКА", "%d м" % roundi(ride.alt))
-	_label("Снимков · %d   Заданий · %d" % [ride.photos, ride.quests], 14, _ride_info, MUTED)
-	var locations: Array = ride.get("locations", [])
-	if locations.is_empty():
-		_label("Посещённых мест нет или данные недоступны", 13, _ride_info, MUTED)
-	else:
-		_label("ПОСЕЩЁННЫЕ МЕСТА", 11, _ride_info, MUTED)
-		for location: Dictionary in locations:
-			var place_button := Button.new()
-			place_button.text = str(location.name) + "  ↗"
-			place_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-			place_button.pressed.connect(_show_place_on_map.bind(str(location.id)))
-			_ride_info.add_child(place_button)
-	var linked := 0
-	for photo: Dictionary in _data.get("personal_photos", []):
-		if float(photo.get("ride_start", 0.0)) > 0.0 and float(photo.get("ride_start", 0.0)) == float(ride.get("start", 0.0)):
-			linked += 1
-	if linked > 0:
-		var photos_button := Button.new()
-		photos_button.text = "Снимки поездки · %d" % linked
-		photos_button.pressed.connect(_show_ride_photos.bind(float(ride.start), photos_button))
-		_ride_info.add_child(photos_button)
-	if ride.legs.is_empty():
-		_label("Трек этой поездки недоступен", 13, _ride_info, MUTED)
-	map_view.show_ride(ride.legs, ride.bounds, frame)
-	controls_created.emit(_ride_info)
-
+func _select_feed_ride(entry: Dictionary, frame := true) -> void:
+	var legs: Array = []
+	for source: Array in entry.get("track", []):
+		var points := PackedVector2Array()
+		for coordinates: Array in source:
+			if coordinates.size() == 2:
+				points.append(Vector2(float(coordinates[0]), float(coordinates[1])))
+		if points.size() > 1:
+			legs.append(points)
+	var bounds := preload("res://scripts/game/ride_log.gd").bounds({legs = legs})
+	map_view.show_ride(legs, bounds, frame, entry.get("fall_marks", []))
 
 func _show_place_on_map(id: String) -> void:
 	_select(Tab.MAP)
 	if map_view.focus_place(id):
 		refresh_inspector(map_view.selected_place)
-
-
-func _show_ride_photos(start: float, return_to: Control) -> void:
-	var pages: Array[Dictionary] = []
-	for photo: Dictionary in _data.get("personal_photos", []):
-		if start > 0.0 and float(photo.get("ride_start", 0.0)) == start:
-			pages.append(_personal_page(photo))
-	if not pages.is_empty():
-		_open_lightbox(pages[0], pages, return_to)
-
-
-func _metric(parent: GridContainer, caption: String, value: String) -> void:
-	var box := VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", 0)
-	parent.add_child(box)
-	_label(caption, 11, box, MUTED)
-	_label(value, 17, box, HudStyle.CREAM)
 
 
 static func _duration(seconds: float) -> String:

@@ -48,6 +48,7 @@ enum Status { VISITED = 1, REVEALED = 2, PHOTO = 4, QUEST = 8 }
 var selected_place := {}
 var _show_photos := false
 var show_travel_track := true
+var ride_fall_marks: Array = []
 var _photo_cache := {}
 var journal: Journal
 var ride_legs: Array = []    # 20.11.2026: трек выбранного заезда (вкладка «Заезды»): он ярче, остальной путь бледнее
@@ -845,6 +846,11 @@ func _draw_track() -> void:
 	for points: PackedVector2Array in ride_legs:
 		_track.draw_polyline(points, Color("#fffaff"), 7.0 / _stroke_scale, true)
 		_track.draw_polyline(points, RIDE_INK, 4.2 / _stroke_scale, true)
+	for mark: Dictionary in ride_fall_marks:
+		var at := Vector2(float(mark.get("x", 0.0)), float(mark.get("z", 0.0)))
+		var radius := 6.0 / _stroke_scale
+		_track.draw_line(at + Vector2(-radius, -radius), at + Vector2(radius, radius), Color.RED, 2.5 / _stroke_scale)
+		_track.draw_line(at + Vector2(-radius, radius), at + Vector2(radius, -radius), Color.RED, 2.5 / _stroke_scale)
 
 
 func _draw_leg(points: PackedVector2Array, faded := false) -> void:
@@ -856,8 +862,9 @@ func _draw_leg(points: PackedVector2Array, faded := false) -> void:
 
 
 ## 20.11.2026: показать заезд — его трек ярко, вид на всю его рамку (пустой список — обычный путь целиком)
-func show_ride(legs: Array, frame: Rect2, fit_view := true) -> void:
+func show_ride(legs: Array, frame: Rect2, fit_view := true, fall_marks: Array = []) -> void:
 	ride_legs = legs
+	ride_fall_marks = fall_marks
 	_ride_frame = frame if not legs.is_empty() else Rect2()
 	if _track != null:
 		_track.queue_redraw()

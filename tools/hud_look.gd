@@ -164,6 +164,7 @@ func _tick(stamina: Stamina, frames: int, ride: bool, throttle: float, boost: bo
 
 func _map_fixture() -> WorldData:
 	var world := WorldData.new()
+	world.seed_text = "Стенд журнала"
 	world.W = 256
 	world.H = 256
 	world.N = world.W * world.H
@@ -343,35 +344,50 @@ func _journal_checks() -> void:
 	snapshot.erase("place_photos")
 	_check(restored.place_photos.get(id) == shot_path and Exploration.valid_save(snapshot),
 		"снимок места переживает сохранение, прежний формат тоже читается")
-	# 20.11.2026: заезды — прошлый (из сохранения) и текущий
+	# Записи подготавливаются в отдельном профиле стенда без загрузки мира.
 	var past := PackedVector2Array()
 	for i in 30:
 		past.append(Vector2(260 + i * 14.0, 300 + sin(i * 0.4) * 40.0))
-	hud.ride_log.entries.append({start = 1795600000.0, end = 1795603600.0, time = 2400.0, bike = 6400.0, foot = 350.0, alt = 412.0,
-		photos = 2, quests = 1, places = [id], legs = [past]})
-	hud.ride_log.begin(hud.map_journal, hud.explore, 0)
 	var second_path := out.path_join("hud_look_shot_second.jpg")
 	image.save_jpg(second_path, 0.9)
+	hud.ride_log.begin(hud.map_journal, hud.explore, 0)
 	hud.explore.add_photo({path = second_path, place = id}, keys, "2026-11-20 12:00:00", hud.ride_log.session_start())
-	for i in 60:
-		hud.map_journal.record(Vector2(520 + i * 4.0, 640 - i * 3.0), 0.3, true)
+	var writer = preload("res://scripts/game/ride_feed_writer.gd").new()
+	var ride := {start = 1795600000.0, end = 1795603600.0, time = 2400.0, bike = 6400.0, foot = 350.0,
+		climb = 180.0, descent = 120.0, alt_min = 200.0, alt_max = 412.0, speed_avg = 5.0, speed_max = 12.0,
+		photos = 1, quests = 1, places = [id], legs = [past], leg_modes = [true],
+		profile = [200.0, 245.0, 230.0, 360.0, 412.0], fall_marks = [{x = 400.0, z = 300.0, speed = 7.0, progress = 0.4}], falls = 1}
+	writer.submit(ride, hud.world.template_id, hud.world.seed_text, ["Ольховка"], [second_path], hud.map_preview, Vector2(hud.world.W, hud.world.H) * GameConfig.TILE, true)
+	var foreign: Dictionary = ride.duplicate(true)
+	foreign.start = 1795500000.0
+	writer.submit(foreign, hud.world.template_id, "Другой мир", [], [], hud.map_preview, Vector2(hud.world.W, hud.world.H) * GameConfig.TILE, true)
+	var walk: Dictionary = ride.duplicate(true)
+	walk.start = 1795400000.0
+	walk.bike = 0.0
+	writer.submit(walk, hud.world.template_id, hud.world.seed_text, [], [], hud.map_preview, Vector2(hud.world.W, hud.world.H) * GameConfig.TILE, true)
 	hud.show_tablet(Hud.Tablet.Tab.PATH)
 	_check(hud.journal_panel.visible and hud.journal_panel._path_page.visible and not hud.journal_panel._album_page.visible, "«Путешествие» открывается на вкладке «Путь»")
 	await process_frame
-	var rides: Array = hud.journal_panel._rides
-	_check(rides.size() == 2 and rides[0].current and hud.journal_panel._ride_buttons.size() == 2 and not hud.big_map.ride_legs.is_empty(),
-		"заезды: текущий первым, его трек выделен на карте")
-	var ride_photo_buttons := hud.journal_panel._ride_info.find_children("*", "Button", true, false).filter(func(node: Node) -> bool:
-		return (node as Button).text.begins_with("Снимки поездки"))
-	_check(ride_photo_buttons.size() == 1, "снимок привязан к текущей поездке")
-	if not ride_photo_buttons.is_empty():
-		(ride_photo_buttons[0] as Button).pressed.emit()
-		_check(hud.journal_panel._lightbox != null, "снимки поездки открываются")
-		hud.journal_panel.close_lightbox()
-	hud.journal_panel._ride_buttons[1].emit_signal("pressed")
+	var feed_view = hud.journal_panel._feed_view
+	_check(feed_view != null and feed_view.feed.entries.size() == 3 and feed_view._list.get_child_count() == 1, "фильтр текущего мира и скрытие прогулок")
+	GameContext.scope.settings.show_walks = true
+	feed_view.refresh()
+	_check(feed_view._list.get_child_count() == 2, "пешие прогулки включаются переключателем")
+	GameContext.scope.settings.show_walks = false
+	feed_view._only_world = false
+	feed_view.refresh()
+	_check(feed_view._list.get_child_count() == 2, "общая лента включает другой мир")
+	feed_view._only_world = true
+	feed_view.refresh()
+	feed_view._choose(feed_view.feed.entries[0])
 	await process_frame
-	_check(hud.big_map.ride_legs.size() == 1 and hud.big_map.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed, "клик по прошлому заезду выбирает его и показывает трек")
+	_check(hud.big_map.ride_legs.size() == 1 and hud.big_map.ride_legs[0] == past and hud.big_map.ride_fall_marks.size() == 1, "клик показывает трек и падение на карте")
 	await _shot("hud_journal_rides")
+	feed_view._detail_button.pressed.emit()
+	await process_frame
+	_check(is_instance_valid(feed_view._dialog) and feed_view._dialog.visible, "подробная карточка открывается")
+	await _shot("hud_ride_detail")
+	feed_view._dialog.hide()
 	_check(root.get_visible_rect().encloses(hud.journal_panel.get_global_rect()), "экран помещается в 1280×720")
 	await process_frame
 	if not hud.big_map.places.is_empty():
@@ -390,7 +406,7 @@ func _journal_checks() -> void:
 	hud.show_tablet(Hud.Tablet.Tab.MAP)
 	hud.show_tablet(Hud.Tablet.Tab.PATH)
 	_check(hud.big_map == atlas and atlas._center == center and atlas._scale == zoom, "Карта и Путь сохраняют один вид")
-	_check(atlas.ride_legs.size() == 1 and atlas.ride_legs[0] == past and hud.journal_panel._ride_buttons[1].button_pressed,
+	_check(atlas.ride_legs.size() == 1 and atlas.ride_legs[0] == past and not feed_view._selected.is_empty(),
 		"выбранная поездка и её маршрут сохраняются при возврате")
 	hud.show_tablet(Hud.Tablet.Tab.MAP)
 	await process_frame
@@ -850,6 +866,13 @@ func _run() -> void:
 	main._pick_seed("Туман-4821")
 	_check(main._chosen_seed() == "Туман-4821" and is_instance_valid(edit), "выбор мира и поле создания доступны")
 	await _shot("menu")
+	main._show("menu", {instant = true})
+	main.get_node("%OpenRides").pressed.emit()
+	await process_frame
+	_check(main._is_screen("ride_feed") and main._ride_feed_view.feed.entries.size() == 3, "общий журнал открывается из меню")
+	await _shot("menu_ride_feed")
+	main._return_to_menu_screen()
+	await process_frame
 	var panel: Control = main.get_node("UI/Root/Menu/Panel")
 	_check(root.get_visible_rect().encloses(panel.get_global_rect()), "меню целиком помещается в 1280×720")
 	main.get_node("%InfiniteWarning").show()

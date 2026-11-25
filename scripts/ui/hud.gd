@@ -750,34 +750,11 @@ func journey_data() -> Dictionary:
 		var p := world.place(str(item.place)) if world != null and not str(item.place).is_empty() else {}
 		item.place_name = str(p.get("name", ""))
 		personal.append(item)
-	return {seed = world.seed_text if world != null else "", close_hint = close_hint,
+	return {seed = world.seed_text if world != null else "", template_id = world.template_id if world != null else "", close_hint = close_hint,
 		foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt,
 		photos = explore.photos, quests = quests.done if quests != null else 0, places = rows,
 		pages = pages, groups = Exploration.GROUPS, active_quest = active_quest,
-		series = series, thanks = thanks, helped = helped, track = track, rides = _ride_rows(), personal_photos = personal}
-
-
-## 20.11.2026: заезды для вкладки дневника, новые первыми: подписи, счётчики, названия мест и трек
-func _ride_rows() -> Array:
-	var out: Array = []
-	for entry: Dictionary in ride_log.history(map_journal, explore, quests.done if quests != null else 0):
-		if not entry.get("current", false) and not RideLog.meaningful(entry):
-			continue
-		var names: Array[String] = []
-		var locations: Array[Dictionary] = []
-		for id: String in entry.places:
-			var place := world.place(id) if world != null else {}
-			if not place.is_empty():
-				names.append(str(place.get("name", "")))
-				locations.append({id = id, name = str(place.get("name", ""))})
-		var distance: float = entry.bike + entry.foot
-		out.append({current = entry.get("current", false),
-			title = ("Сейчас" if entry.get("current", false) else RideLog.date_text(entry.start)),
-			summary = "%s · %s" % [Util.distance_text(distance), RideLog.duration_text(entry.time)],
-			bike = entry.bike, foot = entry.foot, time = entry.time, alt = entry.alt, photos = entry.photos,
-			quests = entry.quests, places = names, locations = locations, legs = entry.legs, bounds = RideLog.bounds(entry),
-			start = entry.start, end = entry.end})
-	return out
+		series = series, thanks = thanks, helped = helped, track = track, personal_photos = personal}
 
 
 ## Место текущего шага задания (метка на компасе и картах) или пусто

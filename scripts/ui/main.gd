@@ -112,6 +112,7 @@ var _menu_rng := RandomNumberGenerator.new()
 var _ui_audio: UiAudio
 var _ui_stack: UiStack
 var _shop: ShopPanel
+var _ride_feed_view
 var _shop_progress: ShopPanel.Progress
 var _active_screen := ""
 var _pause_settings_btn: Button
@@ -218,13 +219,14 @@ func _ready() -> void:
 	%Recommended.tooltip_text = "Вернуть миры от автора в общий список"
 	%Recommended.pressed.connect(_restore_author_worlds)
 	var carousel: Carousel = %Carousel
-	carousel.setup(%Start, [%NewWorld, %OpenWorlds, %OpenShop, %MenuSettings, %MenuExit], %TrailLab)
+	carousel.setup(%Start, [%NewWorld, %OpenWorlds, %OpenShop, %OpenRides, %MenuSettings, %MenuExit], %TrailLab)
 	carousel.favorite_requested.connect(_on_star)
 	%OpenWorlds.icon = UiIcons.ALBUM
 	%OpenShop.icon = UiIcons.BAG
+	%OpenRides.icon = UiIcons.ALBUM
 	%MenuSettings.icon = UiIcons.INFO
 	%MenuExit.icon = UiIcons.EXIT
-	for button: Button in [%OpenWorlds, %OpenShop, %MenuSettings, %MenuExit]:
+	for button: Button in [%OpenWorlds, %OpenShop, %OpenRides, %MenuSettings, %MenuExit]:
 		button.expand_icon = true
 		button.add_theme_constant_override("icon_max_width", 22)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
@@ -268,9 +270,34 @@ func _ready() -> void:
 	shop_screen.add_child(_shop)
 	screens.shop = shop_screen
 	%OpenShop.pressed.connect(_open_shop)
+	var ride_screen := PanelContainer.new()
+	ride_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ride_screen.hide()
+	%Menu.get_parent().add_child(ride_screen)
+	var ride_margin := MarginContainer.new()
+	for edge: String in ["left", "top", "right", "bottom"]:
+		ride_margin.add_theme_constant_override("margin_" + edge, 24)
+	ride_screen.add_child(ride_margin)
+	var ride_box := VBoxContainer.new()
+	ride_margin.add_child(ride_box)
+	var ride_back := Button.new()
+	ride_back.text = "← В меню"
+	ride_back.pressed.connect(_return_to_menu_screen)
+	ride_box.add_child(ride_back)
+	_ride_feed_view = preload("res://scripts/ui/ride_feed_view.gd").new()
+	_ride_feed_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	ride_box.add_child(_ride_feed_view)
+	_ride_feed_view.setup(GameContext.scope.settings)
+	screens.ride_feed = ride_screen
+	%OpenRides.pressed.connect(func() -> void:
+		if _is_screen("menu"):
+			_ride_feed_view.refresh()
+			_active_screen = "ride_feed"
+			_ui_stack.push("ride_feed", {dimmer = 0.35, enter_duration = 0.20, return_focus = %OpenRides, sound = &"panel_open"})
+			_sync_backdrop_visibility("ride_feed"))
 	_pause_settings_btn = get_node_or_null("UI/Root/Pause/Panel/Box/Settings") as Button
 	_ui_stack.setup(self, {menu = %Menu, world_hub = %AllWorlds,
-		loading = %Loading, pause = %Pause, settings = %Settings, shop = shop_screen}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
+		loading = %Loading, pause = %Pause, settings = %Settings, shop = shop_screen, ride_feed = ride_screen}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
 	for launch_btn: Button in [%Start, %PlaySelected, %CreateWorld]:
 		launch_btn.set_meta(&"ui_sound_custom", true)
 	%FovSlider.drag_started.connect(func() -> void:
@@ -433,7 +460,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _is_screen("shop") and _shop.dismiss_purchase():
 		get_viewport().set_input_as_handled()
 		return
-	if game == null and (_is_screen("world_hub") or _is_screen("shop")):
+	if game == null and (_is_screen("world_hub") or _is_screen("shop") or _is_screen("ride_feed")):
 		_return_to_menu_screen()
 		get_viewport().set_input_as_handled()
 
@@ -492,7 +519,7 @@ func _open_shop() -> void:
 
 
 func _return_to_menu_screen() -> void:
-	if _ui_stack != null and (_ui_stack.is_open("world_hub") or _ui_stack.is_open("shop")):
+	if _ui_stack != null and (_ui_stack.is_open("world_hub") or _ui_stack.is_open("shop") or _ui_stack.is_open("ride_feed")):
 		var popped := _ui_stack.pop({sound = &"panel_close", exit_duration = 0.14, exit_scale = 0.97, exit_offset_y = 0.0, reveal_duration = 0.16, dimmer_duration = 0.14})
 		_active_screen = popped.active
 		_sync_backdrop_visibility(_active_screen)

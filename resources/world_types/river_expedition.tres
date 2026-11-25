@@ -1,9 +1,10 @@
-[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=8 format=3]
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
 [ext_resource type="Script" path="res://scripts/world/expedition_anchor_tuning.gd" id="2_anchors"]
 [ext_resource type="Script" path="res://scripts/world/world_vegetation_config.gd" id="3_veg"]
 [ext_resource type="Script" path="res://scripts/world/world_atmosphere_config.gd" id="4_atm"]
+[ext_resource type="Texture2D" path="res://resources/icons/place_lake.svg" id="5_icon"]
 
 [sub_resource type="Resource" id="Resource_atmosphere"]
 script = ExtResource("4_atm")
@@ -157,6 +158,7 @@ terrace_position_weights = PackedFloat64Array(0.85, 0.95)
 script = ExtResource("1_cfg")
 id = "river_expedition"
 title = "Речная экспедиция"
+icon = ExtResource("5_icon")
 available = true
 plan_width = 384
 plan_heights = PackedInt32Array(2048, 2560, 3072)
