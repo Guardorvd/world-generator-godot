@@ -179,10 +179,16 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	if is_cancelled.call():
 		return abort.call(forest_task)
 	var plan_errors := StageTrailPlan.consistency_errors(r.world)
+	var plan_error := ""
 	if not plan_errors.is_empty():
+		plan_error = "Несогласованные данные трасс: " + "; ".join(plan_errors)
+	elif WorldTemplate.has_single_road(r.world.template_id) and r.world.trails.is_empty():
+		# Тип 2: поиск не связал лагеря (StageTrails._expedition_chain) — мир без тропы не открываем.
+		plan_error = "Не удалось проложить тропу экспедиции для мира «%s». Выберите другой мир." % seed_text
+	if not plan_error.is_empty():
 		if forest_task >= 0: WorkerThreadPool.wait_for_task_completion(forest_task)
 		if outer.is_started(): outer.wait_to_finish()
-		r.error = "Несогласованные данные трасс: " + "; ".join(plan_errors)
+		r.error = plan_error
 		return r
 	r.timings["cache_read_ms" if r.from_cache else "generate_ms"] = (generated - started) / 1000.0
 	if not view.is_empty():

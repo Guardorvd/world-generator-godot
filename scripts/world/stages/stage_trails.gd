@@ -81,7 +81,7 @@ static func _part(key: String, since_us: int) -> void:
 	parts[key] = float(parts.get(key, 0.0)) + (Time.get_ticks_usec() - since_us) / 1000.0
 
 
-static func run(w: WorldData, step: Callable) -> void:
+static func run(w: WorldData, step: Callable, should_cancel := Callable()) -> void:
 	parts = {}
 	var started_us := Time.get_ticks_usec()
 	var widths := RoadTuning.for_world(w).section.widths
@@ -113,7 +113,7 @@ static func run(w: WorldData, step: Callable) -> void:
 		_part("road_character_fields", detail_us)
 	_route_surface(finder, surface, widths[main_kind], "corridor_road_ms")
 	if expedition:
-		_run_expedition(w, finder, surface, step, started_us, main_kind)
+		_run_expedition(w, finder, surface, step, started_us, main_kind, should_cancel)
 		return
 	step.call(0.66, "Прокладка троп между поселениями")
 	var primary_end := _settlement_trails(w, finder, surface, step)
@@ -154,7 +154,7 @@ static func run(w: WorldData, step: Callable) -> void:
 ## Сегментный поиск A* в скользящих окнах по цепочке якорей ValleyAxis → склейка без петель →
 ## единая публикация через _add_trail → reshape_axes (V2) → _fit_sections → раскладка домов.
 static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable, started_us: int,
-		route_kind := "") -> void:
+		route_kind := "", should_cancel := Callable()) -> void:
 	var native := finder.fast()
 	if native == null:
 		# Pathfinder has already reported the missing native build.
@@ -198,13 +198,17 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 		var groups := axis.road_anchor_groups(w, start_i, finish_i)
 		var search := {cost = search_cost, cost_v = cost_v, raw = raw_cost, raw_v = raw_v, climb = climb_cost,
 			turn = turn_cost, bend = bend_cost, h_scale = h_scale}
-		var result := _expedition_chain(w, finder, start_i, finish_i, mid, groups, search)
+		var result := _expedition_chain(w, finder, start_i, finish_i, mid, groups, search, should_cancel)
 		stitched = result.path
 		anchors_total = result.total
 		anchors_used = result.used
 		w.generation_profile.expedition_groups = result.groups
 		w.generation_profile.expedition_fallbacks = result.fallbacks
 	finder.window = Rect2i()
+	if should_cancel.is_valid() and bool(should_cancel.call()):
+		# Отмена загрузки: сглаживание и раскладка не нужны, _generate_plan прервёт план после этапа.
+		finder.release()
+		return
 	w.generation_profile.expedition_anchors_total = anchors_total
 	w.generation_profile.expedition_anchors_used = anchors_used
 	if stitched.size() >= 2:
@@ -267,7 +271,7 @@ static func _expedition_shore_cost(w: WorldData, avoid: Vector3) -> PackedFloat3
 
 
 static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, finish: int, anchors: PackedInt32Array,
-		groups: Array[Dictionary], search: Dictionary) -> Dictionary:
+		groups: Array[Dictionary], search: Dictionary, should_cancel := Callable()) -> Dictionary:
 	var events := groups.duplicate()
 	var fallbacks := []
 	var committed := []
@@ -305,6 +309,9 @@ static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, fini
 	events.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.y < b.y)
 	var prefix := 0
 	for event: Dictionary in events:
+		# Отмена между связками: серия нативных поисков длинного плана идёт секунды.
+		if should_cancel.is_valid() and bool(should_cancel.call()):
+			break
 		var first: PackedInt32Array = event.options[0].cells
 		total += first.size()
 		var from := _expedition_row(path, first[0] / w.W - cfg.anchor_approach_rows, w.W, prefix)

@@ -197,7 +197,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		if _cancelled(should_cancel):
 			return abort_plan.call(w)
 		step.call(StageTrails.PROGRESS, StageTrails.LABEL)
-		StageTrails.run(w, step)
+		StageTrails.run(w, step, should_cancel)
 		t = _stage_time(w, "trails", t)
 		if _cancelled(should_cancel):
 			return abort_plan.call(w)
