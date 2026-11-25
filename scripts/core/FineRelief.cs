@@ -11,8 +11,8 @@ public partial class FineRelief : RefCounted
 	// Keep the native parameter layout in sync with WorldReliefDetailConfig.params(). The mask has its own (ReliefMask).
 	internal enum Parameter
 	{
-		Step, Bicubic, Clamp, ReconstructionDelta, TileBytes,
-		Forms, FormGradeLimit, FormGradeGain, FormDelta, TotalDelta,
+		Step, Bicubic, Clamp, MaxOffset, TileBytes,
+		Forms, FormGradeLimit, FormGradeGain,
 		Rill, RillAlong, RillAcross, RillDepth, RillCover, RillSlopeFrom, RillSlopeTo, RillCurvature, RillRim,
 		Root, RootAlong, RootAcross, RootHeight, RootCover, RootPair, RootPitShare,
 		Terrace, TerraceAlong, TerraceAcross, TerraceHeight, TerraceCover, TerraceSlopeFrom, TerraceSlopeTo, TerraceLip,
@@ -20,11 +20,10 @@ public partial class FineRelief : RefCounted
 		Bank, BankAlong, BankAcross, BankHeight, BankCover, BankNear, BankFar, BankLip, Count
 	}
 	private int _width, _height, _cells, _columns, _rows;
-	private double _tile, _step, _reconstructionDelta;
+	private double _tile, _step, _maxOffset;
 	private float[] _coarse, _weight;
 	private bool _bicubic, _clamp, _smallForms;
 	private Lazy<Tile>[] _tiles;
-	private bool[] _active;
 	private long _tileBytes;
 	// A one-node halo stores the same final heights as the neighbouring tile for shared vertex normals.
 	private sealed record Tile(int Stride, float[] Values)
@@ -64,14 +63,13 @@ public partial class FineRelief : RefCounted
 			return false;
 		_bicubic = P(Parameter.Bicubic) != 0.0;
 		_clamp = P(Parameter.Clamp) != 0.0;
-		_reconstructionDelta = P(Parameter.ReconstructionDelta);
+		_maxOffset = Math.Max(0.0, P(Parameter.MaxOffset));
 		_weight = mask.Weight;
 		if (_smallForms)
 			for (int i = 0; i < count; i++)
 				if (mask.ClearOfWater[i])
 					_habitat[i] |= ClearWater;
 		_tiles = new Lazy<Tile>[_columns * _rows];
-		_active = new bool[_tiles.Length];
 		for (int i = 0; i < _tiles.Length; i++)
 		{
 			int key = i;
@@ -124,7 +122,7 @@ public partial class FineRelief : RefCounted
 			if (v == 1.0) { a = c; b = d; }
 			smooth = Math.Clamp(smooth, Math.Min(Math.Min(a, b), Math.Min(c, d)), Math.Max(Math.Max(a, b), Math.Max(c, d)));
 		}
-		return linear + Math.Clamp(smooth - linear, -_reconstructionDelta, _reconstructionDelta) * weight;
+		return linear + Math.Clamp(smooth - linear, -_maxOffset, _maxOffset) * weight;
 	}
 
 	private Tile BuildTile(int index)
@@ -163,15 +161,6 @@ public partial class FineRelief : RefCounted
 		});
 	}
 
-	public void SetActive(int cx, int cz, bool active)
-	{
-		if (!ValidKey(cx, cz))
-			return;
-		int id = Index(cx, cz);
-		if (!active || _tiles[id].IsValueCreated)
-			Volatile.Write(ref _active[id], active);
-	}
-
 	public long Bytes() => Interlocked.Read(ref _tileBytes) + ((long)_weight.Length + _coarse.Length) * sizeof(float) + FormBytes();
 
 	public string TileHash(int cx, int cz)
@@ -192,15 +181,16 @@ public partial class FineRelief : RefCounted
 		return _weight[k] == 0.0f && _weight[k + 1] == 0.0f && _weight[k + _width] == 0.0f && _weight[k + _width + 1] == 0.0f;
 	}
 
-	public double Sample(double x, double z, bool forPlacement)
+	/// <summary>Опора и посадка: поле 2 м везде, где маска разрешает, независимо от того, показан ли уже меш 2 м.
+	/// Плитка строится по первому запросу (обычно её заранее готовит Warm), меш догоняет её морфингом.</summary>
+	public double Sample(double x, double z)
 	{
 		double fx = x / _tile - 0.5, fz = z / _tile - 0.5;
 		if (!UsesDetail || !(fx >= 0.0 && fz >= 0.0 && fx < _width - 1 && fz < _height - 1))
 			return double.NaN;
 		int i = (int)fx, j = (int)fz;
 		int cx = i / _cells, cz = j / _cells, id = Index(cx, cz);
-		if ((!forPlacement && !Volatile.Read(ref _active[id])) ||
-			Triangle(_weight, j * _width + i, _width, fx - i, fz - j) <= 0.0)
+		if (Triangle(_weight, j * _width + i, _width, fx - i, fz - j) <= 0.0)
 			return double.NaN;
 		Tile tile = _tiles[id].Value;
 		double u = (fx - cx * _cells) * 2.0, v = (fz - cz * _cells) * 2.0;

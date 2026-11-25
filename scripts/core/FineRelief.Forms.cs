@@ -44,8 +44,6 @@ public partial class FineRelief
 		Paint(shape, stride, rows, originX, originZ, _step, Form.Terrace, Parameter.Terrace);
 		Paint(shape, stride, rows, originX, originZ, _step, Form.Flood, Parameter.Flood);
 		Paint(shape, stride, rows, originX, originZ, _step, Form.Bank, Parameter.Bank);
-		double maxShape = Math.Max(0.0, Setting(Parameter.FormDelta));
-		double maxOffset = Math.Max(_reconstructionDelta, Setting(Parameter.TotalDelta));
 		for (int j = 0; j < rows; j++)
 		for (int i = 0; i < stride; i++)
 		{
@@ -58,10 +56,10 @@ public partial class FineRelief
 			int cell = CoarseQuad(x, z, out double u, out double v);
 			double weight = Triangle(_weight, cell, _width, u, v);
 			double existing = smooth - Triangle(_coarse, cell, _width, u, v);
-			double limit = maxShape * Math.Max(0.0, weight);
+			// One limit for the whole field: the offset from the 4 m triangle (the morph target and the object seats).
 			// Include zero in the interval so the triangle limiter can always reduce a form towards the base.
-			shape[k] = (float)Math.Clamp(shape[k] * weight, Math.Min(0.0, Math.Max(-limit, -maxOffset - existing)),
-				Math.Max(0.0, Math.Min(limit, maxOffset - existing)));
+			shape[k] = (float)Math.Clamp(shape[k] * weight, Math.Min(0.0, -_maxOffset - existing),
+				Math.Max(0.0, _maxOffset - existing));
 		}
 
 		LimitTriangleGrades(baseH, shape, scale, stride, rows, _step, Setting(Parameter.FormGradeLimit), Setting(Parameter.FormGradeGain));

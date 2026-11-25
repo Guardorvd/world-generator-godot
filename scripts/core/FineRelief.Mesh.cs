@@ -13,7 +13,7 @@ public partial class FineRelief
 		if (!ValidKey(cx, cz) || arrays.Count != (int)Mesh.ArrayType.Max || pieceCells <= 0 || _cells % pieceCells != 0)
 			return result;
 		var fine = _tiles[Index(cx, cz)].Value;
-		bool joinEdges = _lodErrors != null;
+		bool joinEdges = _lodHeightRanges != null;
 		var bounds = joinEdges ? Layout(cx, cz).Whole : default;
 		int ox = cx * _cells, oz = cz * _cells;
 		var xyz = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();

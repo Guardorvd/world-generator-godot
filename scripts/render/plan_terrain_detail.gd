@@ -1,5 +1,6 @@
 extends RefCounted
-## Prepare hidden pieces under the terrain budget, then swap the entire tile together with its physics.
+## Prepare hidden pieces under the terrain budget, then swap the entire tile. Physics already uses the 2 m field
+## everywhere (FineRelief.Sample); the mesh catches up with it here and morphs to 4 m with distance.
 
 const Source := preload("res://scripts/render/chunk_source.gd")
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
@@ -32,7 +33,7 @@ func setup(owner: Node3D, h: Heightfield, chunks: RefCounted, mat: ShaderMateria
 	enter_m = profile.activation_distance_m(high)
 	_exit_m = _transition_end_m + profile.exit_margin_m
 	_fine_shadows = high and profile.cast_shadows
-	_vertical_margin = maxf(profile.reconstruction_delta_m, profile.total_delta_m)
+	_vertical_margin = profile.max_offset_m
 	material = TerrainBuilder.fine_material(mat, profile, _transition_end_m, h.fine_lod)
 
 
@@ -151,8 +152,6 @@ func _publish(key: Vector2i, entry: Dictionary, distance: float, force: bool) ->
 	coarse.mesh = null
 	for node: MeshInstance3D in entry.parts:
 		node.visible = true
-	heights.fine_relief.SetActive(key.x, key.y, true)
-	heights.ground_changed(true)
 	stats.active += 1
 	stats.peak_active = maxi(stats.active, stats.peak_active)
 	if not force:
@@ -170,8 +169,6 @@ func forget(key: Vector2i) -> void:
 			var shadow: MeshInstance3D = entry.shadow
 			shadow.position.y = 0.0
 			terrain._release_mesh_node(shadow)
-		heights.fine_relief.SetActive(key.x, key.y, false)
-		heights.ground_changed(true)
 		stats.active -= 1
 		stats.switches += 1
 	for node: MeshInstance3D in entry.parts:
@@ -180,7 +177,4 @@ func forget(key: Vector2i) -> void:
 
 
 func close() -> void:
-	for key: Vector2i in entries.keys():
-		if active(key):
-			heights.fine_relief.SetActive(key.x, key.y, false)
 	entries.clear()

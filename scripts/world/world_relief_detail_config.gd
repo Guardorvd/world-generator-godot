@@ -4,8 +4,8 @@ extends Resource
 const MountainDetail := preload("res://scripts/world/mountain_detail.gd")
 
 enum {
-	RD_STEP_M, RD_BICUBIC, RD_CLAMP, RD_RECONSTRUCTION_DELTA_M, RD_TILE_BYTES,
-	RD_FORMS, RD_FORM_GRADE_LIMIT, RD_FORM_GRADE_GAIN, RD_FORM_DELTA_M, RD_TOTAL_DELTA_M,
+	RD_STEP_M, RD_BICUBIC, RD_CLAMP, RD_MAX_OFFSET_M, RD_TILE_BYTES,
+	RD_FORMS, RD_FORM_GRADE_LIMIT, RD_FORM_GRADE_GAIN,
 	RD_RILL, RD_RILL_ALONG, RD_RILL_ACROSS, RD_RILL_M, RD_RILL_COVER,
 	RD_RILL_SLOPE_FROM, RD_RILL_SLOPE_TO, RD_RILL_CURVATURE_M, RD_RILL_RIM,
 	RD_ROOT, RD_ROOT_ALONG, RD_ROOT_ACROSS, RD_ROOT_M, RD_ROOT_COVER, RD_ROOT_PAIR_M, RD_ROOT_PIT_SHARE,
@@ -41,14 +41,11 @@ enum {
 @export_group("Средние и дальние уровни")
 ## Включает плавную смену сеток 4, 8 и 16 м.
 @export var lod_morph := false
-## Минимальная дальность конца переходов 4→8 и 8→16, м.
-@export var lod_end_min_m := Vector2.ZERO
-## Максимальная дальность конца переходов, м.
-@export var lod_end_max_m := Vector2.ZERO
+## Дальность конца переходов 4→8 и 8→16, м. Одна для всех чанков: выбор по ошибке формы давал −1 % треугольников
+## (замер этапа 2 части 2) и вырождается в ту же дальность, когда склоны изрезаны.
+@export var lod_end_m := Vector2.ZERO
 ## Ширина каждого плавного перехода, м.
 @export var lod_fade_m := Vector2.ZERO
-## Допустимое отношение вертикальной ошибки к расстоянию для обоих переходов.
-@export var lod_error_ratio := Vector2.ZERO
 ## Переход к общему ребру соседних чанков, м от ребра.
 @export var lod_edge_fade_m := Vector2.ZERO
 ## Запас за концом перехода для обратной подмены, м.
@@ -63,8 +60,9 @@ enum {
 @export var bicubic := true
 ## Ограничивать высоту диапазоном четырёх углов исходного квадрата.
 @export var clamp_bicubic := true
-## Предельное смещение восстановленной высоты от треугольника 4 м, м.
-@export var reconstruction_delta_m := 0.0
+## Наибольшее отклонение поля 2 м от треугольника 4 м, м. Единственный предел высоты слоя: ограничивает и бикубик,
+## и малые формы; это же расхождение опоры объектов с мешем в зоне морфинга и запас высоты мешей.
+@export var max_offset_m := 0.0
 
 @export_group("Малые формы")
 ## Добавлять природные формы в точное поле.
@@ -73,10 +71,6 @@ enum {
 @export var form_grade_limit := MountainDetail.DETAIL_LIMIT
 ## Допустимый прирост модуля градиента от форм, м/м.
 @export var form_grade_gain := 0.0
-## Максимальный вклад всех малых форм в высоту, м.
-@export var form_delta_m := 0.0
-## Наибольшее отклонение поля с формами от опоры 4 м, м.
-@export var total_delta_m := 0.0
 
 @export_group("Промоины и рёбра")
 ## Шаг поиска мест для промоин, м.
@@ -163,8 +157,8 @@ const MIB := 1024 * 1024
 
 func params() -> PackedFloat64Array:
 	return PackedFloat64Array([
-		step_m, float(bicubic), float(clamp_bicubic), maxf(0.0, reconstruction_delta_m), tile_mib * MIB,
-		float(forms_enabled), form_grade_limit, form_grade_gain, form_delta_m, total_delta_m,
+		step_m, float(bicubic), float(clamp_bicubic), maxf(0.0, max_offset_m), tile_mib * MIB,
+		float(forms_enabled), form_grade_limit, form_grade_gain,
 		rill_spacing_m, rill_radii_m.x, rill_radii_m.y, rill_depth_m, rill_cover,
 		rill_slopes.x, rill_slopes.y, rill_curvature_m, rill_rim,
 		root_spacing_m, root_radii_m.x, root_radii_m.y, root_height_m, root_cover, root_pair_m, root_pit_share,
@@ -203,12 +197,10 @@ func valid(chunk_cells: int) -> bool:
 
 
 func valid_lod(recheck_m: float) -> bool:
-	return lod_end_min_m.is_finite() and lod_end_max_m.is_finite() and lod_fade_m.is_finite() \
-		and lod_error_ratio.is_finite() and lod_edge_fade_m.is_finite() \
+	return lod_end_m.is_finite() and lod_fade_m.is_finite() and lod_edge_fade_m.is_finite() \
 		and is_finite(lod_load_margin_m) and is_finite(lod_hysteresis_m) and is_finite(lod_recover_s) \
 		and lod_edge_fade_m.x >= transition_end_m and lod_edge_fade_m.y > lod_edge_fade_m.x \
-		and lod_end_min_m.x - lod_fade_m.x >= maxf(lod_edge_fade_m.y, transition_end_m + exit_margin_m) \
-		and lod_end_min_m.y - lod_fade_m.y >= lod_end_max_m.x + lod_load_margin_m + lod_hysteresis_m \
-		and lod_end_max_m.x >= lod_end_min_m.x and lod_end_max_m.y >= lod_end_min_m.y \
-		and lod_fade_m.x > 0.0 and lod_fade_m.y > 0.0 and lod_error_ratio.x > 0.0 and lod_error_ratio.y > 0.0 \
+		and lod_end_m.x - lod_fade_m.x >= maxf(lod_edge_fade_m.y, transition_end_m + exit_margin_m) \
+		and lod_end_m.y - lod_fade_m.y >= lod_end_m.x + lod_load_margin_m + lod_hysteresis_m \
+		and lod_fade_m.x > 0.0 and lod_fade_m.y > 0.0 \
 		and lod_load_margin_m >= recheck_m and lod_hysteresis_m >= 0.0 and lod_recover_s > 0.0

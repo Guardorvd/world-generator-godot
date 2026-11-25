@@ -18,7 +18,6 @@ public partial class RideGround : RefCounted
 		public double Tile, Hs, LakeDrop;
 		public float[] Hv = Array.Empty<float>();
 		public FineRelief Detail;
-		public bool DetailForPlacement;
 		// метровая сетка дорог: клетка -> номер участка (-1 — нет), высоты участков по Stride*Stride
 		public int[] PatchOf = Array.Empty<int>();
 		public float[] PatchH = Array.Empty<float>();
@@ -52,13 +51,12 @@ public partial class RideGround : RefCounted
 	public bool Ready() => Volatile.Read(ref _snap) != null;
 	public void Invalidate() => Volatile.Write(ref _snap, null);
 
-	public void SetFineRelief(FineRelief detail, bool forPlacement)
+	public void SetFineRelief(FineRelief detail)
 	{
 		var snapshot = Volatile.Read(ref _snap);
 		if (snapshot == null)
 			return;
 		snapshot.Detail = detail;
-		snapshot.DetailForPlacement = forPlacement;
 	}
 
 	/// <summary>Новый снимок; при ошибке входа прежний сброшен и ответы — NaN (GDScript).
@@ -175,7 +173,7 @@ public partial class RideGround : RefCounted
 		}
 		if (s.Detail != null)
 		{
-			double detail = s.Detail.Sample(x, z, s.DetailForPlacement);
+			double detail = s.Detail.Sample(x, z);
 			if (!double.IsNaN(detail))
 				return detail;
 		}

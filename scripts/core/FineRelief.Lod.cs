@@ -7,7 +7,6 @@ using MeshArrays = Godot.Collections.Array;
 public partial class FineRelief
 {
 	private int _lodMidStep, _lodFarStep;
-	private Vector2[] _lodErrors;
 	private Vector2[] _lodHeightRanges;
 
 	private readonly record struct LodRect(int X0, int Z0, int X1, int Z1)
@@ -33,13 +32,10 @@ public partial class FineRelief
 	{
 		_lodMidStep = midStep;
 		_lodFarStep = farStep;
-		var errors = new Vector2[_columns * _rows];
-		var heightRanges = new Vector2[errors.Length];
-		Parallel.For(0, errors.Length, index =>
+		var heightRanges = new Vector2[_columns * _rows];
+		Parallel.For(0, heightRanges.Length, index =>
 		{
-			var layout = Layout(index % _columns, index / _columns);
-			var b = layout.Whole;
-			float mid = 0.0f, far = 0.0f;
+			var b = Layout(index % _columns, index / _columns).Whole;
 			float low = float.PositiveInfinity, high = float.NegativeInfinity;
 			for (int z = b.Z0; z <= b.Z1; z++)
 			for (int x = b.X0; x <= b.X1; x++)
@@ -47,48 +43,43 @@ public partial class FineRelief
 				float height = CoarseNode(x, z);
 				low = Math.Min(low, height);
 				high = Math.Max(high, height);
-				mid = Math.Max(mid, Math.Abs(height - SampleLod(layout, x, z, midStep, false).X));
-				far = Math.Max(far, Math.Abs(height - SampleLod(layout, x, z, farStep, false).X));
 			}
-			errors[index] = new Vector2(mid, far);
 			heightRanges[index] = new Vector2(low, high);
 		});
 		_lodHeightRanges = heightRanges;
-		_lodErrors = errors;
 	}
 
-	public Vector2 LodError(int cx, int cz) => _lodErrors[Index(cx, cz)];
 	public Vector2 LodHeightRange(int cx, int cz) => _lodHeightRanges[Index(cx, cz)];
 
-	private Vector4 LodPoint(int x, int z, bool normals)
+	private Vector4 LodPoint(int x, int z)
 	{
-		var n = normals ? FastGrid.TerrainGridNormal(_coarse, _width, _height, (float)_tile, x, z) : Vector3.Zero;
+		var n = FastGrid.TerrainGridNormal(_coarse, _width, _height, (float)_tile, x, z);
 		return new Vector4(CoarseNode(x, z), n.X, n.Y, n.Z);
 	}
 
 	// A common piecewise-linear edge also serves the short strips beyond the last complete 16 m square.
-	private Vector4 LodEdge(int fixedAxis, double at, int start, int end, bool vertical, bool normals)
+	private Vector4 LodEdge(int fixedAxis, double at, int start, int end, bool vertical)
 	{
 		int a = start + (int)((at - start) / _lodFarStep) * _lodFarStep;
-		Vector4 Point(int axis) => vertical ? LodPoint(fixedAxis, axis, normals) : LodPoint(axis, fixedAxis, normals);
+		Vector4 Point(int axis) => vertical ? LodPoint(fixedAxis, axis) : LodPoint(axis, fixedAxis);
 		if (at == a || at == end)
 			return Point((int)at);
 		int b = Math.Min(a + _lodFarStep, end);
 		return Point(a).Lerp(Point(b), (float)((at - a) / (b - a)));
 	}
 
-	private Vector4 LodVertex(LodLayout layout, int x, int z, bool normals)
+	private Vector4 LodVertex(LodLayout layout, int x, int z)
 	{
 		var b = layout.Whole;
 		var c = layout.Core;
 		if (x == b.X0 || x == b.X1 || (c.HasArea && x == c.X1))
-			return LodEdge(x, z, b.Z0, b.Z1, true, normals);
+			return LodEdge(x, z, b.Z0, b.Z1, true);
 		if (z == b.Z0 || z == b.Z1 || (c.HasArea && z == c.Z1 && x <= c.X1))
-			return LodEdge(z, x, b.X0, b.X1, false, normals);
-		return LodPoint(x, z, normals);
+			return LodEdge(z, x, b.X0, b.X1, false);
+		return LodPoint(x, z);
 	}
 
-	private Vector4 SampleLod(LodLayout layout, double x, double z, int step, bool normals = true)
+	private Vector4 SampleLod(LodLayout layout, double x, double z, int step)
 	{
 		var c = layout.Core;
 		LodRect grid;
@@ -107,14 +98,14 @@ public partial class FineRelief
 		int ix = Math.Min(grid.X0 + (int)((x - grid.X0) / step) * step, grid.X1 - step);
 		int iz = Math.Min(grid.Z0 + (int)((z - grid.Z0) / step) * step, grid.Z1 - step);
 		float u = (float)((x - ix) / step), v = (float)((z - iz) / step);
-		var b = LodVertex(layout, ix + step, iz, normals);
-		var c1 = LodVertex(layout, ix, iz + step, normals);
+		var b = LodVertex(layout, ix + step, iz);
+		var c1 = LodVertex(layout, ix, iz + step);
 		if (u + v <= 1.0f)
 		{
-			var a = LodVertex(layout, ix, iz, normals);
+			var a = LodVertex(layout, ix, iz);
 			return a + (b - a) * u + (c1 - a) * v;
 		}
-		var d = LodVertex(layout, ix + step, iz + step, normals);
+		var d = LodVertex(layout, ix + step, iz + step);
 		return d + (c1 - d) * (1.0f - u) + (b - d) * (1.0f - v);
 	}
 
@@ -122,9 +113,9 @@ public partial class FineRelief
 	{
 		double x = position.X / _tile - 0.5, z = position.Z / _tile - 0.5;
 		if (x == b.X0 || x == b.X1)
-			return LodEdge((int)x, z, b.Z0, b.Z1, true, true);
+			return LodEdge((int)x, z, b.Z0, b.Z1, true);
 		if (z == b.Z0 || z == b.Z1)
-			return LodEdge((int)z, x, b.X0, b.X1, false, true);
+			return LodEdge((int)z, x, b.X0, b.X1, false);
 		return Vector4.Zero;
 	}
 
@@ -176,7 +167,7 @@ public partial class FineRelief
 
 		int Add(int x, int z, float sink = 0.0f)
 		{
-			Vector4 source = LodVertex(layout, x, z, true);
+			Vector4 source = LodVertex(layout, x, z);
 			Vector4 target = morph ? SampleLod(layout, x, z, _lodFarStep) : source;
 			var p = new Vector3((float)((x + 0.5) * _tile), source.X - sink, (float)((z + 0.5) * _tile));
 			return piece.Add(p, new Vector3(source.Y, source.Z, source.W),

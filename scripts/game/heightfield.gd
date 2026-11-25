@@ -353,15 +353,10 @@ var fine_lod := false
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
 const ReliefErosion := preload("res://scripts/world/relief_erosion.gd")
 var fine_profile: ReliefDetailConfig
-var _detail_revision := 0
 
 
 ## Опора изменилась (полотно, сооружения, высоты): снимок C# больше не годится
-func ground_changed(detail_only := false) -> void:
-	if detail_only:
-		# RideGround уже держит ссылку на слой. Смена доступной плитки не копирует снимок мира.
-		_detail_revision += 1
-		return
+func ground_changed() -> void:
 	_ground_rev += 1
 
 
@@ -442,15 +437,6 @@ func prepare_fine_relief(with_forms := true, with_lod := true) -> void:
 		push_warning("Точное поле не помещается в бюджет или входные данные и настройки некорректны: используется исходная поверхность")
 
 
-## Растительность подготавливается до публикации чанка и сразу садится на точную поверхность.
-func placement_ground_at(x: float, z: float) -> float:
-	if fine_relief != null:
-		var detailed: float = fine_relief.Sample(x, z, true)
-		if not is_nan(detailed):
-			return detailed
-	return ground_at(x, z)
-
-
 ## Снимок C# для запроса из физики или null (тогда считает GDScript). Только главный поток: снимок
 ## строится и читается там, потоки подгрузки и генерации идут прежним путём.
 func _ride_ground() -> Object:
@@ -479,7 +465,7 @@ func _build_ride() -> bool:
 ## Отдельный снимок опоры C# (RideGround) для потока генерации: его Ground/Depth/GroundDepth дают то же, что
 ## ground_at/depth_at этого рельефа сейчас (сверка — stress --verify-ride). Не связан с _ride главного потока;
 ## после смены опоры (ground_changed) устаревает — берётся заново. null — нет C# или данных.
-func ride_snapshot(for_placement := false) -> Object:
+func ride_snapshot() -> Object:
 	var w := world
 	if w == null or hv.size() != w.N or w.lake.size() != w.N or w.filled.size() != w.N or Grid.fast_grid() == null:
 		return null
@@ -487,10 +473,10 @@ func ride_snapshot(for_placement := false) -> Object:
 	if script == null:
 		return null
 	var ride: Object = script.new()
-	return ride if _fill_ride(ride, for_placement) else null
+	return ride if _fill_ride(ride) else null
 
 
-func _fill_ride(ride: Object, for_placement := false) -> bool:
+func _fill_ride(ride: Object) -> bool:
 	var w := world
 	var keys := PackedInt32Array()
 	var patch_h := PackedFloat32Array()
@@ -534,7 +520,7 @@ func _fill_ride(ride: Object, for_placement := false) -> bool:
 		push_error("RideGround: " + ride.Error() + " — физика на GDScript")
 		return false
 	if fine_relief != null:
-		ride.SetFineRelief(fine_relief, for_placement)
+		ride.SetFineRelief(fine_relief)
 	return true
 
 
@@ -1365,7 +1351,7 @@ func _ground_script(x: float, z: float, raw: bool = false) -> float:
 				var d := a + RoadRefinement.STRIDE + 1
 				return hs[d] + (hs[a + RoadRefinement.STRIDE] - hs[d]) * (1.0 - tx) + (hs[a + 1] - hs[d]) * (1.0 - tz)
 	if fine_relief != null and not raw:
-		var detailed: float = fine_relief.Sample(x, z, false)
+		var detailed: float = fine_relief.Sample(x, z)
 		if not is_nan(detailed):
 			return detailed
 	if fx >= 0.0 and fz >= 0.0 and fx <= W - 1.001 and fz <= w.H - 1.001:

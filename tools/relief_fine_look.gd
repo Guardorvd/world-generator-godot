@@ -473,7 +473,6 @@ func _ride(route: PackedVector2Array) -> Dictionary:
 		full_upload_ms = upload_after.upload_ms - upload_before.upload_ms, worst_frame = worst}
 	if _terrain.relief_detail != null:
 		result.detail = _terrain.relief_detail.stats
-		result.detail_publications = _heights._detail_revision
 		result.tile_bytes = _heights.fine_relief.Bytes()
 		result.mesh_cache_bytes = _source._fine_cpu.bytes
 	if _terrain.morph_lod != null:

@@ -4,7 +4,6 @@ extends RefCounted
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
 
 var profile: ReliefDetailConfig
-var _limits := {}
 var _height_ranges := {}
 var _tiles := Vector2i.ZERO
 var _near_material: ShaderMaterial
@@ -20,8 +19,6 @@ func setup(h: Heightfield, keys: Array, base: ShaderMaterial) -> void:
 	_tiles = Vector2i(h.world.W - 1, h.world.H - 1)
 	_near_material = TerrainBuilder.coarse_morph_material(base, profile)
 	for key: Vector2i in keys:
-		var error: Vector2 = h.fine_relief.LodError(key.x, key.y)
-		_limits[key] = (error / profile.lod_error_ratio).clamp(profile.lod_end_min_m, profile.lod_end_max_m)
 		_height_ranges[key] = h.fine_relief.LodHeightRange(key.x, key.y)
 
 
@@ -75,7 +72,7 @@ func mesh_bounds(key: Vector2i, bounds: AABB) -> AABB:
 
 func configure(node: MeshInstance3D, key: Vector2i, lod: int) -> void:
 	_recovering.erase(key)
-	var ends: Vector2 = _limits[key]
+	var ends := profile.lod_end_m
 	var band := Vector2.ZERO
 	if lod < 2:
 		band = Vector2(ends[lod] - profile.lod_fade_m[lod], ends[lod])
@@ -85,7 +82,7 @@ func configure(node: MeshInstance3D, key: Vector2i, lod: int) -> void:
 
 
 func desired(key: Vector2i, distance: float, current: int, immediate: bool) -> int:
-	var ends: Vector2 = _limits[key]
+	var ends := profile.lod_end_m
 	var load := profile.lod_load_margin_m
 	if immediate:
 		return int(distance >= ends.x + load) + int(distance >= ends.y + load)
@@ -100,7 +97,7 @@ func desired(key: Vector2i, distance: float, current: int, immediate: bool) -> i
 
 
 func wants_full(key: Vector2i, distance: float, current: int) -> bool:
-	return current == 1 and distance <= _limits[key].x + profile.lod_load_margin_m + profile.prefetch_m
+	return current == 1 and distance <= profile.lod_end_m.x + profile.lod_load_margin_m + profile.prefetch_m
 
 
 func forget(key: Vector2i) -> void:
@@ -109,7 +106,7 @@ func forget(key: Vector2i) -> void:
 
 func record(node: MeshInstance3D, key: Vector2i, distance: float, from_lod: int, to_lod: int, upload_ms: float) -> void:
 	var transition := mini(from_lod, to_lod)
-	var ends: Vector2 = _limits[key]
+	var ends := profile.lod_end_m
 	stats.switches += 1
 	var pair := "%d>%d" % [from_lod, to_lod]
 	stats.by_pair[pair] = stats.by_pair.get(pair, 0) + 1

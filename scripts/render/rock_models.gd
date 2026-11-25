@@ -94,8 +94,8 @@ static func supported(normal: Vector3) -> bool:
 
 
 static func normal_at(heights: Heightfield, x: float, z: float) -> Vector3:
-	return Vector3(heights.placement_ground_at(x - 0.5, z) - heights.placement_ground_at(x + 0.5, z), 1.0,
-		heights.placement_ground_at(x, z - 0.5) - heights.placement_ground_at(x, z + 0.5)).normalized()
+	return Vector3(heights.ground_at(x - 0.5, z) - heights.ground_at(x + 0.5, z), 1.0,
+		heights.ground_at(x, z - 0.5) - heights.ground_at(x, z + 0.5)).normalized()
 
 
 ## Проверка опоры по пятну: не ставим валун мостиком через резкий излом или берег.
@@ -103,12 +103,12 @@ static func has_seat(heights: Heightfield, x: float, z: float, scale: float, nor
 	if normal == Vector3.ZERO: normal = normal_at(heights, x, z)
 	if not supported(normal) or heights.depth_at(x, z) > 0.05:
 		return false
-	if base == INF: base = heights.placement_ground_at(x, z)
+	if base == INF: base = heights.ground_at(x, z)
 	var radius := maxf(0.15, scale * 1.1)
 	for offset: Vector2 in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
 		var p := offset * radius
 		var expected := base - (normal.x * p.x + normal.z * p.y) / normal.y
-		if absf(heights.placement_ground_at(x + p.x, z + p.y) - expected) > maxf(0.12, scale * 0.23):
+		if absf(heights.ground_at(x + p.x, z + p.y) - expected) > maxf(0.12, scale * 0.23):
 			return false
 		if heights.depth_at(x + p.x, z + p.y) > 0.05:
 			return false
@@ -678,7 +678,7 @@ static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int,
 		heights.rock_seats_lock.unlock()
 		return found
 	var normal := normal_at(heights, x, z)
-	var ground := heights.placement_ground_at(x, z)
+	var ground := heights.ground_at(x, z)
 	if not has_seat(heights, x, z, scale, normal, ground):
 		return Vector4(INF, 0, 1, 0)
 	return Vector4(ground, normal.x, normal.y, normal.z)
@@ -700,7 +700,7 @@ static func _outcrop_seat_live(heights: Heightfield, x: float, z: float, scale: 
 			var fast: Vector2 = ride.GroundDepth(px, pz)
 			if not is_nan(fast.x): return fast
 		if heights.fine_relief != null:
-			return Vector2(heights.placement_ground_at(px, pz), heights.depth_at(px, pz))
+			return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz))
 		return heights.ground_depth_at(px, pz), x, z, scale, Vector2(world.world_origin) * GameConfig.TILE, v)
 
 

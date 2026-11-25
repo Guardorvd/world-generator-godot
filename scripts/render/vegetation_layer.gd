@@ -1329,7 +1329,7 @@ func _plan_items(ids: PackedInt32Array) -> Dictionary:
 			ground = seat.x
 			normal = Vector3(seat.y, seat.z, seat.w)
 		else:
-			ground = heights.placement_ground_at(x, z)
+			ground = heights.ground_at(x, z)
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
@@ -2508,7 +2508,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 			continue
 		var y: float
 		if inside:
-			y = heights.placement_ground_at(x, z)
+			y = heights.ground_at(x, z)
 			if heights.depth_at(x, z) > 0.0:
 				continue
 		else:

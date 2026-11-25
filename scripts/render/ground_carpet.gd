@@ -481,7 +481,7 @@ func _begin(p: Vector2, lead: Vector2, road_revision: int) -> void:
 	_started_clock = stream.clock
 	_job_started = Time.get_ticks_usec()
 	if use_native_tiles and heights != null and (_ride == null or _ride_rev != heights._ground_rev):
-		_ride = heights.ride_snapshot(true)
+		_ride = heights.ride_snapshot()
 		_ride_rev = heights._ground_rev
 
 
@@ -842,7 +842,7 @@ func _road_stones(i: int, j: int, ys: Array) -> PackedFloat32Array:
 			continue
 		if out.is_empty():
 			out.resize(STONE_SUB * STONE_SUB * STRIDE)
-		var y := heights.placement_ground_at(x, z)
+		var y := heights.ground_at(x, z)
 		var tint := road_stone_tint(at.surface, WGRandom.hash2(gx, gz, 331))
 		tint.a = sky
 		_put(out, n, Basis(Vector3.UP, h * TAU * 7.0).scaled_local(Vector3(size, size * (0.8 + 0.5 * WGRandom.hash2(gx, gz, 337)), size)), x, y, z, tint, h, 0.0)
@@ -972,8 +972,8 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 			continue
 		if heights.depth_at(x, z) > 0.0:
 			continue
-		var y := heights.placement_ground_at(x, z)
-		var normal := Vector3(y - heights.placement_ground_at(x + 0.4, z), 0.4, y - heights.placement_ground_at(x, z + 0.4)).normalized()
+		var y := heights.ground_at(x, z)
+		var normal := Vector3(y - heights.ground_at(x + 0.4, z), 0.4, y - heights.ground_at(x, z + 0.4)).normalized()
 		var h1 := WGRandom.hash2(gx, gz, 233)
 		var h2 := WGRandom.hash2(gx, gz, 239)
 		# Цвет: тон биома, пятна светлее и суше (2,6 м и 9 м), каждая куртинка чуть своя — ковёр не плоский

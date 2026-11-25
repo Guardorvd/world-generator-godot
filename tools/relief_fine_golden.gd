@@ -121,7 +121,7 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 	var original_water := var_to_bytes(WaterBuilder.prepare(w, h))
 	h.prepare_fine_relief(false)
 	var smooth_field := h.fine_relief
-	var smooth := h.ride_snapshot(true)
+	var smooth := h.ride_snapshot()
 	h.fine_relief = null
 	var started := Time.get_ticks_usec()
 	h.prepare_fine_relief()
@@ -135,7 +135,7 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 	var source := Source.new()
 	source.setup(WorldCache.new(), w, h, w.W, [chunks.duplicate(), {}, {}], null)
 	var on := h.ride_snapshot()
-	var planted := h.ride_snapshot(true)
+	var planted := on
 	var sample: Vector3 = fixture.views[0].eye
 	var morph := LodChecks.inspect(detail, source, w, Vector2(sample.x, sample.z))
 	_check(h.fine_lod and morph.samples > 0 and morph.height_failures == 0 and morph.normal_failures == 0 \
@@ -163,7 +163,7 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 				_check(before == arrays[Mesh.ARRAY_VERTEX], "вершины чанка 4 м совпадают с кэшем")
 				projected[key] = arrays
 			pieces.append(projected[key])
-		var coarse_stats := Metrics.mesh_stats(pieces, h, eye, focus, true)
+		var coarse_stats := Metrics.mesh_stats(pieces, h, eye, focus, true, baseline)
 		coarse_samples += coarse_stats.parity_samples
 		_check(coarse_stats.parity_samples > 0 and coarse_stats.parity_failed == 0, "опора и меш 4 м до включения 2 м: " + w.seed_text)
 	var origin := Vector2(sample.x, sample.z)
@@ -182,8 +182,6 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 	started = Time.get_ticks_usec()
 	detail.Warm(PackedVector2Array([Vector2(sample.x, sample.z)]), INF)
 	var tiles_ms := (Time.get_ticks_usec() - started) / 1000.0
-	for key: Vector2i in chunks:
-		detail.SetActive(key.x, key.y, true)
 	_check(original_hv == h.hv and original_water == var_to_bytes(WaterBuilder.prepare(w, h)), "исходные высоты и меши воды совпадают побитно")
 	var protected := {}
 	for key: int in h.road_refinement.patches:
@@ -286,7 +284,7 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 					grade_violations += 1
 	_check(changed > 0 and morph_errors == 0, "%s: %d изменённых вершин, %d расхождений морфинга" %
 		[w.seed_text, changed, morph_errors])
-	_check(max_delta <= maxf(profile.reconstruction_delta_m, profile.total_delta_m) + Metrics.TOLERANCE_M, "предел смещения от треугольника 4 м")
+	_check(max_delta <= profile.max_offset_m + Metrics.TOLERANCE_M, "предел смещения от треугольника 4 м")
 	_check(grade_violations == 0 and new_vertices > 0, "%s: %d нарушений предела уклона, %d новых вершин" % [w.seed_text, grade_violations, new_vertices])
 	_check(seam_violations == 0, "%s: %d расхождений на границах плиток" % [w.seed_text, seam_violations])
 	print("RELIEF_TILES ", w.seed_text, " init_ms=", prepare_ms, " build_ms=", tiles_ms, " bytes=", detail.Bytes(),

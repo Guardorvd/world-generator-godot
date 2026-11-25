@@ -16,7 +16,7 @@ static func spectrum(h: Heightfield, focus: Vector2) -> Dictionary:
 ## Опора без полотна дорог: поле 2 м у опубликованных плиток, иначе сетка 4 м.
 static func _surface(h: Heightfield, x: float, z: float) -> float:
 	if h.fine_relief != null:
-		var detailed: float = h.fine_relief.Sample(x, z, false)
+		var detailed: float = h.fine_relief.Sample(x, z)
 		if not is_nan(detailed):
 			return detailed
 	return h.base_ground_at(x, z)
@@ -103,7 +103,8 @@ static func _fft(data: PackedVector2Array, start: int, stride: int, reverse: Pac
 		size <<= 1
 
 
-static func mesh_stats(pieces: Array, h: Heightfield, eye: Vector3, focus: Vector2, parity: bool) -> Dictionary:
+## parity сверяет вершины с опорой C#: по умолчанию — текущая опора, ride задаёт другую (например, сетку 4 м до поля 2 м).
+static func mesh_stats(pieces: Array, h: Heightfield, eye: Vector3, focus: Vector2, parity: bool, ride: Object = null) -> Dictionary:
 	var rect := Rect2(focus - Vector2.ONE * SIDE * 0.5, Vector2.ONE * SIDE)
 	var eye_xz := Vector2(eye.x, eye.z)
 	var edges := {}
@@ -118,7 +119,10 @@ static func mesh_stats(pieces: Array, h: Heightfield, eye: Vector3, focus: Vecto
 	var patch_samples := 0
 	var max_error := 0.0
 	var max_grade_gain := 0.0
-	var ride := h.ride_snapshot() if parity else null
+	# Своя опора сверяется только с ней: GDScript-опора Heightfield всегда текущая.
+	var current := ride == null
+	if parity and current:
+		ride = h.ride_snapshot()
 	for arrays: Array in pieces:
 		var xyz: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var ids: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
@@ -182,7 +186,9 @@ static func mesh_stats(pieces: Array, h: Heightfield, eye: Vector3, focus: Vecto
 					var x := a.x + (b.x - a.x) * u + (c.x - a.x) * v
 					var y := a.y + (b.y - a.y) * u + (c.y - a.y) * v
 					var z := a.z + (b.z - a.z) * u + (c.z - a.z) * v
-					var error := maxf(absf(ride.Ground(x, z) - y), absf(h._ground_script(x, z) - y))
+					var error := absf(ride.Ground(x, z) - y)
+					if current:
+						error = maxf(error, absf(h._ground_script(x, z) - y))
 					if not is_finite(error):
 						error = INF
 					max_error = maxf(max_error, error)
