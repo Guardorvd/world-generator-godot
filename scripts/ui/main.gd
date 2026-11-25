@@ -1947,7 +1947,7 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 		_message("Каталог моделей не подготовлен", catalog_error)
 		return
 	var save_began_us := Time.get_ticks_usec()
-	if not _save_current():
+	if not _save_current("auto", "", true):
 		return
 	var save_ended_us := Time.get_ticks_usec()
 	_pending_save = {}
@@ -2288,6 +2288,7 @@ func _free_game() -> void:
 	_cancel_hud_fade()
 	if GameContext.scope.resource_profile != null: GameContext.scope.resource_profile.save()
 	if game != null:
+		game.finish_ride_feed()
 		var bd := game.get_node_or_null("BoardDisplay")
 		if bd != null:
 			bd.set_process(false)
@@ -2412,7 +2413,7 @@ func _has_save(seed_text: String, template_id := "") -> bool:
 	return false
 
 
-func _save_current(slot := "auto", session_end := "") -> bool:
+func _save_current(slot := "auto", session_end := "", force_ride_thumb := false) -> bool:
 	if game == null or game.quests == null or not _progress_enabled:
 		return true
 	var began_us := Time.get_ticks_usec()
@@ -2424,6 +2425,7 @@ func _save_current(slot := "auto", session_end := "") -> bool:
 	var tid := WorldTemplate.normalize_id(str(state.get("template_id", WorldTemplate.DEFAULT_ID)))
 	var err := Saves.write_slot(state, slot, tid)
 	if err == OK:
+		game.save_ride_feed(force_ride_thumb or not session_end.is_empty())
 		_saved_discoveries = hud.map_place_count()
 	if _session_performance != null:
 		var ended_us := Time.get_ticks_usec()
@@ -2451,6 +2453,7 @@ func _queue_auto_save() -> void:
 	if _shop_progress != null:
 		_shop_progress.retry_rewards()
 	var state: Dictionary = game.save_state()
+	game.save_ride_feed()
 	# 21.11.2026: в фон уходят готовые байты, а не словари игры (часть их — общие с живыми данными, например заезды)
 	var seed_text: String = state.seed
 	var tid := WorldTemplate.normalize_id(str(state.get("template_id", WorldTemplate.DEFAULT_ID)))

@@ -7,6 +7,7 @@ const RideLog = preload("res://scripts/game/ride_log.gd")
 const Journal = preload("res://scripts/game/map_journal.gd")
 const Explore = preload("res://scripts/game/exploration.gd")
 const Thumb = preload("res://scripts/ui/ride_thumb.gd")
+const Writer = preload("res://scripts/game/ride_feed_writer.gd")
 var failures := 0
 
 
@@ -42,6 +43,7 @@ func _initialize() -> void:
 	check(reload.upsert(first) == OK, "запись после восстановления")
 	_stats()
 	_thumbs(folder)
+	_writer(folder.path_join("writer"))
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
 
@@ -104,6 +106,24 @@ func _thumbs(folder: String) -> void:
 	var long_image: Image = Thumb.render(map, Vector2(1024, 1024), {legs = [long_track]})
 	print("Превью 6000 точек: %.2f мс" % (float(Time.get_ticks_usec() - start) / 1000.0))
 	check(long_image != null, "превью длинного трека")
+
+
+func _writer(folder: String) -> void:
+	var writer = Writer.new(folder)
+	var map := Image.create(32, 32, false, Image.FORMAT_RGB8)
+	map.fill(Color.DARK_GREEN)
+	var snapshot := {start = 123.0, end = 200.0, time = 77.0, bike = 250.0, foot = 0.0,
+		places = ["old-id"], legs = [PackedVector2Array([Vector2(10, 10), Vector2(100, 100)])]}
+	check(writer.submit(snapshot, "test", "seed", ["Место"], [], map, Vector2(128, 128), true) == OK, "запись и ожидание фонового превью")
+	var feed = Feed.new(folder)
+	check(feed.load_feed() == OK and feed.entries.size() == 1 and feed.entries[0].places == ["Место"], "итог содержит названия мест")
+	var id: String = feed.entries[0].id
+	check(FileAccess.file_exists(feed.thumb_path(id)) and feed.entries[0].track.size() == 1, "превью и координаты доступны после выхода")
+	snapshot.bike = 300.0
+	check(writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128), false) == OK, "автосохранение обновляет заезд")
+	check(writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128), true, true) == OK, "режим разработки пропущен")
+	writer.finish()
+	check(feed.load_feed() == OK and feed.entries.size() == 1 and float(feed.entries[0].bike) == 300.0, "нет дубля после автосохранения")
 
 
 func check(ok: bool, message: String) -> void:

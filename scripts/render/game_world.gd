@@ -45,6 +45,8 @@ const HudStyle := preload("res://scripts/ui/hud_style.gd")
 const BoardDisplay = preload("res://scripts/render/board_display.gd")
 const AdaptiveResolution = preload("res://scripts/render/adaptive_resolution.gd")
 const DisplayConfig = preload("res://scripts/game/display_config.gd")
+const RideFeedWriter = preload("res://scripts/game/ride_feed_writer.gd")
+var _ride_feed_writer
 var board_display: BoardDisplay  # щит ближней доски с картой и заданиями
 var bike_placement: BikePlacement
 var place_names: PlaceNames
@@ -711,6 +713,36 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 		if not places.has(id):
 			return false
 	return Quests.new().restore_state(saved.quest, places, Rect2i(0, 0, w.W, w.H), w)
+
+
+## Итоговый снимок отделён от сохранения мира и не зависит от срока его жизни.
+func save_ride_feed(force := false) -> void:
+	if world == null or hud == null or quests == null:
+		return
+	var development := QuickTrails.network() or WorldTemplate.cmdline_short() or (services.cache != null and services.cache.short_dev)
+	if development:
+		return
+	var snapshot: Dictionary = hud.ride_log.snapshot(hud.map_journal, hud.explore, quests.done)
+	if snapshot.is_empty():
+		return
+	var names: Array = []
+	for id: String in snapshot.places:
+		var place: Dictionary = world.place(id)
+		names.append(str(place.get("name", id)))
+	var photos: Array = []
+	for photo: Dictionary in hud.explore.personal_photos:
+		if float(photo.get("ride_start", -1.0)) == float(snapshot.start):
+			photos.append(str(photo.get("path", "")))
+	if _ride_feed_writer == null:
+		_ride_feed_writer = RideFeedWriter.new()
+	var err: Error = _ride_feed_writer.submit(snapshot, world.template_id, world.seed_text, names, photos, hud.map_preview, Vector2(world.W, world.H) * TILE, force)
+	if err != OK:
+		push_warning("Не удалось записать журнал заездов: " + error_string(err))
+
+
+func finish_ride_feed() -> void:
+	if _ride_feed_writer != null:
+		_ride_feed_writer.finish()
 
 
 func save_state() -> Dictionary:
