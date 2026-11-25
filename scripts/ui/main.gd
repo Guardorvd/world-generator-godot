@@ -20,6 +20,7 @@ const Saves := preload("res://scripts/game/save_game.gd")
 const SessionPerformance := preload("res://scripts/game/session_performance.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
+const RideStyle := preload("res://scripts/ui/hud_style.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
 const UiAudio := preload("res://scripts/ui/ui_audio.gd")
@@ -272,20 +273,37 @@ func _ready() -> void:
 	%OpenShop.pressed.connect(_open_shop)
 	var ride_screen := PanelContainer.new()
 	ride_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ride_screen.theme = RideStyle.theme()
+	ride_screen.add_theme_stylebox_override("panel", RideStyle.panel(Color("#101e1c"), Color("#101e1c"), 0, Vector2.ZERO, false))
 	ride_screen.hide()
 	%Menu.get_parent().add_child(ride_screen)
 	var ride_margin := MarginContainer.new()
 	for edge: String in ["left", "top", "right", "bottom"]:
 		ride_margin.add_theme_constant_override("margin_" + edge, 24)
 	ride_screen.add_child(ride_margin)
+	var ride_center := HBoxContainer.new()
+	ride_margin.add_child(ride_center)
+	var left_space := Control.new()
+	left_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ride_center.add_child(left_space)
 	var ride_box := VBoxContainer.new()
-	ride_margin.add_child(ride_box)
+	ride_box.add_theme_constant_override("separation", 12)
+	ride_center.add_child(ride_box)
+	var right_space := Control.new()
+	right_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ride_center.add_child(right_space)
+	var fit_ride_column := func() -> void:
+		ride_box.custom_minimum_size.x = minf(900.0, maxf(200.0, get_viewport().get_visible_rect().size.x - 48.0))
+	get_viewport().size_changed.connect(fit_ride_column)
+	fit_ride_column.call()
 	var ride_back := Button.new()
 	ride_back.text = "← В меню"
+	ride_back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	ride_back.pressed.connect(_return_to_menu_screen)
 	ride_box.add_child(ride_back)
 	_ride_feed_view = preload("res://scripts/ui/ride_feed_view.gd").new()
 	_ride_feed_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_ride_feed_view.controls_created.connect(_ui_audio.bind_tree)
 	ride_box.add_child(_ride_feed_view)
 	_ride_feed_view.setup(GameContext.scope.settings)
 	screens.ride_feed = ride_screen
@@ -313,7 +331,7 @@ func _ready() -> void:
 	_shop.sound_requested.connect(_play_ui)
 	hud.journal_panel.shop_panel.sound_requested.connect(_play_ui)
 	hud.journal_panel.controls_created.connect(_ui_audio.bind_tree)
-	for subtree: Node in [%Menu, %AllWorlds, %Loading, %Pause, %Settings, _shop, hud.journal_panel]:
+	for subtree: Node in [%Menu, %AllWorlds, %Loading, %Pause, %Settings, _shop, ride_screen, hud.journal_panel]:
 		_ui_audio.bind_tree(subtree)
 	get_viewport().size_changed.connect(_fit_menu)
 	(%AllWorlds.get_node("Panel") as Control).resized.connect(_fit_hub)

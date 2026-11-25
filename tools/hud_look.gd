@@ -844,7 +844,14 @@ func _run() -> void:
 	await _tick(stamina, 330, true, 1.0, true)
 	_check(stamina.exhausted, "полоска истощена")
 	await _tick(stamina, 30, true, 0.0, false)
-	_check(stamina.state == Stamina.State.COAST and hud._ride.warning < 0.05 and hud._ride._coast > 0.9, "накат: предупреждение погасло, ореол наката")
+	# При высокой частоте кадров 30 кадров могут длиться меньше времени появления ореола.
+	var coast_deadline := Time.get_ticks_msec() + 1000
+	while Time.get_ticks_msec() < coast_deadline and (hud._ride.warning >= 0.05 or hud._ride._coast <= 0.9):
+		await process_frame
+		stamina.tick_ride(hud.get_process_delta_time(), false, 0.0, false)
+		hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
+	_check(stamina.state == Stamina.State.COAST and hud._ride.warning < 0.05 and hud._ride._coast > 0.9,
+		"накат: предупреждение погасло, ореол наката (state %d, warning %.2f, coast %.2f)" % [stamina.state, hud._ride.warning, hud._ride._coast])
 	await _tick(stamina, 150, true, 0.0, false)
 	await _shot("hud_coast")
 	hud.set_hints([["Правый бампер", "Поставить велосипед"], ["Треугольник", "Открыть меню"],
