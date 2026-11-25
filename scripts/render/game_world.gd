@@ -464,6 +464,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(wind_layer)
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
+	$WorldEnvironment.environment = $WorldEnvironment.environment.duplicate()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
 	day.atmosphere = WorldTemplate.atmosphere_config(world.template_id)
 	add_child(day.make_cloud_dome()) # 16.11: облака неба считаются в куполе по полосам, не по пикселям экрана
@@ -472,18 +473,11 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(local_mist)
 	local_mist.setup(world, heights)
 	_apply_lighting_and_fog()
-	day.terrain_mats = [$Terrain.material_override]
-	if terrain_stream.far_material != null:
-		day.terrain_mats.append(terrain_stream.far_material)
-	if outer != null and outer._mat != null:
-		day.terrain_mats.append(outer._mat)
-		if outer._far_mat != null and outer._far_mat != outer._mat:
-			day.terrain_mats.append(outer._far_mat)
 	day.camera = camera
 	day.world_seed = world.seed_num
 	_restore_clock(saved)
-	_apply_render_clock(1.0)
 	_update_camera(1.0, 0.0)
+	_apply_render_clock(1.0)
 	if _opening:
 		_draw_opening(1.0)
 	else:
@@ -645,7 +639,12 @@ func _exit_tree() -> void:
 		DisplayConfig.adaptive_scale = 1.0
 		DisplayConfig.apply_quality(get_tree().root, services.settings.display_state()) # меню — в полном разрешении
 	if day != null:
-		RenderingServer.global_shader_parameter_set("vegetation_night", 0.0)
+		RenderingServer.global_shader_parameter_set(&"vegetation_night", 0.0)
+		RenderingServer.global_shader_parameter_set(&"style_haze", Vector3(0.62, 0.74, 0.88))
+		RenderingServer.global_shader_parameter_set(&"mist_weather", DayCycle.MIST_OFF)
+		RenderingServer.global_shader_parameter_set(&"mist_tint", Color(0.86, 0.90, 0.95))
+		RenderingServer.global_shader_parameter_set(&"cloud_shadow", Vector4.ZERO)
+		RenderingServer.global_shader_parameter_set(&"sun_dir", Vector3(0.0, 1.0, 0.0))
 		VisualStyle.release() # окружение мира закрыто; глобальные параметры стиля нейтральны для других сцен
 	if heights != null and heights.obstacles != null:
 		heights.obstacles.finish()

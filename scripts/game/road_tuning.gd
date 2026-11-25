@@ -15,13 +15,18 @@ const BASELINE_CLEARANCE_DIGEST := "1a9220c8b0d0"
 const BASELINE_TREAD_DIGEST := "8bc1a25b1f49"
 const DEFAULT_STONE_SLOPE := 0.19
 
+@export_group("Профили")
+## Правила маршрутизации A* и геометрии линии (RoadRoutingTuning).
 @export var routing: Routing
+## Просветы просеки и маски кромки по видам пути (RoadSectionTuning).
 @export var section: Section
+## Частота и расстановка камней, веток, брёвен и корней (RoadObstacleTuning).
 @export var obstacles: Obstacles
-
-## По видам пути; порядок видов в C# — road, trail, mountain (RoadBed.KINDS, RoadRefinement.CORRIDOR_KINDS)
+## Профиль полотна и коридора для широкой дороги (road).
 @export var road: RoadKindTuning
+## Профиль полотна и коридора для лесной тропы (trail).
 @export var trail: RoadKindTuning
+## Профиль полотна и коридора для горной тропы (mountain).
 @export var mountain: RoadKindTuning
 
 @export_group("По покрытию (порядок RoadSurface.LIST: нет, гравий, грунтовка, укатанная, камень, песок, лес, луг)")
@@ -31,7 +36,7 @@ const DEFAULT_STONE_SLOPE := 0.19
 @export var character := PackedFloat64Array()
 ## Доля выравнивания спокойных участков
 @export var level_surface := PackedFloat64Array()
-## Mean slope over 16 m that turns an otherwise soil-covered trail into stone.
+## Средний уклон на отрезке 16 м, при котором грунтовая тропа переходит в каменистую (RoadSurface.ROCK).
 @export_range(0.0, 0.4) var stone_slope := DEFAULT_STONE_SLOPE
 
 @export_group("Общие")
@@ -104,7 +109,7 @@ static func for_world(w: Variant) -> RoadTuning:
 	return current()
 
 
-## Сбрасывает кэш профилей шаблонов при WorldTemplate.reload() (настройки Типа 1 _current не трогаются).
+## Сбрасывает кэш профилей шаблонов при WorldTemplate.reload_templates() (настройки Типа 1 _current не трогаются).
 static func clear_template_cache() -> void:
 	_lock.lock()
 	_by_path.clear()

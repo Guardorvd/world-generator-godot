@@ -190,7 +190,7 @@ static func expedition_variant(kind: int, roll: float, wet: float, old: float, r
 			var large := wet * (0.10 + 0.28 * old)
 			if roll < large:
 				return [NURSE_LOG_LONG, NURSE_LOG_HOLLOW, NURSE_LOG_PAIR][mini(2, int(roll * 3.0 / large))]
-			return NURSE_LOG_SPLIT if roll < 0.34 * moss else NURSE_LOG
+			return NURSE_LOG_SPLIT if roll < large + (1.0 - large) * 0.34 * moss else NURSE_LOG
 		if kind == STUMP and roll < maxf(old * (0.40 + wet * 0.55), moss * (0.50 + 0.50 * old)):
 			return ROOT_STUMP if roll < 0.28 * moss else (ROOT_PLATE if roll < 0.54 * moss else ROOT_UPTURNED)
 		if kind == BOULDER and roll < maxf(wet * (0.42 + rocky * 0.52), moss * (0.45 + 0.55 * wet)):
@@ -200,7 +200,7 @@ static func expedition_variant(kind: int, roll: float, wet: float, old: float, r
 		var large := wet * (0.10 + 0.28 * old)
 		if roll < large:
 			return [NURSE_LOG_LONG, NURSE_LOG_HOLLOW, NURSE_LOG_PAIR][mini(2, int(roll * 3.0 / large))]
-		return NURSE_LOG_SPLIT if roll < 0.29 else NURSE_LOG
+		return NURSE_LOG_SPLIT if roll < large + (1.0 - large) * 0.29 else NURSE_LOG
 	if kind == STUMP and roll < old * (0.40 + wet * 0.55):
 		return ROOT_STUMP if roll < 0.20 else (ROOT_PLATE if roll < 0.39 else ROOT_UPTURNED)
 	if kind == BOULDER and roll < wet * (0.42 + rocky * 0.52):

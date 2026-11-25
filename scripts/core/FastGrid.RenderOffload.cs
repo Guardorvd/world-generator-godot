@@ -471,7 +471,7 @@ public partial class FastGrid
 	/// </summary>
 	public Godot.Collections.Dictionary BuildCarpetGrassTile(RideGround ride, int tileI, int tileJ, float tileSize, int sub,
 		float cover, float shade, float parched, float straw, float tall, float grow, bool flowers,
-		float tcR, float tcG, float tcB, float surfaceR, float forestMix, bool expedition)
+		float tcR, float tcG, float tcB, float surfaceR, float forestMix, bool expedition, float flowerMul = 1.0f)
 	{
 		if (ride == null || !ride.Ready() || sub <= 0)
 			return new Godot.Collections.Dictionary { ["ok"] = false };
@@ -572,7 +572,7 @@ public partial class FastGrid
 			if (flowers && kind < 2)
 			{
 				float bloom = Smoothstep(0.52f, 0.78f, CarpetValueNoise(x / 5.0f, z / 5.0f, 269)) * (1.0f - 0.7f * parched);
-				if (WgHash2(gx, gz, 271) < 0.16f * bloom)
+				if (WgHash2(gx, gz, 271) < 0.16f * bloom * flowerMul)
 				{
 					int pick = (int)(CarpetValueNoise(x / 14.0f, z / 14.0f, 277) * 3.999f);
 					if (WgHash2(gx, gz, 281) < 0.25f)

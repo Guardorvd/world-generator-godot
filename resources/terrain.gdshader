@@ -42,8 +42,6 @@ uniform sampler2D cavity_tex : hint_default_white, filter_linear_mipmap, repeat_
 uniform sampler2D community_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool community_tex_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
-// 7.8: доля солнечного света (DayCycle): ночью и в сумерках солнечных просветов под пологом нет.
-uniform float sunlight = 1.0;
 global uniform vec4 distant_vegetation;
 // 14.11.2026: дернина у игрока (VegetationLayer, carpet): x — дальность, y — полоса растворения, м (0 — нет).
 // Под ней дёрн в тени травинок: темнее и зеленее у корней, проплешины остаются светлой землёй.
@@ -223,17 +221,20 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float cover = smoothstep(0.03, expedition_floor ? 0.57 : 0.8, forest.r) * (1.0 - snow);
 		canopy = cover;
 		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
-		vec3 soil = mix(leaf_soil, needle_soil, forest.g);
-		soil *= mix(1.12, 0.72, forest.b);
 		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
-		vec3 moss_c = mix(floor_moss, floor_moss * vec3(0.76, 0.73, 0.56), autumn_ground.z);
-		soil = mix(soil, moss_c, moss * 0.7);
+		float has_autumn = step(0.001, autumn_ground.x);
+		vec3 soil;
 		if (expedition_floor) {
 			vec3 damp_duff = mix(vec3(0.25, 0.151, 0.088), vec3(0.185, 0.137, 0.086), forest.g);
 			damp_duff *= mix(1.20, 0.68, forest.b) * mix(0.76, 1.25, n_mid);
 			vec3 olive = mix(vec3(0.19, 0.23, 0.082), vec3(0.29, 0.34, 0.13), n_mid);
-			olive = mix(olive, olive * vec3(0.82, 0.78, 0.62), autumn_ground.z);
+			olive = mix(olive, olive * vec3(0.82, 0.78, 0.62), autumn_ground.z * has_autumn);
 			soil = mix(damp_duff, olive, moss * (0.66 + 0.48 * patch));
+		} else {
+			soil = mix(leaf_soil, needle_soil, forest.g);
+			soil *= mix(1.12, 0.72, forest.b);
+			vec3 moss_c = mix(floor_moss, floor_moss * vec3(0.76, 0.73, 0.56), autumn_ground.z * has_autumn);
+			soil = mix(soil, moss_c, moss * 0.7);
 		}
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
 		float stones = forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6);
@@ -245,25 +246,29 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			vec2 local = fract(cells) - vec2(0.25) - scatter * 0.5;
 			float angle = scatter.x * 6.28318;
 			local = mat2(vec2(cos(angle), sin(angle)), vec2(-sin(angle), cos(angle))) * local;
-			float shape = mix(abs(local.x) * 0.75 + abs(local.y) * 1.5,
-				max(abs(local.x) * 0.55, abs(local.y) * 5.0), forest.g);
 			float aa = max(length(fwidth(cells)), 0.015);
-			float litter = (1.0 - smoothstep(0.13 - aa, 0.13 + aa, shape));
-			litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
 			// первые опавшие листья: в лиственном лесу и в осеннем типе мира опад заметнее и меднее
-				vec3 autumn_leaf = mix(vec3(0.50, 0.33, 0.05), vec3(0.48, 0.22, 0.06), autumn_ground.w);
-				float leaf_share = step(mix(0.74, 0.42, autumn_ground.w), scatter.x) * max(1.0 - forest.g, autumn_ground.w * 0.75);
-				vec3 leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), autumn_leaf, leaf_share * 0.85);
-				if (expedition_floor) {
-					float needles = max(abs(local.x) * 0.42, abs(local.y) * 3.65);
-					float leaf = length(local * vec2(0.66, 1.49)) + abs(local.x + local.y) * 0.15;
-					float shape2 = mix(leaf, needles, forest.g);
-					float intact = (1.0 - smoothstep(0.18 - aa, 0.18 + aa, shape2)) * step(0.23, scatter.y);
-					litter = intact * (1.0 - smoothstep(0.25, 0.9, aa));
-					vec3 exp_leaf = mix(vec3(0.36, 0.19, 0.083), vec3(0.51, 0.30, 0.12), scatter.x);
-					leaf_c = mix(exp_leaf, autumn_leaf, leaf_share * 0.65);
-				}
-				soil = mix(soil, leaf_c, litter * near * (0.55 - moss * 0.25));
+			float warmth = autumn_ground.w * has_autumn;
+			vec3 autumn_leaf = mix(vec3(0.50, 0.33, 0.05), vec3(0.48, 0.22, 0.06), warmth);
+			float leaf_share = step(mix(0.74, 0.42, warmth), scatter.x) * max(1.0 - forest.g, warmth * 0.75);
+			float litter;
+			vec3 leaf_c;
+			if (expedition_floor) {
+				float needles = max(abs(local.x) * 0.42, abs(local.y) * 3.65);
+				float leaf = length(local * vec2(0.66, 1.49)) + abs(local.x + local.y) * 0.15;
+				float shape2 = mix(leaf, needles, forest.g);
+				float intact = (1.0 - smoothstep(0.18 - aa, 0.18 + aa, shape2)) * step(0.23, scatter.y);
+				litter = intact * (1.0 - smoothstep(0.25, 0.9, aa));
+				vec3 exp_leaf = mix(vec3(0.36, 0.19, 0.083), vec3(0.51, 0.30, 0.12), scatter.x);
+				leaf_c = mix(exp_leaf, autumn_leaf, leaf_share * 0.65);
+			} else {
+				float shape = mix(abs(local.x) * 0.75 + abs(local.y) * 1.5,
+					max(abs(local.x) * 0.55, abs(local.y) * 5.0), forest.g);
+				litter = (1.0 - smoothstep(0.13 - aa, 0.13 + aa, shape));
+				litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
+				leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), autumn_leaf, leaf_share * 0.85);
+			}
+			soil = mix(soil, leaf_c, litter * near * (0.55 - moss * 0.25));
 		}
 		if (autumn_ground.x > 0.0) {
 			soil *= mix(vec3(1.0), vec3(0.92, 0.84, 0.76), autumn_ground.x * 0.45);

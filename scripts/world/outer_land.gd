@@ -351,7 +351,7 @@ static func vegetation(w: WorldData, key: Vector2i, surface: Heightfield = null)
 	p = WorldData.NOISE_FIELDS.cost
 	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - pad, y0 - pad, side, side, p[0], p[1])
 	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - pad, y0 - pad, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
-	f.expedition = w.template_id == WorldTemplate.EXPEDITION_ID
+	f.expedition = WorldTemplate.vegetation_config(w.template_id) != null
 	f.veg_params = WorldTemplate.veg_params(w.template_id, w.H)
 	f.plan_h = w.H
 	f.merge(StageVegetation.structure_rect(w, x0 - pad, y0 - pad, side, side))

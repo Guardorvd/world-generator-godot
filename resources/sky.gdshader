@@ -71,7 +71,7 @@ vec3 stars(vec3 ds, float scale, float rare, float size, float bright) {
 }
 
 // ночное небо в направлении d: звёзды, Млечный Путь, туманности, комета, метеоры, луна и сияние
-vec3 night_sky(vec3 d, float sd) {
+vec3 night_sky(vec3 d) {
 	float up = smoothstep(0.0, 0.08, d.y);
 	vec3 md = normalize(moon_dir);
 	float mc = dot(d, md);
@@ -166,13 +166,11 @@ void sky() {
 	float h = max(d.y, 0.0);
 	vec3 col = mix(horizon_color, zenith_color, smoothstep(0.0, 1.0, pow(h, 0.54)));
 	vec3 s_dir = normalize(sun_dir);
-	vec3 m_dir = normalize(moon_dir);
 	float sd = max(dot(d, s_dir), 0.0);
-	float md = max(dot(d, m_dir), 0.0);
 	float above = smoothstep(-0.15, 0.05, s_dir.y);   // гало гаснет, когда солнце глубоко под горизонтом
 	float low_sun = (1.0 - smoothstep(-0.02, 0.32, s_dir.y)) * smoothstep(-0.16, -0.01, s_dir.y);
 	// Двухзонное рассеяние Ми и мягкое зарево вдоль горизонта со стороны солнца
-	float sun_flare_att = 1.0 - overcast_deck * (1.0 - night) * 0.65;
+	float sun_flare_att = 1.0 - overcast_deck * 0.65;
 	float horizon_band = exp(-h * 5.2) * (0.35 + 0.65 * pow(sd, 3.0)) * low_sun * above;
 	col += mix(sun_color, vec3(1.0, 0.48, 0.28), low_sun * 0.55) * horizon_band * 0.24 * sun_flare_att;
 	col += sun_color * (pow(sd, 6.0) * 0.34 + pow(sd, 48.0) * 0.48) * halo * above * sun_flare_att;
@@ -190,10 +188,10 @@ void sky() {
 		// солнце: диск с мягким краем и тесным ореолом, днём не ярче, чем выдержит тоновая кривая
 		float sun_up = smoothstep(-0.05, 0.02, s_dir.y);
 		float sun_disc = smoothstep(0.99925, 0.99965, sd) * sun_up;
-		float disc_att = 1.0 - overcast_deck * (1.0 - night) * 0.88;
+		float disc_att = 1.0 - overcast_deck * 0.88;
 		col += sun_color * (sun_disc * 2.8 + pow(sd, 1400.0) * 0.55 * sun_up) * disc_att;
 		if (night > 0.001) {
-			col += night_sky(d, sd) * night;
+			col += night_sky(d) * night;
 		}
 
 		if (d.y > 0.005) {
@@ -211,7 +209,7 @@ void sky() {
 		// В карте отражений (AT_CUBEMAP_PASS) — согласованный по времени суток отсвет облачного покрова для воды и поверхностей
 		vec2 uv_c = sky_uv(d, 0.12) + vec2(cloud_time * 0.012, cloud_time * 0.004) + vec2(cloud_seed * 0.37, cloud_seed * 0.61);
 		float cn = smoothstep(0.62 - cloud_cover * 0.45, 0.82 - cloud_cover * 0.35, noise(uv_c * 1.4));
-		float deck_r = overcast_deck * (1.0 - night);
+		float deck_r = overcast_deck;
 		cn = mix(cn, 0.90, deck_r);
 		vec3 refl_cloud = mix(cloud_color * 0.92, mix(sun_color, vec3(1.0, 0.52, 0.34), low_sun * 0.5) * 0.95, low_sun * 0.55 * (1.0 - deck_r * 0.70));
 		refl_cloud = mix(refl_cloud, mix(zenith_color, horizon_color, 0.5) * 1.15, night * 0.65);

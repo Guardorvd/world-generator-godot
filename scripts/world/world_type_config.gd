@@ -92,41 +92,50 @@ const RP_FLOOR_GULLY_END := 81
 const RP_COUNT := 82
 
 @export_group("Рельеф лесного дна долины")
-## Масштаб холмов в клетках и амплитуда в долях высоты мира.
+## Поперечный масштаб холмов лесного дна в клетках; увеличение делает холмы шире.
 @export var meso_scale := 14.0
+## Амплитуда холмов лесного дна в долях высоты мира (0 отключает холмы).
 @export var meso_amp := 0.0
-## Наклон осей и отношение продольного масштаба холмов к поперечному.
+## Наклон осей шума холмов относительно оси долины; меняет ориентацию увалов.
 @export var meso_skew := 0.0
+## Отношение продольного масштаба холмов к поперечному; вытягивает холмы вдоль долины.
 @export var meso_aspect := 1.0
-## Сдвиг выборки шума холмов в координатах шума.
+## Сдвиг выборки шума холмов в координатах шума (x, y).
 @export var meso_phase := Vector2.ZERO
-## Наклон осей гребней и масштабы гребней относительно масштаба холмов.
+## Наклон осей шума гребней на холмах лесного дна.
 @export var meso_ridge_skew := 0.0
+## Поперечный масштаб гребней относительно масштаба холмов meso_scale.
 @export var meso_ridge_scale_x := 1.0
+## Продольный масштаб гребней относительно масштаба холмов meso_scale.
 @export var meso_ridge_scale_y := 1.0
+## Сдвиг выборки шума гребней в координатах шума (x, y).
 @export var meso_ridge_phase := Vector2.ZERO
-## Диапазон усиления гребней, уровень отсчёта и относительная амплитуда.
+## Нижний порог усиления гребней лесного дна.
 @export var meso_ridge_min := 0.0
+## Верхний порог усиления гребней лесного дна.
 @export var meso_ridge_max := 1.0
+## Базовый уровень отсчёта гребневого шума на холмах дна.
 @export var meso_ridge_center := 0.0
+## Относительная амплитуда заострения гребней лесного дна.
 @export var meso_ridge_gain := 0.0
-## Отступы от воды, на которых холмы появляются и набирают полную силу, в клетках.
+## Отступ от воды, на котором холмы лесного дна начинают проявляться, в клетках.
 @export var meso_dry_start := 0.0
+## Отступ от воды, на котором холмы лесного дна набирают полную силу, в клетках.
 @export var meso_dry_end := 1.0
-## Размах модуляции высоты и длины спада берега по полю суши.
+## Размах модуляции высоты и длины спада берега по полю суши (0..0.99).
 @export var bank_variation := 0.0
-## Масштаб пятен берега в клетках по x и y и сдвиг выборки в координатах шума.
+## Масштаб пятен модуляции берега в клетках по x и y.
 @export var bank_variation_scale := Vector2.ONE
+## Сдвиг выборки пятен модуляции берега в координатах шума (x, y).
 @export var bank_variation_phase := Vector2.ZERO
-## Глубина распадка ниже предгорий, в долях высоты мира.
+## Глубина продольного распадка ниже предгорий, в долях высоты мира.
 @export var floor_gully := 0.0
-## Отступы от воды, на которых распадок появляется и набирает полную глубину, в клетках.
+## Отступ от воды, на котором распадок начинает врезаться, в клетках.
 @export var floor_gully_start := 0.0
+## Отступ от воды, на котором распадок набирает полную глубину, в клетках.
 @export var floor_gully_end := 1.0
 ## Доля снятия ослабления микрорельефа в низинах и множитель амплитуды.
 @export var valley_micro := Vector2(0.0, 1.0)
-## Верхний уклон клетки для технических якорей. Ноль сохраняет выбор террасы.
-@export var anchor_terrain_slope := 0.0
 
 @export_group("Тип мира и размеры")
 ## Уникальный id типа мира (задаёт папки кэша, сохранений и истории).
@@ -373,8 +382,6 @@ const RP_COUNT := 82
 @export var finish_bend_len := 118.0
 ## Боковой уход реки за лесистый мыс на финише (клеток); увеличение сильнее уводит реку за мыс.
 @export var finish_bend_shift := 44.0
-## Минимальный отступ оси реки от боковых краёв плана (клеток); увеличение держит реку ближе к центру.
-@export var axis_margin_normal := 42.0
 ## Минимальный отступ оси реки со стороны дороги (клеток); увеличение оставляет шире лесной коридор.
 @export var axis_margin_road := 84.0
 ## Минимальный отступ оси реки со стороны противоположного берега (клеток); увеличение даёт запас до края плана.
@@ -481,6 +488,8 @@ const RP_COUNT := 82
 @export var anchor_inland_streak_chance := 0.55
 ## Вероятность задержаться у реки на два узла подряд; увеличение удлиняет береговые отрезки.
 @export var anchor_river_streak_chance := 0.30
+## Верхний уклон клетки для технических якорей. Ноль сохраняет выбор террасы.
+@export var anchor_terrain_slope := 0.0
 ## Дополнительный отступ траверса в лес от носа отрога (клетки). 0 — одиночные якоря.
 @export var anchor_traverse_reach := 0.0
 ## Подбор площадок и форма связок через отроги.
@@ -563,6 +572,8 @@ const RP_COUNT := 82
 @export var map_corridor_width_mul := 2.3
 
 @export_group("Полотно и микрорельеф")
+## Включает лесную подстилку экспедиции (тёмный перегной, оливковый мох, хвоя/опад) в terrain.gdshader.
+@export var expedition_floor := false
 ## Множитель высоты кочек и глубины колеи лесной тропы RoadBump (1.0 — базовое значение Типа 1).
 @export var trail_bump_scale := 1.0
 ## Доля клеток 2.5 м с грязевыми выбоинами на лесной тропе (0.0 — как в Типе 1).
@@ -598,7 +609,7 @@ func relief_params() -> PackedFloat64Array:
 	const EPS := 0.0001
 	p[RP_MESO_SCALE] = maxf(EPS, meso_scale)
 	p[RP_MESO_AMP] = meso_amp
-	p[RP_BANK_VARIATION] = bank_variation
+	p[RP_BANK_VARIATION] = clampf(bank_variation, 0.0, 0.99)
 	p[RP_FLOOR_GULLY] = floor_gully
 	p[RP_MICRO_OPEN] = valley_micro.x
 	p[RP_MICRO_GAIN] = valley_micro.y
@@ -626,7 +637,7 @@ func relief_params() -> PackedFloat64Array:
 	p[RP_WARP_SCALE] = warp_scale
 	p[RP_WARP_AMP] = warp_amp
 	p[RP_BANK_HEIGHT] = bank_height
-	p[RP_BANK_DECAY] = bank_decay
+	p[RP_BANK_DECAY] = maxf(EPS, bank_decay)
 	p[RP_DAMP_START] = channel_damp_start
 	p[RP_DAMP_END] = channel_damp_end
 	p[RP_FOLDS_FINE_SCALE] = folds_fine_scale
@@ -709,7 +720,7 @@ func geo_cache_digest() -> String:
 		valley_swing_wave, valley_swing_amp, valley_swing_warp, valley_swing_warp_scale,
 		meander_slow_scale, meander_med_scale, meander_amp_max, meander_amp_width_frac,
 		head_bend_y, head_bend_span, head_bend_shift, finish_bend_len, finish_bend_shift,
-		axis_margin_normal, axis_margin_road, axis_margin_opp, axis_margin_bend, axis_soft_margin,
+		axis_margin_road, axis_margin_opp, axis_margin_bend, axis_soft_margin,
 		river_hw_start, river_hw_end, river_hw_power, river_hw_mod, river_hw_min, river_hw_max,
 		river_depth_base_m, river_depth_per_hw_m, river_ribbon_step, river_ribbon_margin_m,
 		river_mask_pad, lake_exclude_margin,
@@ -743,3 +754,9 @@ func places_cache_digest() -> String:
 ## Детерминированный хеш параметров генерации растительности: правка перестраивает слой nature.
 func nature_cache_digest() -> String:
 	return vegetation.cache_digest() if vegetation != null else "none"
+
+
+## Детерминированный хеш параметров микрорельефа колеи (RoadBump): правка перестраивает артефакт surface.
+func surface_cache_digest() -> String:
+	var values: Array = [trail_bump_scale, trail_forest_holes, trail_single_rut, trail_single_rut_w]
+	return var_to_str(values).sha256_text().left(16)

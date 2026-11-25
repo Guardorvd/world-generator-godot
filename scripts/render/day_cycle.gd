@@ -63,7 +63,6 @@ const KEYS := [
 var env: Environment
 var light: DirectionalLight3D
 var sky_mat: ShaderMaterial
-var terrain_mats: Array = []   # материалы рельефа: солнечные пятна под пологом гаснут вместе с солнцем
 var atmosphere: WorldAtmosphereConfig = null # профиль пасмурности, тумана и света типа мира (null — прежний Тип 1)
 var sunlight := 1.0            # 0..1: насколько сейчас светит именно солнце
 var camera: Camera3D           # совместимость с игровыми и съёмочными инструментами
@@ -78,7 +77,6 @@ var _clock := NAN              # часы без сброса в полночь:
 var _night := 0x7fffffff
 var _shader_globals := {}
 var _dark_active := true       # были ли включены ночные параметры шейдера неба на прошлом кадре
-var _last_sunlight := -1.0     # кэш sunlight для материалов рельефа
 
 
 func _init(environment: Environment, sun: DirectionalLight3D) -> void:
@@ -279,14 +277,11 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	var cloud_col_use: Color = Color(s[10]).lerp(atm.overcast_cloud_color, atm_blend) if atm != null else s[10]
 	var sun_col_use: Color = Color(s[3]).lerp(atm.overcast_sun_color, atm_blend * 0.75) if atm != null else s[3]
 	env.fog_light_color = horizon_use
-	env.ambient_light_color = s[5]
-	env.ambient_light_energy = s[6]
 	var haze: Color = horizon_use
 	_publish_global(&"style_haze", Vector3(haze.r, haze.g, haze.b))
 	_publish_global(&"sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
 	env.fog_sun_scatter = 0.06 + float(s[8]) * 0.22 * (lerpf(1.0, atm.sun_halo_mul, day_mask) if atm != null else 1.0)
 	var mist: float = s[15]
-	env.adjustment_saturation = s[13]
 	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
 	# свет через облака: чем гуще облачность, тем мягче и слабее прямое солнце, тем больше рассеянного света неба
 	if sun.y > 0.0:
@@ -319,7 +314,7 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	_air_density = lerpf(_air_density, air_target, fog_blend)
 	var mist_tint: Color = horizon_use
 	if env.volumetric_fog_enabled:
-		mist_tint = Color(0.86, 0.90, 0.95).lerp(mist_tint, 0.12 if atm == null else 0.48)
+		mist_tint = Color(0.86, 0.90, 0.95).lerp(mist_tint, 0.12 if atm == null else atm.volumetric_horizon_tint)
 		env.volumetric_fog_density = _air_density
 		env.volumetric_fog_albedo = mist_tint
 		light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
@@ -340,7 +335,7 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	env.fog_aerial_perspective = clampf(lerpf(0.24, 0.40, maxf(overcast, float(s[8]) * 0.6)) * (atm.aerial_perspective_mul if atm != null else 1.0), 0.0, 0.85)
 	# Облегчённая проекция: общие ветер, покрытие и сид; силуэты облаков приближённые.
 	var shadow_ofs := Vector2(seed_phase * 0.37, seed_phase * 0.61) * 160.0
-	var shadow_strength := CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75) * (1.0 - (atm.overcast_deck * 0.55 * day_mask if atm != null else 0.0))
+	var shadow_strength := CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75) * (1.0 - (atm.overcast_deck * atm.overcast_shadow_damp * day_mask if atm != null else 0.0))
 	if shadow_strength > 0.0:
 		ensure_cloud_shadow_texture()
 	_publish_global(&"cloud_shadow", Vector4.ZERO if shadow_strength == 0.0 else
@@ -371,8 +366,3 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 		sky_mat.set_shader_parameter("comet_tail", events.comet_tail)
 		sky_mat.set_shader_parameter("meteor_rate", events.meteor * dark)
 		_dark_active = s[9] > 0.001
-	if absf(sunlight - _last_sunlight) > 0.002:
-		_last_sunlight = sunlight
-		for m: ShaderMaterial in terrain_mats:
-			if m != null:
-				m.set_shader_parameter("sunlight", sunlight)

@@ -892,9 +892,11 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		else:
 			cover *= 1.0 - 0.28 * forest_mix
 	var flowers: bool = bd.get("flowers", false) and surface.r < 0.4 and forest_mix < 0.35
+	var flower_mul := 1.0
 	if _veg_cfg != null:
 		shade = clampf(shade + _veg_cfg.carpet_shade_boost * clampf(surface.r * 1.4, 0.0, 1.0), 0.0, 1.0)
-		flowers = flowers and _veg_cfg.carpet_flowers_mul > 0.0
+		flower_mul = _veg_cfg.carpet_flowers_mul
+		flowers = flowers and flower_mul > 0.0
 	var tall: float = clampf(0.6 + 0.45 * lush, 0.55, 1.15) * grow
 	var step := TILE / SUB
 	var refine = heights.road_refinement
@@ -907,7 +909,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	if use_native_tiles and _ride != null and not has_road_patch and (refine != null or path < 2):
 		var fast: Variant = Grid.fast_grid()
 		if fast != null:
-			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r, forest_mix, _expedition)
+			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r, forest_mix, _expedition, flower_mul)
 			if res is Dictionary and res.get("ok", false):
 				if not res.get("any", false):
 					return []
@@ -991,7 +993,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		# Цветы — полянами ~5 м, цвет поляны общий (шум 14 м), изредка другой
 		if flowers and kind < Models.CARPET_SHADE and low == 1.0:
 			var bloom := smoothstep(0.52, 0.78, VegetationLayer._value_noise(x / 5.0, z / 5.0, 269)) * (1.0 - 0.7 * parched)
-			if WGRandom.hash2(gx, gz, 271) < 0.16 * bloom:
+			if WGRandom.hash2(gx, gz, 271) < 0.16 * bloom * flower_mul:
 				var pick := int(VegetationLayer._value_noise(x / 14.0, z / 14.0, 277) * 3.999)
 				if WGRandom.hash2(gx, gz, 281) < 0.25:
 					pick = int(WGRandom.hash2(gx, gz, 283) * 3.999)

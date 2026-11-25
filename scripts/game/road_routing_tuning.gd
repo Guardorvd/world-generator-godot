@@ -90,7 +90,7 @@ func line_edge_weight() -> float:
 
 
 func configure_line_probe(probe: Object) -> void:
-	if probe != null and expedition_grades.x > 0.0:
+	if probe != null:
 		probe.RoadDownhillRatio = downhill_ratio()
 		probe.RoadEdgeGradeWeight = line_edge_weight()
 
@@ -98,6 +98,15 @@ func configure_line_probe(probe: Object) -> void:
 func valid() -> bool:
 	for table: Dictionary in [climb_costs, turn_costs, bend_costs, straighten, line_relax]:
 		if not valid_kind_values(table, KINDS):
+			return false
+	for exp_val: float in [
+		expedition_grades.x, expedition_grades.y,
+		expedition_connector_limits.x, expedition_connector_limits.y, expedition_connector_limits.z, expedition_connector_limits.w,
+		expedition_cross, expedition_edge_grade, expedition_descent_weight,
+		expedition_cell_cost.x, expedition_cell_cost.y, expedition_cell_cost.z,
+		expedition_turn_speed, expedition_turn_terrain,
+		expedition_shore_avoid.x, expedition_shore_avoid.y, expedition_shore_avoid.z]:
+		if not is_finite(exp_val) or exp_val < 0.0:
 			return false
 	return (not character_field.is_empty() and not network_rules.is_empty() and not line_shape.is_empty()
 		and is_finite(bridge_cost) and bridge_cost >= 1.0 and is_finite(side_cost) and side_cost >= 1.0

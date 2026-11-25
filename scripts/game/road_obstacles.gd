@@ -30,9 +30,7 @@ const JUNCTION := 8.0    # ближе к другому пути (м) — раз
 const SEED := 11606
 ## Кочка мелкого препятствия под колесом: [радиус, высота] при масштабе 1, м
 const BUMP := {BRANCH: Vector2(0.14, 0.07), STONES: Vector2(0.65, 0.11), ROOT: Vector2(0.08, 0.05)}
-const ROOT_REACH := 3.5  # от кромки полотна до ствола, м: дальше корни на тропу не выходят
-const ROOT_TREE := 0.85  # масштаб дерева, с которого у него крупные корни (ствол около 0,2 м, как VegetationLayer.ROOT_TRUNK)
-const TRUNK_UNIT := 0.23 # м: ствол, которому соответствует масштаб 1 в ROOT_TREE
+const TRUNK_UNIT := 0.23 # м: ствол, которому соответствует масштаб 1 для корней (_tuning.root_tree_min)
 const LOOK := 6.0        # радиус поиска причин вокруг отрезка за кромкой, м
 
 var world: WorldData
@@ -571,11 +569,12 @@ func pick_verge(h: Heightfield, surface: Image, route: int, n: int) -> Dictionar
 		prop_radius = 0.95 * scale
 	var lat_offset := maxf(half, TrailTechnical.CORRIDOR) + prop_radius + inward_swing + lerpf(_veg_cfg.verge_shoulder_min, _veg_cfg.verge_shoulder_max, _roll(route, n, 73))
 	var at := mid + side * edge_side * lat_offset
+	if h.depth_at(at.x, at.y) > 0.0:
+		return {}
 	var ai := floori(at.x / TILE)
 	var aj := floori(at.y / TILE)
-	if ai >= 0 and aj >= 0 and ai < world.W and aj < world.H:
-		if world.river[aj * world.W + ai] != 0 or h.depth_at(at.x, at.y) > 0.0:
-			return {}
+	if ai >= 0 and aj >= 0 and ai < world.W and aj < world.H and world.river[aj * world.W + ai] != 0:
+		return {}
 	var dy_mid := absf(support.ground_at(at.x, at.y) - support.ground_at(mid.x, mid.y))
 	if dy_mid > 2.6:
 		return {}

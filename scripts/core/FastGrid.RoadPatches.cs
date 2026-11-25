@@ -354,7 +354,7 @@ public partial class FastGrid
 				RoadVertexOne(n, points[n], selected, u, dist, side, width, height, tile, step, index.Half, index.Road, index.Kind, index.Surface,
 					index.Next, index.Ha, index.Hb, index.Along, index.Len2, index.Route, index.A, index.Delta,
 					fitStart, fitCount, fit, corStart, corCount, surfaces, ground, water, distWater, noise, origin,
-					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags, active,
+					structStarts, structs, steepLo, steepHi, waterGap, pinStart, pinStart + pinFade, hs, colors, uv, surface, roadFlags, active,
 					selected >= 0 && authoredRoutes[index.Route[selected]] != 0, tread);
 				vertexRoute[n] = selected >= 0 ? index.Route[selected] : -1;
 			}
@@ -471,7 +471,7 @@ public partial class FastGrid
 		double tile, double step, double[] segHalf, byte[] segRoad, byte[] segKind, int[] segSurf, int[] segNext, double[] segHa, double[] segHb, double[] segAlong,
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, RoadFitData fit,
 		int[] corStart, int[] corCount, double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
-		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap,
+		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap, double pinStart, double pinEnd,
 		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut, bool[] active, bool authored, double[] tread)
 	{
 		double x = pt.X, z = pt.Y;
@@ -502,7 +502,7 @@ public partial class FastGrid
 		int key = Math.Clamp((int)Math.Floor(z / tile - 0.5), 0, height - 2) * width + Math.Clamp((int)Math.Floor(x / tile - 0.5), 0, width - 2);
 		double structurePin = 1.0;
 		for (int s = structStarts[key]; s < structStarts[key + 1]; s++)
-			structurePin = Math.Min(structurePin, RoadSmooth(6.0, 10.0, RoadSegmentDistance(x, z, structs, s * 4)));
+			structurePin = Math.Min(structurePin, RoadSmooth(pinStart, pinEnd, RoadSegmentDistance(x, z, structs, s * 4)));
 		pin = Math.Min(pin, structurePin);
 		double gx = RoadGround(ground, width, height, tile, x + 1.0, z) - RoadGround(ground, width, height, tile, x - 1.0, z);
 		double gz = RoadGround(ground, width, height, tile, x, z + 1.0) - RoadGround(ground, width, height, tile, x, z - 1.0);

@@ -4,7 +4,7 @@
 // поэтому их можно считать заранее в текстуру купола и брать из неё.
 // sky_clouds(d) возвращает (C, T): небо под облаками превращается в col * T + C (три яруса и лучи).
 // Перед #include шейдер объявляет параметры: zenith_color, horizon_color, sun_dir, sun_color, halo,
-// moon_dir, night, cloud_color, cloud_cover, cumulus_steps, cloud_time, cloud_seed, moon_phase, cloud_lite.
+// moon_dir, night, cloud_color, cloud_cover, overcast_deck, cumulus_steps, cloud_time, cloud_seed, moon_phase, cloud_lite.
 
 const mat2 OCT_ROT = mat2(vec2(0.80, 0.60), vec2(-0.60, 0.80));
 
@@ -120,7 +120,7 @@ float cumulus_density_at(vec2 p, float h, float cov, float morph, bool shadow_pa
 
 	// Башни сужаются к вершине: широкое основание и рельефные пики наверху
 	float taper = mix(0.0, 0.16, (h * h) / max(out_tower, 0.38));
-	float deck_day = overcast_deck * (1.0 - smoothstep(0.15, 0.75, night));
+	float deck_day = overcast_deck;
 	float eff_cov = clamp(cov * mix(0.90, 1.08, deck_day) - taper * (1.0 - 0.55 * deck_day), 0.06, mix(0.74, 0.96, deck_day));
 	float edge = 1.0 - eff_cov;
 
@@ -254,7 +254,7 @@ vec4 sky_clouds(vec3 d) {
 		}
 	}
 
-	float deck_day = overcast_deck * (1.0 - smoothstep(0.15, 0.75, night));
+	float deck_day = overcast_deck;
 	if (deck_day > 0.001) {
 		vec2 uv_deck = sky_uv(d, 0.14) * 1.15 + wind * 0.75 + seed_ofs * 0.5;
 		float stratus_var = fbm_flow(uv_deck, morph * 0.45);

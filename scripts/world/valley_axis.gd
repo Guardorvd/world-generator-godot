@@ -66,6 +66,13 @@ static func get_axis(p_seed: int, p_w: int, p_h: int, p_cfg: WorldTypeConfig = n
 	return built
 
 
+## Сбрасывает кэш таблиц ValleyAxis при перезагрузке шаблонов миров.
+static func clear_cache() -> void:
+	_cache_lock.lock()
+	_cache.clear()
+	_cache_lock.unlock()
+
+
 func _init(p_seed: int = 0, p_w: int = 256, p_h: int = 768, p_cfg: WorldTypeConfig = null) -> void:
 	cfg = p_cfg if p_cfg != null else WorldTemplate.config(WorldTemplate.EXPEDITION_ID)
 	seed_num = p_seed

@@ -100,8 +100,6 @@ func layer_keys() -> PackedStringArray:
 			suffixes["geo"] = WorldTemplate.geo_cache_suffix(template_id)
 			suffixes["places"] = str(suffixes.get("places", "")) + WorldTemplate.places_cache_suffix(template_id)
 			suffixes["nature"] = str(suffixes.get("nature", "")) + WorldTemplate.nature_cache_suffix(template_id)
-		if template_id == WorldTemplate.EXPEDITION_ID:
-			suffixes["nature"] = str(suffixes.get("nature", "")) + "|expedition-vegetation-3"
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
 			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]),
 			suffixes)
@@ -176,7 +174,7 @@ func artifact_key(seed_text: String, size: int, artifact: String) -> String:
 	if layer == 0:
 		return key
 	var tuning := RoadTuning.for_template(template_id)
-	return key + "|" + tuning.digest() + tuning.tread_cache_suffix()
+	return key + "|" + tuning.digest() + tuning.tread_cache_suffix() + WorldTemplate.surface_cache_suffix(template_id)
 
 
 ## Artifact passport without decompressing payloads. Sizes include the retained recovery generation.

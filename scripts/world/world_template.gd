@@ -46,10 +46,11 @@ static func _load_all(fresh := false) -> void:
 	_cache_lock.unlock()
 
 
-static func reload() -> void:
+static func reload_templates() -> void:
 	_cache_lock.lock()
 	_cache.clear()
 	_cache_lock.unlock()
+	ValleyAxis.clear_cache()
 	RoadTuning.clear_template_cache()
 	_load_all(true)
 
@@ -191,6 +192,14 @@ static func nature_cache_suffix(id: String) -> String:
 	if vdigest != "none":
 		suffix += "|v=" + vdigest
 	return suffix
+
+
+## Суффикс артефакта surface по параметрам микрорельефа тропы (пусто для Типа 1).
+static func surface_cache_suffix(id: String) -> String:
+	var tid := normalize_id(id)
+	if tid == DEFAULT_ID:
+		return ""
+	return "|s=" + config(tid).surface_cache_digest()
 
 
 ## Размер плана (W, H) в клетках по сиду и типу. Длина кратна 64 и строго <= 4096 (потолок GPU-текстур).

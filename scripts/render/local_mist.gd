@@ -231,7 +231,7 @@ func _site(key: Vector2i) -> Dictionary:
 		var cell := Vector2i((point / GameConfig.TILE).floor())
 		var data := world.tile_info(cell.x, cell.y)
 		if data.is_empty(): continue
-		var strength := suitability(data, _atm != null)
+		var strength := suitability(data, _atm)
 		if strength <= 0.0: continue
 		if _atm != null:
 			strength *= _atm.local_mist_patch_mul
@@ -260,12 +260,17 @@ func _site(key: Vector2i) -> Dictionary:
 	best.size.z = maxf(48.0, lerpf(100.0, 48.0, smoothstep(3.0, 16.0, relief.y)) * (0.9 + 0.1 * cos(phase)))
 	return best
 
-static func suitability(data: Dictionary, expedition := false) -> float:
+static func suitability(data: Dictionary, atm: WorldAtmosphereConfig = null) -> float:
 	var biome: int = data.get("biome", Biomes.ROCK)
 	if biome in [Biomes.DEEP, Biomes.OCEAN, Biomes.SHALLOW, Biomes.SNOW, Biomes.PEAK]: return 0.0
-	var moisture := smoothstep(0.36 if expedition else 0.48, 0.72 if expedition else 0.82, float(data.get("moist", 0.0)))
+	var moist_lo := atm.local_mist_moist_range.x if atm != null else 0.48
+	var moist_hi := atm.local_mist_moist_range.y if atm != null else 0.82
+	var slope_lo := atm.local_mist_slope_range.x if atm != null else 0.12
+	var slope_hi := atm.local_mist_slope_range.y if atm != null else 0.4
+	var min_suit := atm.local_mist_min_suitability if atm != null else 0.2
+	var moisture := smoothstep(moist_lo, moist_hi, float(data.get("moist", 0.0)))
 	var lowland := 1.0 - smoothstep(0.35, 0.72, float(data.get("elev", 1.0)))
-	var gentle := 1.0 - smoothstep(0.16 if expedition else 0.12, 0.55 if expedition else 0.4, float(data.get("slope", 1.0)))
+	var gentle := 1.0 - smoothstep(slope_lo, slope_hi, float(data.get("slope", 1.0)))
 	var habitat := 1.0 if biome in [Biomes.FOREST, Biomes.JUNGLE, Biomes.TAIGA, Biomes.SWAMP, Biomes.LAKE] or data.get("river", false) else 0.45
 	var value := moisture * lowland * gentle * habitat
-	return 0.007 * value if value > (0.14 if expedition else 0.2) else 0.0
+	return 0.007 * value if value > min_suit else 0.0

@@ -25,6 +25,7 @@ extends SceneTree
 ##   -- --verify-phase5    проверка изоляции per-template RoadTuning, 16-поточности, ключей кэша, SurfaceSnapshot и шейдеров
 ##   -- --verify-phase7    проверка полотна Типа 2: корыто, косогор, контруклон, препятствия, паритет RoadBump и проезд
 ##   -- --shots-p7         крупные планы тропы Типа 2 с высоты руля: спуск, косогор, контруклон, корни (нужно окно)
+##   -- --verify-phase12   ревизия Типа 2: матрица инвалидации кэша (geo/places/nature/surface/atmosphere), изоляция Типа 1 и инварианты .tres
 ## Лимит 240 с.
 
 const CONTROL := ["Север-1234", "Туман-4821"]
@@ -83,7 +84,7 @@ func _run() -> void:
 	if not fp_out.is_empty() or not fp_cmp.is_empty():
 		ok = _run_fingerprint(seeds[0], short_dev, explicit_h, fp_out, fp_cmp) and ok
 
-	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--shots-p9") and not args.has("--shots-p10") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not phase82 and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and not args.has("--verify-phase9") and not args.has("--verify-phase10") and fp_out.is_empty() and fp_cmp.is_empty()):
+	if args.has("--geo") or (not args.has("--verify-phase1") and not args.has("--verify-phase2") and not args.has("--roads") and not args.has("--shots") and not args.has("--shots-p3") and not args.has("--shots-p7") and not args.has("--shots-p9") and not args.has("--shots-p10") and not args.has("--phase8") and not args.has("--phase8-drive") and not maple and not phase82 and not args.has("--verify-phase4") and not args.has("--verify-phase5") and not args.has("--verify-phase7") and not args.has("--verify-phase9") and not args.has("--verify-phase10") and not args.has("--verify-phase12") and fp_out.is_empty() and fp_cmp.is_empty()):
 		var maps: Array[Image] = []
 		var rows := []
 		for seed_text: String in seeds:
@@ -136,6 +137,8 @@ func _run() -> void:
 		ok = await _verify_phase10(seeds) and ok
 	if args.has("--shots-p10"):
 		ok = await _capture_phase10_shots(seeds[0], tag) and ok
+	if args.has("--verify-phase12"):
+		ok = _verify_phase12() and ok
 
 	quit(0 if ok else 1)
 
@@ -2209,7 +2212,7 @@ func _verify_phase5() -> bool:
 		failures.append("Type 1 far_material mismatched or aliased Type 2 far shader")
 
 	t2.section.edge = old_edge
-	WorldTemplate.reload()
+	WorldTemplate.reload_templates()
 	var t2_reloaded := RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
 	if t2_reloaded == null or not t2_reloaded.valid():
 		failures.append("reloaded Type 2 RoadTuning invalid")
@@ -3378,3 +3381,184 @@ func _capture_phase10_shots(seed_text: String, tag: String) -> bool:
 	await process_frame
 	GameContext.scope.cache.enabled = prev_cache
 	return true
+
+
+func _verify_phase12() -> bool:
+	const ForestFloor := preload("res://scripts/render/forest_floor.gd")
+	const LocalMist := preload("res://scripts/render/local_mist.gd")
+	var failures: PackedStringArray = []
+	WorldTemplate.reload_templates()
+
+	var cfg1 := WorldTemplate.config(WorldTemplate.DEFAULT_ID)
+	var cfg2 := WorldTemplate.config(WorldTemplate.EXPEDITION_ID)
+	if cfg1 == null or cfg2 == null:
+		push_error("PHASE12_VERIFY FAIL: missing WorldTypeConfig")
+		return false
+	if cfg2.vegetation == null or cfg2.atmosphere == null or cfg2.anchor_tuning == null:
+		push_error("PHASE12_VERIFY FAIL: incomplete river_expedition.tres sub-resources")
+		return false
+
+	# 1. Valid RoadTuning resources for both templates.
+	var rt1 := RoadTuning.current()
+	var rt2 := RoadTuning.for_template(WorldTemplate.EXPEDITION_ID)
+	if rt1 == null or not rt1.valid():
+		failures.append("Type 1 RoadTuning.current() invalid")
+	if rt2 == null or not rt2.valid() or rt2 == rt1:
+		failures.append("Type 2 RoadTuning invalid or aliased")
+
+	# 2. No duplicate nature suffix between WorldTemplate and WorldCache.
+	var nat_sfx := WorldTemplate.nature_cache_suffix(WorldTemplate.EXPEDITION_ID)
+	if nat_sfx.count("expedition-vegetation-3") != 1:
+		failures.append("nature_cache_suffix duplicate/missing marker: %s" % nat_sfx)
+	var road_sfx := WorldCache._road_layer_suffixes(rt2, false)
+	if str(road_sfx.get("nature", "")).contains("expedition-vegetation-3"):
+		failures.append("_road_layer_suffixes unexpectedly contains expedition-vegetation-3")
+
+	# 3. Full cache invalidation & Type-1 isolation matrix.
+	var snap := func(tid: String) -> Dictionary:
+		var c := WorldCache.new()
+		c.set_template(tid)
+		return {
+			layers = c.layer_keys(),
+			base = c.artifact_key("Север-1234", 512, "base"),
+			surf = c.artifact_key("Север-1234", 512, "surface"),
+		}
+	var base1: Dictionary = snap.call(WorldTemplate.DEFAULT_ID)
+	var base2: Dictionary = snap.call(WorldTemplate.EXPEDITION_ID)
+
+	# 3a. Geo edit -> invalidates Type 2 geo..view + base + surface; Type 1 unchanged.
+	var old_swing := cfg2.valley_swing_amp
+	cfg2.valley_swing_amp = old_swing + 3.0
+	var s1: Dictionary = snap.call(WorldTemplate.DEFAULT_ID)
+	var s2: Dictionary = snap.call(WorldTemplate.EXPEDITION_ID)
+	cfg2.valley_swing_amp = old_swing
+	if s2.layers[0] == base2.layers[0] or s2.layers[1] == base2.layers[1] or s2.layers[2] == base2.layers[2] or s2.layers[3] == base2.layers[3] or s2.base == base2.base or s2.surf == base2.surf:
+		failures.append("geo edit did not invalidate all Type 2 layers + base + surface")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 geo edit")
+
+	# 3b. Places + anchor_tuning edit -> keeps geo & base, invalidates places..view + surface; Type 1 unchanged.
+	var old_inland := cfg2.anchor_inland_min
+	cfg2.anchor_inland_min = old_inland + 4.0
+	s1 = snap.call(WorldTemplate.DEFAULT_ID)
+	s2 = snap.call(WorldTemplate.EXPEDITION_ID)
+	cfg2.anchor_inland_min = old_inland
+	if s2.layers[0] != base2.layers[0] or s2.base != base2.base or s2.layers[1] == base2.layers[1] or s2.layers[2] == base2.layers[2] or s2.layers[3] == base2.layers[3] or s2.surf == base2.surf:
+		failures.append("anchor_inland_min invalidation mismatch")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after anchor_inland_min edit")
+
+	var old_apex := cfg2.anchor_tuning.turn_apex.duplicate()
+	cfg2.anchor_tuning.turn_apex[0] = old_apex[0] + 0.05
+	s1 = snap.call(WorldTemplate.DEFAULT_ID)
+	s2 = snap.call(WorldTemplate.EXPEDITION_ID)
+	cfg2.anchor_tuning.turn_apex = old_apex
+	if s2.layers[0] != base2.layers[0] or s2.base != base2.base or s2.layers[1] == base2.layers[1] or s2.surf == base2.surf:
+		failures.append("anchor_tuning.turn_apex invalidation mismatch")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after anchor_tuning.turn_apex edit")
+
+	# 3c. Vegetation edit -> keeps geo/places/base, invalidates nature/view/surface; Type 1 unchanged.
+	var old_spruce := cfg2.vegetation.spruce_base_share
+	cfg2.vegetation.spruce_base_share = old_spruce + 0.05
+	s1 = snap.call(WorldTemplate.DEFAULT_ID)
+	s2 = snap.call(WorldTemplate.EXPEDITION_ID)
+	cfg2.vegetation.spruce_base_share = old_spruce
+	if s2.layers[0] != base2.layers[0] or s2.layers[1] != base2.layers[1] or s2.base != base2.base or s2.layers[2] == base2.layers[2] or s2.layers[3] == base2.layers[3] or s2.surf == base2.surf:
+		failures.append("vegetation spruce_base_share invalidation mismatch")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 vegetation edit")
+
+	# 3d. RoadTuning edit -> invalidates Type 2 nature/view/surface; Type 1 unchanged.
+	var old_dish := rt2.trail.dish
+	rt2.trail.dish = old_dish - 0.02
+	s1 = snap.call(WorldTemplate.DEFAULT_ID)
+	s2 = snap.call(WorldTemplate.EXPEDITION_ID)
+	rt2.trail.dish = old_dish
+	if s2.layers[2] == base2.layers[2] or s2.surf == base2.surf:
+		failures.append("Type 2 trail.dish edit did not invalidate nature/surface")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 trail.dish edit")
+
+	# 3e. Surface bump edit -> keeps geo..view & base unchanged, ONLY invalidates Type 2 surface; Type 1 unchanged.
+	var old_bump := cfg2.trail_bump_scale
+	cfg2.trail_bump_scale = old_bump + 0.25
+	s1 = snap.call(WorldTemplate.DEFAULT_ID)
+	s2 = snap.call(WorldTemplate.EXPEDITION_ID)
+	cfg2.trail_bump_scale = old_bump
+	if s2.layers != base2.layers or s2.base != base2.base or s2.surf == base2.surf:
+		failures.append("trail_bump_scale invalidation mismatch (expected surface-only invalidation)")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after trail_bump_scale edit")
+
+	# 3f. Atmosphere & shader-only flag edits -> zero disk cache invalidation in Type 2 or Type 1.
+	var old_deck := cfg2.atmosphere.overcast_deck
+	var old_autumn := cfg2.atmosphere.autumn_strength
+	var old_mist := cfg2.atmosphere.local_mist_min_suitability
+	var old_floor := cfg2.expedition_floor
+	cfg2.atmosphere.overcast_deck = 0.42
+	cfg2.atmosphere.autumn_strength = 0.31
+	cfg2.atmosphere.local_mist_min_suitability = 0.35
+	cfg2.expedition_floor = false
+	s1 = snap.call(WorldTemplate.DEFAULT_ID)
+	s2 = snap.call(WorldTemplate.EXPEDITION_ID)
+	cfg2.atmosphere.overcast_deck = old_deck
+	cfg2.atmosphere.autumn_strength = old_autumn
+	cfg2.atmosphere.local_mist_min_suitability = old_mist
+	cfg2.expedition_floor = old_floor
+	if s2.layers != base2.layers or s2.base != base2.base or s2.surf != base2.surf:
+		failures.append("atmosphere/expedition_floor edit invalidated disk cache keys")
+	if s1.layers != base1.layers or s1.base != base1.base or s1.surf != base1.surf:
+		failures.append("Type 1 keys changed after Type 2 atmosphere edit")
+
+	# 4. ValleyAxis & RoadTuning template caches cleared cleanly on WorldTemplate.reload_templates().
+	var ax := ValleyAxis.get_axis(1234, 384, 1024, cfg2)
+	if ax == null or ValleyAxis._cache.is_empty():
+		failures.append("ValleyAxis.get_axis did not populate cache")
+	WorldTemplate.reload_templates()
+	if not ValleyAxis._cache.is_empty():
+		failures.append("WorldTemplate.reload_templates() did not clear ValleyAxis._cache")
+	if not RoadTuning._by_path.is_empty():
+		failures.append("WorldTemplate.reload_templates() did not clear RoadTuning._by_path")
+	cfg2 = WorldTemplate.config(WorldTemplate.EXPEDITION_ID)
+
+	# 5. relief_params bounds & div-by-zero clamps.
+	var rp_tmp := WorldTypeConfig.new()
+	rp_tmp.bank_variation = 1.5
+	rp_tmp.bank_decay = 0.0
+	var rp := rp_tmp.relief_params()
+	if rp.size() != WorldTypeConfig.RP_COUNT:
+		failures.append("relief_params size mismatch: %d != %d" % [rp.size(), WorldTypeConfig.RP_COUNT])
+	else:
+		if rp[WorldTypeConfig.RP_BANK_VARIATION] > 0.99 or rp[WorldTypeConfig.RP_BANK_DECAY] <= 0.0:
+			failures.append("relief_params failed bank clamps: var=%.3f decay=%.6f" % [rp[WorldTypeConfig.RP_BANK_VARIATION], rp[WorldTypeConfig.RP_BANK_DECAY]])
+		for v: float in rp:
+			if not is_finite(v):
+				failures.append("non-finite value in relief_params()")
+				break
+
+	# 6. ForestFloor NURSE_LOG_SPLIT reachability in wet old forest.
+	var large_cut := 0.9 * (0.10 + 0.28 * 0.9)
+	var v_split := ForestFloor.expedition_variant(ForestFloor.MOSS_LOG, large_cut + 0.02, 0.9, 0.9, 0.2, cfg2.vegetation)
+	if v_split != ForestFloor.NURSE_LOG_SPLIT:
+		failures.append("NURSE_LOG_SPLIT unreachable in ForestFloor.expedition_variant (got %d)" % v_split)
+
+	# 7. LocalMist suitability honors WorldAtmosphereConfig vs Type 1 null.
+	var mist_cell := {biome = Biomes.FOREST, moist = 0.52, elev = 0.20, slope = 0.25, river = false}
+	var m_t1 := LocalMist.suitability(mist_cell, null)
+	var m_t2 := LocalMist.suitability(mist_cell, cfg2.atmosphere)
+	if m_t1 != 0.0 or m_t2 <= 0.0:
+		failures.append("LocalMist suitability mismatch: t1=%.5f t2=%.5f" % [m_t1, m_t2])
+	var old_min_suit := cfg2.atmosphere.local_mist_min_suitability
+	cfg2.atmosphere.local_mist_min_suitability = 0.99
+	var m_t2_hi := LocalMist.suitability(mist_cell, cfg2.atmosphere)
+	cfg2.atmosphere.local_mist_min_suitability = old_min_suit
+	if m_t2_hi != 0.0:
+		failures.append("LocalMist did not honor local_mist_min_suitability threshold (got %.5f)" % m_t2_hi)
+
+	if failures.is_empty():
+		print("PHASE12_VERIFY: PASS (cache_keys=OK, type1_isolated=OK, road_tuning=OK, valley_axis_clear=OK, nurse_split=OK, local_mist=OK)")
+		return true
+	for msg: String in failures:
+		push_error("PHASE12_VERIFY FAIL: " + msg)
+	return false

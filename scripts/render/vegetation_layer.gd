@@ -2286,11 +2286,13 @@ func _prepare_open_cache() -> void:
 func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2: float, n: int, path: int, regions := {}, ctx = null) -> int:
 	var buf: PackedFloat32Array = grass_buf if ctx == null else ctx.grass
 	var w := world
-	if _expedition:
+	var forest_mul := 1.0
+	if _veg_cfg != null:
+		if surface.r > 0.15:
+			forest_mul = lerpf(0.75, _veg_cfg.grass_forest_density_mul, smoothstep(0.15, 0.50, surface.r))
+	elif _expedition:
 		lush *= 1.0 - 0.82 * smoothstep(0.15, 0.63, surface.r)
-	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
-	if _veg_cfg != null and surface.r > 0.15:
-		cnt = floori(float(cnt) * lerpf(0.75, _veg_cfg.grass_forest_density_mul, smoothstep(0.15, 0.50, surface.r)))
+	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * forest_mul * (1.0 - 0.9 * surface.a))
 	if cnt <= 0:
 		return n
 	var tc: Array = gr.tint
@@ -3076,7 +3078,7 @@ func _fill_road(px: float, pz: float) -> void:
 		if _expedition and _veg_cfg != null:
 			var vp_item := road.pick_verge(heights, _forest_surface, pairs[p], pairs[p + 1])
 			if not vp_item.is_empty():
-				var vkind := Floor.FIRST + Floor.variant_kind(vp_item.floor_kind, int(WGRandom.hash2(roundi(vp_item.x * 7.0), roundi(vp_item.z * 7.0), world.seed_num ^ 73) * 3.0))
+				var vkind := Floor.FIRST + int(vp_item.floor_kind)
 				if StreamPolicy.distance_to_coverage(Vector2(vp_item.x, vp_item.z), Vector2(px, pz), _fill_lead) <= (under_r if understory[vkind].far else grass_r):
 					_put_understory(vkind, vp_item.x, vp_item.z, vp_item.rot, vp_item.scale, 1.0, -1, 0.0, true, vp_item.stretch, vp_item.sink)
 		var o := road.pick(heights, _forest_surface, pairs[p], pairs[p + 1])
@@ -3160,7 +3162,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 			elif form_twins and maxf(at.distance_to(_fill_at), at.distance_to(_fill_at + _fill_lead)) > s.x - margin:
 				twin = _far_of[kind]
 	if entry.count >= entry.cap:
-		if (group == kind and _far_of.has(kind)) or (_expedition and entry.get("expedition_form", false) and entry.cap < 8192):
+		if entry.cap < 8192 and ((group == kind and _far_of.has(kind)) or (_expedition and entry.get("expedition_form", false))):
 			# Keep the detailed mesh when the wider reserve outgrows its initial buffer.
 			entry.cap = mini(entry.cap * 2, 8192)
 			entry.buf.resize(entry.cap * STRIDE)
@@ -3222,16 +3224,18 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 					xf = placement.seat_road_span(xf, Floor.log_span(kind - Floor.FIRST), sink, 0.34, 0.70)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
-		elif not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG] and not large_log:
+		elif _expedition and not on_road and floor_kind in [Floor.LOG, Floor.MOSS_LOG] and not large_log:
 			xf = placement.seat_forest_log(xf, Floor.log_span(kind - Floor.FIRST), sink)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
+			pos = xf.origin
 		elif not placement.terrain_fits(xf, local_box, 0.34 if large_log else (0.25 if on_road and floor_kind == Floor.STONES else 0.18)):
 			return RoadPlacement.TERRAIN
 	elif _expedition and floor_kind in [Floor.STUMP, Floor.BOULDER] and (kind - Floor.FIRST) >= Floor.NURSE_LOG:
 		xf = placement.seat_embedded_solid(xf, local_box, sink)
 		if xf == Transform3D.IDENTITY:
 			return RoadPlacement.TERRAIN
+		pos = xf.origin
 	var box: AABB = xf * local_box
 	var clear_box := box
 	if _expedition and _veg_cfg != null and Placement.priority(kind) == 2:
