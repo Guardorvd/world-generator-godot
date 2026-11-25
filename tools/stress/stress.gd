@@ -43,6 +43,7 @@ var report := {tool = "stress", format = 1, cases = [], ablation = {}, memory = 
 var started := 0
 var clock := 0.0
 var beat := 0            # когда шёл последний кадр прогона: если он встал на ошибке скрипта, _process закрывает отчёт
+var beat_frame := 0
 var closed := false
 var case_end := 0        # когда кончился прошлый замер: время подготовки между замерами идёт в setup_s
 # лес
@@ -136,13 +137,18 @@ func _run(groups: Array) -> void:
 	_finish()
 
 
-## Ошибка скрипта обрывает прогон молча, и процесс ждал бы сторожевой таймер: через 20 с без кадров прогона
-## отчёт закрывается с тем, что снято, и кодом 1.
+## Ошибка скрипта может остановить шаги прогона, пока движок продолжает кадры.
+## Долгий одиночный кадр загрузки обрабатывает общий watchdog.
 func _process(_delta: float) -> bool:
-	if beat > 0 and not closed and Time.get_ticks_msec() - beat > 20000:
+	if beat > 0 and not closed and Engine.get_process_frames() > beat_frame + 1 and Time.get_ticks_msec() - beat > 20000:
 		report.failed.append("прогон оборвался после замера %s: ошибка скрипта, см. вывод" % (report.cases[-1].name if not report.cases.is_empty() else "—"))
 		_finish()
 	return false
+
+
+func _mark_progress() -> void:
+	beat = Time.get_ticks_msec()
+	beat_frame = Engine.get_process_frames()
 
 
 func _finish() -> void:
@@ -181,7 +187,7 @@ func _unlock_frames() -> void:
 
 func _frames(n: int) -> void:
 	for i in n:
-		beat = Time.get_ticks_msec()
+		_mark_progress()
 		await process_frame
 
 
@@ -209,7 +215,7 @@ static func _pipeline_counts() -> Vector4i:
 ## Кадры в течение seconds; step(t, dt) — что делать в каждом кадре (камера, подгрузка), его время идёт в work_ms.
 func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var vp := root.get_viewport_rid()
-	beat = Time.get_ticks_msec() # долгая синхронная подготовка перед замером — не остановка
+	_mark_progress()
 	var ms := PackedFloat32Array()
 	var gpu := PackedFloat32Array()
 	var cpu := PackedFloat32Array()
@@ -234,7 +240,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 		_chunk_mark()
 		await process_frame
 		var now := Time.get_ticks_usec()
-		beat = Time.get_ticks_msec()
+		_mark_progress()
 		dt = (now - last) / 1000000.0
 		clock += dt
 		last = now
@@ -781,7 +787,7 @@ func _group_world() -> void:
 	main.start_game(seed_text, size, "", true, template_id)
 	while main.game == null or main.game.player == null or main.busy: # 15.1: main ещё держит заставку первые кадры
 		await process_frame
-		beat = Time.get_ticks_msec()
+		_mark_progress()
 		if Time.get_ticks_msec() - t0 > 330000 or (not main.busy and main.game == null and Time.get_ticks_msec() - t0 > 3000):
 			report.failed.append("мир %s не загрузился за %d с" % [seed_text, (Time.get_ticks_msec() - t0) / 1000])
 			return
@@ -1180,7 +1186,7 @@ func _travel(v: Dictionary) -> void:
 	while game.travel_active() and Time.get_ticks_usec() - t0 < 20000000:
 		var phase := "prepare" if game._travel_task != -1 else "publish"
 		await process_frame
-		beat = Time.get_ticks_msec()
+		_mark_progress()
 		var now := Time.get_ticks_usec()
 		var elapsed := (now - last) / 1000.0
 		if elapsed > worst:
@@ -1207,7 +1213,7 @@ func _reload(seed_text: String, size: int) -> void:
 	main.start_game(seed_text, size)
 	while main.game == null or main.game.player == null or main.busy:
 		await process_frame
-		beat = Time.get_ticks_msec()
+		_mark_progress()
 		if Time.get_ticks_msec() - t0 > 120000 or (not main.busy and main.game == null and Time.get_ticks_msec() - t0 > 3000):
 			report.failed.append("мир %s не загрузился второй раз" % seed_text)
 			return

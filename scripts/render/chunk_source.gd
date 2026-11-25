@@ -151,7 +151,7 @@ func read_detail(key: Vector2i, coarse: Array) -> Array:
 	var arrays := coarse if not coarse.is_empty() else read(-1, key)
 	if arrays.is_empty():
 		return []
-	return heights.fine_relief.BuildMeshes(key.x, key.y, roundi(heights.fine_profile.piece_m / GameConfig.TILE), arrays)
+	return heights.fine_relief.BuildMeshes(key.x, key.y, heights.fine_profile.piece_cells(), arrays)
 
 
 ## Called on the loading worker before the first force_terrain. Later builds go through the shared read queue.

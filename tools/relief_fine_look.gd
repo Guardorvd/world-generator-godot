@@ -5,6 +5,7 @@ extends SceneTree
 ## --fine smooth оставляет только восстановление. --fine compare_forms добавляет к нему малые формы.
 ## --fine compare_mid сравнивает малые формы с полным полем. --fine small оставляет только малые.
 ## --fine compare_lod сравнивает старые и новые LOD на одном поле. --fine legacy_lod пригоден для исходного заезда.
+## --fine ordinary использует обычную детализацию; --fine compare_quality сравнивает её с высокой.
 ## --ride ведёт камеру по оси тропы 60 с со скоростью 22 м/с, --parity сверяет физику с мешем.
 
 const Fixture := preload("res://tools/relief_fine_fixture.gd")
@@ -60,16 +61,20 @@ func _run() -> void:
 		return
 	var comparison_modes: Array = {
 		"both": ["off", "on"], "compare_forms": ["smooth", "small"], "compare_mid": ["small", "on"],
-		"compare_lod": ["legacy_lod", "on"],
+		"compare_lod": ["legacy_lod", "on"], "compare_quality": ["on", "ordinary"],
 	}.get(fine, [])
-	if DisplayServer.get_name() == "headless" or (comparison_modes.is_empty() and fine not in ["off", "on", "smooth", "small", "legacy_lod"]) or (not comparison_modes.is_empty() and args.has("--ride")):
-		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|both|smooth|small|legacy_lod|compare_forms|compare_mid|compare_lod (заезд с одним вариантом)")
+	if DisplayServer.get_name() == "headless" or (comparison_modes.is_empty() and fine not in ["off", "on", "ordinary", "smooth", "small", "legacy_lod"]) or (not comparison_modes.is_empty() and args.has("--ride")):
+		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|ordinary|both|smooth|small|legacy_lod|compare_forms|compare_mid|compare_lod|compare_quality (заезд с одним вариантом)")
 		quit(1)
 		return
 	var measure := args.has("--measure")
 	var parity := args.has("--parity")
 	root.size = Vector2i(1920, 1080) if measure else Vector2i(960, 540)
-	root.msaa_3d = Viewport.MSAA_DISABLED
+	var settings := GameSettings.new()
+	var settings_path := Dev.arg("settings", "")
+	if not settings_path.is_empty():
+		settings.settings_path = settings_path
+		settings.load_settings()
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	var viewport := root.get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(viewport, measure)
@@ -96,12 +101,15 @@ func _run() -> void:
 		if mkdir != OK:
 			_expect(false, "папка прогона %s: %s" % [folder, error_string(mkdir)])
 			continue
+		var prepare_ms := 0.0
 		if mode != "off":
-			fixture.heights.prepare_fine_relief(mode != "smooth", mode in ["on", "legacy_lod"], mode == "on" and fine != "compare_mid")
+			var prepare_started := Time.get_ticks_usec()
+			fixture.heights.prepare_fine_relief(mode != "smooth", mode in ["on", "ordinary", "legacy_lod"], mode in ["on", "ordinary"] and fine != "compare_mid")
+			prepare_ms = (Time.get_ticks_usec() - prepare_started) / 1000.0
 			if fixture.heights.fine_relief == null:
 				_expect(false, "точное поле не готово на " + seed)
 				continue
-		_build_scene(fixture.world, fixture.heights)
+		_build_scene(fixture.world, fixture.heights, mode != "ordinary")
 		var rows: Array = []
 		var capture_views: Array = [] if args.has("--ride") else fixture.views
 		var sheet := Image.create_empty(SHOT_SIZE.x * Fixture.VIEW_NAMES.size(), SHOT_SIZE.y, false, Image.FORMAT_RGB8)
@@ -111,6 +119,8 @@ func _run() -> void:
 			var target: Vector3 = view.target
 			var focus: Vector2 = view.focus
 			var uploads := _place_camera(eye, target)
+			if mode == "ordinary":
+				_check_coarse_shadows()
 			var shot := await _grab()
 			shot.convert(Image.FORMAT_RGB8)
 			var repeated := true
@@ -141,9 +151,11 @@ func _run() -> void:
 			if i == 0:
 				row.repeat_identical = repeated
 			if measure:
-				_sun.shadow_enabled = true
+				root.msaa_3d = settings.msaa as Viewport.MSAA
+				_sun.shadow_enabled = settings.shadows
 				row.merge(await _measure(viewport))
 				_sun.shadow_enabled = false
+				root.msaa_3d = Viewport.MSAA_DISABLED
 			if parity:
 				_expect(row.parity_samples > 0 and row.parity_failed == 0, "паритет %s %s: %d / %d, max %.4f мм" %
 					[seed, row.name, row.parity_failed, row.parity_samples, row.max_error_mm])
@@ -173,6 +185,8 @@ func _run() -> void:
 				_expect(sheet.save_png(folder.path_join("relief_fine_sheet.png")) == OK, "запись листа " + seed)
 		var ride := {}
 		if args.has("--ride"):
+			root.msaa_3d = settings.msaa as Viewport.MSAA if measure else Viewport.MSAA_DISABLED
+			_sun.shadow_enabled = settings.shadows
 			ride = await _ride(fixture.route)
 			_expect(not ride.is_empty(), "нет 1320 м непрерывной тропы для заезда")
 			if _terrain.morph_lod != null:
@@ -183,15 +197,17 @@ func _run() -> void:
 		_expect(file != null, "запись метрик " + seed)
 		if file != null:
 			file.store_string(JSON.stringify({seed = seed, renderer = renderer, gpu = adapter, resolution = [root.size.x, root.size.y],
-				custom0_and_instance_uniform = probe, fixture_and_views_ms = setup_ms, views = rows, ride = ride}, "\t"))
+				msaa = settings.msaa if measure else Viewport.MSAA_DISABLED, shadows = settings.shadows,
+				custom0_and_instance_uniform = probe, fixture_and_views_ms = setup_ms, prepare_ms = prepare_ms, views = rows, ride = ride}, "\t"))
 		_source.close()
 		_scene.free()
 	print("RELIEF_RESULT failures=", _failures)
 	quit(int(_failures > 0))
 
 
-func _build_scene(w: WorldData, h: Heightfield) -> void:
+func _build_scene(w: WorldData, h: Heightfield, high_relief_detail: bool) -> void:
 	_heights = h
+	root.msaa_3d = Viewport.MSAA_DISABLED
 	_scene = Node3D.new()
 	root.add_child(_scene)
 	var env := Environment.new()
@@ -217,7 +233,7 @@ func _build_scene(w: WorldData, h: Heightfield) -> void:
 	_terrain.frame_budget = _provider
 	var builder := TerrainBuilder.new()
 	var mat := builder.material(MapBaker.bake(w, WorldLoader.px_for(maxi(w.W, w.H)), true), null, w.template_id)
-	_terrain.setup(chunks, mat, null, w, h, _source)
+	_terrain.setup(chunks, mat, null, w, h, _source, high_relief_detail)
 	_terrain.far_material = builder.far_material(mat)
 	# Вода остаётся на том же меше; останавливаем только движение бликов для повторяемой съёмки.
 	var water_shader := Shader.new()
@@ -242,9 +258,11 @@ func _place_camera(eye: Vector3, target: Vector3, near := PlanTerrain.RADIUS) ->
 	_camera.look_at(target)
 	var p := Vector2(eye.x, eye.z)
 	_source.prewarm([p], near)
-	if _heights.fine_relief != null:
-		var profile := _heights.fine_profile
-		_source.prewarm_detail(PackedVector2Array([p]), profile.transition_end_m + profile.enter_margin_m)
+	var detail_prewarm_ms := 0.0
+	if _terrain.relief_detail != null:
+		var started := Time.get_ticks_usec()
+		_source.prewarm_detail(PackedVector2Array([p]), _terrain.relief_detail.enter_m)
+		detail_prewarm_ms = (Time.get_ticks_usec() - started) / 1000.0
 	_terrain.update(p.x, p.y, true, _heights.fine_relief != null, near)
 	_source.finish_startup()
 	# Статичный вид снимается после подмены всех уровней. В заезде работает обычный бюджет кадра.
@@ -252,7 +270,24 @@ func _place_camera(eye: Vector3, target: Vector3, near := PlanTerrain.RADIUS) ->
 		while _terrain._step_lod(p):
 			pass
 		_expect(_terrain.arrival_ready(p, near), "не все чанки готовы к съёмке")
-	return _source.snapshot()
+	var snapshot: Dictionary = _source.snapshot()
+	snapshot.detail_prewarm_ms = detail_prewarm_ms
+	return snapshot
+
+
+func _check_coarse_shadows() -> void:
+	var detail := _terrain.relief_detail
+	_expect(detail.stats.active > 0, "обычная детализация включает точный меш")
+	for key: Vector2i in detail.entries:
+		if not detail.active(key):
+			continue
+		var entry: Dictionary = detail.entries[key]
+		var shadow: MeshInstance3D = entry.get("shadow")
+		_expect(shadow != null and shadow.mesh == entry.coarse and shadow.position.y < 0.0
+			and shadow.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY,
+			"обычная детализация отбрасывает тени сеткой 4 м")
+		for part: MeshInstance3D in entry.parts:
+			_expect(part.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "точная порция в обычном режиме без теней")
 
 
 func _grab() -> Image:
@@ -294,7 +329,6 @@ func _ride(route: PackedVector2Array) -> Dictionary:
 		length.append(length[-1] + route[i].distance_to(route[i - 1]))
 	if length[-1] < RIDE_SPEED * RIDE_SECONDS + 12.0:
 		return {}
-	_sun.shadow_enabled = true
 	var start := route[0]
 	var forward := start.direction_to(route[1])
 	_place_camera(_at(start, 1.85), _at(start + forward * 12.0, 1.0), PlanTerrain.SIDE)

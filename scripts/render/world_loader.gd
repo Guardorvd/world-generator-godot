@@ -26,6 +26,7 @@ var _prepare_times := {} # One worker writes; the owner merges only after joinin
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
 var surface_hit := false
 var chunk_source: RefCounted
+var high_relief_detail := true
 var _pending_chunk_refs: Array = []
 var opening_spot := {}
 var opening_prepared := false
@@ -341,8 +342,9 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 	chunk_source.prewarm(points, PlanTerrain.RADIUS / 2.0)
 	if heights.fine_relief != null:
 		var profile := heights.fine_profile
+		high_relief_detail = service_scope.settings.relief_quality == GameSettings.ReliefQuality.HIGH
 		var prewarm_started := Time.get_ticks_usec()
-		chunk_source.prewarm_detail(PackedVector2Array(points), profile.transition_end_m + profile.enter_margin_m)
+		chunk_source.prewarm_detail(PackedVector2Array(points), profile.activation_distance_m(high_relief_detail))
 		timings.relief_detail_prewarm_ms = (Time.get_ticks_usec() - prewarm_started) / 1000.0
 	water_arrays.assign([[], []])
 	timings.startup_prefetch_ms = (Time.get_ticks_usec() - t) / 1000.0

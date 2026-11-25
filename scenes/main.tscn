@@ -1455,6 +1455,20 @@ custom_minimum_size = Vector2(126, 40)
 layout_mode = 2
 tooltip_text = "Дальность детализации дорог"
 
+[node name="ReliefRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="ReliefLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/ReliefRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Детализация рельефа"
+
+[node name="ReliefQualityOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/ReliefRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+tooltip_text = "Дальность точного рельефа и его тени. Применяется при следующем входе в «Речную экспедицию»."
+
 [node name="ParticlesRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 layout_mode = 2
 

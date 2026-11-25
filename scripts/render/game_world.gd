@@ -245,7 +245,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	terrain_stream = PlanTerrain.new()
 	terrain_stream.name = "PlanTerrain"
 	$Terrain.add_child(terrain_stream)
-	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights, chunk_source)
+	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights, chunk_source, loaded.high_relief_detail)
 	terrain_stream.far_material = services.terrain.far_material($Terrain.material_override)
 	stream_coordinator.terrain_update = terrain_stream.update
 	terrain_stream.frame_budget = stream_coordinator.frame_budget

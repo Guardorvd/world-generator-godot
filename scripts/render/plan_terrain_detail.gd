@@ -15,15 +15,25 @@ var _ordered: Array[Vector2i] = []
 var _observer := Vector2.INF
 var _priority_at := Vector2.INF
 var _ahead := Vector2.INF
+var enter_m := 0.0
+var _transition_end_m := 0.0
+var _exit_m := 0.0
+var _fine_shadows := true
+var _vertical_margin := 0.0
 var stats := {uploads = 0, switches = 0, late = 0, max_piece_ms = 0.0, active = 0, peak_active = 0}
 
 
-func setup(owner: Node3D, h: Heightfield, chunks: RefCounted, mat: ShaderMaterial) -> void:
+func setup(owner: Node3D, h: Heightfield, chunks: RefCounted, mat: ShaderMaterial, high: bool) -> void:
 	terrain = owner
 	source = chunks
 	heights = h
 	profile = h.fine_profile
-	material = TerrainBuilder.fine_material(mat, profile, h.fine_lod)
+	_transition_end_m = profile.transition_end_for(high)
+	enter_m = profile.activation_distance_m(high)
+	_exit_m = _transition_end_m + profile.exit_margin_m
+	_fine_shadows = high and profile.cast_shadows
+	_vertical_margin = maxf(profile.reconstruction_delta_m, profile.total_delta_m)
+	material = TerrainBuilder.fine_material(mat, profile, _transition_end_m, h.fine_lod)
 
 
 func active(key: Vector2i) -> bool:
@@ -31,7 +41,7 @@ func active(key: Vector2i) -> bool:
 
 
 func ready_at(p: Vector2, radius: float) -> bool:
-	var inside := minf(radius, profile.transition_end_m + profile.enter_margin_m)
+	var inside := minf(radius, enter_m)
 	for key: Vector2i in terrain.nodes:
 		if terrain.distance_to_chunk(key, p) <= inside and not (active(key) or _failed.has(key)):
 			return false
@@ -45,22 +55,20 @@ func follow(p: Vector2, force: bool, lookahead: float, recheck: float) -> void:
 	if force or p.distance_to(_priority_at) >= recheck:
 		_ahead = p if force or not _priority_at.is_finite() else p + (p - _priority_at).normalized() * lookahead
 		_priority_at = p
-	var enter := profile.transition_end_m + profile.enter_margin_m
-	var exit := profile.transition_end_m + profile.exit_margin_m
-	var prefetch := enter + profile.prefetch_m
+	var prefetch := enter_m + profile.prefetch_m
 	for key: Vector2i in entries.keys():
 		var distance: float = terrain.distance_to_chunk(key, p)
-		if distance > (exit if active(key) else prefetch):
+		if distance > (_exit_m if active(key) else prefetch):
 			forget(key)
 	var candidates: Array = []
 	for key: Vector2i in terrain.nodes:
 		if terrain._node_lod[key] != 0 or active(key) or _failed.has(key):
 			continue
 		var distance: float = terrain.distance_to_chunk(key, p)
-		if distance > (enter if force else prefetch):
+		if distance > (enter_m if force else prefetch):
 			continue
 		# Within the switch radius actual distance wins, including after a turn or teleport.
-		var priority: float = distance if distance <= enter else distance + terrain.distance_to_chunk(key, _ahead)
+		var priority: float = distance if distance <= enter_m else distance + terrain.distance_to_chunk(key, _ahead)
 		candidates.append([priority, key, distance])
 	candidates.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 	_ordered.clear()
@@ -73,14 +81,13 @@ func follow(p: Vector2, force: bool, lookahead: float, recheck: float) -> void:
 
 
 func step(p: Vector2, force: bool) -> bool:
-	var enter := profile.transition_end_m + profile.enter_margin_m
 	for key: Vector2i in _ordered:
 		if active(key) or _failed.has(key):
 			continue
 		var d: float = terrain.distance_to_chunk(key, p)
 		var entry: Dictionary = entries.get(key, {})
 		if not entry.is_empty() and entry.parts.size() == entry.total:
-			if d <= enter:
+			if d <= enter_m:
 				_publish(key, entry, d, force)
 			continue
 		var parts: Variant = source.ready(Source.DETAIL_LAYER, key)
@@ -102,11 +109,10 @@ func step(p: Vector2, force: bool) -> bool:
 		var arrays: Array = parts[entry.parts.size()]
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, TerrainBuilder.relief_mesh_format(arrays))
 		var bounds := mesh.get_aabb()
-		var vertical_margin := maxf(profile.reconstruction_delta_m, profile.total_delta_m)
-		bounds.position.y -= vertical_margin
-		bounds.size.y += 2.0 * vertical_margin
+		bounds.position.y -= _vertical_margin
+		bounds.size.y += 2.0 * _vertical_margin
 		mesh.custom_aabb = bounds
-		var shadow := GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if profile.cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var shadow := GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if _fine_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		var node: MeshInstance3D = terrain._acquire_mesh_node(mesh, material, shadow)
 		if terrain.morph_lod != null:
 			node.set_instance_shader_parameter("relief_chunk_bounds", terrain.morph_lod.bounds(key))
@@ -116,7 +122,7 @@ func step(p: Vector2, force: bool) -> bool:
 		stats.max_piece_ms = maxf(stats.max_piece_ms, (Time.get_ticks_usec() - started) / 1000.0)
 		if entry.parts.size() == entry.total:
 			source._release_handoff(source._id(Source.DETAIL_LAYER, key))
-			if d <= enter:
+			if d <= enter_m:
 				_publish(key, entry, d, force)
 		return true
 	return false
@@ -125,6 +131,15 @@ func step(p: Vector2, force: bool) -> bool:
 func _publish(key: Vector2i, entry: Dictionary, distance: float, force: bool) -> void:
 	var coarse: MeshInstance3D = terrain.nodes[key]
 	entry.coarse = coarse.mesh
+	if not _fine_shadows:
+		# Share the mesh and keep the attachments on the original node at ground level.
+		var shadow: MeshInstance3D = terrain._acquire_mesh_node(coarse.mesh, coarse.material_override,
+			GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY)
+		shadow.position.y = -_vertical_margin
+		if terrain.morph_lod != null:
+			shadow.set_instance_shader_parameter("relief_chunk_bounds", terrain.morph_lod.bounds(key))
+			shadow.set_instance_shader_parameter("relief_chunk_lod", Vector3.ZERO)
+		entry.shadow = shadow
 	coarse.mesh = null
 	for node: MeshInstance3D in entry.parts:
 		node.visible = true
@@ -134,7 +149,7 @@ func _publish(key: Vector2i, entry: Dictionary, distance: float, force: bool) ->
 	stats.peak_active = maxi(stats.active, stats.peak_active)
 	if not force:
 		stats.switches += 1
-		stats.late += int(distance < profile.transition_end_m)
+		stats.late += int(distance < _transition_end_m)
 
 
 func forget(key: Vector2i) -> void:
@@ -143,6 +158,10 @@ func forget(key: Vector2i) -> void:
 	var entry: Dictionary = entries[key]
 	if active(key):
 		terrain.nodes[key].mesh = entry.coarse
+		if entry.has("shadow"):
+			var shadow: MeshInstance3D = entry.shadow
+			shadow.position.y = 0.0
+			terrain._release_mesh_node(shadow)
 		heights.fine_relief.SetActive(key.x, key.y, false)
 		heights.ground_changed(true)
 		stats.active -= 1

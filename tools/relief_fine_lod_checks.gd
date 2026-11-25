@@ -43,6 +43,29 @@ static func inspect(detail: Object, source: RefCounted, w: WorldData, focus: Vec
 	return errors
 
 
+static func resumes_after_recovery(h: Heightfield, source: RefCounted, key: Vector2i, point: Vector2) -> bool:
+	var stream := PlanTerrain.new()
+	var material := ShaderMaterial.new()
+	material.shader = TerrainBuilder.SHADER
+	stream.setup({key: source.groups[0][key]}, material, null, h.world, h, source)
+	var node := MeshInstance3D.new()
+	stream.add_child(node)
+	stream.nodes[key] = node
+	stream._node_lod[key] = 2
+	stream._set_lod_mesh(node, key, 2, point, stream._lod_arrays(key, 2))
+	# The first step from 16 m is late after a teleport. The second waits for its blend.
+	stream.update(point.x, point.y)
+	stream.update(point.x, point.y)
+	var ok: bool = stream._node_lod[key] == 1 and stream._lod_at == point and stream.morph_lod._recovering.has(key)
+	if ok:
+		var recovery: Array = stream.morph_lod._recovering[key]
+		recovery[1] -= ceili(h.fine_profile.lod_recover_s * 1000000.0) + 1
+		stream.update(point.x, point.y)
+		ok = stream._node_lod[key] == 0
+	stream.free()
+	return ok
+
+
 static func budget(h: Heightfield, chunks: Dictionary, route: PackedVector2Array) -> Dictionary:
 	var original := PlanTerrain.new()
 	var changed := PlanTerrain.new()

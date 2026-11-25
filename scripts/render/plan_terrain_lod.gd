@@ -25,7 +25,8 @@ func setup(h: Heightfield, keys: Array, base: ShaderMaterial) -> void:
 		_height_ranges[key] = h.fine_relief.LodHeightRange(key.x, key.y)
 
 
-func follow(p: Vector2) -> void:
+func follow(p: Vector2) -> bool:
+	var finished := false
 	if not _recovering.is_empty():
 		var now := Time.get_ticks_usec()
 		for key: Vector2i in _recovering.keys():
@@ -35,12 +36,14 @@ func follow(p: Vector2) -> void:
 			node.set_instance_shader_parameter("relief_lod_recovery", Vector2(recovery[2], alpha))
 			if alpha <= 0.0:
 				_recovering.erase(key)
+				finished = true
 	if p == _observer:
-		return
+		return finished
 	_observer = p
 	_near_material.set_shader_parameter("relief_observer", p)
 	if _far_material != null:
 		_far_material.set_shader_parameter("relief_observer", p)
+	return finished
 
 
 func material_for(base: ShaderMaterial) -> ShaderMaterial:

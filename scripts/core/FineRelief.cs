@@ -44,6 +44,9 @@ public partial class FineRelief : RefCounted
 	{
 		if (profile.Length != (int)Parameter.Count)
 			return false;
+		foreach (double value in profile)
+			if (!double.IsFinite(value))
+				return false;
 		double P(Parameter key) => profile[(int)key];
 		_width = input["width"].AsInt32();
 		_height = input["height"].AsInt32();

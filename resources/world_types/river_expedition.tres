@@ -160,6 +160,7 @@ script = ExtResource("6_relief")
 enabled = true
 full_m = 84.0
 transition_end_m = 152.0
+ordinary_transition_end_m = 112.0
 enter_margin_m = 12.0
 exit_margin_m = 32.0
 piece_m = 128.0

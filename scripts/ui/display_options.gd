@@ -27,6 +27,7 @@ var carpet_range: OptionButton
 var mid_grass: OptionButton # 17.11.2026: дерновины вдали — густота
 var road_quality: OptionButton # 15.11.2026: детализация дорог — качество и дальность
 var road_range: OptionButton
+var relief_quality: OptionButton
 var style_on := {}      # 13.11: «Визуальный стиль» — CheckBox и HSlider у каждого эффекта VisualStyle.EFFECTS
 var style_amount := {}
 var style_value := {}
@@ -66,6 +67,10 @@ func setup(host: Node) -> void:
 	mid_grass = host.get_node("%MidGrassOption")
 	road_quality = host.get_node("%RoadQualityOption")
 	road_range = host.get_node("%RoadRangeOption")
+	relief_quality = host.get_node("%ReliefQualityOption")
+	if relief_quality.item_count == 0:
+		for title: String in GameSettings.RELIEF_QUALITY_LEVELS:
+			relief_quality.add_item(title)
 	if scale.item_count == AUTO_SCALE:
 		scale.add_item("Авто — 100 %, при нагрузке до 80 %")
 	if road_quality.item_count == 0:
@@ -126,10 +131,10 @@ func setup(host: Node) -> void:
 				_host._set_preview_peek(false))
 	apply_button.pressed.connect(preview)
 	_option_buttons = [mode, resolution, scale, aa, draw, flora, lighting, fog_quality, cloud_quality,
-		particles, carpet_density, carpet_range, mid_grass, road_quality, road_range]
+		particles, carpet_density, carpet_range, mid_grass, road_quality, road_range, relief_quality]
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
-	for option: OptionButton in [scale, aa, lighting, fog_quality, cloud_quality, particles, road_range]:
+	for option: OptionButton in [scale, aa, lighting, fog_quality, cloud_quality, particles, road_range, relief_quality]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics(&"graphics"))
 	for option: OptionButton in [draw, flora, carpet_density, carpet_range, mid_grass, road_quality]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics(&"vegetation"))
@@ -172,6 +177,7 @@ func sync() -> void:
 	mid_grass.select(state.get("mid_grass", GameSettings.DEFAULT_MID_GRASS))
 	road_quality.select(state.get("road_quality", GameSettings.DEFAULT_ROAD_QUALITY))
 	road_range.select(state.get("road_range", GameSettings.DEFAULT_ROAD_RANGE))
+	relief_quality.select(state.relief_quality)
 	for id: String in VisualStyle.EFFECTS:
 		var cb: CheckBox = style_on[id]
 		var slider: HSlider = style_amount[id]
@@ -205,7 +211,7 @@ func selected_state() -> Dictionary:
 		shadows = shadows.button_pressed, tree_garlands = tree_garlands.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
 		fog_quality = fog_quality.selected, cloud_quality = cloud_quality.selected, particles = particles.selected,
 		carpet_density = carpet_density.selected, carpet_range = carpet_range.selected, mid_grass = mid_grass.selected,
-		road_quality = road_quality.selected, road_range = road_range.selected}
+		road_quality = road_quality.selected, road_range = road_range.selected, relief_quality = relief_quality.selected}
 
 func pending() -> bool:
 	return not _pending.is_empty()
@@ -223,7 +229,7 @@ func _update_apply() -> void:
 func apply_graphics(category: StringName = &"graphics") -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "adaptive_resolution", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "mid_grass", "road_quality", "road_range"]:
+	for key: String in ["render_scale", "adaptive_resolution", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "mid_grass", "road_quality", "road_range", "relief_quality"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

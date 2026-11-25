@@ -103,7 +103,8 @@ static func partition_reference(arrays: Array) -> Dictionary:
 	return out
 
 
-func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: WorldData = null, h: Heightfield = null, shared_source: RefCounted = null) -> void:
+func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: WorldData = null, h: Heightfield = null,
+		shared_source: RefCounted = null, high_relief_detail := true) -> void:
 	chunks = prepared
 	material = mat
 	_cache = cache
@@ -121,7 +122,7 @@ func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: Wor
 			morph_lod = preload("res://scripts/render/plan_terrain_lod.gd").new()
 			morph_lod.setup(h, chunks.keys(), mat)
 		relief_detail = preload("res://scripts/render/plan_terrain_detail.gd").new()
-		relief_detail.setup(self, h, source, mat)
+		relief_detail.setup(self, h, source, mat, high_relief_detail)
 
 
 func _read_arrays(key: Vector2i) -> Array:
@@ -355,8 +356,9 @@ func _has_near_pending(p: Vector2, radius: float) -> bool:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
 	var p := Vector2(x, z)
-	if morph_lod != null:
-		morph_lod.follow(p)
+	if morph_lod != null and morph_lod.follow(p):
+		# A stationary arrival can still need the next finer level after recovery.
+		_lod_at = Vector2.INF
 	if relief_detail != null:
 		relief_detail.follow(p, force, AHEAD, LOD_RECHECK)
 	if not force and frame_budget != null and not frame_budget.allows_work():
@@ -459,7 +461,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 		uploaded = true
 	if force and allow_apply and relief_detail != null:
 		if _lod_enabled():
-			while _step_lod(p, minf(near, relief_detail.profile.transition_end_m + relief_detail.profile.enter_margin_m), true):
+			while _step_lod(p, minf(near, relief_detail.enter_m), true):
 				pass
 		relief_detail.follow(p, true, AHEAD, LOD_RECHECK)
 		while relief_detail.step(p, true):

@@ -28,6 +28,11 @@ func _run() -> void:
 	var p := cfg.params()
 	_check(p.size() == Profile.RD_COUNT and p[Profile.RD_STEP_M] == cfg.step_m and p[Profile.RD_TILE_BYTES] == cfg.tile_mib * Profile.MIB,
 		"контракт массива настроек")
+	var invalid := cfg.duplicate() as Profile
+	invalid.road_guard_m = -TILE
+	_check(not invalid.valid(CELLS), "отрицательная защита дороги отклоняется")
+	invalid.lod_recover_s = INF
+	_check(not invalid.valid_lod(PlanTerrain.LOD_RECHECK), "бесконечное восстановление LOD отклоняется")
 	var old_profile := WorldTemplate.config(WorldTemplate.DEFAULT_ID).relief_detail
 	_check(old_profile == null or not old_profile.enabled, "точное поле выключено у Типа 1")
 	var hashes := {}
@@ -176,6 +181,9 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 		source.prewarm([origin], 0.0)
 		var expected := var_to_bytes(projected[first_key])
 		_check(var_to_bytes(source.ready(-1, first_key)) == expected, "в загрузке подготовлен именно меш C")
+		if w.seed_text == Fixture.SEEDS[0]:
+			_check(LodChecks.resumes_after_recovery(h, source, first_key, origin),
+				"неподвижное прибытие получает уровень 4 м после поздней подмены 16→8 м")
 		source.finish_startup()
 		_check(var_to_bytes(source.ready(-1, first_key)) == expected, "завершение загрузки сохраняет меш C в ОЗУ")
 		_check(var_to_bytes(source.read(-1, first_key)) == expected, "повторная сборка из исходных данных даёт тот же меш C")
@@ -238,7 +246,7 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 				continue
 			if not meshes.has(key):
 				phases[str(key)] = detail.TileHash(key.x, key.y)
-				meshes[key] = detail.BuildMeshes(key.x, key.y, roundi(h.fine_profile.piece_m / TILE), projected[key])
+				meshes[key] = detail.BuildMeshes(key.x, key.y, h.fine_profile.piece_cells(), projected[key])
 			pieces.append_array(meshes[key])
 		var stats := Metrics.mesh_stats(pieces, h, eye, focus, true)
 		_check(stats.parity_samples > 0 and stats.parity_failed == 0, "%s %d: физика и меш (%d ошибок)" %

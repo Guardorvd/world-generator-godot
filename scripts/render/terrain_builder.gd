@@ -398,9 +398,9 @@ func outer_material(template_id := "") -> ShaderMaterial:
 	return mat
 
 
-static func fine_material(base: ShaderMaterial, profile: Resource, join_edges := false) -> ShaderMaterial:
+static func fine_material(base: ShaderMaterial, profile: Resource, transition_end_m: float, join_edges := false) -> ShaderMaterial:
 	var mat := _relief_morph_material(base, profile, "FINE_RELIEF_MORPH", join_edges)
-	mat.set_shader_parameter("relief_morph_range", Vector2(profile.full_m, profile.transition_end_m))
+	mat.set_shader_parameter("relief_morph_range", Vector2(profile.full_m, transition_end_m))
 	return mat
 
 

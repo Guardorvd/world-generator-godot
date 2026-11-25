@@ -62,6 +62,19 @@ func run() -> void:
 	options.setup(main)
 	main.display_options = options
 	main._sync_settings_controls()
+	var expected_relief := GameSettings.ReliefQuality.HIGH
+	check(options.relief_quality.selected == expected_relief, "high relief detail is selected by default")
+	options.relief_quality.select(GameSettings.ReliefQuality.ORDINARY)
+	options.relief_quality.item_selected.emit(options.relief_quality.selected)
+	var restored_settings := GameSettings.new()
+	restored_settings.settings_path = GameContext.scope.settings.settings_path
+	var saved := GameContext.scope.settings.save_settings()
+	restored_settings.load_settings()
+	check(saved == OK and restored_settings.relief_quality == GameSettings.ReliefQuality.ORDINARY,
+		"ordinary relief detail is saved and restored")
+	GameContext.scope.settings.reset_defaults()
+	options.sync()
+	check(options.relief_quality.selected == expected_relief, "reset restores high relief detail")
 	main.seed_edit.text = "Север-1234"
 	main._show_seed_tab("saved")
 	# 14.2: строка списка ставит своё зерно в поле — один источник выбора
