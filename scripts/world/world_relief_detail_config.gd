@@ -25,10 +25,8 @@ enum {
 @export var step_m := GameConfig.TILE * 0.5
 ## Дальность полной геометрии от игрока, м.
 @export var full_m := 0.0
-## Дальность совпадения точного меша с уровнем 4 м при высокой детализации, м.
+## Дальность совпадения точного меша с уровнем 4 м, м.
 @export var transition_end_m := 0.0
-## Дальность совпадения с уровнем 4 м при обычной детализации, м. Ноль использует высокую дальность.
-@export var ordinary_transition_end_m := 0.0
 ## Запас за концом перехода для включения чанка, м.
 @export var enter_margin_m := 0.0
 ## Запас за концом перехода для выключения чанка, м.
@@ -149,8 +147,6 @@ enum {
 @export var tile_mib := 0
 ## Лимит Миб для массивов точных мешей в общем LRU.
 @export var mesh_mib := 0
-## Разрешать точному уровню отбрасывать тени при высокой детализации.
-@export var cast_shadows := true
 
 const MIB := 1024 * 1024
 
@@ -171,12 +167,8 @@ func params() -> PackedFloat64Array:
 	])
 
 
-func transition_end_for(high: bool) -> float:
-	return transition_end_m if high or ordinary_transition_end_m == 0.0 else ordinary_transition_end_m
-
-
-func activation_distance_m(high: bool) -> float:
-	return transition_end_for(high) + enter_margin_m
+func activation_distance_m() -> float:
+	return transition_end_m + enter_margin_m
 
 
 func piece_cells() -> int:
@@ -187,10 +179,9 @@ func valid(chunk_cells: int) -> bool:
 	if not is_finite(piece_m) or piece_m > chunk_cells * GameConfig.TILE:
 		return false
 	var cells := piece_cells()
-	var ordinary_end := transition_end_for(false)
 	return step_m * 2.0 == GameConfig.TILE and cells > 0 \
 		and is_equal_approx(piece_m, cells * GameConfig.TILE) \
-		and chunk_cells % cells == 0 and full_m > 0.0 and ordinary_end > full_m and ordinary_end <= transition_end_m \
+		and chunk_cells % cells == 0 and full_m > 0.0 and transition_end_m > full_m \
 		and is_finite(transition_end_m) and is_finite(exit_margin_m) and is_finite(prefetch_m) \
 		and exit_margin_m >= enter_margin_m and enter_margin_m >= 0.0 and prefetch_m >= 0.0 \
 		and tile_mib > 0 and mesh_mib > 0

@@ -5,7 +5,6 @@ extends SceneTree
 ## --fine smooth оставляет только восстановление. --fine compare_forms добавляет к нему малые формы.
 ## --fine small оставляет только малые формы без плавных уровней.
 ## --fine compare_lod сравнивает старые и новые LOD на одном поле. --fine legacy_lod пригоден для исходного заезда.
-## --fine ordinary использует обычную детализацию; --fine compare_quality сравнивает её с высокой.
 ## --ride ведёт камеру по оси тропы 60 с со скоростью 22 м/с, --parity сверяет физику с мешем.
 ## Лист: верхний ряд — свет стенда, нижний — свет «для формы» (серая глина, низкое солнце сбоку).
 ## Виды: пять ближних из фикстуры и дальние Fixture.FAR_VIEW_NAMES (план части 2, этап 0).
@@ -79,10 +78,10 @@ func _run() -> void:
 		return
 	var comparison_modes: Array = {
 		"both": ["off", "on"], "compare_forms": ["smooth", "small"],
-		"compare_lod": ["legacy_lod", "on"], "compare_quality": ["on", "ordinary"],
+		"compare_lod": ["legacy_lod", "on"],
 	}.get(fine, [])
-	if DisplayServer.get_name() == "headless" or (comparison_modes.is_empty() and fine not in ["off", "on", "ordinary", "smooth", "small", "legacy_lod"]) or (not comparison_modes.is_empty() and args.has("--ride")):
-		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|ordinary|both|smooth|small|legacy_lod|compare_forms|compare_lod|compare_quality (заезд с одним вариантом)")
+	if DisplayServer.get_name() == "headless" or (comparison_modes.is_empty() and fine not in ["off", "on", "smooth", "small", "legacy_lod"]) or (not comparison_modes.is_empty() and args.has("--ride")):
+		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|both|smooth|small|legacy_lod|compare_forms|compare_lod (заезд с одним вариантом)")
 		quit(1)
 		return
 	var measure := args.has("--measure")
@@ -122,12 +121,12 @@ func _run() -> void:
 		var prepare_ms := 0.0
 		if mode != "off":
 			var prepare_started := Time.get_ticks_usec()
-			fixture.heights.prepare_fine_relief(mode != "smooth", mode in ["on", "ordinary"])
+			fixture.heights.prepare_fine_relief(mode != "smooth", mode == "on")
 			prepare_ms = (Time.get_ticks_usec() - prepare_started) / 1000.0
 			if fixture.heights.fine_relief == null:
 				_expect(false, "точное поле не готово на " + seed)
 				continue
-		_build_scene(fixture.world, fixture.heights, mode != "ordinary")
+		_build_scene(fixture.world, fixture.heights)
 		var rows: Array = []
 		var names := Fixture.view_names()
 		var capture_views: Array = [] if args.has("--ride") else fixture.views + fixture.far_views
@@ -140,8 +139,6 @@ func _run() -> void:
 			var target: Vector3 = view.target
 			var focus: Vector2 = view.focus
 			var uploads := _place_camera(eye, target)
-			if mode == "ordinary":
-				_check_coarse_shadows()
 			var shot := await _grab()
 			shot.convert(Image.FORMAT_RGB8)
 			var repeated := true
@@ -228,7 +225,7 @@ func _run() -> void:
 	quit(int(_failures > 0))
 
 
-func _build_scene(w: WorldData, h: Heightfield, high_relief_detail: bool) -> void:
+func _build_scene(w: WorldData, h: Heightfield) -> void:
 	_heights = h
 	root.msaa_3d = Viewport.MSAA_DISABLED
 	_scene = Node3D.new()
@@ -259,7 +256,7 @@ func _build_scene(w: WorldData, h: Heightfield, high_relief_detail: bool) -> voi
 	_terrain.frame_budget = _provider
 	var builder := TerrainBuilder.new()
 	var mat := builder.material(MapBaker.bake(w, WorldLoader.px_for(maxi(w.W, w.H)), true), null, w.template_id)
-	_terrain.setup(chunks, mat, null, w, h, _source, high_relief_detail)
+	_terrain.setup(chunks, mat, null, w, h, _source)
 	_terrain.far_material = builder.far_material(mat)
 	# Вода остаётся на том же меше; останавливаем только движение бликов для повторяемой съёмки.
 	var water_shader := Shader.new()
@@ -347,21 +344,6 @@ func _clay(source: ShaderMaterial) -> ShaderMaterial:
 	clay.shader = _clay_shaders[source.shader]
 	_clay_materials[source] = clay
 	return clay
-
-
-func _check_coarse_shadows() -> void:
-	var detail := _terrain.relief_detail
-	_expect(detail.stats.active > 0, "обычная детализация включает точный меш")
-	for key: Vector2i in detail.entries:
-		if not detail.active(key):
-			continue
-		var entry: Dictionary = detail.entries[key]
-		var shadow: MeshInstance3D = entry.get("shadow")
-		_expect(shadow != null and shadow.mesh == entry.coarse and shadow.position.y < 0.0
-			and shadow.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY,
-			"обычная детализация отбрасывает тени сеткой 4 м")
-		for part: MeshInstance3D in entry.parts:
-			_expect(part.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "точная порция в обычном режиме без теней")
 
 
 func _grab() -> Image:

@@ -110,7 +110,7 @@ static func partition_reference(arrays: Array) -> Dictionary:
 
 
 func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: WorldData = null, h: Heightfield = null,
-		shared_source: RefCounted = null, high_relief_detail := true) -> void:
+		shared_source: RefCounted = null) -> void:
 	chunks = prepared
 	material = mat
 	_cache = cache
@@ -128,7 +128,7 @@ func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: Wor
 			morph_lod = preload("res://scripts/render/plan_terrain_lod.gd").new()
 			morph_lod.setup(h, chunks.keys(), mat)
 		relief_detail = preload("res://scripts/render/plan_terrain_detail.gd").new()
-		relief_detail.setup(self, h, source, mat, high_relief_detail)
+		relief_detail.setup(self, h, source, mat)
 
 
 func _read_arrays(key: Vector2i) -> Array:

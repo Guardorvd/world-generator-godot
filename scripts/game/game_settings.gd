@@ -108,9 +108,6 @@ const ROAD_RANGE := [
 	{title = "далеко", scale = 1.6},
 ]
 const DEFAULT_ROAD_RANGE := 1
-enum ReliefQuality { ORDINARY, HIGH }
-const RELIEF_QUALITY_LEVELS := ["Обычная", "Высокая"]
-const DEFAULT_RELIEF_QUALITY := ReliefQuality.HIGH
 
 var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 var invert_y := DEFAULT_INVERT_Y
@@ -131,7 +128,6 @@ var carpet_range := DEFAULT_CARPET_RANGE     # номер в CARPET_RANGE
 var mid_grass := DEFAULT_MID_GRASS           # номер в MID_GRASS
 var road_quality := DEFAULT_ROAD_QUALITY     # номер в ROAD_QUALITY
 var road_range := DEFAULT_ROAD_RANGE         # номер в ROAD_RANGE
-var relief_quality: int = DEFAULT_RELIEF_QUALITY
 var shadows := DEFAULT_SHADOWS # только тени направленного света
 var tree_garlands := DEFAULT_TREE_GARLANDS # парковые гирлянды вдоль отдельных дорог и полян
 var lighting := DEFAULT_LIGHTING
@@ -196,7 +192,6 @@ func _apply_config(cfg: ConfigFile) -> void:
 	mid_grass = roundi(_number(cfg, "view", "mid_grass", mid_grass, 0, MID_GRASS.size() - 1))
 	road_quality = roundi(_number(cfg, "view", "road_quality", road_quality, 0, ROAD_QUALITY.size() - 1))
 	road_range = roundi(_number(cfg, "view", "road_range", road_range, 0, ROAD_RANGE.size() - 1))
-	relief_quality = roundi(_number(cfg, "view", "relief_quality", relief_quality, 0, RELIEF_QUALITY_LEVELS.size() - 1))
 	for id: String in VisualStyle.EFFECTS:
 		style_on[id] = _flag(cfg, "style", id + "_on", style_on[id])
 		style_amount[id] = _number(cfg, "style", id + "_amount", style_amount[id], 0.0, 1.0)
@@ -339,7 +334,6 @@ func reset_defaults() -> void:
 	mid_grass = DEFAULT_MID_GRASS
 	road_quality = DEFAULT_ROAD_QUALITY
 	road_range = DEFAULT_ROAD_RANGE
-	relief_quality = DEFAULT_RELIEF_QUALITY
 	style_on = VisualStyle.DEFAULT_ON.duplicate()
 	style_amount = VisualStyle.DEFAULT_AMOUNT.duplicate()
 	volume = DEFAULT_VOLUME
@@ -375,7 +369,6 @@ func save_settings() -> Error:
 	cfg.set_value("view", "mid_grass", mid_grass)
 	cfg.set_value("view", "road_quality", road_quality)
 	cfg.set_value("view", "road_range", road_range)
-	cfg.set_value("view", "relief_quality", relief_quality)
 	for id: String in VisualStyle.EFFECTS:
 		cfg.set_value("style", id + "_on", style_on[id])
 		cfg.set_value("style", id + "_amount", style_amount[id])
@@ -409,7 +402,7 @@ func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale, adaptive_resolution = adaptive_resolution,
 		msaa = msaa, vsync = vsync, shadows = shadows, tree_garlands = tree_garlands, draw = draw, flora = flora, lighting = lighting,
 		fog_quality = fog_quality, cloud_quality = cloud_quality, particles = particles, carpet_density = carpet_density, carpet_range = carpet_range,
-		mid_grass = mid_grass, road_quality = road_quality, road_range = road_range, relief_quality = relief_quality,
+		mid_grass = mid_grass, road_quality = road_quality, road_range = road_range,
 		style_on = style_on.duplicate(), style_amount = style_amount.duplicate()}
 
 
@@ -430,7 +423,6 @@ func set_display_state(state: Dictionary) -> void:
 	mid_grass = clampi(state.get("mid_grass", mid_grass), 0, MID_GRASS.size() - 1)
 	road_quality = clampi(state.get("road_quality", road_quality), 0, ROAD_QUALITY.size() - 1)
 	road_range = clampi(state.get("road_range", road_range), 0, ROAD_RANGE.size() - 1)
-	relief_quality = clampi(state.get("relief_quality", relief_quality), 0, RELIEF_QUALITY_LEVELS.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)
 	fog_quality = clampi(state.get("fog_quality", fog_quality), 0, FOG_QUALITY_LEVELS.size() - 1)
 	cloud_quality = clampi(state.get("cloud_quality", cloud_quality), 0, CLOUD_QUALITY_LEVELS.size() - 1)

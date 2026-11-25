@@ -19,20 +19,18 @@ var _ahead := Vector2.INF
 var enter_m := 0.0
 var _transition_end_m := 0.0
 var _exit_m := 0.0
-var _fine_shadows := true
 var _vertical_margin := 0.0
 var stats := {uploads = 0, switches = 0, late = 0, max_piece_ms = 0.0, active = 0, peak_active = 0}
 
 
-func setup(owner: Node3D, h: Heightfield, chunks: RefCounted, mat: ShaderMaterial, high: bool) -> void:
+func setup(owner: Node3D, h: Heightfield, chunks: RefCounted, mat: ShaderMaterial) -> void:
 	terrain = owner
 	source = chunks
 	heights = h
 	profile = h.fine_profile
-	_transition_end_m = profile.transition_end_for(high)
-	enter_m = profile.activation_distance_m(high)
+	_transition_end_m = profile.transition_end_m
+	enter_m = profile.activation_distance_m()
 	_exit_m = _transition_end_m + profile.exit_margin_m
-	_fine_shadows = high and profile.cast_shadows
 	_vertical_margin = profile.max_offset_m
 	material = TerrainBuilder.fine_material(mat, profile, _transition_end_m, h.fine_lod)
 
@@ -121,8 +119,7 @@ func step(p: Vector2, force: bool) -> bool:
 		bounds.position.y -= _vertical_margin
 		bounds.size.y += 2.0 * _vertical_margin
 		mesh.custom_aabb = bounds
-		var shadow := GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if _fine_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		var node: MeshInstance3D = terrain._acquire_mesh_node(mesh, material, shadow)
+		var node: MeshInstance3D = terrain._acquire_mesh_node(mesh, material, GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED)
 		if terrain.morph_lod != null:
 			node.set_instance_shader_parameter("relief_chunk_bounds", terrain.morph_lod.bounds(key))
 		node.visible = false
@@ -140,15 +137,6 @@ func step(p: Vector2, force: bool) -> bool:
 func _publish(key: Vector2i, entry: Dictionary, distance: float, force: bool) -> void:
 	var coarse: MeshInstance3D = terrain.nodes[key]
 	entry.coarse = coarse.mesh
-	if not _fine_shadows:
-		# Share the mesh and keep the attachments on the original node at ground level.
-		var shadow: MeshInstance3D = terrain._acquire_mesh_node(coarse.mesh, coarse.material_override,
-			GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY)
-		shadow.position.y = -_vertical_margin
-		if terrain.morph_lod != null:
-			shadow.set_instance_shader_parameter("relief_chunk_bounds", terrain.morph_lod.bounds(key))
-			shadow.set_instance_shader_parameter("relief_chunk_lod", Vector3.ZERO)
-		entry.shadow = shadow
 	coarse.mesh = null
 	for node: MeshInstance3D in entry.parts:
 		node.visible = true
@@ -165,10 +153,6 @@ func forget(key: Vector2i) -> void:
 	var entry: Dictionary = entries[key]
 	if active(key):
 		terrain.nodes[key].mesh = entry.coarse
-		if entry.has("shadow"):
-			var shadow: MeshInstance3D = entry.shadow
-			shadow.position.y = 0.0
-			terrain._release_mesh_node(shadow)
 		stats.active -= 1
 		stats.switches += 1
 	for node: MeshInstance3D in entry.parts:
