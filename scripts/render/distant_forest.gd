@@ -86,7 +86,7 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i, include_scrub := t
 				var z := float(w.obj_y[o]) * TILE
 				if not _plan_dry(w, h, Vector2(x, z)): continue
 				var size := float(w.obj_s[o])
-				var ground := h.ground_at(x, z)
+				var ground := h.placement_ground_at(x, z)
 				var radius: float = Biomes.CROWN_RADIUS[kind] * TILE * size
 				if kind == Biomes.T_ROCK:
 					var half := Vector3(radius, radius * 0.45, radius)
@@ -190,7 +190,7 @@ static func _plan_scrub(w: WorldData, h: Heightfield, rect: Rect2i, wooded: Dict
 			if site.is_empty(): continue
 			var p: Vector2 = site.at
 			if not _plan_dry(w, h, p, true): continue
-			_add_scrub(out, plants, site, p, h.ground_at(p.x, p.y), false)
+			_add_scrub(out, plants, site, p, h.placement_ground_at(p.x, p.y), false)
 	return out
 
 ## Woody part of the open-land community at a 12 m sample (the same Understory.communities and noise as

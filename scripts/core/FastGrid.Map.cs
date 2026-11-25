@@ -127,7 +127,7 @@ public partial class FastGrid
 	private static int MapCell(double coordinate, int size)
 		=> Math.Clamp((int)Math.Round(coordinate, MidpointRounding.AwayFromZero), 0, size - 1);
 
-	private static double MapHash(int x, int y, uint seed)
+	internal static double MapHash(int x, int y, uint seed)
 	{
 		uint hash = unchecked((uint)x * 374761393u + (uint)y * 668265263u) ^ seed;
 		hash = unchecked((hash ^ (hash >> 13)) * 1274126177u);

@@ -165,11 +165,11 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				if on_tread(heights, x, z):
 					continue
 				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
-					var seat := RockModels.seat(heights, x, z, s * 1.2, world.obj_v[o])
+					var seat := RockModels.seat(heights, x, z, s * RockModels.PLAN_ROCK_SCALE, world.obj_v[o])
 					if seat.x != INF:
 						_add_outcrop(out, x, z, s * 1.2, seat.x, Vector3(seat.y, seat.z, seat.w), world.obj_v[o])
 					continue
-				var base := heights.ground_at(x, z)
+				var base := heights.placement_ground_at(x, z)
 				if kind == Biomes.T_ROCK:
 					if s < 0.42 or not RockModels.has_seat(heights, x, z, s * 1.2):
 						continue

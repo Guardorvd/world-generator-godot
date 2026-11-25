@@ -345,11 +345,96 @@ var _ride: Object = null       # RideGround; создаётся и читает�
 var _ground_rev := 0           # растёт при каждой смене опоры (с любого потока)
 var _ride_rev := -1            # с какой версии опоры снят снимок
 var _ride_ok := false          # снимок удался (иначе до следующей смены опоры — GDScript)
+var fine_relief: Object
+var fine_medium := false
+const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
+var fine_profile: ReliefDetailConfig
+var _detail_revision := 0
 
 
 ## Опора изменилась (полотно, сооружения, высоты): снимок C# больше не годится
-func ground_changed() -> void:
+func ground_changed(detail_only := false) -> void:
+	if detail_only:
+		# RideGround уже держит ссылку на слой. Смена доступной плитки не копирует снимок мира.
+		_detail_revision += 1
+		return
 	_ground_rev += 1
+
+
+## После полотна, воды и генерации. Источник для маски — опубликованные игровые данные.
+func prepare_fine_relief(with_forms := true, with_mid := true) -> void:
+	var w := world
+	var profile := WorldTemplate.config(w.template_id).relief_detail
+	if fine_relief != null or profile == null or not profile.enabled:
+		return
+	var fast := Grid.fast_grid()
+	if fast == null:
+		return
+	if not profile.valid(PlanTerrain.CELLS):
+		push_warning("Некорректные настройки точного рельефа: используется исходная поверхность")
+		return
+	var footprints := PackedFloat64Array()
+	for place: SettlementData in w.settlements:
+		footprints.append_array([place.x * TILE, place.y * TILE, StageVegetation.VILLAGE_R * TILE])
+		for hut: HutData in place.huts:
+			footprints.append_array([hut.x * TILE, hut.y * TILE, PlayerState.hut_half(hut).length()])
+	for place: SiteData in w.sites:
+		footprints.append_array([place.x * TILE, place.y * TILE, place.clear * TILE])
+		for hut: HutData in place.huts:
+			footprints.append_array([hut.x * TILE, hut.y * TILE, PlayerState.hut_half(hut).length()])
+	var kinds := w.obj_k
+	var variants := w.obj_v
+	var xs := w.obj_x
+	var zs := w.obj_y
+	var scales := w.obj_s
+	for i in kinds.size():
+		if kinds[i] != Biomes.T_ROCK or not RockModels.is_outcrop(variants[i]):
+			continue
+		var reach := RockModels.MASSIF_REACH if RockModels.is_massif(variants[i]) else RockModels.OUTCROP_R * scales[i] * RockModels.PLAN_ROCK_SCALE
+		footprints.append_array([xs[i] * TILE, zs[i] * TILE, reach])
+	var keys := PackedInt32Array(road_refinement.patches.keys() if road_refinement != null else [])
+	var params := profile.params()
+	if not with_forms:
+		params[ReliefDetailConfig.RD_FORMS] = 0.0
+	if not with_mid:
+		params[ReliefDetailConfig.RD_MID_FORMS] = 0.0
+	var inputs := {
+		width = w.W, height = w.H, cells = PlanTerrain.CELLS, tile = TILE,
+		hv = hv, water = water_level, wet = w.river_cells(), lake = w.lake,
+		rock = RockRelief.field_of(w), patches = keys, structures = PackedInt32Array(_cells.keys()), places = footprints,
+	}
+	if params[ReliefDetailConfig.RD_FORMS] != 0.0 or params[ReliefDetailConfig.RD_MID_FORMS] != 0.0:
+		var axis := ValleyAxis.for_world(w)
+		var river := PackedFloat64Array()
+		river.resize(w.H * 2)
+		for row in w.H:
+			river[row * 2] = axis.axis_x_at(row + 0.5) * TILE
+			river[row * 2 + 1] = axis.river_hw_at(row) * TILE
+		var seeds := PackedInt64Array()
+		for name in ["relief_rills", "relief_roots", "relief_terraces", "relief_flood", "relief_banks",
+				"relief_knolls", "relief_hollows", "relief_gullies"]:
+			seeds.append(int(WorldGenerator.noise_rng(w.seed_num, name).next_float() * (WGRandom.MASK + 1)))
+		var forest_cover := PackedFloat32Array()
+		forest_cover.resize(Biomes.LIST.size())
+		for biome in [Biomes.FOREST, Biomes.JUNGLE, Biomes.TAIGA]:
+			forest_cover[biome] = Biomes.LIST[biome].trees
+		inputs.merge({biome = w.biome, forest_cover = forest_cover, river_axis = river, form_seeds = seeds, origin = w.world_origin})
+	fine_relief = fast.CreateFineRelief(inputs, params)
+	fine_medium = fine_relief != null and fine_relief.HasMedium()
+	if fine_relief != null:
+		fine_profile = profile
+		ground_changed()
+	else:
+		push_warning("Точное поле не помещается в бюджет или входные поля неполны: используется исходная поверхность")
+
+
+## Растительность подготавливается до публикации чанка и сразу садится на точную поверхность.
+func placement_ground_at(x: float, z: float) -> float:
+	if fine_relief != null:
+		var detailed: float = fine_relief.Sample(x, z, true)
+		if not is_nan(detailed):
+			return detailed
+	return ground_at(x, z)
 
 
 ## Снимок C# для запроса из физики или null (тогда считает GDScript). Только главный поток: снимок
@@ -380,7 +465,7 @@ func _build_ride() -> bool:
 ## Отдельный снимок опоры C# (RideGround) для потока генерации: его Ground/Depth/GroundDepth дают то же, что
 ## ground_at/depth_at этого рельефа сейчас (сверка — stress --verify-ride). Не связан с _ride главного потока;
 ## после смены опоры (ground_changed) устаревает — берётся заново. null — нет C# или данных.
-func ride_snapshot() -> Object:
+func ride_snapshot(for_placement := false) -> Object:
 	var w := world
 	if w == null or hv.size() != w.N or w.lake.size() != w.N or w.filled.size() != w.N or Grid.fast_grid() == null:
 		return null
@@ -388,10 +473,10 @@ func ride_snapshot() -> Object:
 	if script == null:
 		return null
 	var ride: Object = script.new()
-	return ride if _fill_ride(ride) else null
+	return ride if _fill_ride(ride, for_placement) else null
 
 
-func _fill_ride(ride: Object) -> bool:
+func _fill_ride(ride: Object, for_placement := false) -> bool:
 	var w := world
 	var keys := PackedInt32Array()
 	var patch_h := PackedFloat32Array()
@@ -434,6 +519,8 @@ func _fill_ride(ride: Object) -> bool:
 			cells, ids, tunnel, rails, geo, sine_start, sines, _seg_pts, _pair_cells, _pair_segs, w.lake, w.filled):
 		push_error("RideGround: " + ride.Error() + " — физика на GDScript")
 		return false
+	if fine_relief != null:
+		ride.SetFineRelief(fine_relief, for_placement)
 	return true
 
 
@@ -1263,6 +1350,10 @@ func _ground_script(x: float, z: float, raw: bool = false) -> float:
 					return hs[a] + (hs[a + 1] - hs[a]) * tx + (hs[a + RoadRefinement.STRIDE] - hs[a]) * tz
 				var d := a + RoadRefinement.STRIDE + 1
 				return hs[d] + (hs[a + RoadRefinement.STRIDE] - hs[d]) * (1.0 - tx) + (hs[a + 1] - hs[d]) * (1.0 - tz)
+	if fine_relief != null and not raw:
+		var detailed: float = fine_relief.SampleSurface(x, z, false)
+		if not is_nan(detailed):
+			return detailed
 	if fx >= 0.0 and fz >= 0.0 and fx <= W - 1.001 and fz <= w.H - 1.001:
 		var arr := hv_raw if raw else hv
 		var i := floori(fx)
@@ -1281,6 +1372,10 @@ func _ground_script(x: float, z: float, raw: bool = false) -> float:
 
 ## Сетка 4 м без локальной детализации, также используется при её подготовке.
 func base_ground_at(x: float, z: float, raw: bool = false) -> float:
+	if fine_relief != null and not raw:
+		var detailed: float = fine_relief.SampleSurface(x, z, false)
+		if not is_nan(detailed):
+			return detailed
 	var W := world.W
 	var arr := hv_raw if raw else hv
 	var fx := x / TILE - 0.5

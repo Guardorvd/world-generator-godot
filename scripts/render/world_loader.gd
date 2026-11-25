@@ -294,7 +294,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		r.timings.surface_write_queue_ms = (Time.get_ticks_usec() - queued_at) / 1000.0
 	if is_cancelled.call():
 		return abort.call()
-	if services.cache.enabled: r.prepare_streaming(start_at)
+	var relief_detail := WorldTemplate.config(tid).relief_detail
+	if services.cache.enabled or (relief_detail != null and relief_detail.enabled):
+		r.prepare_streaming(start_at)
 	if is_cancelled.call():
 		return abort.call()
 	r.timings.cache_io = services.cache.take_io_timings()
@@ -324,6 +326,10 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 		opening_spot = preload("res://scripts/game/opening_route.gd").choose(world, heights, rng)
 		if not opening_spot.is_empty(): points.push_front(Vector2(opening_spot.position.x, opening_spot.position.z))
 	startup_at = points[0]
+	var detail_started := Time.get_ticks_usec()
+	heights.prepare_fine_relief()
+	if heights.fine_relief != null:
+		timings.relief_detail_prepare_ms = (Time.get_ticks_usec() - detail_started) / 1000.0
 	if water_chunks.is_empty():
 		for arrays: Array in water_arrays: water_chunks.append(WaterBuilder.partition_arrays(arrays))
 	if water_chunks.size() != 2: water_chunks.assign([{}, {}])
@@ -333,6 +339,11 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 		chunk_source.set_persisted_refs(_pending_chunk_refs)
 		_pending_chunk_refs = []
 	chunk_source.prewarm(points, PlanTerrain.RADIUS / 2.0)
+	if heights.fine_relief != null:
+		var profile := heights.fine_profile
+		var prewarm_started := Time.get_ticks_usec()
+		chunk_source.prewarm_detail(PackedVector2Array(points), profile.transition_end_m + profile.enter_margin_m)
+		timings.relief_detail_prewarm_ms = (Time.get_ticks_usec() - prewarm_started) / 1000.0
 	water_arrays.assign([[], []])
 	timings.startup_prefetch_ms = (Time.get_ticks_usec() - t) / 1000.0
 

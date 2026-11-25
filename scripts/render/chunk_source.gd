@@ -6,7 +6,10 @@ const MAX_CROWN_TASKS := 2
 const READ_BYTES := 32 * 1024 * 1024
 const LRU := preload("res://scripts/core/byte_lru.gd")
 const FarForest := preload("res://scripts/render/distant_forest.gd")
+const DETAIL_LAYER := -2
 var _far_cpu := LRU.new()
+var _fine_cpu := LRU.new()
+var _fine_reserved := 0
 var _far_lock := Mutex.new()
 var _far_tasks := {}
 var cache: WorldCache
@@ -38,6 +41,13 @@ func setup(owner: WorldCache, w: WorldData, h: Heightfield, start_size: int, pre
 	_far_cpu.limit = 16 * 1024 * 1024
 	_cpu.limit = 128 * 1024 * 1024
 	_cpu.budget = budget
+	if h.fine_relief != null:
+		_fine_cpu.limit = h.fine_profile.mesh_mib * h.fine_profile.MIB
+		_fine_cpu.budget = budget
+		if budget != null:
+			budget.register_owner(_fine_cpu._owner_id, "terrain_detail")
+			_fine_reserved = h.fine_profile.tile_mib * h.fine_profile.MIB
+			budget.reserve(_fine_reserved)
 	for group: Dictionary in groups:
 		for ref: Variant in group.values():
 			if ref is Dictionary and ref.get("file", "") != "": _pins.append(cache.dir.path_join(ref.file))
@@ -45,6 +55,9 @@ func setup(owner: WorldCache, w: WorldData, h: Heightfield, start_size: int, pre
 
 func _id(layer: int, key: Vector2i) -> Vector3i:
 	return Vector3i(key.x, key.y, layer + 1)
+
+func _cache_for(id: Vector3i) -> RefCounted:
+	return _fine_cpu if id.z == DETAIL_LAYER + 1 else _cpu
 
 ## Cold startup consumes prepared RAM immediately while the FIFO writer persists far blocks.
 func set_persisted_refs(refs: Array) -> void:
@@ -58,7 +71,7 @@ func set_persisted_refs(refs: Array) -> void:
 func ready(layer: int, key: Vector2i) -> Variant:
 	var id := _id(layer, key)
 	if _handoff.has(id): return _handoff[id]
-	return _startup[id] if _startup.has(id) else _cpu.get_value(id)
+	return _startup[id] if _startup.has(id) else _cache_for(id).get_value(id)
 
 ## Far crown proxies of a terrain tile; null until computed. Never gates the terrain itself.
 func crowns(key: Vector2i) -> Variant:
@@ -118,6 +131,8 @@ func read(layer: int, key: Vector2i) -> Array:
 			else:
 				arrays = WaterBuilder.build_chunk(world, heights, key, layer)
 			if ref.get("file", "") != "": cache._write(cache.dir.path_join(ref.file), ref.key, var_to_bytes({arrays = arrays}))
+	if layer < 0 and heights.fine_medium and not arrays.is_empty():
+		arrays = heights.fine_relief.ProjectCoarseMesh(arrays)
 	_stats_lock.lock()
 	stats.reads += 1
 	stats.repairs += int(repaired)
@@ -126,6 +141,45 @@ func read(layer: int, key: Vector2i) -> Array:
 	stats.read_ms += (Time.get_ticks_usec() - started) / 1000.0
 	_stats_lock.unlock()
 	return arrays
+
+
+func read_detail(key: Vector2i, coarse: Array) -> Array:
+	if heights.fine_relief == null:
+		return []
+	var arrays := coarse if not coarse.is_empty() else read(-1, key)
+	if arrays.is_empty():
+		return []
+	return heights.fine_relief.BuildMeshes(key.x, key.y, roundi(heights.fine_profile.piece_m / GameConfig.TILE), arrays)
+
+
+## Called on the loading worker before the first force_terrain. Later builds go through the shared read queue.
+func prewarm_detail(points: PackedVector2Array, radius: float) -> void:
+	if heights.fine_relief == null or points.is_empty():
+		return
+	heights.fine_relief.Warm(points, radius)
+	var nearby: Array[Vector2i] = []
+	for key: Vector2i in groups[0]:
+		for p: Vector2 in points:
+			if _distance(key, p) <= radius:
+				nearby.append(key)
+				break
+	nearby.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _distance(a, points[0]) > _distance(b, points[0]))
+	var ready_coarse := {}
+	for key: Vector2i in nearby:
+		var value: Variant = ready(-1, key)
+		if value is Array:
+			ready_coarse[key] = value
+	var pieces := Parallel.bands(nearby.size(), func(a: int, b: int) -> Array:
+		var batch := []
+		for i in range(a, b):
+			var key := nearby[i]
+			batch.append(read_detail(key, ready_coarse.get(key, [])))
+		return batch, 1)
+	var i := 0
+	for batch: Array in pieces:
+		for arrays: Array in batch:
+			_fine_cpu.put(_id(DETAIL_LAYER, nearby[i]), arrays)
+			i += 1
 
 ## Executed by WorldLoader/travel worker before scene publication; these arrays are pinned until upload.
 func prewarm(points: Array, radius: float) -> void:
@@ -200,7 +254,9 @@ func finish_startup() -> void:
 		for key: Vector2i in groups[group].keys():
 			var arrays: Variant = groups[group][key]
 			if not arrays is Array: continue
-			_cpu.put(_id(group - 1, key), arrays)
+			# These are raw disk-cache arrays. The terrain reader projects them onto C on demand.
+			if group != 0 or not heights.fine_medium:
+				_cpu.put(_id(group - 1, key), arrays)
 			groups[group][key] = _persisted_refs[group][key] if not _persisted_refs.is_empty() else {file = "", key = "", bytes = LRU.size_of(arrays)}
 	_persisted_refs = []
 
@@ -208,7 +264,7 @@ func request(layer: int, key: Vector2i, priority: float) -> void:
 	if closed: return
 	var id := _id(layer, key)
 	_wanted[id] = priority
-	if _startup.has(id) or _handoff.has(id) or _cpu.get_value(id) != null or _active.has(id): return
+	if _startup.has(id) or _handoff.has(id) or _cache_for(id).get_value(id) != null or _active.has(id): return
 	var queued := false
 	for item: Dictionary in _queue:
 		if item.id == id:
@@ -216,8 +272,11 @@ func request(layer: int, key: Vector2i, priority: float) -> void:
 			queued = true
 			break
 	if not queued:
-		var ref: Variant = groups[layer + 1][key]
+		var ref: Variant = groups[maxi(layer + 1, 0)][key]
 		var bytes: int = ref.get("bytes", 8 * 1024 * 1024) if ref is Dictionary else LRU.size_of(ref)
+		if layer == DETAIL_LAYER:
+			# Even if every original triangle is split into four, this bounds the in-flight data.
+			bytes *= 4
 		_queue.append({id = id, layer = layer, key = key, bytes = bytes, priority = priority})
 	_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.priority < b.priority)
 	if _queue.size() > MAX_QUEUED: _queue.pop_back()
@@ -233,7 +292,7 @@ func poll() -> void:
 		WorkerThreadPool.wait_for_task_completion(item.task)
 		_reserved -= item.bytes
 		if _cpu.budget != null: _cpu.budget.release(item.bytes)
-		if _wanted.has(id) and not _cpu.put(id, item.out.arrays):
+		if _wanted.has(id) and not _cache_for(id).put(id, item.out.arrays):
 			var bytes := LRU.size_of(item.out.arrays)
 			_handoff[id] = item.out.arrays
 			_handoff_bytes += bytes
@@ -254,7 +313,12 @@ func poll() -> void:
 		item.out = out
 		_reserved += item.bytes
 		if _cpu.budget != null: _cpu.budget.reserve(item.bytes)
-		item.task = WorkerThreadPool.add_task(func() -> void: out.arrays = read(item.layer, item.key), false, "Чтение чанка")
+		if item.layer == DETAIL_LAYER:
+			var coarse: Variant = ready(-1, item.key)
+			item.task = WorkerThreadPool.add_task(func() -> void:
+				out.arrays = read_detail(item.key, coarse if coarse is Array else []), false, "Точный рельеф")
+		else:
+			item.task = WorkerThreadPool.add_task(func() -> void: out.arrays = read(item.layer, item.key), false, "Чтение чанка")
 		_active[item.id] = item
 		_stats_lock.lock()
 		stats.peak_reads = maxi(stats.peak_reads, _active.size())
@@ -280,6 +344,9 @@ func close() -> void:
 	_startup.clear()
 	_startup_bytes = 0
 	_cpu.clear()
+	_fine_cpu.clear()
+	if _cpu.budget != null: _cpu.budget.release(_fine_reserved)
+	_fine_reserved = 0
 	_far_cpu.clear()
 	_release_pins()
 
@@ -292,7 +359,7 @@ func _release_pins() -> void:
 func _notification(what: int) -> void:
 	# A RefCounted script cannot call an instance method on itself at zero references.
 	if what != NOTIFICATION_PREDELETE: return
-	if not closed and _cpu.budget != null: _cpu.budget.release(_startup_bytes + _handoff_bytes)
+	if not closed and _cpu.budget != null: _cpu.budget.release(_startup_bytes + _handoff_bytes + _fine_reserved)
 	if not _pins.is_empty():
 		WorldCache.unpin_files(_pins)
 		cache.request_collection(world.seed_text, size)

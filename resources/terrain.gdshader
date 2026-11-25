@@ -32,6 +32,10 @@ uniform vec3 road_edge;
 // Сдвиг меша от мировых координат, м: у сохранённого участка Trail Lab (WorldData.world_origin), у мира ноль.
 // Деталь и кочки полотна остаются на своих мировых местах, как у колёс.
 uniform vec2 world_offset = vec2(0.0);
+#ifdef FINE_RELIEF_MORPH
+uniform vec2 relief_observer;
+uniform vec2 relief_morph_range;
+#endif
 uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
@@ -113,8 +117,15 @@ float wg_vnoise(vec2 cell, float scale, int seed) {
 }
 
 void vertex() {
-	wpos =(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+#ifdef FINE_RELIEF_MORPH
+	float relief_morph = smoothstep(relief_morph_range.x, relief_morph_range.y, distance(VERTEX.xz, relief_observer));
+	VERTEX.y = mix(VERTEX.y, CUSTOM0.x, relief_morph);
+	NORMAL = mix(NORMAL, CUSTOM0.yzw, relief_morph);
+	wnormal = (MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz;
+#else
 	wnormal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+#endif
+	wpos =(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	// 12.11: тень облаков — в вершине (сетка 4 м, пятна 160 м; ошибка линейной интерполяции < 1 %), а не 20 хэшей на пиксель.
 	surface_cloud = cloud_light(wpos.xz + world_offset);
 	// Выбираем свойства в вершине: в пикселях смешиваются свойства, а не номера материалов.

@@ -25,7 +25,7 @@ func _init(w: WorldData, h: Heightfield) -> void:
 
 
 func ground_at(x: float, z: float) -> float:
-	if x >= 0 and z >= 0 and x < world.W * TILE and z < world.H * TILE: return heights.ground_at(x, z)
+	if x >= 0 and z >= 0 and x < world.W * TILE and z < world.H * TILE: return heights.placement_ground_at(x, z)
 	return RegionStream.snapshot_ground(world, heights, regions, x, z)
 
 

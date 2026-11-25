@@ -54,6 +54,7 @@ var _uncached_key: Variant = null
 var _uncached_arrays: Array = [] # one oversized block, released as soon as it is uploaded
 var source: RefCounted
 var frame_budget: RefCounted
+var relief_detail: RefCounted
 static var _recheck_frame := -1 # рельеф и два слоя воды пересчитывают очередь в разных кадрах
 
 
@@ -114,6 +115,9 @@ func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: Wor
 		_lod_cache.budget = src_cpu.budget
 		if _lod_cache.budget != null:
 			_lod_cache.budget.register_owner(_lod_cache._owner_id, "terrain_lod")
+	if water_layer < 0 and h != null and h.fine_relief != null and source != null and mat is ShaderMaterial:
+		relief_detail = preload("res://scripts/render/plan_terrain_detail.gd").new()
+		relief_detail.setup(self, h, source, mat)
 
 
 func _read_arrays(key: Vector2i) -> Array:
@@ -134,6 +138,8 @@ func _arrays(key: Vector2i) -> Variant:
 
 
 func _exit_tree() -> void:
+	if relief_detail != null:
+		relief_detail.close()
 	if _read_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -177,15 +183,23 @@ func _lod_arrays(key: Vector2i, lod: int) -> Array:
 		return []
 	var step := LOD1_STEP if lod == 1 else LOD2_STEP
 	var skirt := step * GameConfig.TILE * 0.5
-	var arrays: Array = fast.BuildTerrainLod(_world.W, _world.H, GameConfig.TILE, key.x, key.y, CELLS, step, _heights.hv, _world.path_mask, skirt)
+	var arrays: Array
+	if _heights.fine_medium:
+		arrays = _heights.fine_relief.BuildCoarseLod(key.x, key.y, step, skirt)
+	else:
+		arrays = fast.BuildTerrainLod(_world.W, _world.H, GameConfig.TILE, key.x, key.y, CELLS, step, _heights.hv, _world.path_mask, skirt)
 	if not arrays.is_empty():
 		_lod_cache.put(cache_key, arrays)
 	return arrays
 
 
-func _step_lod(p: Vector2) -> bool:
+func _step_lod(p: Vector2, near := INF) -> bool:
 	var waiting_io := false
 	for key: Vector2i in nodes:
+		if near < INF and distance_to_chunk(key, p) > near:
+			continue
+		if relief_detail != null and relief_detail.active(key):
+			continue
 		var current: int = _node_lod.get(key, 0)
 		var wanted := _desired_lod(key, p, current)
 		if wanted == current:
@@ -289,7 +303,8 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 
 
 func arrival_ready(p: Vector2, radius: float) -> bool:
-	return p.distance_to(checked_at) < RECHECK and not _has_near_pending(p, radius)
+	return p.distance_to(checked_at) < RECHECK and not _has_near_pending(p, radius) \
+		and (relief_detail == null or relief_detail.ready_at(p, radius))
 
 
 func _has_near_pending(p: Vector2, radius: float) -> bool:
@@ -300,9 +315,11 @@ func _has_near_pending(p: Vector2, radius: float) -> bool:
 ## force — старт: части ближе near передаются сразу, остальные ждут очереди.
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := INF) -> bool:
+	var p := Vector2(x, z)
+	if relief_detail != null:
+		relief_detail.follow(p, force, AHEAD, LOD_RECHECK)
 	if not force and frame_budget != null and not frame_budget.allows_work():
 		return false
-	var p := Vector2(x, z)
 	var uploaded := false
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
@@ -348,6 +365,8 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 			# Preserve the consumer's order, including look-ahead and equal-distance ties.
 			source.request(water_layer, at, distance_to_chunk(at, p) + offset * (RADIUS + SIDE))
 		source.poll()
+	if not force and allow_apply and relief_detail != null and (frame_budget == null or frame_budget.allows_work()):
+		uploaded = relief_detail.step(p, false)
 	while _has_near_pending(p, near) and (force or allow_apply and not uploaded):
 		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		var key: Vector2i = pending.back()
@@ -393,14 +412,21 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 				_uncached_key = null
 				_uncached_arrays = []
 		uploaded = true
+	if force and allow_apply and relief_detail != null:
+		if _lod_enabled():
+			while _step_lod(p, minf(near, relief_detail.profile.transition_end_m + relief_detail.profile.enter_margin_m)):
+				pass
+		relief_detail.follow(p, true, AHEAD, LOD_RECHECK)
+		while relief_detail.step(p, true):
+			uploaded = true
 	if (force or near == INF) and far_material != null and (force or p.distance_to(_far_at) >= FAR_RECHECK):
 		_far_at = p
 		for key: Vector2i in nodes:
 			var wanted := _material_for(key, p)
 			if nodes[key].material_override != wanted:
 				nodes[key].material_override = wanted
-	if near == INF and allow_apply and not uploaded and _lod_enabled() and p.distance_to(_lod_at) >= LOD_RECHECK and (frame_budget == null or frame_budget.allows_work()):
-		if _step_lod(p):
+	if (near == INF or relief_detail != null) and allow_apply and not uploaded and _lod_enabled() and p.distance_to(_lod_at) >= LOD_RECHECK and (frame_budget == null or frame_budget.allows_work()):
+		if _step_lod(p, near):
 			uploaded = true
 	# Кроны — после рельефа: только в кадре без передачи чанка и в пределах общего бюджета.
 	if (force or near == INF) and _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
@@ -408,6 +434,8 @@ func update(x: float, z: float, force := false, allow_apply := true, near := INF
 	if near == INF and allow_apply and not uploaded and not _evict_pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
 		var key: Vector2i = _evict_pending.pop_back()
 		if nodes.has(key) and distance_to_chunk(key, p) > DROP:
+			if relief_detail != null:
+				relief_detail.forget(key)
 			_release_mesh_node(nodes[key])
 			nodes.erase(key)
 			_node_lod.erase(key)

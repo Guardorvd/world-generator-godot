@@ -599,6 +599,11 @@ const RP_COUNT := 82
 ## Вложенный конфиг плотного зонирования растительности, подлеска и притропных объектов.
 @export var vegetation: WorldVegetationConfig = null
 
+@export_group("Детальная геометрия")
+## Поле высот игрового рельефа, собираемое после генерации.
+const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
+@export var relief_detail: ReliefDetailConfig = null
+
 @export_group("Атмосфера и сезон")
 ## Вложенный конфиг пасмурного неба, осенней палитры, тумана и 3D LUT (null для Типа 1).
 @export var atmosphere: WorldAtmosphereConfig = null

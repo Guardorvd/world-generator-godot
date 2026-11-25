@@ -370,6 +370,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		# 11.6: вступительный проезд по дороге не упирается в бревно
 		vegetation.road.clear.append(Vector2(player.x, player.z))
 	stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
+	if heights.fine_relief != null:
+		player.feet = heights.surface_at(player.x, player.z, player.feet)
 	if chunk_source != null: chunk_source.finish_startup()
 	t = _mark("start_terrain_ms", t)
 	if saved.is_empty() and opening_spot.is_empty() and world.settlements.size() > 0:
@@ -1238,6 +1240,8 @@ func travel_to(place: Dictionary) -> void:
 		audio.set_paused(true)
 	var arrival_yaw := PlayerState.arrival_heading(place, Vector2(arriving.x, arriving.z), yaw)
 	if not await _travel_load(Vector3(arriving.x, arriving.feet, arriving.z), arrival_yaw): return
+	if heights.fine_relief != null:
+		arriving.feet = heights.surface_at(arriving.x, arriving.z, arriving.feet)
 	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	var parked := BikeRide.park_near(arriving, arrival_yaw, world, heights)
 	if parked == null or not safe_position(arriving.x, arriving.z, arriving.feet):

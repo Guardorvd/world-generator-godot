@@ -17,6 +17,8 @@ public partial class RideGround : RefCounted
 		public int W, H, RoadH;
 		public double Tile, Hs, LakeDrop;
 		public float[] Hv = Array.Empty<float>();
+		public FineRelief Detail;
+		public bool DetailForPlacement;
 		// метровая сетка дорог: клетка -> номер участка (-1 — нет), высоты участков по Stride*Stride
 		public int[] PatchOf = Array.Empty<int>();
 		public float[] PatchH = Array.Empty<float>();
@@ -49,6 +51,15 @@ public partial class RideGround : RefCounted
 	public string Error() => _error;
 	public bool Ready() => Volatile.Read(ref _snap) != null;
 	public void Invalidate() => Volatile.Write(ref _snap, null);
+
+	public void SetFineRelief(FineRelief detail, bool forPlacement)
+	{
+		var snapshot = Volatile.Read(ref _snap);
+		if (snapshot == null)
+			return;
+		snapshot.Detail = detail;
+		snapshot.DetailForPlacement = forPlacement;
+	}
 
 	/// <summary>Новый снимок; при ошибке входа прежний сброшен и ответы — NaN (GDScript).
 	/// patchKeys — клетки участков сетки дорог, patchH — их высоты подряд по Stride*Stride.
@@ -161,6 +172,12 @@ public partial class RideGround : RefCounted
 				int d = a + Stride + 1;
 				return hs[o + d] + (hs[o + a + Stride] - (double)hs[o + d]) * (1.0 - tx) + (hs[o + a + 1] - (double)hs[o + d]) * (1.0 - tz);
 			}
+		}
+		if (s.Detail != null)
+		{
+			double detail = s.Detail.SampleSurface(x, z, s.DetailForPlacement);
+			if (!double.IsNaN(detail))
+				return detail;
 		}
 		{
 			var arr = s.Hv;

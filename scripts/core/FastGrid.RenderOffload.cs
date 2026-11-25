@@ -217,6 +217,20 @@ public partial class FastGrid
 	/// </summary>
 	public Godot.Collections.Array BuildTerrainLod(int worldW, int worldH, float tile, int chunkX, int chunkY,
 		int chunkCells, int step, float[] heights, byte[] pathMask, float skirtDepth)
+		=> BuildTerrainLodArrays(worldW, worldH, tile, chunkX, chunkY, chunkCells, step, heights, skirtDepth);
+
+	internal static Vector3 TerrainGridNormal(float[] heights, int w, int h, float tile, int x, int z)
+	{
+		float hl = heights[z * w + Math.Max(0, x - 1)], hr = heights[z * w + Math.Min(w - 1, x + 1)];
+		float hu = heights[Math.Max(0, z - 1) * w + x], hd = heights[Math.Min(h - 1, z + 1) * w + x];
+		return (x > 0 && z > 0 && x < w - 1 && z < h - 1)
+			? new Vector3(hl - hr, 2.0f * tile, hu - hd).Normalized()
+			: new Vector3((hl - hr) / ((x == 0 || x == w - 1) ? tile : 2.0f * tile), 1.0f,
+				(hu - hd) / ((z == 0 || z == h - 1) ? tile : 2.0f * tile)).Normalized();
+	}
+
+	internal static Godot.Collections.Array BuildTerrainLodArrays(int worldW, int worldH, float tile, int chunkX, int chunkY,
+		int chunkCells, int step, float[] heights, float skirtDepth)
 	{
 		step = Math.Max(2, step);
 		int x0 = chunkX * chunkCells;
@@ -250,24 +264,12 @@ public partial class FastGrid
 		for (int r = 0; r < rows; r++)
 		{
 			int j = ys[r];
-			int ju = Math.Max(0, j - 1);
-			int jd = Math.Min(worldH - 1, j + 1);
-			float dz = (j == 0 || j == worldH - 1) ? tile : 2.0f * tile;
 			for (int c = 0; c < cols; c++)
 			{
 				int i = xs[c];
 				int k = r * cols + c;
-				int il = Math.Max(0, i - 1);
-				int ir = Math.Min(worldW - 1, i + 1);
-				float hl = heights[j * worldW + il];
-				float hr = heights[j * worldW + ir];
-				float hu = heights[ju * worldW + i];
-				float hd = heights[jd * worldW + i];
-				Vector3 n = (i > 0 && j > 0 && i < worldW - 1 && j < worldH - 1)
-					? new Vector3(hl - hr, 2.0f * tile, hu - hd).Normalized()
-					: new Vector3((hl - hr) / ((i == 0 || i == worldW - 1) ? tile : 2.0f * tile), 1.0f, (hu - hd) / dz).Normalized();
 				pos[k] = new Vector3((i + 0.5f) * tile, heights[j * worldW + i], (j + 0.5f) * tile);
-				nor[k] = n;
+				nor[k] = TerrainGridNormal(heights, worldW, worldH, tile, i, j);
 				uv[k] = new Vector2((i + 0.5f) * invW, (j + 0.5f) * invH);
 				uv2[k] = Vector2.Zero;
 				colors[k] = new Color(0f, 0f, 0f, 0f);

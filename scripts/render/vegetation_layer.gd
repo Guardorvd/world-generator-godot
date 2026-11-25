@@ -1254,13 +1254,13 @@ func _plan_items(ids: PackedInt32Array) -> Dictionary:
 		if kind == Biomes.T_ROCK:
 			if RockModels.is_outcrop(world.obj_v[o]) and not _defs.has(OUTCROP_MODEL):
 				continue
-			var seat := RockModels.seat(heights, x, z, world.obj_s[o] * 1.2, world.obj_v[o])
+			var seat := RockModels.seat(heights, x, z, world.obj_s[o] * RockModels.PLAN_ROCK_SCALE, world.obj_v[o])
 			if seat.x == INF:
 				continue
 			ground = seat.x
 			normal = Vector3(seat.y, seat.z, seat.w)
 		else:
-			ground = heights.ground_at(x, z)
+			ground = heights.placement_ground_at(x, z)
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
@@ -2329,7 +2329,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 			continue
 		var y: float
 		if inside:
-			y = heights.ground_at(x, z)
+			y = heights.placement_ground_at(x, z)
 			if heights.depth_at(x, z) > 0.0:
 				continue
 		else:

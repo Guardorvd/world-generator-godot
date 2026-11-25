@@ -398,6 +398,17 @@ func outer_material(template_id := "") -> ShaderMaterial:
 	return mat
 
 
+static func fine_material(base: ShaderMaterial, profile: Resource) -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = "#define FINE_RELIEF_MORPH\n" + base.shader.code
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	for uniform: Dictionary in base.shader.get_shader_uniform_list():
+		mat.set_shader_parameter(uniform.name, base.get_shader_parameter(uniform.name))
+	mat.set_shader_parameter("relief_morph_range", Vector2(profile.full_m, profile.transition_end_m))
+	return mat
+
+
 ## Compile the original edge expression at the shipped settings to preserve its rounding.
 static func _terrain_shader(template_id := "") -> Shader:
 	if RoadTuning.for_template(template_id).tread_cache_suffix().is_empty():
