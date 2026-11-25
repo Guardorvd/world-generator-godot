@@ -454,7 +454,8 @@ func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 	if should_cancel.is_valid() and bool(should_cancel.call()):
 		return {world = null, layers = n, cancelled = true}
 	# Validate the plan before starting expensive preparation, even when schema keys match.
-	if n >= 2 and StageTrailPlan.stale(got.world.trail_plan):
+	var broken_expedition: bool = n >= 2 and got.world != null and WorldTemplate.has_single_road(template_id) and got.world.trails.is_empty()
+	if n >= 2 and (StageTrailPlan.stale(got.world.trail_plan) or broken_expedition):
 		invalidate_from(seed_text, size, 1)
 		got = _load(seed_text, size)
 		n = got.layers
@@ -477,6 +478,8 @@ func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 	if n > 0: got.world.generation_profile = {} # report only stages actually generated on this load
 	var w := WorldGenerator.generate_layers(seed_text, size, on_progress, prepare_base, got.world, n,
 		func(cur: WorldData, k: int) -> void:
+			if k >= 1 and WorldTemplate.has_single_road(template_id) and cur.trails.is_empty():
+				return
 			state.prev = _save_layer(cur, size, k, state.prev), should_cancel, template_id, short_dev)
 	if w == null:
 		return {world = null, layers = n, cancelled = true}

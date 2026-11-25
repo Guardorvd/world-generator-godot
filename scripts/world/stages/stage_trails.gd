@@ -70,6 +70,16 @@ const ROAD_LIMIT := 0.28 # короткий запасной подъём; да�
 const TRAIL_GRADE := 0.4
 const MOUNTAIN_GRADE := 0.55
 const BENCH_CROSS := 0.65 # полка не должна превращаться в стену у поворота или берега
+const BACKBONE_WIDE_Y_PAD := 72 # запас строк сверх старта/финиша для широкого окна поиска основной нитки
+## Аварийная лестница пределов основной нитки экспедиции (подъём, спуск, поперечный крен, вес кромки):
+## используется только если ни основные (expedition_grades), ни резервные (expedition_connector_limits)
+## пределы не смогли соединить стартовый и финишный лагеря через локальный прижим долины.
+## Коридор воды (_corridor[e] == INF) остаётся запрещённым на всех ступенях.
+const EXPEDITION_EMERGENCY_LIMITS: Array[Vector4] = [
+	Vector4(0.65, 1.00, 1.50, 0.25),
+	Vector4(0.85, 1.25, 2.00, 0.15),
+	Vector4(1.20, 1.60, 2.60, 0.0),
+]
 
 
 ## Время частей этапа, мс (ревью дорожной сети 29.10, шаг 5: где тратится время). Заполняется всегда, дёшево;
@@ -284,7 +294,24 @@ static func _expedition_chain(w: WorldData, finder: Pathfinder, start: int, fini
 		_set_expedition_grade(finder, reserve)
 		path = _expedition_backbone(w, finder, start, finish, search, reserve.x)
 		_set_expedition_grade(finder, primary)
-		fallbacks.append({from_y = start / w.W, to_y = finish / w.W, choice = "connector_limits"})
+		if not path.is_empty():
+			fallbacks.append({from_y = start / w.W, to_y = finish / w.W, choice = "connector_limits"})
+	if path.is_empty() and primary.x > 0.0:
+		var y_lo := mini(start / w.W, finish / w.W)
+		var y_hi := maxi(start / w.W, finish / w.W)
+		var wy0 := maxi(0, y_lo - BACKBONE_WIDE_Y_PAD)
+		var wy1 := mini(w.H, y_hi + BACKBONE_WIDE_Y_PAD + 1)
+		for idx in EXPEDITION_EMERGENCY_LIMITS.size():
+			var emergency := EXPEDITION_EMERGENCY_LIMITS[idx]
+			_set_expedition_grade(finder, emergency)
+			finder.window = Rect2i(0, wy0, w.W, wy1 - wy0)
+			if not finder.can_reach(search.raw, start, finish, search.climb, emergency.x):
+				continue
+			path = _expedition_backbone(w, finder, start, finish, search, emergency.x)
+			if not path.is_empty():
+				fallbacks.append({from_y = start / w.W, to_y = finish / w.W, choice = "emergency_limits_%d" % (idx + 1)})
+				break
+		_set_expedition_grade(finder, primary)
 	if path.is_empty():
 		push_error("StageTrails (expedition): failed to connect %d -> %d" % [start, finish])
 		return {path = path, total = 0, used = 0, groups = committed, fallbacks = fallbacks}
@@ -438,8 +465,8 @@ static func _expedition_backbone(w: WorldData, finder: Pathfinder, a: int, b: in
 		var seg := finder.find_path(search.cost, a, b, search.climb, g, search.cost_v, search.turn, search.bend, search.h_scale)
 		if seg.size() >= 2:
 			return seg
-	var wy0 := maxi(0, y_lo - 72)
-	var wy1 := mini(H, y_hi + 73)
+	var wy0 := maxi(0, y_lo - BACKBONE_WIDE_Y_PAD)
+	var wy1 := mini(H, y_hi + BACKBONE_WIDE_Y_PAD + 1)
 	finder.window = Rect2i(0, wy0, W, wy1 - wy0)
 	for g: float in ([technical] if technical > 0.0 else [ROAD_LIMIT, TRAIL_GRADE, MOUNTAIN_GRADE]):
 		var seg := finder.find_path(search.raw, a, b, search.climb, g, search.raw_v, search.turn, search.bend, 1.0)
