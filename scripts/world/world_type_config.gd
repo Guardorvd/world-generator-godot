@@ -600,7 +600,10 @@ const RP_COUNT := 82
 @export var vegetation: WorldVegetationConfig = null
 
 @export_group("Детальная геометрия")
-## Поле высот игрового рельефа, собираемое после генерации.
+## Рельеф генерации: общая маска и эрозия (меняют высоты 4 м, входят в ключ кэша при включённой эрозии).
+const ReliefGenerationConfig := preload("res://scripts/world/world_relief_generation_config.gd")
+@export var relief_generation: ReliefGenerationConfig = null
+## Поле высот игрового рельефа, собираемое после генерации (вне ключей кэша).
 const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
 @export var relief_detail: ReliefDetailConfig = null
 
@@ -766,4 +769,11 @@ func nature_cache_digest() -> String:
 ## Детерминированный хеш параметров микрорельефа колеи (RoadBump): правка перестраивает артефакт surface.
 func surface_cache_digest() -> String:
 	var values: Array = [trail_bump_scale, trail_forest_holes, trail_single_rut, trail_single_rut_w]
-	return var_to_str(values).sha256_text().left(16)
+	return var_to_str(values).sha256_text().left(16) + relief_generation_suffix()
+
+
+## Эрозия меняет высоты поверхности и то, на что садится растительность: её хеш входит в оба ключа.
+## Пусто, пока эрозия выключена, чтобы прежний кэш оставался годным.
+func relief_generation_suffix() -> String:
+	var digest := relief_generation.cache_digest() if relief_generation != null else ""
+	return "" if digest.is_empty() else "|e=" + digest

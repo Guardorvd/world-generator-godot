@@ -175,7 +175,7 @@ public partial class RideGround : RefCounted
 		}
 		if (s.Detail != null)
 		{
-			double detail = s.Detail.SampleSurface(x, z, s.DetailForPlacement);
+			double detail = s.Detail.Sample(x, z, s.DetailForPlacement);
 			if (!double.IsNaN(detail))
 				return detail;
 		}

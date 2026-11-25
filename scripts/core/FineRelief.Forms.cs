@@ -5,7 +5,7 @@ using Inputs = Godot.Collections.Dictionary;
 
 public partial class FineRelief
 {
-	private enum Form { Rill, Root, Terrace, Flood, Bank, Knoll, Hollow, Gully }
+	private enum Form { Rill, Root, Terrace, Flood, Bank }
 	private const byte ClearWater = 1 << 7;
 	private double[] _formProfile;
 	private byte[] _habitat;
@@ -22,7 +22,7 @@ public partial class FineRelief
 		_formSeeds = input["form_seeds"].AsInt64Array();
 		_worldOrigin = input["origin"].AsVector2I();
 		_formProfile = profile;
-		return _habitat.Length == cells && _riverAxis.Length == _height * 2 && _formSeeds.Length == (int)Form.Gully + 1
+		return _habitat.Length == cells && _riverAxis.Length == _height * 2 && _formSeeds.Length == (int)Form.Bank + 1
 			&& _forestCover.Length > 0 && _forestCover.Length < ClearWater;
 	}
 
@@ -173,9 +173,7 @@ public partial class FineRelief
 						strength = Band(Setting(Parameter.BankNear), Setting(Parameter.BankFar), shore);
 					break;
 				default:
-					double mediumCurvature = hx + hx1 + hz + hz1 - 4.0 * At(jx, jz);
-					strength = MediumSite(kind, sx - ox, jz, grade, mediumCurvature, ref dx, ref dz);
-					break;
+					continue;
 			}
 			if (strength <= 0.0)
 				continue;
@@ -213,20 +211,23 @@ public partial class FineRelief
 						double edge = Setting(Parameter.BankLip) * 0.5;
 						form = Bell(t * t + q * q) * Smooth(-edge, edge, v * bankSide);
 						break;
-					case Form.Knoll:
-						form = Bell(t * t + q * q);
-						break;
-					case Form.Gully:
-						// Incision deepens downstream, then opens into the terrace as the envelope decays.
-						form = -Bell(t * t + q * q) * Smooth(-1.0, 0.0, t);
-						break;
 					default:
-						form = -Bell(t * t + q * q);
-						break;
+						continue;
 				}
 				output[j * stride + i] += (float)(magnitude * strength * form);
 			}
 		}
+	}
+
+	private double RiverLocal(double x, int z, out double dx, out double dz, out double toward)
+	{
+		double axis = _riverAxis[z * 2];
+		// Наклон оси реки по соседним рядам: направление вдоль реки.
+		double meander = (_riverAxis[(z + 1) * 2] - _riverAxis[(z - 1) * 2]) / (2.0 * _tile);
+		dz = 1.0 / Math.Sqrt(1.0 + meander * meander);
+		dx = meander * dz;
+		toward = -Math.Sign(x - axis);
+		return Math.Abs(x - axis) * dz - _riverAxis[z * 2 + 1];
 	}
 
 	private bool AboveWaterFade(int x, int z)

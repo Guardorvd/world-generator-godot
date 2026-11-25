@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=11 format=3]
+[gd_resource type="Resource" script_class="WorldTypeConfig" load_steps=13 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/world_type_config.gd" id="1_cfg"]
 [ext_resource type="Script" path="res://scripts/world/expedition_anchor_tuning.gd" id="2_anchors"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/world/world_atmosphere_config.gd" id="4_atm"]
 [ext_resource type="Texture2D" path="res://resources/icons/place_lake.svg" id="5_icon"]
 [ext_resource type="Script" path="res://scripts/world/world_relief_detail_config.gd" id="6_relief"]
+[ext_resource type="Script" path="res://scripts/world/world_relief_generation_config.gd" id="7_relief_gen"]
 
 [sub_resource type="Resource" id="Resource_atmosphere"]
 script = ExtResource("4_atm")
@@ -155,6 +156,17 @@ terrace_shoulder_band_m = PackedFloat64Array(0.4, 5.0)
 terrace_terrain_weights = PackedFloat64Array(0.57, 0.65, 0.33)
 terrace_position_weights = PackedFloat64Array(0.85, 0.95)
 
+[sub_resource type="Resource" id="Resource_relief_generation"]
+script = ExtResource("7_relief_gen")
+road_guard_m = 4.0
+road_fade_m = 8.0
+water_clearance_m = 0.5
+water_fade_m = 8.0
+place_fade_m = 4.0
+rock_fade = Vector2(0.55, 0.82)
+edge_guard_m = 8.0
+edge_fade_m = 8.0
+
 [sub_resource type="Resource" id="Resource_relief_detail"]
 script = ExtResource("6_relief")
 enabled = true
@@ -174,14 +186,6 @@ lod_edge_fade_m = Vector2(152, 184)
 lod_load_margin_m = 24.0
 lod_hysteresis_m = 20.0
 lod_recover_s = 0.45
-road_guard_m = 4.0
-road_fade_m = 8.0
-water_clearance_m = 0.5
-water_fade_m = 8.0
-place_fade_m = 4.0
-rock_fade = Vector2(0.55, 0.82)
-edge_guard_m = 8.0
-edge_fade_m = 8.0
 reconstruction_delta_m = 0.55
 forms_enabled = true
 form_grade_gain = 0.34
@@ -218,34 +222,13 @@ bank_height_m = 0.46
 bank_cover = 0.81
 bank_shore_m = Vector2(12.0, 30.0)
 bank_lip_m = 3.4
-mid_enabled = true
-mid_fade_m = 12.0
-mid_grade_gain = 0.32
-mid_delta_m = 1.7
-knoll_spacing_m = 24.0
-knoll_radii_m = Vector2(16.0, 13.5)
-knoll_height_m = 1.7
-knoll_cover = 0.86
-hollow_spacing_m = 29.0
-hollow_radii_m = Vector2(17.0, 13.0)
-hollow_depth_m = 1.35
-hollow_cover = 0.84
-shelf_grade = 0.37
-shelf_shore_m = Vector2(12.0, 360.0)
-shelf_curvature_m = 0.85
-gully_spacing_m = 23.0
-gully_radii_m = Vector2(17.0, 10.0)
-gully_depth_m = 1.7
-gully_cover = 0.9
-gully_slopes = Vector2(0.10, 0.62)
-gully_shore_m = Vector2(16.0, 300.0)
-gully_curvature_m = 0.9
 tile_mib = 30
 mesh_mib = 28
 
 [resource]
 script = ExtResource("1_cfg")
 id = "river_expedition"
+relief_generation = SubResource("Resource_relief_generation")
 relief_detail = SubResource("Resource_relief_detail")
 title = "Речная экспедиция"
 icon = ExtResource("5_icon")

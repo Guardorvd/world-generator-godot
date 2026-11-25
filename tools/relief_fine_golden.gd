@@ -28,9 +28,12 @@ func _run() -> void:
 	var p := cfg.params()
 	_check(p.size() == Profile.RD_COUNT and p[Profile.RD_STEP_M] == cfg.step_m and p[Profile.RD_TILE_BYTES] == cfg.tile_mib * Profile.MIB,
 		"контракт массива настроек")
+	var generation := WorldTemplate.config(WorldTemplate.EXPEDITION_ID).relief_generation
+	_check(generation != null and generation.mask_params().size() == generation.RM_COUNT, "контракт массива маски")
+	var invalid_mask := generation.duplicate()
+	invalid_mask.road_guard_m = -TILE
+	_check(not invalid_mask.valid(), "отрицательная защита дороги отклоняется")
 	var invalid := cfg.duplicate() as Profile
-	invalid.road_guard_m = -TILE
-	_check(not invalid.valid(CELLS), "отрицательная защита дороги отклоняется")
 	invalid.lod_recover_s = INF
 	_check(not invalid.valid_lod(PlanTerrain.LOD_RECHECK), "бесконечное восстановление LOD отклоняется")
 	var old_profile := WorldTemplate.config(WorldTemplate.DEFAULT_ID).relief_detail
@@ -94,8 +97,7 @@ func _check_form_groups(cfg: Profile) -> void:
 	for z in rows:
 		for x in columns:
 			original[Vector2i(x, z)] = h.fine_relief.TileHash(x, z)
-	for field: StringName in [&"rill_cover", &"root_cover", &"terrace_cover", &"flood_cover", &"bank_cover",
-			&"knoll_cover", &"hollow_cover", &"gully_cover"]:
+	for field: StringName in [&"rill_cover", &"root_cover", &"terrace_cover", &"flood_cover", &"bank_cover"]:
 		h.fine_relief = null
 		var cover: float = cfg.get(field)
 		cfg.set(field, 0.0)
@@ -143,12 +145,9 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 	_check(budget.samples > 0 and budget.switches > 0 and budget.new_peak <= budget.old_peak,
 		"пиковое число треугольников сеток 4/8/16 м на маршруте")
 	print("RELIEF_LOD_BUDGET ", w.seed_text, " ", JSON.stringify(budget))
-	_check(h.fine_medium, "поле 4 м со средними формами включено")
+	# Меши чанков 4 м берутся из кэша как есть (средних форм и проекции на поле C больше нет), с целями морфинга LOD.
 	var projected := {}
 	var coarse_samples := 0
-	var coarse_changed := 0
-	var coarse_max := 0.0
-	var lod_failures := 0
 	for view: Dictionary in fixture.views:
 		var eye: Vector3 = view.eye
 		var focus: Vector2 = view.focus
@@ -159,50 +158,27 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 			if not projected.has(key):
 				var raw := var_to_bytes(chunks[key])
 				var arrays := source.read(-1, key)
-				_check(raw == var_to_bytes(chunks[key]), "проекция сохраняет исходные массивы чанка")
-				projected[key] = arrays
+				_check(raw == var_to_bytes(chunks[key]), "чтение чанка сохраняет исходные массивы")
 				var before: PackedVector3Array = chunks[key][Mesh.ARRAY_VERTEX]
-				var after: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-				for i in after.size():
-					var d := absf(after[i].y - before[i].y)
-					coarse_changed += int(d > Metrics.TOLERANCE_M)
-					coarse_max = maxf(coarse_max, d)
-				for step: int in [PlanTerrain.LOD1_STEP, PlanTerrain.LOD2_STEP]:
-					var lod: Array = detail.BuildCoarseLod(key.x, key.y, step, step * TILE * 0.5)
-					lod_failures += _check_lod_nodes(detail, lod, w, key, step)
+				_check(before == arrays[Mesh.ARRAY_VERTEX], "вершины чанка 4 м совпадают с кэшем")
+				projected[key] = arrays
 			pieces.append(projected[key])
 		var coarse_stats := Metrics.mesh_stats(pieces, h, eye, focus, true)
 		coarse_samples += coarse_stats.parity_samples
 		_check(coarse_stats.parity_samples > 0 and coarse_stats.parity_failed == 0, "опора и меш 4 м до включения 2 м: " + w.seed_text)
-	_check(coarse_changed > 0 and coarse_max <= h.fine_profile.mid_delta_m + Metrics.TOLERANCE_M and lod_failures == 0, "поле C передаётся всем трём грубым уровням")
 	var origin := Vector2(sample.x, sample.z)
 	var first_key := Vector2i(((origin - Vector2.ONE * TILE * 0.5) / PlanTerrain.SIDE).floor())
 	if projected.has(first_key):
 		source.prewarm([origin], 0.0)
 		var expected := var_to_bytes(projected[first_key])
-		_check(var_to_bytes(source.ready(-1, first_key)) == expected, "в загрузке подготовлен именно меш C")
+		_check(var_to_bytes(source.ready(-1, first_key)) == expected, "в загрузке подготовлен тот же меш 4 м")
 		if w.seed_text == Fixture.SEEDS[0]:
 			_check(LodChecks.resumes_after_recovery(h, source, first_key, origin),
 				"неподвижное прибытие получает уровень 4 м после поздней подмены 16→8 м")
 		source.finish_startup()
-		_check(var_to_bytes(source.ready(-1, first_key)) == expected, "завершение загрузки сохраняет меш C в ОЗУ")
-		_check(var_to_bytes(source.read(-1, first_key)) == expected, "повторная сборка из исходных данных даёт тот же меш C")
-	var medium_heights := PackedFloat32Array()
-	medium_heights.resize(w.W * w.H)
-	var edge_violations := 0
-	for z in w.H:
-		for x in w.W:
-			var k := z * w.W + x
-			medium_heights[k] = detail.CoarseNode(x, z)
-			var edge := mini(mini(x, w.W - 1 - x), mini(z, w.H - 1 - z))
-			if edge * TILE <= h.fine_profile.edge_guard_m:
-				edge_violations += int(medium_heights[k] != original_hv[k])
-	_check(edge_violations == 0, "C сохраняет высоты у стыка с OuterLand")
-	var medium_grade_violations := _medium_grade_failures(w, original_hv, medium_heights, h.fine_profile)
-	_check(medium_grade_violations == 0, "C соблюдает предел уклона на треугольниках 4 м")
-	print("RELIEF_MEDIUM ", w.seed_text, " parity_samples=", coarse_samples, " shifted=", coarse_changed,
-		" max_delta_m=", coarse_max, " lod_failures=", lod_failures, " edge_failures=", edge_violations,
-		" grade_failures=", medium_grade_violations)
+		_check(var_to_bytes(source.ready(-1, first_key)) == expected, "завершение загрузки сохраняет меш 4 м в ОЗУ")
+		_check(var_to_bytes(source.read(-1, first_key)) == expected, "повторная сборка из исходных данных даёт тот же меш 4 м")
+	print("RELIEF_COARSE ", w.seed_text, " parity_samples=", coarse_samples)
 	started = Time.get_ticks_usec()
 	detail.Warm(PackedVector2Array([Vector2(sample.x, sample.z)]), INF)
 	var tiles_ms := (Time.get_ticks_usec() - started) / 1000.0
@@ -293,7 +269,7 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 				var z := (float(xyz[a].z) + xyz[b].z + xyz[c].z) / 3.0
 				var y := (targets[a * 4] + targets[b * 4] + targets[c * 4]) / 3.0
 				var cell_id := floori(z / TILE - 0.5) * w.W + floori(x / TILE - 0.5)
-				var target_y: float = baseline.Ground(x, z) if h.road_refinement.patches.has(cell_id) else detail.SampleCoarse(x, z)
+				var target_y: float = baseline.Ground(x, z) if h.road_refinement.patches.has(cell_id) else h.base_ground_at(x, z)
 				morph_errors += int(is_nan(target_y) or absf(target_y - y) > Metrics.TOLERANCE_M)
 				var ab := xyz[b] - xyz[a]
 				var ac := xyz[c] - xyz[a]
@@ -320,35 +296,3 @@ func _inspect(fixture: Dictionary) -> Dictionary:
 		" seam_failures=", seam_violations)
 	source.close()
 	return phases
-
-
-func _medium_grade_failures(w: WorldData, base: PackedFloat32Array, medium: PackedFloat32Array, profile: Resource) -> int:
-	var failures := 0
-	for z in w.H - 1:
-		for x in w.W - 1:
-			var a := z * w.W + x
-			var b := a + 1
-			var c := a + w.W
-			var d := c + 1
-			if base[a] == medium[a] and base[b] == medium[b] and base[c] == medium[c] and base[d] == medium[d]:
-				continue
-			var grade_a := Vector2(base[b] - base[a], base[c] - base[a]).length() / TILE
-			var grade_d := Vector2(base[c] - base[d], base[b] - base[d]).length() / TILE
-			var result_a := Vector2(medium[b] - medium[a], medium[c] - medium[a]).length() / TILE
-			var result_d := Vector2(medium[c] - medium[d], medium[b] - medium[d]).length() / TILE
-			failures += int(result_a > minf(maxf(profile.form_grade_limit, grade_a), grade_a + profile.mid_grade_gain) + 0.001)
-			failures += int(result_d > minf(maxf(profile.form_grade_limit, grade_d), grade_d + profile.mid_grade_gain) + 0.001)
-	return failures
-
-
-func _check_lod_nodes(detail: Object, arrays: Array, w: WorldData, key: Vector2i, step: int) -> int:
-	if arrays.is_empty():
-		return 1
-	var cols := ceili(float(mini(CELLS, w.W - 1 - key.x * CELLS)) / step) + 1
-	var rows := ceili(float(mini(CELLS, w.H - 1 - key.y * CELLS)) / step) + 1
-	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var failures := 0
-	for i in cols * rows:
-		var p := vertices[i]
-		failures += int(p.y != detail.CoarseNode(floori(p.x / TILE), floori(p.z / TILE)))
-	return failures

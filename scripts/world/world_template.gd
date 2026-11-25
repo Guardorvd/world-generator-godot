@@ -191,7 +191,7 @@ static func nature_cache_suffix(id: String) -> String:
 	var vdigest := config(tid).nature_cache_digest()
 	if vdigest != "none":
 		suffix += "|v=" + vdigest
-	return suffix
+	return suffix + config(tid).relief_generation_suffix()
 
 
 ## Суффикс артефакта surface по параметрам микрорельефа тропы (пусто для Типа 1).

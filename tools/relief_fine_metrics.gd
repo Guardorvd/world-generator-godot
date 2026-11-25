@@ -10,23 +10,16 @@ const TOLERANCE_M := 0.001
 static func spectrum(h: Heightfield, focus: Vector2) -> Dictionary:
 	var centre := (SIDE - 1) * 0.5
 	return _spectrum(func(x: int, z: int) -> float:
-		return h.base_ground_at(focus.x + x - centre, focus.y + z - centre), 1.0, BANDS)
+		return _surface(h, focus.x + x - centre, focus.y + z - centre), 1.0, BANDS)
 
 
-## Spectrum of C − hv at the original 4 m nodes. Sampling the triangles at 1 m
-## would mix in extra harmonics from rasterising the piecewise-linear surface.
-static func medium_spectrum(h: Heightfield, focus: Vector2) -> Dictionary:
-	var step := GameConfig.TILE
-	var corner := Vector2i((focus / step).floor()) - Vector2i.ONE * (SIDE / 2)
-	var hv := h.hv
-	var w := h.world.W
-	var height := h.world.H
-	return _spectrum(func(x: int, z: int) -> float:
-		var at := corner + Vector2i(x, z)
-		if at.x < 0 or at.y < 0 or at.x >= w or at.y >= height:
-			return 0.0
-		return h.fine_relief.CoarseNode(at.x, at.y) - hv[at.y * w + at.x],
-		step, [step * 2.0, 12.0, 16.0, 24.0, 32.0, 40.0, 64.0, 128.0, SIDE * step])
+## Опора без полотна дорог: поле 2 м у опубликованных плиток, иначе сетка 4 м.
+static func _surface(h: Heightfield, x: float, z: float) -> float:
+	if h.fine_relief != null:
+		var detailed: float = h.fine_relief.Sample(x, z, false)
+		if not is_nan(detailed):
+			return detailed
+	return h.base_ground_at(x, z)
 
 
 static func _spectrum(sample: Callable, spacing: float, bands: Array) -> Dictionary:

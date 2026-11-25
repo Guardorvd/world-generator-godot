@@ -1,11 +1,10 @@
 extends Resource
 ## Настройки игрового слоя после генерации. Не участвуют в ключах кэша мира.
+## Маска (где поле 2 м меняет высоты) — общая с эрозией генерации: WorldReliefGenerationConfig.
 const MountainDetail := preload("res://scripts/world/mountain_detail.gd")
 
 enum {
-	RD_STEP_M, RD_ROAD_GUARD_M, RD_ROAD_FADE_M, RD_WATER_CLEARANCE_M, RD_WATER_FADE_M,
-	RD_PLACE_FADE_M, RD_ROCK_FROM, RD_ROCK_TO, RD_STEEP_FROM, RD_STEEP_TO,
-	RD_EDGE_GUARD_M, RD_EDGE_FADE_M, RD_BICUBIC, RD_CLAMP, RD_RECONSTRUCTION_DELTA_M, RD_TILE_BYTES,
+	RD_STEP_M, RD_BICUBIC, RD_CLAMP, RD_RECONSTRUCTION_DELTA_M, RD_TILE_BYTES,
 	RD_FORMS, RD_FORM_GRADE_LIMIT, RD_FORM_GRADE_GAIN, RD_FORM_DELTA_M, RD_TOTAL_DELTA_M,
 	RD_RILL, RD_RILL_ALONG, RD_RILL_ACROSS, RD_RILL_M, RD_RILL_COVER,
 	RD_RILL_SLOPE_FROM, RD_RILL_SLOPE_TO, RD_RILL_CURVATURE_M, RD_RILL_RIM,
@@ -15,13 +14,7 @@ enum {
 	RD_FLOOD, RD_FLOOD_ALONG, RD_FLOOD_ACROSS, RD_FLOOD_M, RD_FLOOD_COVER,
 	RD_FLOOD_NEAR_M, RD_FLOOD_FAR_M, RD_FLOOD_GRADE,
 	RD_BANK, RD_BANK_ALONG, RD_BANK_ACROSS, RD_BANK_M, RD_BANK_COVER,
-	RD_BANK_NEAR_M, RD_BANK_FAR_M, RD_BANK_LIP_M,
-	RD_MID_FORMS, RD_MID_FADE_M, RD_MID_GRADE_GAIN, RD_MID_DELTA_M,
-	RD_KNOLL, RD_KNOLL_ALONG, RD_KNOLL_ACROSS, RD_KNOLL_HEIGHT, RD_KNOLL_COVER,
-	RD_HOLLOW, RD_HOLLOW_ALONG, RD_HOLLOW_ACROSS, RD_HOLLOW_DEPTH, RD_HOLLOW_COVER,
-	RD_SHELF_GRADE, RD_SHELF_NEAR_M, RD_SHELF_FAR_M, RD_SHELF_CURVATURE_M,
-	RD_GULLY, RD_GULLY_ALONG, RD_GULLY_ACROSS, RD_GULLY_DEPTH, RD_GULLY_COVER,
-	RD_GULLY_SLOPE_FROM, RD_GULLY_SLOPE_TO, RD_GULLY_NEAR_M, RD_GULLY_FAR_M, RD_GULLY_CURVATURE_M, RD_COUNT,
+	RD_BANK_NEAR_M, RD_BANK_FAR_M, RD_BANK_LIP_M, RD_COUNT,
 }
 
 ## Включает точную поверхность для этого типа мира.
@@ -64,26 +57,6 @@ enum {
 @export var lod_hysteresis_m := 0.0
 ## Длительность плавного восстановления, если поток опоздал к порогу, с.
 @export var lod_recover_s := 0.0
-
-@export_group("Маска")
-## Неподвижная полоса вокруг дорожных патчей, м.
-@export var road_guard_m := 0.0
-## Выход из защитной полосы дороги, м.
-@export var road_fade_m := 0.0
-## Минимальная высота суши над соседним уровнем воды, м.
-@export var water_clearance_m := 0.0
-## Переход от защищённого берега к детали, м.
-@export var water_fade_m := 0.0
-## Переход от площадки или сооружения к детали, м.
-@export var place_fade_m := 0.0
-## Плавное затухание по доле обнажённой породы.
-@export var rock_fade := Vector2(1.0, 1.0)
-## Доли уклона, при которых начинается и заканчивается затухание.
-@export var slope_fade := Vector2(MountainDetail.DETAIL_STEEP_FROM, MountainDetail.DETAIL_LIMIT)
-## Ширина неподвижного края плана, м.
-@export var edge_guard_m := 0.0
-## Переход между неподвижным краем и деталью, м.
-@export var edge_fade_m := 0.0
 
 @export_group("Восстановление")
 ## Восстанавливать промежуточные высоты бикубиком Catmull–Rom.
@@ -177,56 +150,6 @@ enum {
 ## Ширина плавного перегиба, м.
 @export var bank_lip_m := 0.0
 
-@export_group("Средние формы")
-## Добавлять средние формы к игровому полю 4 м после генерации.
-@export var mid_enabled := false
-## Плавный выход из нулевой части общей маски для средних форм, м.
-@export var mid_fade_m := 0.0
-## Максимальный прирост уклона над исходной сеткой 4 м, м/м.
-@export var mid_grade_gain := 0.0
-## Предел общего смещения сетки 4 м, м.
-@export var mid_delta_m := 0.0
-
-@export_group("Бугры и западины на полках")
-## Шаг поиска мест для бугров, м.
-@export var knoll_spacing_m := 0.0
-## Радиусы бугра вдоль и поперёк долины, м.
-@export var knoll_radii_m := Vector2.ZERO
-## Высота бугра до маскирования, м.
-@export var knoll_height_m := 0.0
-## Вероятность бугра на подходящей полке, доля.
-@export var knoll_cover := 0.0
-## Шаг поиска мест для западин, м.
-@export var hollow_spacing_m := 0.0
-## Радиусы западины вдоль и поперёк долины, м.
-@export var hollow_radii_m := Vector2.ZERO
-## Глубина западины до маскирования, м.
-@export var hollow_depth_m := 0.0
-## Вероятность западины на подходящей полке, доля.
-@export var hollow_cover := 0.0
-## Уклон, на котором формы полок исчезают, м/м.
-@export var shelf_grade := 0.0
-## Полоса расстояний от кромки реки для форм полок, м.
-@export var shelf_shore_m := Vector2.ZERO
-## Перепад, различающий выпуклость бугра и вогнутость западины, м.
-@export var shelf_curvature_m := 0.0
-
-@export_group("Короткие овражки к реке")
-## Шаг поиска мест для овражков, м.
-@export var gully_spacing_m := 0.0
-## Радиусы овражка вдоль и поперёк падения, м.
-@export var gully_radii_m := Vector2.ZERO
-## Глубина овражка до маскирования, м.
-@export var gully_depth_m := 0.0
-## Вероятность формы на подходящем склоне, доля.
-@export var gully_cover := 0.0
-## Полоса уклонов, м/м.
-@export var gully_slopes := Vector2.ZERO
-## Полоса расстояний от кромки реки, м.
-@export var gully_shore_m := Vector2.ZERO
-## Перепад для плавного усиления в ложбинах, м.
-@export var gully_curvature_m := 0.0
-
 @export_group("Бюджет")
 ## Лимит Миб для плиток и маски высот.
 @export var tile_mib := 0
@@ -240,9 +163,7 @@ const MIB := 1024 * 1024
 
 func params() -> PackedFloat64Array:
 	return PackedFloat64Array([
-		step_m, road_guard_m, road_fade_m, water_clearance_m, water_fade_m,
-		place_fade_m, rock_fade.x, rock_fade.y, slope_fade.x, slope_fade.y,
-		edge_guard_m, edge_fade_m, float(bicubic), float(clamp_bicubic), maxf(0.0, reconstruction_delta_m), tile_mib * MIB,
+		step_m, float(bicubic), float(clamp_bicubic), maxf(0.0, reconstruction_delta_m), tile_mib * MIB,
 		float(forms_enabled), form_grade_limit, form_grade_gain, form_delta_m, total_delta_m,
 		rill_spacing_m, rill_radii_m.x, rill_radii_m.y, rill_depth_m, rill_cover,
 		rill_slopes.x, rill_slopes.y, rill_curvature_m, rill_rim,
@@ -253,12 +174,6 @@ func params() -> PackedFloat64Array:
 		flood_shore_m.x, flood_shore_m.y, flood_grade,
 		bank_spacing_m, bank_radii_m.x, bank_radii_m.y, bank_height_m, bank_cover,
 		bank_shore_m.x, bank_shore_m.y, bank_lip_m,
-		float(mid_enabled), mid_fade_m, mid_grade_gain, mid_delta_m,
-		knoll_spacing_m, knoll_radii_m.x, knoll_radii_m.y, knoll_height_m, knoll_cover,
-		hollow_spacing_m, hollow_radii_m.x, hollow_radii_m.y, hollow_depth_m, hollow_cover,
-		shelf_grade, shelf_shore_m.x, shelf_shore_m.y, shelf_curvature_m,
-		gully_spacing_m, gully_radii_m.x, gully_radii_m.y, gully_depth_m, gully_cover,
-		gully_slopes.x, gully_slopes.y, gully_shore_m.x, gully_shore_m.y, gully_curvature_m,
 	])
 
 
@@ -284,7 +199,6 @@ func valid(chunk_cells: int) -> bool:
 		and chunk_cells % cells == 0 and full_m > 0.0 and ordinary_end > full_m and ordinary_end <= transition_end_m \
 		and is_finite(transition_end_m) and is_finite(exit_margin_m) and is_finite(prefetch_m) \
 		and exit_margin_m >= enter_margin_m and enter_margin_m >= 0.0 and prefetch_m >= 0.0 \
-		and road_guard_m >= 0.0 and water_clearance_m >= 0.0 and edge_guard_m >= 0.0 \
 		and tile_mib > 0 and mesh_mib > 0
 
 

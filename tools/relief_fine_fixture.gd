@@ -1,5 +1,7 @@
 extends RefCounted
 ## Сохраняет окончательное полотно вместе с планом, чтобы стенд не перестраивал ни мир, ни дорогу.
+## Поверхность хранится до шага эрозии (ReliefErosion), restore прогоняет его сам с текущими настройками:
+## настройку эрозии можно крутить без генерации мира (план части 2, задача 1.7).
 
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
 const Files := preload("res://scripts/core/cache_file.gd")
@@ -33,11 +35,20 @@ const FAR_EYE_M := 1.85
 ## Отступ точек дальних видов от края плана, м.
 const FAR_MARGIN_M := 80.0
 const SIZE := Vector2i(384, 1024)
+const Erosion := preload("res://scripts/world/relief_erosion.gd")
 const TILE := GameConfig.TILE
 const VERSION := 1
 
 
 static func save(seed_text: String) -> Error:
+	# Генерация тоже собирает поверхность (для растительности), и загрузка берёт её готовой: шаг выключен на всё время.
+	Erosion.allowed = false
+	var result := _save(seed_text)
+	Erosion.allowed = true
+	return result
+
+
+static func _save(seed_text: String) -> Error:
 	var w := WorldGenerator.generate(seed_text, SIZE.x, Callable(), Callable(), Callable(), WorldTemplate.EXPEDITION_ID, true)
 	if w == null or Vector2i(w.W, w.H) != SIZE or w.trails.is_empty():
 		return ERR_CANT_CREATE
@@ -78,6 +89,7 @@ static func restore(seed_text: String) -> Dictionary:
 	var h := Surface.restore(w, saved.surface, "final")
 	if h == null or h.road_refinement.patches.is_empty():
 		return {}
+	Erosion.run(h)
 	w.clear_noise_fields()
 	# Ближние виды — как сохранены (по ним сверяются эталоны), дальние — отдельным ключом для стенда.
 	# Пустой список дальних видов не мешает эталонам; стенд считает это ошибкой сам.

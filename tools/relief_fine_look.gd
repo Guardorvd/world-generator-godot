@@ -3,7 +3,7 @@ extends SceneTree
 ## --save-fixture создаёт два плана. --seeds <a,b> выбирает фикстуры; --tag задаёт папку прогона.
 ## --fine off|on|both выбирает поверхность, both пишет общий лист. --measure включает замер кадра при 1080p,
 ## --fine smooth оставляет только восстановление. --fine compare_forms добавляет к нему малые формы.
-## --fine compare_mid сравнивает малые формы с полным полем. --fine small оставляет только малые.
+## --fine small оставляет только малые формы без плавных уровней.
 ## --fine compare_lod сравнивает старые и новые LOD на одном поле. --fine legacy_lod пригоден для исходного заезда.
 ## --fine ordinary использует обычную детализацию; --fine compare_quality сравнивает её с высокой.
 ## --ride ведёт камеру по оси тропы 60 с со скоростью 22 м/с, --parity сверяет физику с мешем.
@@ -78,11 +78,11 @@ func _run() -> void:
 		quit(int(_failures > 0))
 		return
 	var comparison_modes: Array = {
-		"both": ["off", "on"], "compare_forms": ["smooth", "small"], "compare_mid": ["small", "on"],
+		"both": ["off", "on"], "compare_forms": ["smooth", "small"],
 		"compare_lod": ["legacy_lod", "on"], "compare_quality": ["on", "ordinary"],
 	}.get(fine, [])
 	if DisplayServer.get_name() == "headless" or (comparison_modes.is_empty() and fine not in ["off", "on", "ordinary", "smooth", "small", "legacy_lod"]) or (not comparison_modes.is_empty() and args.has("--ride")):
-		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|ordinary|both|smooth|small|legacy_lod|compare_forms|compare_mid|compare_lod|compare_quality (заезд с одним вариантом)")
+		printerr("RELIEF_FAIL для съёмки нужен экран; --fine off|on|ordinary|both|smooth|small|legacy_lod|compare_forms|compare_lod|compare_quality (заезд с одним вариантом)")
 		quit(1)
 		return
 	var measure := args.has("--measure")
@@ -122,7 +122,7 @@ func _run() -> void:
 		var prepare_ms := 0.0
 		if mode != "off":
 			var prepare_started := Time.get_ticks_usec()
-			fixture.heights.prepare_fine_relief(mode != "smooth", mode in ["on", "ordinary", "legacy_lod"], mode in ["on", "ordinary"] and fine != "compare_mid")
+			fixture.heights.prepare_fine_relief(mode != "smooth", mode in ["on", "ordinary"])
 			prepare_ms = (Time.get_ticks_usec() - prepare_started) / 1000.0
 			if fixture.heights.fine_relief == null:
 				_expect(false, "точное поле не готово на " + seed)
@@ -163,8 +163,6 @@ func _run() -> void:
 			row.eye = eye
 			row.target = target
 			row.energy_pct = Metrics.spectrum(_heights, focus)
-			if _heights.fine_medium:
-				row.medium_energy_pct = Metrics.medium_spectrum(_heights, focus)
 			row.triangles = _visible_triangles()
 			row.settle_uploads = uploads
 			if _terrain.relief_detail != null:

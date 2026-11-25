@@ -131,8 +131,6 @@ func read(layer: int, key: Vector2i) -> Array:
 			else:
 				arrays = WaterBuilder.build_chunk(world, heights, key, layer)
 			if ref.get("file", "") != "": cache._write(cache.dir.path_join(ref.file), ref.key, var_to_bytes({arrays = arrays}))
-	if layer < 0 and heights.fine_medium and not arrays.is_empty():
-		arrays = heights.fine_relief.ProjectCoarseMesh(arrays)
 	if layer < 0 and heights.fine_lod and not arrays.is_empty():
 		arrays = heights.fine_relief.DecorateFullLod(key.x, key.y, arrays)
 	_stats_lock.lock()
@@ -256,8 +254,8 @@ func finish_startup() -> void:
 		for key: Vector2i in groups[group].keys():
 			var arrays: Variant = groups[group][key]
 			if not arrays is Array: continue
-			# These are raw disk-cache arrays. The terrain reader projects them onto C on demand.
-			if group != 0 or not (heights.fine_medium or heights.fine_lod):
+			# These are raw disk-cache arrays. The terrain reader decorates them with LOD morph targets on demand.
+			if group != 0 or not heights.fine_lod:
 				_cpu.put(_id(group - 1, key), arrays)
 			groups[group][key] = _persisted_refs[group][key] if not _persisted_refs.is_empty() else {file = "", key = "", bytes = LRU.size_of(arrays)}
 	_persisted_refs = []

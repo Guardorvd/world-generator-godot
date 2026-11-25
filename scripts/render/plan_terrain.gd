@@ -217,8 +217,6 @@ func _lod_arrays(key: Vector2i, lod: int, immediate := true) -> Variant:
 	var arrays: Array
 	if morph_lod != null:
 		arrays = _heights.fine_relief.BuildMorphLod(key.x, key.y, step)
-	elif _heights.fine_medium:
-		arrays = _heights.fine_relief.BuildCoarseLod(key.x, key.y, step, skirt)
 	else:
 		arrays = fast.BuildTerrainLod(_world.W, _world.H, GameConfig.TILE, key.x, key.y, CELLS, step, _heights.hv, _world.path_mask, skirt)
 	if not arrays.is_empty():

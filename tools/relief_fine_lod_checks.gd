@@ -90,7 +90,8 @@ static func budget(h: Heightfield, chunks: Dictionary, route: PackedVector2Array
 		var old := [count]
 		var now := [count]
 		for step: int in [PlanTerrain.LOD1_STEP, PlanTerrain.LOD2_STEP]:
-			var a: Array = h.fine_relief.BuildCoarseLod(key.x, key.y, step, step * TILE * 0.5)
+			var a: Array = Grid.fast_grid().BuildTerrainLod(h.world.W, h.world.H, TILE, key.x, key.y, CELLS, step, h.hv,
+				h.world.path_mask, step * TILE * 0.5)
 			var b: Array = h.fine_relief.BuildMorphLod(key.x, key.y, step)
 			old.append(a[Mesh.ARRAY_INDEX].size() / 3)
 			now.append(b[Mesh.ARRAY_INDEX].size() / 3)

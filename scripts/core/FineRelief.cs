@@ -8,28 +8,21 @@ using Inputs = Godot.Collections.Dictionary;
 /// <summary>Derived terrain. Workers calculate immutable tiles; only the scene publishes them to physics.</summary>
 public partial class FineRelief : RefCounted
 {
-	// Keep the native parameter layout in sync with WorldReliefDetailConfig.params().
+	// Keep the native parameter layout in sync with WorldReliefDetailConfig.params(). The mask has its own (ReliefMask).
 	internal enum Parameter
 	{
-		Step, RoadGuard, RoadFade, WaterClearance, WaterFade, PlaceFade, RockFrom, RockTo, SteepFrom, SteepTo,
-		EdgeGuard, EdgeFade, Bicubic, Clamp, ReconstructionDelta, TileBytes,
+		Step, Bicubic, Clamp, ReconstructionDelta, TileBytes,
 		Forms, FormGradeLimit, FormGradeGain, FormDelta, TotalDelta,
 		Rill, RillAlong, RillAcross, RillDepth, RillCover, RillSlopeFrom, RillSlopeTo, RillCurvature, RillRim,
 		Root, RootAlong, RootAcross, RootHeight, RootCover, RootPair, RootPitShare,
 		Terrace, TerraceAlong, TerraceAcross, TerraceHeight, TerraceCover, TerraceSlopeFrom, TerraceSlopeTo, TerraceLip,
 		Flood, FloodAlong, FloodAcross, FloodDepth, FloodCover, FloodNear, FloodFar, FloodGrade,
-		Bank, BankAlong, BankAcross, BankHeight, BankCover, BankNear, BankFar, BankLip,
-		MidForms, MidFade, MidGradeGain, MidDelta,
-		Knoll, KnollAlong, KnollAcross, KnollHeight, KnollCover,
-		Hollow, HollowAlong, HollowAcross, HollowDepth, HollowCover,
-		ShelfGrade, ShelfNear, ShelfFar, ShelfCurvature,
-		Gully, GullyAlong, GullyAcross, GullyDepth, GullyCover,
-		GullySlopeFrom, GullySlopeTo, GullyNear, GullyFar, GullyCurvature, Count
+		Bank, BankAlong, BankAcross, BankHeight, BankCover, BankNear, BankFar, BankLip, Count
 	}
 	private int _width, _height, _cells, _columns, _rows;
 	private double _tile, _step, _reconstructionDelta;
 	private float[] _coarse, _weight;
-	private bool _bicubic, _clamp, _smallForms, _mediumForms;
+	private bool _bicubic, _clamp, _smallForms;
 	private Lazy<Tile>[] _tiles;
 	private bool[] _active;
 	private long _tileBytes;
@@ -40,106 +33,43 @@ public partial class FineRelief : RefCounted
 	}
 	private bool UsesDetail => _bicubic || _smallForms;
 
-	internal bool Initialize(Inputs input, double[] profile)
+	internal bool Initialize(Inputs input, ReliefMask mask, double[] profile)
 	{
-		if (profile.Length != (int)Parameter.Count)
+		if (mask == null || profile.Length != (int)Parameter.Count)
 			return false;
 		foreach (double value in profile)
 			if (!double.IsFinite(value))
 				return false;
 		double P(Parameter key) => profile[(int)key];
-		_width = input["width"].AsInt32();
-		_height = input["height"].AsInt32();
+		_width = mask.Width;
+		_height = mask.Height;
+		_tile = mask.Tile;
 		_cells = input["cells"].AsInt32();
-		_tile = input["tile"].AsDouble();
 		_step = P(Parameter.Step);
 		int count = _width * _height;
-		if (_width < 2 || _height < 2 || _cells <= 0 || _step <= 0.0 || _step * 2.0 != _tile)
+		// Узлы 2 м совпадают с узлами 4 м и их диагоналями только при шаге в половину клетки.
+		if (_cells <= 0 || _step <= 0.0 || _step * 2.0 != _tile)
 			return false;
 		_coarse = input["hv"].AsFloat32Array();
-		var water = input["water"].AsFloat32Array();
-		var wet = input["wet"].AsByteArray();
-		var lake = input["lake"].AsByteArray();
-		var rock = input["rock"].AsByteArray();
-		if (_coarse.Length != count || water.Length != count || wet.Length != count || lake.Length != count || rock.Length != count)
+		if (_coarse.Length != count)
 			return false;
 		_columns = (_width - 2) / _cells + 1;
 		_rows = (_height - 2) / _cells + 1;
 		_smallForms = P(Parameter.Forms) != 0.0;
-		_mediumForms = P(Parameter.MidForms) != 0.0;
+		// Худший случай памяти плиток: узлы 2 м всех чанков с ореолом в один узел, плюс маска и высоты 4 м.
 		long maxNodes = (2L * (_width - 1) + 3L * _columns) * (2L * (_height - 1) + 3L * _rows);
-		if ((_smallForms || _mediumForms) && !InitializeForms(input, profile, count))
+		if (_smallForms && !InitializeForms(input, profile, count))
 			return false;
 		if ((maxNodes + 2L * count) * sizeof(float) + FormBytes() > P(Parameter.TileBytes))
 			return false;
 		_bicubic = P(Parameter.Bicubic) != 0.0;
 		_clamp = P(Parameter.Clamp) != 0.0;
 		_reconstructionDelta = P(Parameter.ReconstructionDelta);
-		_weight = new float[count];
-		Array.Fill(_weight, 1.0f);
-
-		var distance = new int[count];
-		ResetDistance(distance);
-		foreach (int cell in input["patches"].AsInt32Array())
-		{
-			int x = cell % _width, z = cell / _width;
-			Mark(distance, x, z, x + 1, z + 1);
-		}
-		ApplyDistance(distance, P(Parameter.RoadGuard), P(Parameter.RoadFade));
-
-		ResetDistance(distance);
-		double clearance = P(Parameter.WaterClearance);
-		for (int z = 0; z < _height; z++)
-		for (int x = 0; x < _width; x++)
-		{
-			int k = z * _width + x;
-			if (wet[k] != 0 || lake[k] != 0 || _coarse[k] <= clearance)
-				Mark(distance, x - 1, z - 1, x + 1, z + 1);
-			if (float.IsNegativeInfinity(water[k]))
-				continue;
-			double limit = water[k] + clearance;
-			for (int dz = Math.Max(0, z - 1); dz <= Math.Min(z + 1, _height - 1); dz++)
-			for (int dx = Math.Max(0, x - 1); dx <= Math.Min(x + 1, _width - 1); dx++)
-				if (_coarse[dz * _width + dx] <= limit)
-					Mark(distance, dx - 1, dz - 1, dx + 1, dz + 1);
-		}
-		ApplyDistance(distance, 0.0, P(Parameter.WaterFade));
+		_weight = mask.Weight;
 		if (_smallForms)
 			for (int i = 0; i < count; i++)
-				if (distance[i] * _tile >= P(Parameter.WaterFade))
+				if (mask.ClearOfWater[i])
 					_habitat[i] |= ClearWater;
-
-		ResetDistance(distance);
-		foreach (int cell in input["structures"].AsInt32Array())
-		{
-			int x = cell % _width, z = cell / _width;
-			Mark(distance, x - 1, z - 1, x + 1, z + 1);
-		}
-		double[] sites = input["places"].AsFloat64Array();
-		for (int k = 0; k + 2 < sites.Length; k += 3)
-		{
-			double x = sites[k] / _tile - 0.5, z = sites[k + 1] / _tile - 0.5, r = sites[k + 2] / _tile;
-			Mark(distance, (int)Math.Floor(x - r), (int)Math.Floor(z - r), (int)Math.Ceiling(x + r), (int)Math.Ceiling(z + r));
-		}
-		ApplyDistance(distance, 0.0, P(Parameter.PlaceFade));
-		double rockFrom = P(Parameter.RockFrom), rockTo = P(Parameter.RockTo);
-		double steepFrom = P(Parameter.SteepFrom), steepTo = P(Parameter.SteepTo);
-		double edgeGuard = P(Parameter.EdgeGuard), edgeFade = P(Parameter.EdgeFade);
-		for (int z = 0; z < _height; z++)
-		for (int x = 0; x < _width; x++)
-		{
-			int k = z * _width + x;
-			if (_weight[k] == 0.0f)
-				continue;
-			int edge = Math.Min(Math.Min(x, _width - 1 - x), Math.Min(z, _height - 1 - z));
-			double sx = (At(x + 1, z) - At(x - 1, z)) / (2.0 * _tile);
-			double sz = (At(x, z + 1) - At(x, z - 1)) / (2.0 * _tile);
-			_weight[k] *= (float)(Smooth(edgeGuard, edgeGuard + edgeFade, edge * _tile)
-				* (1.0 - Smooth(steepFrom, steepTo, Math.Sqrt(sx * sx + sz * sz)))
-				* (1.0 - Smooth(rockFrom, rockTo, rock[k] / (double)byte.MaxValue)));
-		}
-		if (_mediumForms)
-			BuildMedium(distance);
 		_tiles = new Lazy<Tile>[_columns * _rows];
 		_active = new bool[_tiles.Length];
 		for (int i = 0; i < _tiles.Length; i++)
@@ -150,57 +80,7 @@ public partial class FineRelief : RefCounted
 		return true;
 	}
 
-	private void ResetDistance(int[] distance) => Array.Fill(distance, Math.Max(_width, _height));
-
-	private void Mark(int[] distance, int x0, int z0, int x1, int z1)
-	{
-		x0 = Math.Max(x0, 0);
-		x1 = Math.Min(x1, _width - 1);
-		if (x0 > x1)
-			return;
-		for (int z = Math.Max(0, z0); z <= Math.Min(z1, _height - 1); z++)
-			Array.Clear(distance, z * _width + x0, x1 - x0 + 1);
-	}
-
-	// Distance to protected coarse nodes in grid rings. Eight neighbours make the zero ring continuous around corners.
-	private void ApplyDistance(int[] d, double guard, double fade)
-	{
-		DistanceToGuard(d);
-		for (int k = 0; k < d.Length; k++)
-			_weight[k] *= (float)Smooth(guard, guard + fade, d[k] * _tile);
-	}
-
-	private void DistanceToGuard(int[] d)
-	{
-		for (int z = 0; z < _height; z++)
-		for (int x = 0; x < _width; x++)
-		{
-			int k = z * _width + x, best = d[k];
-			if (x > 0) best = Math.Min(best, d[k - 1] + 1);
-			if (z > 0)
-				for (int dx = Math.Max(0, x - 1); dx <= Math.Min(x + 1, _width - 1); dx++)
-					best = Math.Min(best, d[k - _width - x + dx] + 1);
-			d[k] = best;
-		}
-		for (int z = _height - 1; z >= 0; z--)
-		for (int x = _width - 1; x >= 0; x--)
-		{
-			int k = z * _width + x, best = d[k];
-			if (x < _width - 1) best = Math.Min(best, d[k + 1] + 1);
-			if (z < _height - 1)
-				for (int dx = Math.Max(0, x - 1); dx <= Math.Min(x + 1, _width - 1); dx++)
-					best = Math.Min(best, d[k + _width - x + dx] + 1);
-			d[k] = best;
-		}
-	}
-
-	private static double Smooth(double a, double b, double v)
-	{
-		if (b <= a)
-			return v > a ? 1.0 : 0.0;
-		double t = Math.Clamp((v - a) / (b - a), 0.0, 1.0);
-		return t * t * (3.0 - 2.0 * t);
-	}
+	private static double Smooth(double a, double b, double v) => ReliefMask.Smooth(a, b, v);
 
 	private double At(int x, int z) => _coarse[Math.Clamp(z, 0, _height - 1) * _width + Math.Clamp(x, 0, _width - 1)];
 
@@ -328,24 +208,7 @@ public partial class FineRelief : RefCounted
 		return Triangle(tile.Values, (b + 1) * tile.Stride + a + 1, tile.Stride, u - a, v - b);
 	}
 
-	public bool HasMedium() => _mediumForms;
-
-	public double SampleSurface(double x, double z, bool forPlacement)
-	{
-		double fine = Sample(x, z, forPlacement);
-		return double.IsNaN(fine) ? SampleCoarse(x, z) : fine;
-	}
-
-	public double SampleCoarse(double x, double z)
-	{
-		double fx = x / _tile - 0.5, fz = z / _tile - 0.5;
-		if (!_mediumForms || !(fx >= 0.0 && fz >= 0.0 && fx < _width - 1 && fz < _height - 1))
-			return double.NaN;
-		int i = (int)fx, j = (int)fz;
-		return Triangle(_coarse, j * _width + i, _width, fx - i, fz - j);
-	}
-
-	public float CoarseNode(int x, int z) => _coarse[z * _width + x];
+	private float CoarseNode(int x, int z) => _coarse[z * _width + x];
 
 	private int ClampX(int x) => Math.Clamp(x, 0, (_width - 1) * 2);
 	private int ClampZ(int z) => Math.Clamp(z, 0, (_height - 1) * 2);
@@ -353,10 +216,10 @@ public partial class FineRelief : RefCounted
 
 public partial class FastGrid
 {
-	public FineRelief CreateFineRelief(Inputs input, double[] parameters)
+	public FineRelief CreateFineRelief(Inputs input, double[] maskParameters, double[] parameters)
 	{
 		var fine = new FineRelief();
-		if (fine.Initialize(input, parameters))
+		if (fine.Initialize(input, ReliefMask.Build(input, maskParameters), parameters))
 			return fine;
 		fine.Dispose();
 		return null;
