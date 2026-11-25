@@ -46,6 +46,10 @@ func _initialize() -> void:
 	_thumbs(folder)
 	_writer(folder.path_join("writer"))
 	_migration(folder.path_join("migration"))
+	var args := OS.get_cmdline_user_args()
+	var before := args.find("--before")
+	if before >= 0 and before + 1 < args.size():
+		_compare_before(folder, args[before + 1])
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
 
@@ -153,6 +157,29 @@ func _migration(folder: String) -> void:
 	check(writer.migrate(records, "test", "seed", map, Vector2(128, 128)) == OK, "повторный перенос после удаления")
 	writer.finish()
 	check(feed.load_feed() == OK and feed.entries.is_empty(), "удалённая запись не возвращается")
+
+
+func _compare_before(folder: String, source_folder: String) -> void:
+	var feed_script := GDScript.new()
+	feed_script.source_code = FileAccess.get_file_as_string(source_folder.path_join("ride_feed.gd"))
+	var thumb_script := GDScript.new()
+	thumb_script.source_code = FileAccess.get_file_as_string(source_folder.path_join("ride_thumb.gd"))
+	if feed_script.reload() != OK or thumb_script.reload() != OK:
+		check(false, "версия до ревизии загружена")
+		return
+	var old_feed = feed_script.new(folder.path_join("before"))
+	var new_feed = Feed.new(folder.path_join("after"))
+	var entries := [{id = "a", version = 1, start = 1, bike = 300.0}, {id = "b", version = 1, start = 2, bike = 450.0}]
+	for entry: Dictionary in entries:
+		old_feed.upsert(entry)
+		new_feed.upsert(entry)
+	check(FileAccess.get_file_as_bytes(folder.path_join("before/feed.json")) == FileAccess.get_file_as_bytes(folder.path_join("after/feed.json")), "до и после: записи побайтно")
+	var map := Image.create(128, 128, false, Image.FORMAT_RGB8)
+	map.fill(Color.DARK_GREEN)
+	var ride := {legs = [PackedVector2Array([Vector2(10, 20), Vector2(90, 100)])], fall_marks = [{x = 50, z = 60}]}
+	var before_image: Image = thumb_script.render(map, Vector2(128, 128), ride)
+	var after_image: Image = Thumb.render(map, Vector2(128, 128), ride)
+	check(before_image.save_png_to_buffer() == after_image.save_png_to_buffer(), "до и после: PNG побайтно")
 
 
 func check(ok: bool, message: String) -> void:

@@ -718,20 +718,28 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 
 
 ## Итоговый снимок отделён от сохранения мира и не зависит от срока его жизни.
+func _ride_feed_development() -> bool:
+	return QuickTrails.network() or WorldTemplate.cmdline_short() or (services.cache != null and services.cache.short_dev)
+
+
+func _ride_feed_item(snapshot: Dictionary) -> Dictionary:
+	var names := []
+	for id: String in snapshot.get("places", []):
+		var place: Dictionary = world.place(id)
+		names.append(str(place.get("name", id)))
+	var photos := []
+	for photo: Dictionary in hud.explore.personal_photos:
+		if float(photo.get("ride_start", -1.0)) == float(snapshot.start):
+			photos.append(str(photo.get("path", "")))
+	return {snapshot = snapshot, names = names, photos = photos}
+
+
 func migrate_legacy_rides() -> void:
-	if _legacy_rides_migrated or world == null or QuickTrails.network() or WorldTemplate.cmdline_short() or (services.cache != null and services.cache.short_dev):
+	if _legacy_rides_migrated or world == null or _ride_feed_development():
 		return
 	var records := []
 	for entry: Dictionary in hud.ride_log.entries:
-		var names := []
-		for id: String in entry.get("places", []):
-			var place: Dictionary = world.place(id)
-			names.append(str(place.get("name", id)))
-		var photos := []
-		for photo: Dictionary in hud.explore.personal_photos:
-			if float(photo.get("ride_start", -1.0)) == float(entry.start):
-				photos.append(str(photo.get("path", "")))
-		records.append({snapshot = entry, names = names, photos = photos})
+		records.append(_ride_feed_item(entry))
 	if _ride_feed_writer == null:
 		_ride_feed_writer = RideFeedWriter.new()
 	var err: Error = _ride_feed_writer.migrate(records, world.template_id, world.seed_text, hud.map_preview, Vector2(world.W, world.H) * TILE)
@@ -743,23 +751,15 @@ func migrate_legacy_rides() -> void:
 func save_ride_feed(force := false) -> void:
 	if world == null or hud == null or quests == null:
 		return
-	var development := QuickTrails.network() or WorldTemplate.cmdline_short() or (services.cache != null and services.cache.short_dev)
-	if development:
+	if _ride_feed_development():
 		return
 	var snapshot: Dictionary = hud.ride_log.snapshot(hud.map_journal, hud.explore, quests.done)
 	if snapshot.is_empty():
 		return
-	var names: Array = []
-	for id: String in snapshot.places:
-		var place: Dictionary = world.place(id)
-		names.append(str(place.get("name", id)))
-	var photos: Array = []
-	for photo: Dictionary in hud.explore.personal_photos:
-		if float(photo.get("ride_start", -1.0)) == float(snapshot.start):
-			photos.append(str(photo.get("path", "")))
+	var item := _ride_feed_item(snapshot)
 	if _ride_feed_writer == null:
 		_ride_feed_writer = RideFeedWriter.new()
-	var err: Error = _ride_feed_writer.submit(snapshot, world.template_id, world.seed_text, names, photos, hud.map_preview, Vector2(world.W, world.H) * TILE, force)
+	var err: Error = _ride_feed_writer.submit(snapshot, world.template_id, world.seed_text, item.names, item.photos, hud.map_preview, Vector2(world.W, world.H) * TILE, force)
 	if err != OK:
 		push_warning("Не удалось записать журнал заездов: " + error_string(err))
 
