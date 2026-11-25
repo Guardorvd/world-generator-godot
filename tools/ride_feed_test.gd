@@ -6,6 +6,7 @@ const Config = preload("res://resources/ride_journal.tres")
 const RideLog = preload("res://scripts/game/ride_log.gd")
 const Journal = preload("res://scripts/game/map_journal.gd")
 const Explore = preload("res://scripts/game/exploration.gd")
+const Thumb = preload("res://scripts/ui/ride_thumb.gd")
 var failures := 0
 
 
@@ -40,6 +41,7 @@ func _initialize() -> void:
 	check(reload.load_feed() == OK and reload.entries.is_empty() and FileAccess.file_exists(folder.path_join("feed.json.bad")), "повреждённый файл сохранён")
 	check(reload.upsert(first) == OK, "запись после восстановления")
 	_stats()
+	_thumbs(folder)
 	print("ИТОГО: %s" % ("всё прошло" if failures == 0 else "%d провалов" % failures))
 	quit(1 if failures else 0)
 
@@ -80,6 +82,28 @@ func _stats() -> void:
 		var elevation := float(i) if i <= 12 else float(24 - i)
 		hill.track_tick(hill_journal, elevation, 1.0, true)
 	check(hill.climb == 12.0 and hill.descent == 12.0 and hill.alt_min == 0.0 and hill.alt_max == 12.0, "набор, сброс и пределы высоты")
+
+
+func _thumbs(folder: String) -> void:
+	var map := Image.create(256, 256, false, Image.FORMAT_RGB8)
+	map.fill(Color(0.2, 0.4, 0.3))
+	var entry := {legs = [PackedVector2Array([Vector2(100, 100), Vector2(500, 500)]), PackedVector2Array([Vector2(500, 500), Vector2(700, 800)])], leg_modes = [true, false], fall_marks = [{x = 500.0, z = 500.0}]}
+	var start := Time.get_ticks_usec()
+	var square: Image = Thumb.render(map, Vector2(1024, 1024), entry)
+	var elapsed := Time.get_ticks_usec() - start
+	var same: Image = Thumb.render(map, Vector2(1024, 1024), entry)
+	check(square != null and square.get_size() == Vector2i(Config.thumb_width, Config.thumb_height) and square.get_data() == same.get_data(), "квадратная карта: размер и повторяемость превью")
+	check(square.save_png(folder.path_join("square.png")) == OK, "PNG квадратной карты")
+	var elongated: Image = Thumb.render(map, Vector2(1024, 4096), entry)
+	check(elongated != null and elongated.save_png(folder.path_join("elongated.png")) == OK, "PNG вытянутой карты")
+	print("Превью: %.2f мс" % (float(elapsed) / 1000.0))
+	var long_track := PackedVector2Array()
+	for i in 6000:
+		long_track.append(Vector2(20.0 + float(i) * 0.15, 500.0 + 100.0 * sin(float(i) * 0.02)))
+	start = Time.get_ticks_usec()
+	var long_image: Image = Thumb.render(map, Vector2(1024, 1024), {legs = [long_track]})
+	print("Превью 6000 точек: %.2f мс" % (float(Time.get_ticks_usec() - start) / 1000.0))
+	check(long_image != null, "превью длинного трека")
 
 
 func check(ok: bool, message: String) -> void:

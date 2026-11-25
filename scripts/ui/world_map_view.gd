@@ -870,7 +870,7 @@ func _frame_ride() -> void:
 	if size.x < 2.0 or size.y < 2.0:
 		return
 	var area := (size - Vector2(80, 120)).max(Vector2.ONE * 40.0)
-	var fit := _ride_frame.grow(maxf(60.0, maxf(_ride_frame.size.x, _ride_frame.size.y) * 0.12))
+	var fit: Rect2 = preload("res://scripts/game/ride_log.gd").framed_bounds(_ride_frame, area.x / area.y)
 	_center = fit.get_center().clamp(_bounds.position, _bounds.end)
 	_scale = clampf(minf(area.x / maxf(fit.size.x, 1.0), area.y / maxf(fit.size.y, 1.0)), _min_scale, MAX_SCALE)
 	_update_base()

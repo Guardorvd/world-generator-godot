@@ -22,6 +22,7 @@ var record_step := 0.0
 var completed_legs := 0
 var legs: Array[Dictionary] = []
 var current := PackedVector2Array()
+var current_riding := false
 var current_bounds := Rect2()
 var _elapsed := 0.0
 var _position := Vector2.INF
@@ -39,14 +40,18 @@ func record(at: Vector2, dt: float, riding := false) -> void:
 	if not at.is_finite():
 		return
 	if current.is_empty():
-		_begin(at)
+		_begin(at, riding)
 		sample_recorded = true
 		record_broken = true
 		return
+	if current_riding != riding:
+		var previous := _position
+		end_trip()
+		_begin(previous, riding)
 	var step := _position.distance_to(at)
 	if step >= MAX_STEP:
 		end_trip()
-		_begin(at)
+		_begin(at, riding)
 		sample_recorded = true
 		record_broken = true
 		return
@@ -67,11 +72,12 @@ func record(at: Vector2, dt: float, riding := false) -> void:
 		revision += 1
 		if current.size() >= POINTS_PER_LEG:
 			end_trip()
-			_begin(at)
+			_begin(at, riding)
 
 
-func _begin(at: Vector2) -> void:
+func _begin(at: Vector2, riding := false) -> void:
 	current.append(at)
+	current_riding = riding
 	current_bounds = Rect2(at, Vector2.ZERO)
 	_position = at
 
@@ -93,7 +99,7 @@ func end_trip() -> void:
 		return
 	var points := _with_endpoint(current)
 	if points.size() > 1:
-		legs.append({points = points, bounds = current_bounds.expand(points[-1])})
+		legs.append({points = points, bounds = current_bounds.expand(points[-1]), riding = current_riding})
 		completed_legs += 1
 		if legs.size() > MAX_LEGS:
 			legs.pop_front()

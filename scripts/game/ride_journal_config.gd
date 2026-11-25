@@ -34,8 +34,14 @@ extends Resource
 @export var thumb_height := 200
 ## Увеличение добавляет больше свободного места вокруг трека.
 @export var frame_margin := 0.12
+## Увеличение добавляет поля вокруг коротких треков.
+@export var frame_min_margin := 60.0
 ## Увеличение делает линию трека толще.
 @export var track_width := 2
+## Увеличение удлиняет штрихи пешего трека.
+@export var foot_dash := 6
+## Увеличение делает отметки начала, конца и падений крупнее.
+@export var marker_radius := 3
 ## Увеличение увеличивает промежуток между обновлениями превью.
 @export var thumb_interval := 60.0
 ## Более светлый цвет делает велосипедный трек заметнее.
@@ -44,6 +50,12 @@ extends Resource
 @export var foot_color := Color(0.85, 0.9, 1.0)
 ## Более яркий цвет делает падения заметнее.
 @export var fall_color := Color(1.0, 0.2, 0.2)
+## Более светлый цвет делает начало пути заметнее.
+@export var start_color := Color(0.2, 0.9, 0.4)
+## Более светлый цвет делает конец пути заметнее.
+@export var finish_color := Color(1.0, 0.8, 0.2)
+## Более светлый цвет осветляет поля за границей карты.
+@export var background_color := Color(0.12, 0.15, 0.16)
 @export_group("Хранилище")
 ## Увеличение сохраняет больше последних записей.
 @export var entries_limit := 200

@@ -170,12 +170,15 @@ func snapshot(journal, explore: Exploration, quests_done: int) -> Dictionary:
 	if _start.is_empty():
 		return {}
 	var legs: Array = []
+	var leg_modes: Array[bool] = []
 	var first: int = journal.completed_legs - journal.legs.size()
 	for i in journal.legs.size():
 		if first + i >= int(_start.leg):
 			legs.append(journal.legs[i].points)
+			leg_modes.append(bool(journal.legs[i].get("riding", true)))
 	if journal.current.size() > 1:
 		legs.append(journal.current.duplicate())
+		leg_modes.append(journal.current_riding)
 	var profile := []
 	for point: Vector2 in _resample_profile(_profile_samples, maxi(2, CONFIG.profile_limit)):
 		profile.append(point.y)
@@ -193,7 +196,7 @@ func snapshot(journal, explore: Exploration, quests_done: int) -> Dictionary:
 		moving_time = moving_time, jumps = jumps, air_max = air_max, falls = falls,
 		fall_marks = marks, profile = profile,
 		alt = alt if is_finite(alt) else 0.0, photos = maxi(0, explore.photos - int(_start.photos)),
-		quests = maxi(0, quests_done - int(_start.quests)), places = places.keys(), legs = legs}
+		quests = maxi(0, quests_done - int(_start.quests)), places = places.keys(), legs = legs, leg_modes = leg_modes}
 
 
 ## Стоит ли заезд записи: был путь или время
@@ -307,3 +310,19 @@ static func bounds(entry: Dictionary) -> Rect2:
 			else:
 				frame = frame.expand(point)
 	return frame
+
+
+## Рамка в метрах с полями, дополненная до пропорций целевой области.
+static func framed_bounds(frame: Rect2, aspect: float) -> Rect2:
+	var margin := maxf(CONFIG.frame_min_margin, maxf(frame.size.x, frame.size.y) * CONFIG.frame_margin)
+	var result := frame.grow(margin)
+	var ratio := maxf(aspect, 0.001)
+	if result.size.x / maxf(result.size.y, 0.001) < ratio:
+		var width := result.size.y * ratio
+		result.position.x -= (width - result.size.x) * 0.5
+		result.size.x = width
+	else:
+		var height := result.size.x / ratio
+		result.position.y -= (height - result.size.y) * 0.5
+		result.size.y = height
+	return result
