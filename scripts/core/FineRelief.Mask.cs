@@ -20,8 +20,6 @@ public sealed class ReliefMask
 	public readonly double Tile;
 	/// <summary>Вес изменения высоты в узле 4 м, 0..1.</summary>
 	public readonly float[] Weight;
-	/// <summary>Узел дальше полосы перехода от воды (берег не защищён).</summary>
-	public readonly bool[] ClearOfWater;
 	/// <summary>Только для эрозии: расстояние до ближайшей защищённой зоны (дорога за своей полосой, вода, место,
 	/// сооружение, край плана за своей полосой), м. Эрозия меняет высоту не больше чем на это расстояние × уклон перехода.</summary>
 	public readonly float[] ProtectM;
@@ -34,7 +32,6 @@ public sealed class ReliefMask
 		Height = height;
 		Tile = tile;
 		Weight = new float[width * height];
-		ClearOfWater = new bool[Weight.Length];
 		ProtectM = erosion ? new float[Weight.Length] : null;
 		RockFree = erosion ? new float[Weight.Length] : null;
 		if (erosion)
@@ -92,8 +89,6 @@ public sealed class ReliefMask
 					mask.Mark(distance, dx - 1, dz - 1, dx + 1, dz + 1);
 		}
 		mask.ApplyDistance(distance, 0.0, P(Parameter.WaterFade));
-		for (int i = 0; i < count; i++)
-			mask.ClearOfWater[i] = distance[i] * tile >= P(Parameter.WaterFade);
 
 		mask.ResetDistance(distance);
 		foreach (int cell in input["structures"].AsInt32Array())
@@ -146,7 +141,7 @@ public sealed class ReliefMask
 		return mask;
 	}
 
-	public long Bytes() => (long)Weight.Length * sizeof(float) + ClearOfWater.LongLength
+	public long Bytes() => (long)Weight.Length * sizeof(float)
 		+ (ProtectM == null ? 0L : 2L * ProtectM.Length * sizeof(float));
 
 	private void ResetDistance(int[] distance) => Array.Fill(distance, Math.Max(Width, Height));

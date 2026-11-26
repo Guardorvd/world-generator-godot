@@ -13,11 +13,18 @@ public partial class FineRelief : RefCounted
 	{
 		Step, Bicubic, Clamp, MaxOffset, TileBytes,
 		Forms, FormGradeLimit, FormGradeGain,
-		Rill, RillAlong, RillAcross, RillDepth, RillCover, RillSlopeFrom, RillSlopeTo, RillCurvature, RillRim,
-		Root, RootAlong, RootAcross, RootHeight, RootCover, RootPair, RootPitShare,
-		Terrace, TerraceAlong, TerraceAcross, TerraceHeight, TerraceCover, TerraceSlopeFrom, TerraceSlopeTo, TerraceLip,
-		Flood, FloodAlong, FloodAcross, FloodDepth, FloodCover, FloodNear, FloodFar, FloodGrade,
-		Bank, BankAlong, BankAcross, BankHeight, BankCover, BankNear, BankFar, BankLip, Count
+		RillSpacing, RillLength, RillStep, RillAcross, RillWiden,
+		RillDepth, RillMinShare, RillCover, RillSlopeFrom, RillSlopeFull,
+		RillAreaFrom, RillAreaTo, RillRim, RillMergeShare,
+		RillThalwegM, RillThalwegArea, RillThalwegRidgeOct,
+		SwaleSpacing, SwaleAlong, SwaleAcross, SwaleDepth, SwaleCover,
+		SwaleWetFrom, SwaleWetTo, SwaleDepositFrom, SwaleDepositTo,
+		SwaleGrade, SwaleFlowGrade,
+		HummockSpacing, HummockRadius, HummockHeight, HummockCover,
+		ForestHummockSpacing, ForestHummockRadius, ForestHummockHeight, ForestHummockCover,
+		WindthrowSpacing, WindthrowAlong, WindthrowAcross, WindthrowHeight,
+		WindthrowCover, WindthrowPair, WindthrowPitShare, WindthrowMaxGrade,
+		Count
 	}
 	private int _width, _height, _cells, _columns, _rows;
 	private double _tile, _step, _maxOffset;
@@ -65,10 +72,6 @@ public partial class FineRelief : RefCounted
 		_clamp = P(Parameter.Clamp) != 0.0;
 		_maxOffset = Math.Max(0.0, P(Parameter.MaxOffset));
 		_weight = mask.Weight;
-		if (_smallForms)
-			for (int i = 0; i < count; i++)
-				if (mask.ClearOfWater[i])
-					_habitat[i] |= ClearWater;
 		_tiles = new Lazy<Tile>[_columns * _rows];
 		for (int i = 0; i < _tiles.Length; i++)
 		{

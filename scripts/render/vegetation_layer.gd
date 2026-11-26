@@ -174,6 +174,12 @@ const LARGE_LOG_SEAT_SAMPLES := 9
 const FOREST_LOG_SEAT_TOLERANCE_M := 0.44
 const FOREST_LOG_SEAT_SETTLE := 0.65
 const FOREST_LOG_SEAT_SAMPLES := 7
+## Вывалы рельефа 2 м (FineRelief.WindthrowSites): параметры посадки ROOT_UPTURNED на буграх вывалов.
+const WINDTHROW_SCALE := Vector2(0.85, 1.30)
+const WINDTHROW_TINT := Vector2(0.85, 1.15)
+const WINDTHROW_SINK_M := 0.06
+const WINDTHROW_SEED_SALT := 5183
+const WINDTHROW_HASH_QUANT := 10.0
 ## Гильдии подлеска Экспедиции (диапазоны множителей и добавок от долей сообществ)
 const EXP_COMMUNITY_PATCH_CELLS := 9.0
 const EXP_COMMUNITY_PATCH_SALT := 7309
@@ -2286,6 +2292,7 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}, loading := tru
 	# Obstacles still own first placement, after the complete snapshot is ready.
 	road.sync_regions(regions, placement, snapshot.trees, snapshot.get("road_revision", 0))
 	_fill_road(px, pz)
+	_fill_windthrows(px, pz)
 	# 17.11.2026: клетки плана обходятся полосами строк параллельно (раньше — одним потоком, 2–3 с из 3–5 с снимка).
 	# У каждой полосы свои места подлеска и пучки травы; сливаются по порядку полос — результат тот же, что
 	# при обходе подряд. Кэш сообществ открытых клеток в полосах только читается, новые записи — после слияния.
@@ -2800,6 +2807,8 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			var variant_roll := WGRandom.hash2(slot_x, j, seed + 13)
 			if kind >= Floor.FIRST:
 				kind = Floor.FIRST + Floor.expedition_variant(kind - Floor.FIRST, variant_roll, wet_patch, old_patch, surface.a, _veg_cfg)
+				if heights.fine_relief != null and kind == Floor.FIRST + Floor.ROOT_UPTURNED:
+					kind = Floor.FIRST + Floor.ROOT_PLATE
 			else:
 				kind = Understory.expedition_variant(kind, variant_roll)
 		var far: bool = understory[kind].far
@@ -3313,6 +3322,39 @@ func _fill_road(px: float, pz: float) -> void:
 			if measure_road_clutter:
 				var label: String = RoadPlacement.keys()[outcome]
 				counts[label] = counts.get(label, 0) + 1
+
+
+## Вывалы Типа 2: ставит ROOT_UPTURNED на буграх пар «яма–бугор» из FineRelief, корневой плитой к яме.
+func _fill_windthrows(px: float, pz: float) -> void:
+	if not _expedition or heights.fine_relief == null:
+		return
+	var kind := Floor.FIRST + Floor.ROOT_UPTURNED
+	var far: bool = understory[kind].far
+	var reach := _reach_r(kind, far)
+	var full := _full_r(kind, far)
+	var ahead := _ahead(reach)
+	var cover_reach := reach + _fill_lead.length() * 0.5
+	var cx := px + _fill_lead.x * 0.5
+	var cz := pz + _fill_lead.y * 0.5
+	var sites: PackedFloat64Array = heights.fine_relief.WindthrowSites(cx - cover_reach, cz - cover_reach, cx + cover_reach, cz + cover_reach)
+	var seed := world.seed_num ^ WINDTHROW_SEED_SALT
+	var center := Vector2(px, pz)
+	for idx in range(0, sites.size(), 4):
+		var mx := sites[idx]
+		var mz := sites[idx + 1]
+		var dx := sites[idx + 2]
+		var dz := sites[idx + 3]
+		var d := StreamPolicy.distance_to_coverage(Vector2(mx, mz), center, _fill_lead)
+		if d > reach:
+			continue
+		var hx := floori(mx * WINDTHROW_HASH_QUANT)
+		var hz := floori(mz * WINDTHROW_HASH_QUANT)
+		var rank := WGRandom.hash2(hx, hz, seed + 8)
+		if rank > _keep(d, full, ahead):
+			continue
+		var scale := lerpf(WINDTHROW_SCALE.x, WINDTHROW_SCALE.y, WGRandom.hash2(hx, hz, seed + 5))
+		var tint := lerpf(WINDTHROW_TINT.x, WINDTHROW_TINT.y, WGRandom.hash2(hx, hz, seed + 7))
+		_put_understory(kind, mx, mz, atan2(-dz, dx), scale, tint, -1, rank, false, 1.0, WINDTHROW_SINK_M * scale)
 
 
 ## 17.11.2026: граница смены ближней формы на упрощённую (м от игрока) и полоса, в которой пиксели делятся между ними.

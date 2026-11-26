@@ -429,13 +429,18 @@ func prepare_fine_relief(with_forms := true, with_lod := true) -> void:
 			river[row * 2] = axis.axis_x_at(row + 0.5) * TILE
 			river[row * 2 + 1] = axis.river_hw_at(row) * TILE
 		var seeds := PackedInt64Array()
-		for name in ["relief_rills", "relief_roots", "relief_terraces", "relief_flood", "relief_banks"]:
+		for name in ["relief_rills", "relief_swales", "relief_hummocks", "relief_forest_hummocks", "relief_windthrows"]:
 			seeds.append(int(WorldGenerator.noise_rng(w.seed_num, name).next_float() * (WGRandom.MASK + 1)))
 		var forest_cover := PackedFloat32Array()
 		forest_cover.resize(Biomes.LIST.size())
 		for biome in [Biomes.FOREST, Biomes.JUNGLE, Biomes.TAIGA]:
 			forest_cover[biome] = Biomes.LIST[biome].trees
-		inputs.merge({biome = w.biome, forest_cover = forest_cover, river_axis = river, form_seeds = seeds, origin = w.world_origin})
+		inputs.merge({
+			biome = w.biome, forest_cover = forest_cover, river_axis = river, form_seeds = seeds, origin = w.world_origin,
+			flow_area = relief_flow.get("area", PackedByteArray()),
+			flow_deposit = relief_flow.get("deposit", PackedByteArray()),
+			flow_wet = relief_flow.get("wet", PackedByteArray()),
+		})
 	fine_relief = fast.CreateFineRelief(inputs, generation.mask_params(), params)
 	if fine_relief != null:
 		fine_profile = profile

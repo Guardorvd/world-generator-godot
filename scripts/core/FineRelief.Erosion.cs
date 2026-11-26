@@ -41,9 +41,9 @@ public static class TerrainErosion
 	private const double WetSlopeFloor = 1e-3;
 	/// <summary>Кодирование карты водосбора в байт: 8 ступеней на удвоение площади, от площади одной клетки
 	/// (255 ступеней ≈ 2^32 клеток — больше любого плана).</summary>
-	private const double AreaStepsPerOctave = 8.0;
+	internal const double AreaStepsPerOctave = 8.0;
 	/// <summary>Кодирование карты наносов в байт: 2 см на ступень (до 5,1 м).</summary>
-	private const double DepositStepM = 0.02;
+	internal const double DepositStepM = 0.02;
 
 	internal static Godot.Collections.Dictionary Run(Inputs input, double[] maskProfile, double[] profile)
 	{

@@ -6,15 +6,18 @@ const MountainDetail := preload("res://scripts/world/mountain_detail.gd")
 enum {
 	RD_STEP_M, RD_BICUBIC, RD_CLAMP, RD_MAX_OFFSET_M, RD_TILE_BYTES,
 	RD_FORMS, RD_FORM_GRADE_LIMIT, RD_FORM_GRADE_GAIN,
-	RD_RILL, RD_RILL_ALONG, RD_RILL_ACROSS, RD_RILL_M, RD_RILL_COVER,
-	RD_RILL_SLOPE_FROM, RD_RILL_SLOPE_TO, RD_RILL_CURVATURE_M, RD_RILL_RIM,
-	RD_ROOT, RD_ROOT_ALONG, RD_ROOT_ACROSS, RD_ROOT_M, RD_ROOT_COVER, RD_ROOT_PAIR_M, RD_ROOT_PIT_SHARE,
-	RD_TERRACE, RD_TERRACE_ALONG, RD_TERRACE_ACROSS, RD_TERRACE_M, RD_TERRACE_COVER,
-	RD_TERRACE_SLOPE_FROM, RD_TERRACE_SLOPE_TO, RD_TERRACE_LIP_M,
-	RD_FLOOD, RD_FLOOD_ALONG, RD_FLOOD_ACROSS, RD_FLOOD_M, RD_FLOOD_COVER,
-	RD_FLOOD_NEAR_M, RD_FLOOD_FAR_M, RD_FLOOD_GRADE,
-	RD_BANK, RD_BANK_ALONG, RD_BANK_ACROSS, RD_BANK_M, RD_BANK_COVER,
-	RD_BANK_NEAR_M, RD_BANK_FAR_M, RD_BANK_LIP_M, RD_COUNT,
+	RD_RILL_SPACING, RD_RILL_LENGTH, RD_RILL_STEP, RD_RILL_ACROSS, RD_RILL_WIDEN,
+	RD_RILL_DEPTH, RD_RILL_MIN_SHARE, RD_RILL_COVER, RD_RILL_SLOPE_FROM, RD_RILL_SLOPE_FULL,
+	RD_RILL_AREA_FROM, RD_RILL_AREA_TO, RD_RILL_RIM, RD_RILL_MERGE_SHARE,
+	RD_RILL_THALWEG_M, RD_RILL_THALWEG_AREA, RD_RILL_THALWEG_RIDGE_OCT,
+	RD_SWALE_SPACING, RD_SWALE_ALONG, RD_SWALE_ACROSS, RD_SWALE_DEPTH, RD_SWALE_COVER,
+	RD_SWALE_WET_FROM, RD_SWALE_WET_TO, RD_SWALE_DEPOSIT_FROM, RD_SWALE_DEPOSIT_TO,
+	RD_SWALE_GRADE, RD_SWALE_FLOW_GRADE,
+	RD_HUMMOCK_SPACING, RD_HUMMOCK_RADIUS, RD_HUMMOCK_HEIGHT, RD_HUMMOCK_COVER,
+	RD_FOREST_HUMMOCK_SPACING, RD_FOREST_HUMMOCK_RADIUS, RD_FOREST_HUMMOCK_HEIGHT, RD_FOREST_HUMMOCK_COVER,
+	RD_WINDTHROW_SPACING, RD_WINDTHROW_ALONG, RD_WINDTHROW_ACROSS, RD_WINDTHROW_HEIGHT,
+	RD_WINDTHROW_COVER, RD_WINDTHROW_PAIR_M, RD_WINDTHROW_PIT_SHARE, RD_WINDTHROW_MAX_GRADE,
+	RD_COUNT,
 }
 
 ## Включает точную поверхность для этого типа мира.
@@ -70,80 +73,90 @@ enum {
 ## Допустимый прирост модуля градиента от форм, м/м.
 @export var form_grade_gain := 0.0
 
-@export_group("Промоины и рёбра")
-## Шаг поиска мест для промоин, м.
+@export_group("Промоины и рёбрышки по стоку")
+## Шаг сетки истоков промоин, м.
 @export var rill_spacing_m := 0.0
-## Радиусы вдоль и поперёк падения, м.
-@export var rill_radii_m := Vector2.ZERO
-## Глубина промоины, м.
+## Наибольшая длина трассы промоины вниз по склону, м.
+@export var rill_length_m := 0.0
+## Длина одного шага трассировки промоины по градиенту, м.
+@export var rill_step_m := 0.0
+## Начальная полуширина промоины поперёк стока, м.
+@export var rill_across_m := 0.0
+## Относительное расширение промоины вниз по водосбору, доля.
+@export var rill_widen := 0.0
+## Наибольшая глубина промоины при полном водосборе, м.
 @export var rill_depth_m := 0.0
-## Вероятность формы на подходящем участке, доля.
+## Доля глубины у истока относительно наибольшей глубины, доля.
+@export var rill_min_share := 0.0
+## Вероятность промоины на подходящем истоке, доля.
 @export var rill_cover := 0.0
-## Полоса уклонов, м/м.
+## Уклоны начала и полного проявления промоин, м/м.
 @export var rill_slopes := Vector2.ZERO
-## Масштаб перегиба в высотах клеток для усиления ложбин и ослабления гребней, м.
-@export var rill_curvature_m := 0.0
-## Высота рёбер у промоины относительно глубины, доля.
+## Водосборы начала усиления и полной глубины промоин, м².
+@export var rill_area_m2 := Vector2.ZERO
+## Высота боковых рёбрышек у промоины относительно её глубины, доля.
 @export var rill_rim := 0.0
+## Запас углубления при слиянии промоин сверх rill_depth_m, доля.
+@export var rill_merge_share := 0.0
+## Глубина непрерывной промоины по осям стока, м.
+@export var rill_thalweg_m := 0.0
+## Наименьший водосбор для непрерывной оси стока, м².
+@export var rill_thalweg_area_m2 := 0.0
+## Превышение водосбора над соседями поперёк склона для полной глубины оси, октав.
+@export var rill_thalweg_ridge_oct := 0.0
+
+@export_group("Кочки и ложбинки по влажности и наносам")
+## Шаг поиска сырых и наносных ложбинок, м.
+@export var swale_spacing_m := 0.0
+## Полуоси ложбинки вдоль и поперёк направления стока, м.
+@export var swale_radii_m := Vector2.ZERO
+## Глубина ложбинки, м.
+@export var swale_depth_m := 0.0
+## Вероятность ложбинки на подходящем участке, доля.
+@export var swale_cover := 0.0
+## Влажность W начала и полного проявления ложбинок и кочек, доля.
+@export var swale_wet := Vector2.ZERO
+## Толщина наносов D начала и полного проявления ложбинок и кочек, м.
+@export var swale_deposit_m := Vector2.ZERO
+## Уклон, на котором ложбинки и кочки поймы затухают, м/м.
+@export var swale_grade := 0.0
+## Уклон перехода ориентации ложбинки от оси реки к падению склона, м/м.
+@export var swale_flow_grade := 0.0
+## Шаг поиска сырых и наносных кочек, м.
+@export var hummock_spacing_m := 0.0
+## Радиус сырой или наносной кочки, м.
+@export var hummock_radius_m := 0.0
+## Высота сырой или наносной кочки, м.
+@export var hummock_height_m := 0.0
+## Вероятность кочки на сыром или наносном участке, доля.
+@export var hummock_cover := 0.0
 
 @export_group("Лесные кочки и вывалы")
-## Шаг поиска мест для вывала, м.
-@export var root_spacing_m := 0.0
-## Радиусы каждой половины вывала, м.
-@export var root_radii_m := Vector2.ZERO
-## Высота кочки, м.
-@export var root_height_m := 0.0
-## Максимальная доля занятых мест в сомкнутом лесу.
-@export var root_cover := 0.0
-## Расстояние от центра ямы до центра кочки, м.
-@export var root_pair_m := 0.0
-## Глубина ямы относительно высоты кочки, доля.
-@export var root_pit_share := 0.0
-
-@export_group("Террасетки на открытых склонах")
-## Шаг поиска террасеток, м.
-@export var terrace_spacing_m := 0.0
-## Радиусы вдоль и поперёк горизонтали склона, м.
-@export var terrace_radii_m := Vector2.ZERO
-## Высота уступа со стороны низкого склона, м.
-@export var terrace_height_m := 0.0
-## Вероятность формы на подходящем участке, доля.
-@export var terrace_cover := 0.0
-## Полоса уклонов, м/м.
-@export var terrace_slopes := Vector2.ZERO
-## Ширина плавного перегиба, м.
-@export var terrace_lip_m := 0.0
-
-@export_group("Ложбины поймы")
-## Шаг поиска ложбин, м.
-@export var flood_spacing_m := 0.0
-## Радиусы вдоль и поперёк долины, м.
-@export var flood_radii_m := Vector2.ZERO
-## Глубина ложбины, м.
-@export var flood_depth_m := 0.0
-## Вероятность на ровной пойме, доля.
-@export var flood_cover := 0.0
-## Полоса расстояний от кромки реки, м.
-@export var flood_shore_m := Vector2.ZERO
-## Уклон, на котором ложбина исчезает, м/м.
-@export var flood_grade := 0.0
-
-@export_group("Береговые уступчики")
-## Шаг поиска коротких уступчиков, м.
-@export var bank_spacing_m := 0.0
-## Радиусы вдоль и поперёк реки, м.
-@export var bank_radii_m := Vector2.ZERO
-## Высота короткого уступчика, м.
-@export var bank_height_m := 0.0
-## Вероятность формы на подходящем участке, доля.
-@export var bank_cover := 0.0
-## Полоса расстояний за защитной зоной воды, м.
-@export var bank_shore_m := Vector2.ZERO
-## Ширина плавного перегиба, м.
-@export var bank_lip_m := 0.0
+## Шаг поиска обычных лесных кочек, м.
+@export var forest_hummock_spacing_m := 0.0
+## Радиус обычной лесной кочки, м.
+@export var forest_hummock_radius_m := 0.0
+## Высота обычной лесной кочки, м.
+@export var forest_hummock_height_m := 0.0
+## Наибольшая доля обычных кочек в сомкнутом лесу.
+@export var forest_hummock_cover := 0.0
+## Шаг сетки поиска пар «яма–бугор» вывала, м.
+@export var windthrow_spacing_m := 0.0
+## Радиусы бугра и ямы вывала вдоль и поперёк оси падения дерева, м.
+@export var windthrow_radii_m := Vector2.ZERO
+## Высота бугра вывала, м.
+@export var windthrow_height_m := 0.0
+## Наибольшая доля вывалов в сомкнутом лесу.
+@export var windthrow_cover := 0.0
+## Расстояние между центрами ямы и бугра вывала, м.
+@export var windthrow_pair_m := 0.0
+## Глубина ямы вывала относительно высоты бугра, доля.
+@export var windthrow_pit_share := 0.0
+## Наибольший уклон склона для размещения вывала, м/м.
+@export var windthrow_max_grade := 0.0
 
 @export_group("Бюджет")
-## Лимит Миб для плиток и маски высот.
+## Лимит Миб для плиток, карт стока и маски высот.
 @export var tile_mib := 0
 ## Лимит Миб для массивов точных мешей в общем LRU.
 @export var mesh_mib := 0
@@ -155,15 +168,17 @@ func params() -> PackedFloat64Array:
 	return PackedFloat64Array([
 		step_m, float(bicubic), float(clamp_bicubic), maxf(0.0, max_offset_m), tile_mib * MIB,
 		float(forms_enabled), form_grade_limit, form_grade_gain,
-		rill_spacing_m, rill_radii_m.x, rill_radii_m.y, rill_depth_m, rill_cover,
-		rill_slopes.x, rill_slopes.y, rill_curvature_m, rill_rim,
-		root_spacing_m, root_radii_m.x, root_radii_m.y, root_height_m, root_cover, root_pair_m, root_pit_share,
-		terrace_spacing_m, terrace_radii_m.x, terrace_radii_m.y, terrace_height_m, terrace_cover,
-		terrace_slopes.x, terrace_slopes.y, terrace_lip_m,
-		flood_spacing_m, flood_radii_m.x, flood_radii_m.y, flood_depth_m, flood_cover,
-		flood_shore_m.x, flood_shore_m.y, flood_grade,
-		bank_spacing_m, bank_radii_m.x, bank_radii_m.y, bank_height_m, bank_cover,
-		bank_shore_m.x, bank_shore_m.y, bank_lip_m,
+		rill_spacing_m, rill_length_m, rill_step_m, rill_across_m, rill_widen,
+		rill_depth_m, rill_min_share, rill_cover, rill_slopes.x, rill_slopes.y,
+		rill_area_m2.x, rill_area_m2.y, rill_rim, rill_merge_share,
+		rill_thalweg_m, rill_thalweg_area_m2, rill_thalweg_ridge_oct,
+		swale_spacing_m, swale_radii_m.x, swale_radii_m.y, swale_depth_m, swale_cover,
+		swale_wet.x, swale_wet.y, swale_deposit_m.x, swale_deposit_m.y,
+		swale_grade, swale_flow_grade,
+		hummock_spacing_m, hummock_radius_m, hummock_height_m, hummock_cover,
+		forest_hummock_spacing_m, forest_hummock_radius_m, forest_hummock_height_m, forest_hummock_cover,
+		windthrow_spacing_m, windthrow_radii_m.x, windthrow_radii_m.y, windthrow_height_m,
+		windthrow_cover, windthrow_pair_m, windthrow_pit_share, windthrow_max_grade,
 	])
 
 

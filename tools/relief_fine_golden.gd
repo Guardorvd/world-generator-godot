@@ -97,7 +97,7 @@ func _check_form_groups(cfg: Profile) -> void:
 	for z in rows:
 		for x in columns:
 			original[Vector2i(x, z)] = h.fine_relief.TileHash(x, z)
-	for field: StringName in [&"rill_cover", &"root_cover", &"terrace_cover", &"flood_cover", &"bank_cover"]:
+	for field: StringName in [&"rill_cover", &"swale_cover", &"hummock_cover", &"forest_hummock_cover", &"windthrow_cover"]:
 		h.fine_relief = null
 		var cover: float = cfg.get(field)
 		cfg.set(field, 0.0)
@@ -110,6 +110,13 @@ func _check_form_groups(cfg: Profile) -> void:
 					changed = true
 					break
 		_check(changed, "%s проявляется на сохранённом мире" % field)
+	h.fine_relief = null
+	h.prepare_fine_relief()
+	if h.fine_relief != null:
+		var span := Vector2(w.W, w.H) * TILE
+		var sites_a: PackedFloat64Array = h.fine_relief.WindthrowSites(0.0, 0.0, span.x, span.y)
+		var sites_b: PackedFloat64Array = h.fine_relief.WindthrowSites(0.0, 0.0, span.x, span.y)
+		_check(sites_a.size() > 0 and sites_a.size() % 4 == 0 and sites_a == sites_b, "вывалы WindthrowSites детерминированы и непусты")
 	_check(w.biome == biome, "маска форм сохраняет исходные биомы")
 
 

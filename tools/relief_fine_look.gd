@@ -332,19 +332,22 @@ func _grab_form(eye: Vector3, target: Vector3) -> Image:
 
 
 func _clay(source: ShaderMaterial) -> ShaderMaterial:
-	if _clay_materials.has(source):
-		return _clay_materials[source]
-	if not _clay_shaders.has(source.shader):
-		var code := source.shader.code
-		for line: String in CLAY_LINES:
-			_expect(code.count(line) == 1, "строка глины не найдена в шейдере рельефа: " + line)
-			code = code.replace(line, CLAY_LINES[line] % str(FORM_ALBEDO) if "%s" in CLAY_LINES[line] else CLAY_LINES[line])
-		var shader := Shader.new()
-		shader.code = code
-		_clay_shaders[source.shader] = shader
-	var clay := source.duplicate() as ShaderMaterial
-	clay.shader = _clay_shaders[source.shader]
-	_clay_materials[source] = clay
+	var clay: ShaderMaterial = _clay_materials.get(source)
+	if clay == null:
+		if not _clay_shaders.has(source.shader):
+			var code := source.shader.code
+			for line: String in CLAY_LINES:
+				_expect(code.count(line) == 1, "строка глины не найдена в шейдере рельефа: " + line)
+				code = code.replace(line, CLAY_LINES[line] % str(FORM_ALBEDO) if "%s" in CLAY_LINES[line] else CLAY_LINES[line])
+			var shader := Shader.new()
+			shader.code = code
+			_clay_shaders[source.shader] = shader
+		clay = source.duplicate() as ShaderMaterial
+		clay.shader = _clay_shaders[source.shader]
+		_clay_materials[source] = clay
+	var observer: Variant = source.get_shader_parameter("relief_observer")
+	if observer != null:
+		clay.set_shader_parameter("relief_observer", observer)
 	return clay
 
 
