@@ -164,4 +164,36 @@ func look() -> void:
 		advance(1)
 	anim.append(await shot(Vector3(0.6, 1.3, -2.7), Vector3(0, 1.0, 0.0)))
 	save(anim, "rider_anim_sheet", 5)
+	var balance: Array[Image] = []
+	var ground := root.get_node("Ground") as MeshInstance3D
+	var rear := Vector3(0.65, 1.65, 3.3)
+	var frame_center := Vector3(0, 0.82, 0)
+	reset(0.0)
+	state._stance_driven = true
+	state.stance = BikeRide.Stance.TRACKSTAND
+	advance(35)
+	balance.append(await shot(rear, frame_center, 44.0))
+	state.stance = BikeRide.Stance.FOOT_DOWN
+	state.foot_side = 1.0
+	ground.rotation.z = atan(0.30)
+	state.foot_ground_y = state.config.stop_foot_offset * tan(ground.rotation.z)
+	advance(55)
+	balance.append(await shot(rear, frame_center, 44.0))
+	reset(6.0)
+	state.bank_slope = 0.4
+	ground.rotation.z = atan(state.bank_slope)
+	state.lateral_speed = -0.8
+	state.instability = 0.85
+	advance(25)
+	balance.append(await shot(rear, frame_center, 44.0))
+	reset(10.0)
+	state.tilt = -0.24
+	ground.rotation = Vector3(state.tilt, 0, 0)
+	state.brakes.pressure = 1.0
+	state.brakes.brace = 0.9
+	state.brakes.front_load = 1.1
+	state.brakes.lift = 0.16
+	advance(35)
+	balance.append(await shot(Vector3(3.1, 1.2, 0.0), frame_center, 44.0))
+	save(balance, "rider_balance", 4)
 	quit(0)

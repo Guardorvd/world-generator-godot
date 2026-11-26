@@ -42,6 +42,7 @@ static func setup(root: Window) -> DayCycle:
 		VisualStyle.bind(env)
 		cycle.apply(float(arg("--hour", "10.5")), 0.0)
 	var ground := MeshInstance3D.new()
+	ground.name = "Ground"
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(60, 60)
 	ground.mesh = plane

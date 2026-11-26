@@ -313,14 +313,13 @@ func run(finish := true) -> void:
 	# Пять читаемых фаз прыжка: подготовка → отрыв → полёт → приземление → восстановление.
 	reset()
 	state._hop_buf = 0.15
-	state.body_back = true
 	for i in 12:
 		advance()
 	var prep_head_y := bone("Head").y
 	var prep_crouch := bike._cur[BikeView.S_CROUCH]
 	check(prep_head_y < neutral.y - 0.015 and prep_crouch > 0.025, "Jump phase 1 (preparation): preload compression before takeoff")
 	state._hop_buf = 0.0
-	state.body_back = false
+	state._hop_used = true
 	state.airborne = true
 	state.vy = 4.0
 	for i in 3:
@@ -577,6 +576,7 @@ func run(finish := true) -> void:
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")
+	check_balance_reactions()
 	await check_ragdoll_skin()
 	var invalid: CyclistRig = load("res://scenes/cyclist.tscn").instantiate()
 	root.add_child(invalid)
@@ -594,6 +594,49 @@ func run(finish := true) -> void:
 		quit(1 if fails else 0)
 
 
+func check_balance_reactions() -> void:
+	reset()
+	state.speed = 0.0
+	state._stance_driven = true
+	state.stance = BikeRide.Stance.TRACKSTAND
+	for i in 40:
+		advance()
+	check(bike._cur[BikeView.S_TRACK] > 0.9 and is_zero_approx(bike._cur[BikeView.S_STOP]), "Trackstand balances with both feet on pedals")
+	contacts()
+	state.stance = BikeRide.Stance.FOOT_DOWN
+	state.foot_side = 1.0
+	state.foot_ground_y = 0.09
+	state.tilt = 0.18
+	for i in 90:
+		advance()
+	var sk := bike.rider.skeleton
+	var sole := sk.global_transform * sk.get_bone_global_pose(sk.find_bone("FootR")) * CyclistRig.PEDAL_CONTACT_LOCAL
+	check(absf(sole.y - state.y - state.foot_ground_y) < 0.003, "Uphill sole meets sampled support on a pitched frame")
+	reset()
+	state.speed = -1.2
+	for i in 45:
+		advance()
+	var rollback := bone("Hips")
+	var rollback_crank := bike.crank.rotation.x
+	state._manual_reverse = true
+	for i in 45:
+		advance()
+	check(bike._cur[BikeView.S_LOOK] > 0.5 and bone("Hips").z > rollback.z + 0.01, "Intentional reverse looks back, rollback braces forward")
+	check(absf(angle_difference(rollback_crank, bike.crank.rotation.x)) > 0.2, "Rider follows cranks during deliberate reverse")
+	for side: float in [-1.0, 1.0]:
+		reset()
+		state.lateral_speed = side
+		state.instability = 1.0
+		state.brakes.skid = 1.0
+		state.use_r = 1.0
+		for i in 40:
+			state.wheel += 0.12
+			advance()
+		var foot := "FootR" if side > 0.0 else "FootL"
+		check(side * bone(foot).x > 0.24 and side * bone("Chest").x < -0.035, "Catch leg opens toward slip and trunk counterbalances")
+		check(absf(angle_difference(bike._prev[BikeView.S_WHEEL_R], bike._cur[BikeView.S_WHEEL_R])) < 0.01 and absf(angle_difference(bike._prev[BikeView.S_WHEEL_F], bike._cur[BikeView.S_WHEEL_F])) > 0.1, "Saturated rear wheel slows independently")
+
+
 ## Короткое физическое падение в той же сцене: новая оболочка должна следовать костям после отделения от рамы.
 func check_ragdoll_skin() -> void:
 	reset()
@@ -602,7 +645,13 @@ func check_ragdoll_skin() -> void:
 	var crash := BikeCrash.new()
 	root.add_child(crash)
 	crash.start(bike, state, Vector3(0, -5, -6), heights)
-	crash._begin_ragdoll()
+	crash.tick(DT * 5.0, state, world, heights)
+	crash.draw(0.36)
+	var release := bike.rider.capture_pose()
+	crash.draw(0.82)
+	crash.draw(0.36)
+	check(release == bike.rider.capture_pose() and release != crash._seated_pose, "Balance phase releases limbs independently of render order")
+	crash.tick(BikeCrash.BALANCE, state, world, heights)
 	for i in 12:
 		await physics_frame
 		crash.tick(DT, state, world, heights)

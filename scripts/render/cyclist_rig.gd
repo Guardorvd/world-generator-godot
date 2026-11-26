@@ -36,12 +36,12 @@ const BASE_POSES := {
 		chest = Vector3(0.0, -0.018, -0.145), elbow = Vector2(0.56, -0.24), wrist = 0.08,
 	},
 	"descent": {
-		hip = Vector3(0.0, 0.028, 0.024), pelvis_pitch = 0.045,
+		hip = Vector3(0.0, 0.028, 0.063), pelvis_pitch = 0.045,
 		chest = Vector3(0.0, -0.058, 0.018), elbow = Vector2(0.80, -0.10), wrist = -0.11,
 	},
 	"brake": {
-		hip = Vector3(0.0, 0.004, 0.034), pelvis_pitch = 0.055,
-		chest = Vector3(0.0, -0.026, 0.042), elbow = Vector2(0.64, -0.18), wrist = -0.15,
+		hip = Vector3(0.0, -0.012, 0.132), pelvis_pitch = 0.055,
+		chest = Vector3(0.0, -0.018, 0.128), elbow = Vector2(0.64, -0.18), wrist = -0.15,
 	},
 }
 var _bones: Dictionary[String, int] = {}
@@ -109,7 +109,7 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 ## («атака»: таз над седлом, вес на ногах), 0 — сидит.
 ## Поза строится от базовых архетипов (накат, спокойная езда, подъём стоя, спуск, торможение)
 ## с приоритетами над процедурными реакциями и раздельным приёмом переднего (руки) и заднего (ноги, таз) ударов.
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO, watch := 0.0) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO, watch := 0.0, balance := 0.0) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
@@ -120,7 +120,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		return
 	if not is_finite(foot_down) or not is_finite(ground) or not is_finite(ground_lean) or not gaze.is_finite():
 		return
-	if not is_finite(hand_rest) or not hand_shake.is_finite() or not is_finite(watch):
+	if not is_finite(hand_rest) or not hand_shake.is_finite() or not is_finite(watch) or not is_finite(balance):
 		return
 	_poses.clear()
 	# 12.11: свободная рука. hand_rest — отдых на долгой стоянке: рука (знак — сторона) лежит на бедре, спина прямее;
@@ -183,10 +183,12 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		if fd > 0.0 and side == fd_side:
 			# стопа идёт с педали на землю по дуге наружу и встаёт плоско, носком чуть в сторону
 			var ground_basis := Basis.from_euler(Vector3(0.0, -side * 0.22, side * ground_lean))
-			var contact := Vector3(side * 0.27, ground + 0.27 * tan(ground_lean) * fd, -0.06)
+			var contact := Vector3(side * 0.27, ground, -0.06)
 			foot_basis = foot_basis.slerp(ground_basis, fd).orthonormalized()
 			foot_pitch *= 1.0 - fd
 			ankle_at = ankle_at.lerp(contact - ground_basis * PEDAL_CONTACT_LOCAL, fd) + Vector3(side * 0.035, 0.05, 0.0) * sin(fd * PI)
+		var catch := smoothstep(0.2, 0.9, side * balance) * (1.0 - fd)
+		ankle_at += Vector3(side * 0.14, 0.055, -0.055) * catch
 		foot_pitches[side] = foot_pitch
 		foot_bases[side] = foot_basis
 		ankles[side] = ankle_at
@@ -303,7 +305,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		# а внутреннее колено в повороте, при заднем ударе и в «атаке» открывается наружу для баланса и амортизации.
 		var knee_arc := (0.045 + 0.055 * tuck) * maxf(0.0, top_phase) - (0.045 + 0.045 * heavy + 0.035 * up) * power_phase
 		var corner_knee := (0.055 * inner_leg - 0.055 * outer_leg) * (1.0 - spin * 0.5)
-		var knee_out := side * (-0.035 + 0.085 * attack + 0.040 * rear_load + 0.020 * up + knee_arc + corner_knee) + clampf(motion.y * 0.35 - sway * 0.25 * up, -0.06, 0.06)
+		var knee_out := side * (-0.035 + 0.085 * attack + 0.040 * rear_load + 0.020 * up + knee_arc + corner_knee + 0.75 * maxf(0.0, side * balance)) + clampf(motion.y * 0.35 - sway * 0.25 * up, -0.06, 0.06)
 		var knee := _joint(h, ankle, LEG_LENGTH, Vector3(knee_out, 0.32 + 0.08 * power_phase, -1.0))
 		var leg_x := (ankle - h).cross(knee - h)
 		_set_bone("UpperLeg" + suffix, h, _limb_basis(h, knee, leg_x))
@@ -339,7 +341,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		var arm_compress := clampf(motion.z * 2.0 + front_load * 0.65 + tuck * 0.32, -0.15, 0.95)
 		var corner_elbow := 0.10 * inner_leg - 0.06 * outer_leg
 		var elbow_pole := Vector3(
-			side * (base_elbow.x + arm_compress * 0.44 - arm_pull * 0.12 + corner_elbow) - sway * 0.22,
+			side * (base_elbow.x + arm_compress * 0.44 - arm_pull * 0.12 + corner_elbow + absf(balance) * 0.30) - sway * 0.22,
 			base_elbow.y + arm_compress * 0.22 - arm_pull * 0.10 + 0.06 * inner_leg,
 			0.92
 		)

@@ -20,6 +20,24 @@ const MAX_BONE_SPIN := 12.0 # рад/с: ограничение разгона �
 const RECOVERY_PENETRATION := 0.12 # м: мелкие контакты оставляем решателю, не поднимаем тело каждый такт
 const EnvironmentContacts = preload("res://scripts/render/crash_environment.gd")
 class FallBone extends PhysicalBone3D:
+	var linked_parent: PhysicalBone3D
+	var parent_anchor := Vector3.ZERO
+
+	# Recover from deep terrain contacts that pull a light limb out of its cone joint.
+	func keep_joint_connected() -> void:
+		if linked_parent == null:
+			return
+		var anchor := global_transform * joint_offset.origin
+		var target := linked_parent.global_transform * parent_anchor
+		var gap := anchor - target
+		if gap.length_squared() < 0.075 * 0.075:
+			return
+		global_position -= gap
+		var normal := gap.normalized()
+		var parent_speed := linked_parent.linear_velocity + linked_parent.angular_velocity.cross(target - linked_parent.global_position)
+		var child_speed := linear_velocity + angular_velocity.cross(target - global_position)
+		linear_velocity -= normal * maxf(0.0, (child_speed - parent_speed).dot(normal))
+
 	func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		# Ограничиваем физическое состояние, а не видимую позу скелета.
 		state.angular_velocity = state.angular_velocity.limit_length(MAX_BONE_SPIN)
@@ -102,6 +120,7 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 	_rider = view.rider
 	_rider_local = _rider.transform
 	_procedural_pose = _rider.procedural_pose
+	view.draw(1.0)
 	_seated_pose = _rider.capture_pose()
 	_rider.procedural_pose = false
 	_animation_player = _rider.get_node_or_null("AnimationPlayer") as AnimationPlayer
@@ -124,6 +143,8 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 	_side = signf(b.lean) if absf(b.lean) > 0.02 else (signf(b.steer) if absf(b.steer) > 0.05 else 1.0)
 	_tumble = smoothstep(2.0, 10.0, Vector2(velocity.x, velocity.z).length()) * (1.0 - clampf(absf(b.lean) / 0.4, 0.0, 0.6))
 	_start = view.global_transform
+	if absf(view.rotation.z) > 0.02:
+		_side = signf(view.rotation.z)
 	_impact_normal = b.crash_normal.normalized()
 	var collision := b.crash_cause == BikeRide.CrashCause.COLLISION
 	var normal_speed := maxf(0.0, -velocity.dot(_impact_normal))
@@ -185,6 +206,7 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			_bike_prev = _bike_curr
 			_bike_curr = Transform3D(roll * _start.basis, at)
 			_view.global_transform = _bike_curr
+			_release_balance_pose(k)
 			if t >= _balance_time:
 				_begin_ragdoll()
 		Phase.RAGDOLL:
@@ -193,6 +215,8 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			if Vector2(hips.global_position.x, hips.global_position.z).distance_to(ground_center) > GROUND_R - 4:
 				# Долгое падение не заканчивается из-за края временного коллайдера земли.
 				_build_ground(hips.global_position, hips.global_position.y, heights)
+			for bone: FallBone in _bones.values():
+				bone.keep_joint_connected()
 			_keep_above_ground(heights, dt)
 			_bike_prev = _bike_curr
 			_bike_curr = _bike_body.global_transform
@@ -221,7 +245,7 @@ func draw(alpha := 1.0) -> void:
 	alpha = clampf(alpha, 0.0, 1.0) if is_finite(alpha) else 1.0
 	if phase == Phase.BALANCE or phase == Phase.RAGDOLL:
 		_view.global_transform = _bike_prev.interpolate_with(_bike_curr, alpha)
-	if phase == Phase.RAGDOLL and is_instance_valid(_rider) and _rider.is_rig_valid():
+	if phase in [Phase.BALANCE, Phase.RAGDOLL] and is_instance_valid(_rider) and _rider.is_rig_valid():
 		var skel := _rider.skeleton
 		var count := mini(skel.get_bone_count(), mini(_bone_prev.size(), _bone_curr.size()))
 		if count > 0:
@@ -264,6 +288,24 @@ func abort() -> void:
 	_finish()
 
 
+## Build each release sample from the mounted pose, independent of the last rendered frame.
+func _release_balance_pose(fraction: float) -> void:
+	_bone_prev = _bone_curr
+	_bone_curr = _seated_pose.duplicate()
+	var reach := smoothstep(0.12, 1.0, fraction)
+	var skel := _rider.skeleton
+	var hips := skel.find_bone("Hips")
+	_bone_curr[hips].origin += Vector3(-_side * 0.045, 0.055, -0.09 * _tumble) * reach
+	for suffix: String in ["L", "R"]:
+		var side := -1.0 if suffix == "L" else 1.0
+		var arm := skel.find_bone("UpperArm" + suffix)
+		var leg := skel.find_bone("UpperLeg" + suffix)
+		var catch := 1.0 if side == -_side else 0.35
+		_bone_curr[arm].basis *= Basis(Vector3.BACK, -side * (0.17 + 0.26 * catch) * reach)
+		_bone_curr[leg].basis *= Basis(Vector3.BACK, -side * 0.34 * catch * reach)
+	_rider.restore_pose(_bone_curr)
+
+
 func _begin_ragdoll() -> void:
 	phase = Phase.RAGDOLL
 	t = 0.0
@@ -278,9 +320,10 @@ func _begin_ragdoll() -> void:
 		var into := minf(fling.dot(_impact_normal), 0.0)
 		fling -= _impact_normal * into
 		fling += _impact_normal * (0.3 + _severity * 0.6)
+	var spin := -view_at.basis.x * _forward * lerpf(0.6, 2.5, _tumble) + view_at.basis.z * _side * lerpf(2.2, 1.0, _tumble)
 	for bone: PhysicalBone3D in _bones.values():
-		bone.linear_velocity = fling
-		bone.angular_velocity = -view_at.basis.x * _forward * lerpf(0.6, 2.5, _tumble) + view_at.basis.z * _side * lerpf(2.2, 1.0, _tumble)
+		bone.angular_velocity = spin
+		bone.linear_velocity = fling + spin.cross(bone.global_position - _bones["Hips"].global_position)
 		if bone.bone_name.begins_with("Forearm"):
 			bone.angular_velocity += view_at.basis.z * _side * 0.25
 	_bike_body = RigidBody3D.new()
@@ -302,11 +345,12 @@ func _begin_ragdoll() -> void:
 	_bike_body.global_transform = view_at
 	_bike_body.linear_velocity = Vector3(_release_velocity.x * 0.6, 0.5, _release_velocity.z * 0.6) - view_at.basis.x * _side * 0.25
 	_bike_body.angular_velocity = -view_at.basis.z * _side * 3.0
-	_bike_prev = view_at
-	_bike_curr = view_at
-	var release_pose := _rider.capture_pose()
-	_bone_prev = release_pose.duplicate()
-	_bone_curr = release_pose
+	# Express the previous attached sample in the detached skeleton's space.
+	var skel := _rider.skeleton
+	var previous_world := _bike_prev * view_at.affine_inverse() * skel.global_transform
+	var to_detached := skel.global_transform.affine_inverse() * previous_world
+	for root_index in skel.get_parentless_bones():
+		_bone_prev[root_index] = to_detached * _bone_prev[root_index]
 
 
 ## PhysicalBone3D на костях из BODIES: тело — посередине кости, сустав — в её начале
@@ -359,6 +403,12 @@ func _build_ragdoll() -> void:
 		var spec: Dictionary = BODIES[bone_name]
 		if spec.swing > 0.0:
 			var bone := _bones[bone_name]
+			var parent := skel.get_bone_parent(skel.find_bone(bone_name))
+			while parent >= 0 and not _bones.has(skel.get_bone_name(parent)):
+				parent = skel.get_bone_parent(parent)
+			var limb := bone as FallBone
+			limb.linked_parent = _bones[skel.get_bone_name(parent)]
+			limb.parent_anchor = limb.linked_parent.to_local(limb.global_transform * limb.joint_offset.origin)
 			bone.joint_type = PhysicalBone3D.JOINT_TYPE_CONE
 			bone.set("joint_constraints/swing_span", spec.swing)
 			bone.set("joint_constraints/twist_span", spec.twist)
@@ -409,7 +459,7 @@ func _sync_pose() -> Array[Transform3D]:
 	var globals: Array[Transform3D] = []
 	globals.resize(skel.get_bone_count())
 	for i in _bone_order:
-		var local := skel.get_bone_pose(i)
+		var local := _bone_curr[i]
 		var parent := skel.get_bone_parent(i)
 		var global := (globals[parent] as Transform3D) * local if parent >= 0 else local
 		var bone := _bones.get(skel.get_bone_name(i)) as PhysicalBone3D

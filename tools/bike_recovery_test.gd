@@ -241,9 +241,9 @@ func check_placement() -> void:
 	if RenderingServer.get_current_rendering_method() == "forward_plus":
 		check(not game.bike_view._placement_meshes.is_empty() and game.bike_view._placement_meshes[0].transparency > 0.0,
 			"Forward+ reveals the real frame from partial transparency")
-	game.bike_view._placement_tween.custom_step(0.16)
+	game.bike_view.tick(game.bike, 0.16)
 	game.bike_view.draw(1.0)
-	check(is_zero_approx(game.bike_view._placement_lift) and game.bike_view._placement_tween == null,
+	check(is_zero_approx(game.bike_view._placement_lift),
 		"Visual effect settles without affecting bike state")
 	check(game.bike==same_bike and not game.bike.fallen and not game.bike.riding and game.bike_view.lamp_on(),"Same bike and lamp survive placement with motion/fallen state cleared")
 	check(Vector3(game.player.x,game.player.feet,game.player.z)==player_at,"Placement never teleports the player")
