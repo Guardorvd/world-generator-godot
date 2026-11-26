@@ -73,7 +73,8 @@ func run() -> void:
 	root.add_child(model)
 	var frame := model.get_node("Frame") as MeshInstance3D
 	var minimum := INF
-	for travel: float in [0.0, 0.08, BikeRide.SAG_MAX]:
+	var sag_max := BikePhysicsConfig.current().sag_max
+	for travel: float in [0.0, 0.08, sag_max]:
 		for steer: float in [-BikeView.STEER_VIEW, 0.0, BikeView.STEER_VIEW]:
 			var inverse := Basis(Vector3.UP, steer).inverse()
 			for surface in frame.mesh.get_surface_count():
@@ -91,7 +92,7 @@ func run() -> void:
 							minimum = minf(minimum, clearance)
 	print("FRAME minimum conservative clearance m=", minimum)
 	check(minimum > 0.015, "frame clears front tyre at full travel and steering lock")
-	check(BikeView.FORK_CROWN_Y - BikeView.WHEEL_Y - BikeRide.SAG_MAX - 0.036 - 0.354 > 0.005,
+	check(BikeView.FORK_CROWN_Y - BikeView.WHEEL_Y - sag_max - 0.036 - 0.354 > 0.005,
 		"fork crown clears the compressed tyre")
 	if "--capture" in OS.get_cmdline_user_args(): await capture(model)
 	model.queue_free()
@@ -120,7 +121,7 @@ func capture(model: BikeView) -> void:
 	state.riding = true
 	var sheet := Image.create(1800, 1200, false, Image.FORMAT_RGB8)
 	for i in 4:
-		state.squash_f = BikeRide.SAG_MAX if i in [1, 2] else 0.0
+		state.squash_f = state.config.sag_max if i in [1, 2] else 0.0
 		state.steer = 1.0 if i == 2 else 0.0
 		model.snap(state)
 		model.draw(1.0)

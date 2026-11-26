@@ -142,7 +142,8 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне", "safety", {actual = float(flight.impact), limit = float(S.LEVELS[_level(d, e.station)].impact), deviation = float(flight.impact) - float(S.LEVELS[_level(d, e.station)].impact)})
 					land_to = maxf(land_to, float(flight.land))
 				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rolls_off else "safety")
-				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(BikeRide.LOOK[-1])), float(w.get("lip", from)))
+				var looks := BikePhysicsConfig.current().look_times
+				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(looks[looks.size() - 1])), float(w.get("lip", from)))
 				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + S.recovery_distance(v, true)))
 				var required_radius := v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))
 				if minf(approach, landing) < required_radius:
@@ -186,7 +187,7 @@ static func _level(d: TrailDefinition, station: float) -> int:
 
 ## Match TrailStandards and fly_surface: gravity along the tread is bounded by G.
 static func _slope_acceleration(grade: float) -> float:
-	return -S.G * grade / sqrt(1.0 + grade * grade)
+	return -S.G_GROUND * grade / sqrt(1.0 + grade * grade)
 
 
 static func _height(y: PackedFloat32Array, s: float) -> float:
@@ -212,12 +213,13 @@ static func fly_surface(y: PackedFloat32Array, start: float, entry: float, end: 
 			var grade := (_height(y, s + S.HUB) - _height(y, s - S.HUB)) / (2.0 * S.HUB)
 			vy = grade * v
 			height = _contact(y, s)
-			for look: float in BikeRide.LOOK:
-				if height + vy * look - S.G * look * look * 0.5 - _contact(y, s + v * look) > BikeRide.LIFT:
+			var cfg := BikePhysicsConfig.current()
+			for look: float in cfg.look_times:
+				if height + vy * look - S.G * look * look * 0.5 - _contact(y, s + v * look) > cfg.lift_threshold:
 					airborne = true
 					break
 			if not airborne:
-				v += (-S.G * grade / sqrt(1.0 + grade * grade) - S.ROLL - S.DRAG * v * v) * dt
+				v += (-S.G_GROUND * grade / sqrt(1.0 + grade * grade) - S.ROLL - S.DRAG * v * v) * dt
 				s += maxf(v, 0.0) * dt
 				continue
 		s += v * dt

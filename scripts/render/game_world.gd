@@ -157,10 +157,9 @@ const DISCOVERY_TICKS := 6   # такты физики между проверк
 var _discovery_tick := 0
 var _dragging := false
 var _captured_at := 0
-var _looked_at: float:
-	get: return camera_controller._looked_at
-	set(value): camera_controller._looked_at = value
 var _rescue_input_until := 0.0
+var _physics_debug_on := false
+var _physics_debug_label: Label
 var _cam_y: float:
 	get: return camera_controller._cam_y
 	set(value): camera_controller._cam_y = value
@@ -473,6 +472,13 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(wind_layer)
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
+	_physics_debug_label = Label.new()
+	_physics_debug_label.visible = false
+	_physics_debug_label.position = Vector2(16, 16)
+	_physics_debug_label.add_theme_font_size_override("font_size", 14)
+	_physics_debug_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_physics_debug_label.add_theme_constant_override("outline_size", 3)
+	wind_layer.add_child(_physics_debug_label)
 	$WorldEnvironment.environment = $WorldEnvironment.environment.duplicate()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
 	day.atmosphere = WorldTemplate.atmosphere_config(world.template_id)
@@ -957,7 +963,8 @@ func _apply_live_fov() -> void:
 		return
 	var fov_goal := services.settings.fov
 	if bike != null and bike.riding:
-		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3)
+		var cruise := BikePhysicsConfig.current().cruise_speed
+		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (cruise - 2.0), 0.0, 1.3)
 	else:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	camera.fov = fov_goal
@@ -1022,7 +1029,6 @@ func look(dx: float, dy: float) -> void:
 	var k := GameConfig.MOUSE * services.settings.mouse * (photo.look_scale() if photo.active else 1.0)
 	yaw -= dx * k
 	pitch = clampf(pitch - dy * k * (-1.0 if services.settings.invert_y else 1.0), -1.5, 1.5)
-	_looked_at = time
 
 
 ## Сесть на велосипед, если он рядом, или слезть с него (действие interact, по умолчанию F).
@@ -1435,6 +1441,12 @@ func _tablet_shortcut(event: InputEvent) -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if startup_input_locked or event.is_echo() or paused:
 		return
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F4:
+		_physics_debug_on = not _physics_debug_on
+		if _physics_debug_label != null:
+			_physics_debug_label.visible = _physics_debug_on
+		get_viewport().set_input_as_handled()
+		return
 	if show_map:
 		if _tablet_shortcut(event) or (hud._travel_dialog == null and not travel_active() and hud.big_map.map_action(event)):
 			get_viewport().set_input_as_handled()
@@ -1760,13 +1772,11 @@ func _physics_process(dt: float) -> void:
 	if crash.active():
 		crashed = bike_controller.recover(dt, player, bike, crash, world, heights)
 	elif bike.riding:
-		var h0 := bike.heading
 		var speed_before := bike.speed
 		services.controls.read_bike_body(bike, not _opening and not input_lock)
 		fw = bike_controller.ride(dt, player, bike, world, heights, fw, st, Input.is_action_pressed("run") and not map_lock, jump, _opening)
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
 			_finish_opening()
-		camera_controller.follow_bike(bike, bike.heading - h0, time, dt)
 		_bike_impacts()
 		crashed = bike.crashed
 		if not _opening:
@@ -1927,12 +1937,19 @@ func _process(delta: float) -> void:
 			look(stick.x, stick.y)
 	hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
 	hud.set_brakes(bike)
+	if _physics_debug_on and _physics_debug_label != null:
+		var stance_name := "НОГА" if bike.stance == BikeRide.Stance.FOOT_DOWN else ("БАЛАНС" if bike.stance == BikeRide.Stance.TRACKSTAND else "ЕЗДА")
+		_physics_debug_label.text = "%.1f км/ч (%.1f м/с) · %s · %s\nуклон %.1f%% / крен %.1f%%\nF %.2f (%.0f%%) · R %.2f (%.0f%%)\nнестаб. %.0f%% · тангаж %+.2f · g %.0f/%.0f" % [
+			absf(bike.speed) * 3.6, bike.speed, stance_name, "ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ",
+			bike.grade_now * 100.0, bike.bank_slope * 100.0,
+			bike.load_f, bike.use_f * 100.0, bike.load_r, bike.use_r * 100.0,
+			bike.instability * 100.0, bike.pitch_vel, bike.config.ground_gravity, bike.config.air_gravity]
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := 1.0 if _placing_bike() or _settlement_open() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	if not _map_covers_world:
 		if crash.active():
-			crash.draw()
+			crash.draw(alpha)
 		else:
 			bike_view.draw(alpha, not _opening and not show_map and not photo.active and not _placing_bike())
 	t0 = _tick_mark("frame_bike_view", t0)
@@ -2763,7 +2780,7 @@ func _bike_impacts() -> void:
 	if bike.bottom_out > 0.0:
 		audio.bottom_out(bike.bottom_out)
 		# 14.1: пробой вилки — удар рамы: камера проседает и вздрагивает, геймпад отдаёт тяжёлым мотором
-		var hit := clampf(bike.bottom_out - BikeRide.BOTTOM_OUT, 0.0, 3.0)
+		var hit := clampf(bike.bottom_out - BikePhysicsConfig.current().bottom_out_speed, 0.0, 3.0)
 		dip = maxf(dip, 0.4 + hit * 0.35)
 		trauma += 0.12 + hit * 0.08
 		weak = maxf(weak, 0.3)

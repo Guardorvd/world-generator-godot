@@ -967,8 +967,9 @@ func _group_world() -> void:
 	# движение: подгрузка рельефа, растительности и воды штатным планировщиком
 	await _settle(game.vegetation, _ride.bind(0.0), 1.0, 3.0)
 	await _case("world.road_still", "Мир: начало дороги, на месте", HOLD, _ride.bind(0.0))
-	await _case("world.ride", "Мир: езда по дороге %d м/с" % GameConfig.BIKE_SPEED, MOVE * 1.5, _ride.bind(GameConfig.BIKE_SPEED))
-	await _case("world.fast", "Мир: пролёт по дороге %d м/с" % (GameConfig.BIKE_SPEED * 4), MOVE, _ride.bind(GameConfig.BIKE_SPEED * 4.0))
+	var cruise_speed := BikePhysicsConfig.current().cruise_speed
+	await _case("world.ride", "Мир: езда по дороге %d м/с" % cruise_speed, MOVE * 1.5, _ride.bind(cruise_speed))
+	await _case("world.fast", "Мир: пролёт по дороге %d м/с" % (cruise_speed * 4), MOVE, _ride.bind(cruise_speed * 4.0))
 	var stops: Array = views.values()
 	await _case("world.jump", "Мир: перенос в другое место раз в 1,5 с", MOVE * 1.5, func(t: float, dt: float) -> void: _look(t, dt, stops[int(t / 1.5) % stops.size()]))
 

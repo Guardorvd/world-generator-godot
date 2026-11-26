@@ -16,7 +16,6 @@ const SETTLE := 0.2     # остановка должна держаться, а
 const GROUND_R := 16    # радиус куска рельефа под падением, м
 const LAYER_GROUND := 4
 const LAYER_BODY := 8
-const GRAVITY_SCALE := GameConfig.GRAVITY / 9.8
 const MAX_BONE_SPIN := 12.0 # рад/с: ограничение разгона лёгких конечностей решателем суставов
 const RECOVERY_PENETRATION := 0.12 # м: мелкие контакты оставляем решателю, не поднимаем тело каждый такт
 const EnvironmentContacts = preload("res://scripts/render/crash_environment.gd")
@@ -78,6 +77,10 @@ var _impact_normal := Vector3.UP
 var _severity := 0.0
 var _balance_time := BALANCE
 var _recover_retry := 0.0
+var _bike_prev := Transform3D()
+var _bike_curr := Transform3D()
+var _bone_prev: Array[Transform3D] = []
+var _bone_curr: Array[Transform3D] = []
 
 
 func active() -> bool:
@@ -141,6 +144,10 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 	_balance_time = lerpf(0.22, 0.14, _severity) if collision else BALANCE
 	_forward = -1.0 if velocity.dot(-_start.basis.z) < -0.1 else 1.0
 	_build_ground(Vector3(b.x, b.y, b.z) + Vector3(velocity.x, 0.0, velocity.z) * 0.35, b.y, heights)
+	_bike_prev = _start
+	_bike_curr = _start
+	_bone_prev = _seated_pose.duplicate()
+	_bone_curr = _seated_pose.duplicate()
 	phase = Phase.BALANCE
 	t = 0.0
 
@@ -162,7 +169,7 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			var fwd := -_start.basis.z
 			var roll := Basis(fwd, -_side * 0.7 * k * k) * Basis(_start.basis.x, -0.25 * _tumble * _forward * k * k)
 			var travel := Vector3(_vel.x, 0.0, _vel.z) * t * (1.0 - 0.3 * k)
-			var before := _view.global_position
+			var before := _bike_curr.origin
 			var prev_t := maxf(0.0, t - dt)
 			var prev_k := clampf(prev_t / _balance_time, 0.0, 1.0)
 			var prev_travel := Vector3(_vel.x, 0.0, _vel.z) * prev_t * (1.0 - 0.3 * prev_k)
@@ -175,7 +182,9 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			var at := Vector3(to[0], _start.origin.y, to[1])
 			_release_velocity.x = (at.x - before.x) / maxf(dt, 0.001)
 			_release_velocity.z = (at.z - before.z) / maxf(dt, 0.001)
-			_view.global_transform = Transform3D(roll * _start.basis, at)
+			_bike_prev = _bike_curr
+			_bike_curr = Transform3D(roll * _start.basis, at)
+			_view.global_transform = _bike_curr
 			if t >= _balance_time:
 				_begin_ragdoll()
 		Phase.RAGDOLL:
@@ -185,8 +194,12 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 				# Долгое падение не заканчивается из-за края временного коллайдера земли.
 				_build_ground(hips.global_position, hips.global_position.y, heights)
 			_keep_above_ground(heights, dt)
-			_view.global_transform = _bike_body.global_transform
+			_bike_prev = _bike_curr
+			_bike_curr = _bike_body.global_transform
+			_view.global_transform = _bike_curr
+			_bone_prev = _bone_curr
 			_sync_pose()
+			_bone_curr = _rider.capture_pose()
 			var near_ground := hips.global_position.y - _support_height(hips.global_position, heights) < 0.65
 			var head := _bones["Head"] as PhysicalBone3D
 			var lying := head.global_position.y - _support_height(head.global_position, heights) < 0.45
@@ -201,9 +214,36 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 	return false
 
 
-## Поза рамы заморожена после физики; перелёта седока в седло больше нет.
-func draw() -> void:
-	pass
+## Интерполяция положения рамы и костей между двумя тактами физики (без ступенек при падении).
+func draw(alpha := 1.0) -> void:
+	if not active() or not is_instance_valid(_view):
+		return
+	alpha = clampf(alpha, 0.0, 1.0) if is_finite(alpha) else 1.0
+	if phase == Phase.BALANCE or phase == Phase.RAGDOLL:
+		_view.global_transform = _bike_prev.interpolate_with(_bike_curr, alpha)
+	if phase == Phase.RAGDOLL and is_instance_valid(_rider) and _rider.is_rig_valid():
+		var skel := _rider.skeleton
+		var count := mini(skel.get_bone_count(), mini(_bone_prev.size(), _bone_curr.size()))
+		if count > 0:
+			var globals: Array[Transform3D] = []
+			globals.resize(skel.get_bone_count())
+			for i in _bone_order:
+				var local: Transform3D
+				if i < count:
+					var a := _bone_prev[i]
+					var b := _bone_curr[i]
+					local = Transform3D(Basis(a.basis.get_rotation_quaternion().slerp(b.basis.get_rotation_quaternion(), alpha)), a.origin.lerp(b.origin, alpha))
+					skel.set_bone_pose_position(i, local.origin)
+					skel.set_bone_pose_rotation(i, local.basis.get_rotation_quaternion())
+				else:
+					local = skel.get_bone_pose(i)
+				var parent := skel.get_bone_parent(i)
+				globals[i] = (globals[parent] as Transform3D) * local if parent >= 0 else local
+			for child: Node in skel.get_children():
+				if child is BoneAttachment3D:
+					var index := skel.find_bone((child as BoneAttachment3D).bone_name)
+					if index >= 0:
+						(child as BoneAttachment3D).transform = globals[index]
 
 
 ## Положение игрока для камеры, звука и подгрузки мира; после падения не привязано к раме.
@@ -247,7 +287,7 @@ func _begin_ragdoll() -> void:
 	_bike_body.collision_layer = LAYER_BODY
 	_bike_body.collision_mask = LAYER_GROUND
 	_bike_body.mass = 14.0
-	_bike_body.gravity_scale = GRAVITY_SCALE
+	_bike_body.gravity_scale = BikePhysicsConfig.current().air_gravity / 9.8
 	_bike_body.angular_damp = 1.5
 	_bike_body.linear_damp = 0.7
 	_bike_body.continuous_cd = true
@@ -262,6 +302,11 @@ func _begin_ragdoll() -> void:
 	_bike_body.global_transform = view_at
 	_bike_body.linear_velocity = Vector3(_release_velocity.x * 0.6, 0.5, _release_velocity.z * 0.6) - view_at.basis.x * _side * 0.25
 	_bike_body.angular_velocity = -view_at.basis.z * _side * 3.0
+	_bike_prev = view_at
+	_bike_curr = view_at
+	var release_pose := _rider.capture_pose()
+	_bone_prev = release_pose.duplicate()
+	_bone_curr = release_pose
 
 
 ## PhysicalBone3D на костях из BODIES: тело — посередине кости, сустав — в её начале
@@ -283,7 +328,7 @@ func _build_ragdoll() -> void:
 		bone.collision_mask = LAYER_GROUND
 		bone.mass = spec.mass
 		bone.friction = 0.45
-		bone.gravity_scale = GRAVITY_SCALE
+		bone.gravity_scale = BikePhysicsConfig.current().air_gravity / 9.8
 		bone.linear_damp = 0.7
 		bone.angular_damp = 3.0
 		bone.body_offset = Transform3D(Basis(), Vector3(0, spec.offset, 0))

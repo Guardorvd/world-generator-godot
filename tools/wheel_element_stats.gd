@@ -37,7 +37,6 @@ func ride(h: Heightfield, d: TrailDefinition, e: TrailElement, speed: float, man
 	var finish := minf(length - 1.0, e.station + e.length * 0.5 + 6.0)
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var at := d.point_at(start)
 	b.x = at.x
 	b.z = at.y

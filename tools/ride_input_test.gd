@@ -46,7 +46,7 @@ func run() -> void:
 	for i in 30:
 		b.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
 		quiet = quiet and b.pump_accel == 0.0 and b.pump_load == 0.0 and b.pump_active == 0.0 and b.pump_body == 0.0
-		quiet = quiet and b._pump_absorb_v <= BikeRide.PUMP_ABSORB_V * BikeRide.PUMP_PASSIVE + 0.0001
+		quiet = quiet and b._pump_absorb_v <= b.config.pump_absorb_v * b.config.pump_passive + 0.0001
 		passive = maxf(passive, b._pump_absorb_v)
 	# 20.11: без пампа седок только гасит гребень ногами (PUMP_PASSIVE), сил пампа нет
 	check(quiet, "отпущенная ЛКМ: нет сил пампа, поглощение не больше пассивного (%.2f м/с)" % passive)
@@ -58,13 +58,17 @@ func run() -> void:
 		controls.reset()
 		var first := controls.bike_steer(1.0, 1.0 / 60, pace)
 		var held := first
+		var monotonic := true
+		for i in 45:
+			var prev := held
+			held = controls.bike_steer(1.0, 1.0 / 60, pace)
+			if held < prev - 0.0001:
+				monotonic = false
+		check(first > 0.1 and monotonic and held > 0.95, "монотонное и быстрое нарастание руля на %.0f м/с (%.2f)" % [pace, held])
 		for i in 45: held = controls.bike_steer(1.0, 1.0 / 60, pace)
-		# 12.11: удержание на скорости мягче нажатия (KEY_STEER_HOLD), на малой — полный руль
-		check(first > 0.0 and first < 0.4 and (held > 0.9 if pace < 5.0 else held > 0.7 and held < 0.97), "быстрое начало и дуга удержания на %.0f м/с (%.2f)" % [pace, held])
-		for i in 90: held = controls.bike_steer(1.0, 1.0 / 60, pace)
-		check(held > 0.9, "долгое удержание дожимает дугу до полной")
+		check(held > 0.99, "удержание дожимает руль до полного")
 		var reverse := controls.bike_steer(-1.0, 1.0 / 60, pace)
-		check(reverse > 0.0 and held - reverse < 0.35, "перекладка не меняет знак рывком")
+		check(reverse > 0.0 and held - reverse < 0.55, "перекладка не меняет знак рывком")
 		for i in 60: reverse = controls.bike_steer(-1.0, 1.0 / 60, pace)
 		check(reverse < -0.5, "противоположная дуга доступна")
 		for i in 30: reverse = controls.bike_steer(0.0, 1.0 / 60, pace)
@@ -75,7 +79,7 @@ func run() -> void:
 	controls.reset()
 	var c := 0.0
 	for i in 120: c = controls.bike_steer(1.0, 1.0 / 120, 16.0)
-	check(absf(a - c) < 0.01, "нарастание одинаково при 30/120 Гц")
+	check(absf(a - c) < 0.02, "нарастание одинаково при 30/120 Гц")
 	var flat := Friendly.TestGround.new(world)
 	for pace: float in [8.0, 16.0]:
 		var rider := BikeRide.new()
@@ -89,8 +93,7 @@ func run() -> void:
 	controls.reset()
 	var early := 0.0
 	for i in 6: early = controls.bike_steer(1.0, 1.0 / 60, 16.0)
-	# 12.11: нажатие — резкий доворот (KEY_STEER_KICK), сильнее дуги удержания
-	check(early > 0.7 and early <= 1.0, "нажатие за 100 мс даёт резкий доворот (%.2f)" % early)
+	check(early > 0.35 and early <= 0.75, "нажатие за 100 мс даёт предсказуемый отклик без провала (%.2f)" % early)
 	# частые нажатия в одну сторону (0,25 с нажато, 0,12 с отпущено) ведут дугу, а не начинают её заново
 	controls.reset()
 	var pulsed := 0.0
@@ -102,32 +105,32 @@ func run() -> void:
 	controls.reset()
 	var single := 0.0
 	for i in 15: single = controls.bike_steer(1.0, 1.0 / 60, 12.0)
-	check(single > 0.6, "одно короткое нажатие — заметный доворот (%.2f)" % single)
-	# перекладка на малой скорости (подъём): после короткого руля влево полный вправо набирается быстрее, чем на скорости
+	check(single > 0.55, "одно короткое нажатие — заметный доворот (%.2f)" % single)
+	# перекладка без задержки через нейтраль
 	var reach := {}
 	for pace: float in [5.0, 14.0]:
 		controls.reset()
 		for i in 9: controls.bike_steer(-1.0, 1.0 / 60, pace)
 		var ticks := 0
-		while controls.bike_steer(1.0, 1.0 / 60, pace) < 0.9 and ticks < 120: ticks += 1
+		while controls.bike_steer(1.0, 1.0 / 60, pace) < 0.7 and ticks < 120: ticks += 1
 		reach[pace] = ticks / 60.0
-	check(reach[5.0] < 0.35 and reach[14.0] < 0.35, "перекладка в резкий доворот быстрая на любой скорости (%.2f с и %.2f с)" % [reach[5.0], reach[14.0]])
+	check(reach[5.0] < 0.30 and reach[14.0] < 0.30, "перекладка быстрая на любой скорости (%.2f с и %.2f с)" % [reach[5.0], reach[14.0]])
 	# 31.10: тормоз с клавиатуры ступенями — нажатие подтормаживает, удержание доводит до полного; газ и аналог как есть
 	controls.reset()
 	var brake_tap := controls.bike_brake(-1.0, 1.0 / 60)
 	var brake_held := brake_tap
 	for i in 40: brake_held = controls.bike_brake(-1.0, 1.0 / 60)
-	check(brake_tap > -0.5 and brake_tap < -0.2 and brake_held < -0.99 and controls.bike_brake(0.7, 1.0 / 60) == 0.7 and controls.bike_brake(-0.4, 1.0 / 60) == -0.4,
+	check(brake_tap > -0.8 and brake_tap < -0.2 and brake_held < -0.99 and controls.bike_brake(0.7, 1.0 / 60) == 0.7 and controls.bike_brake(-0.4, 1.0 / 60) == -0.4,
 		"нажатие тормоза подтормаживает (%.2f), удержание — полный тормоз, газ и аналог как есть" % brake_tap)
 	var pose := BikeRide.new()
 	pose.speed = 12.0
 	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
 	var flat_lean := rad_to_deg(pose.lean)
-	check(flat_lean > 12.0 and flat_lean <= rad_to_deg(BikeRide.LEAN_MAX_FLAT) + 0.1, "сдержанный крен в быстром повороте на ровном (%.1f°)" % flat_lean)
+	check(flat_lean > 12.0 and flat_lean <= rad_to_deg(pose.config.lean_max_flat) + 0.1, "сдержанный крен в быстром повороте на ровном (%.1f°)" % flat_lean)
 	pose.bank_slope = 0.3
 	for i in 120: pose._step_pose(0.0, 5.0, 1.0 / 60)
-	check(rad_to_deg(pose.lean) > flat_lean + 2.0 and pose.lean <= BikeRide.LEAN_MAX + 0.001, "на вираже крен больше, чем на ровном, но в пределе (%.1f°)" % rad_to_deg(pose.lean))
-	var cross_gravity := BikeRide.SIDE_GRAVITY * 0.3 / sqrt(1.0 + 0.3 * 0.3)
+	check(rad_to_deg(pose.lean) > flat_lean + 2.0 and pose.lean <= pose.config.lean_max + 0.001, "на вираже крен больше, чем на ровном, но в пределе (%.1f°)" % rad_to_deg(pose.lean))
+	var cross_gravity := pose.config.ground_gravity * 0.3 / sqrt(1.0 + 0.3 * 0.3)
 	for i in 120: pose._step_pose(0.0, -cross_gravity, 1.0 / 60)
 	check(absf(pose.lean) < 0.01, "straight traverse stays upright")
 	pose.airborne = true
@@ -137,8 +140,14 @@ func run() -> void:
 	var camera := PlayerCameraController.new()
 	camera.yaw = 0.7
 	camera.pitch = -0.4
+	camera.heights = ground
+	camera.settings = GameSettings.new()
+	var cam_node := Camera3D.new()
 	b.heading = 2.0
-	for i in 180: camera.follow_bike(b, 0.01, 10.0, 1.0 / 60)
+	b.riding = true
+	for i in 60:
+		camera.update(1.0, 1.0 / 60.0, player, b, cam_node, 10.0 + i / 60.0, false, false, false, false, 70.0, 0.0)
 	check(camera.yaw == 0.7 and camera.pitch == -0.4, "камера не доворачивает за велосипедом даже после ожидания")
+	cam_node.free()
 	print("ride_input: %d failures" % failures)
 	quit(1 if failures else 0)

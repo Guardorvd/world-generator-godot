@@ -875,7 +875,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 		bend = best_o
 		on_steep = steep_cost and (best_g < -STEEP or best_g > STEEP)
 		# скорость «как едут»: тяжесть на уклоне, качение, воздух, педали до крейсерской
-		var acc: float = -TrailStandards.G * best_g / sqrt(1.0 + best_g * best_g) - TrailStandards.ROLL - TrailStandards.DRAG * v * v
+		var acc: float = -TrailStandards.G_GROUND * best_g / sqrt(1.0 + best_g * best_g) - TrailStandards.ROLL - TrailStandards.DRAG * v * v
 		if v < cruise: acc += TrailStandards.PEDAL * (1.0 - v / cruise)
 		v = clampf(sqrt(maxf(1.0, v * v + 2.0 * acc * STEP)), 3.0, 20.0)
 		p += Vector2.from_angle(a) * STEP

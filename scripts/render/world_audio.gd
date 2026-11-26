@@ -336,7 +336,7 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 		_sample_rolling(pos)
 	var v := absf(bike_speed)
 	# Скорость передаётся шинами и касаниями покрытия, без постоянного шума ветра.
-	var rush := clampf(v / GameConfig.BIKE_SPEED, 0.0, 1.3)
+	var rush := clampf(v / BikePhysicsConfig.current().cruise_speed, 0.0, 1.3)
 	# Покрытие меняет плотность и тембр шин, поворот чуть усиливает их шорох.
 	var corner := clampf(absf(bike_lean) / 0.28, 0.0, 1.0)
 	var near := Util.damp(8.0, dt)

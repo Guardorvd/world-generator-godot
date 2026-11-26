@@ -30,8 +30,9 @@ func _init() -> void:
 		"помощь в подъём близка при 30 и 120 тактах/с")
 	var start := ride(0.0, 1.0, 0.0, 0.5).speed
 	check(start > 2.5 and start < 3.5, "отзывчивый старт: %.2f м/с за 0.5 с" % start)
+	var cfg := BikePhysicsConfig.current()
 	var cruise := ride(0.0, 1.0, 0.0, 25.0).speed
-	check(absf(cruise - GameConfig.BIKE_SPEED) < 0.15, "плавный выход на крейсерскую: %.2f м/с" % cruise)
+	check(absf(cruise - cfg.cruise_speed) < 0.15, "плавный выход на крейсерскую: %.2f м/с" % cruise)
 	check(ride(8.0, 1.0, 0.0, 0.5).speed - 8.0 < start * 0.5, "тяга плавно ослабевает с ростом скорости")
 	var coast := ride(11.0, 0.0, 0.0, 2.0).speed
 	check(coast > 8.6 and coast < 10.0, "накат сохраняет ход: %.2f м/с через 2 с" % coast)
@@ -49,7 +50,7 @@ func _init() -> void:
 	var brake := ride(11.0, -1.0, -0.3, 2.25) # 12.7: задний ход через 0,22 с после остановки
 	check(brake.speed == 0.0, "торможение со спуска до остановки без заднего хода")
 	check(ride(0.0, -1.0, -0.3, 0.2).speed == 0.0, "тормоз удерживает на склоне")
-	check(ride(0.0, -1.0, 0.0, 1.0).speed == -GameConfig.BIKE_REVERSE, "задний ход после паузы")
+	check(ride(0.0, -1.0, 0.0, 1.0).speed == -cfg.reverse_speed, "задний ход после паузы")
 	check(ride(-1.5, 1.0, 0.0, 0.1).speed < 0.0, "смена направления проходит через торможение")
 	var slow_tick := ride(0.0, 1.0, -0.1, 5.0, false, 1.0, 30).speed
 	var fast_tick := ride(0.0, 1.0, -0.1, 5.0, false, 1.0, 120).speed

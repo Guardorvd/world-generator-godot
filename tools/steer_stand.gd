@@ -18,7 +18,6 @@ func _initialize() -> void:
 
 func bike(pace: float) -> BikeRide:
 	var b := BikeRide.new()
-	b.contact_model = true
 	b.y = ground.surface_at(0, 0)
 	b.mount(p)
 	b.speed = pace

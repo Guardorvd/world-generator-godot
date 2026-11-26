@@ -28,7 +28,6 @@ var controller := BikeController.new()
 ## разгрузка переднего колеса от сценария, а не от клавиши Q (замеры)
 var body_back := false
 var body_back_forced := false
-var contact_model := bike.contact_model # общая игровая модель; F6 — сравнить с прежней
 var view: BikeView
 var brake_effects := BrakeEffects.new()
 var crash := BikeCrash.new()
@@ -1124,8 +1123,6 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	controller.message.connect(show_message)
 	player = PlayerState.new()
 	bike = BikeRide.new()
-	if trial != null: contact_model = bike.contact_model
-	bike.contact_model = contact_model
 	var d := routes[lane]
 	var at := d.point_at(station)
 	player.x = at.x
@@ -1240,11 +1237,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == KEY_F2:
 		set_editor_visible(not editor.visible)
 	if key == KEY_F5: reload_sources()
-	if key == KEY_F6:
-		if trial != null: trial.fail("Модель управления изменена во время заезда")
-		contact_model = not contact_model
-		bike.contact_model = contact_model
-		show_message("Модель контактов колёс: " + ("два контакта" if contact_model else "прежняя"))
 	if key == KEY_F3:
 		set_diagnostics_visible(not diagnostics_visible)
 		get_viewport().set_input_as_handled()
@@ -1288,12 +1280,14 @@ func save_ride_log() -> void:
 		return
 	show_message("Запись сохранена: %s" % saved.trim_prefix("res://"))
 
-## Колёса по отдельности: нагрузка (доли веса) и использованный запас сцепления
+## Колёса по отдельности: нагрузка (доли веса), использованный запас сцепления и параметры устойчивости
 func _contact_report() -> String:
-	if not bike.contact_model:
-		return "Контакты: прежняя модель (F6)"
-	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s  (F6)" % [bike.load_f, bike.tire_f, bike.use_f * 100,
-		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
+	var stance_name := "НОГА" if bike.stance == BikeRide.Stance.FOOT_DOWN else ("БАЛАНС" if bike.stance == BikeRide.Stance.TRACKSTAND else "ЕЗДА")
+	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s\nСтойка %s · нестаб. %.0f%% · тангаж %+.2f рад/с · крен-склон %.0f%% · g %.0f/%.0f" % [
+		bike.load_f, bike.tire_f, bike.use_f * 100, "" if bike.contact_f() else " · НЕТ КОНТАКТА",
+		bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА",
+		stance_name, bike.instability * 100.0, bike.pitch_vel, bike.bank_slope * 100.0,
+		bike.config.ground_gravity, bike.config.air_gravity]
 
 func _sync_mouse() -> void:
 	# 30.10: движение мыши вращает камеру; зажатый Alt (и панель F2, вид сверху) отпускает курсор для интерфейса,
@@ -1452,7 +1446,7 @@ func _process(dt: float) -> void:
 		if status_time <= 0.0: status.hide()
 	if vegetation != null: vegetation.update(player.x, player.z, false)
 	var alpha := Engine.get_physics_interpolation_fraction()
-	if crash.active(): crash.draw()
+	if crash.active(): crash.draw(alpha)
 	else: view.draw(alpha)
 	# Same interpolation as the bike model: the camera must not step at the physics rate.
 	var at := _cam_from.lerp(_cam_to, alpha)
@@ -1483,10 +1477,7 @@ func _process(dt: float) -> void:
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
 	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп  ·  Alt курсор"
-	if bike.contact_model:
-		route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
-	else:
-		route_hint.tooltip_text = ""
+	route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
 	speed_label.text = "%.0f км/ч  " % (absf(bike.speed) * 3.6)
 	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)

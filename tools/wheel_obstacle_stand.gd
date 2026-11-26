@@ -31,10 +31,9 @@ func obstacle(h: Heightfield, kind: String, tall: float) -> PackedFloat32Array:
 	return PackedFloat32Array([128.0, AT, 128.0, AT, 0.5, base, base + tall])
 
 
-func ride(h: Heightfield, contact: bool, speed: float, throttle: float) -> Dictionary:
+func ride(h: Heightfield, speed: float, throttle: float) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = contact
 	b.x = 128.0
 	b.z = AT + 12.0
 	b.y = h.surface_at(b.x, b.z, -INF)
@@ -70,14 +69,13 @@ func run() -> void:
 	var kit: Array[TrailDefinition] = [d]
 	var prepared := Fixture.prepare(kit)
 	var h: Heightfield = prepared.heights
-	print("препятствие | подъезд м/с | ввод | модель | исход | скорость у препятствия → после | удар колеса м/с")
+	print("препятствие | подъезд м/с | ввод | исход | скорость у препятствия → после | удар колеса м/с")
 	for spec: Array in [["log", 0.1], ["log", 0.2], ["log", 0.3], ["log", 0.4], ["rock", 0.3]]:
 		h.obstacles.set_trail(obstacle(h, spec[0], spec[1]), PackedFloat32Array())
 		h.obstacles.update(128.0, AT, PackedFloat32Array(), 1, true)
 		for speed: float in [1.5, 3.0, 5.0, 7.0, 10.0, 13.0]:
 			for throttle: float in [0.0, 0.6]:
-				for contact in [false, true]:
-					var r := ride(h, contact, speed, throttle)
-					print("%s %.1f м | %4.1f | %s | %s | %s | %.1f → %.1f | %.1f" % ["бревно" if spec[0] == "log" else "валун", spec[1], speed,
-						"педали" if throttle > 0.0 else "накат", "новая" if contact else "старая", r.result, r.before, r.after, r.impact])
+				var r := ride(h, speed, throttle)
+				print("%s %.1f м | %4.1f | %s | %s | %.1f → %.1f | %.1f" % ["бревно" if spec[0] == "log" else "валун", spec[1], speed,
+					"педали" if throttle > 0.0 else "накат", r.result, r.before, r.after, r.impact])
 	quit(0)

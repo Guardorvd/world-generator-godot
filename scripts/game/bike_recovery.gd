@@ -20,7 +20,7 @@ static func placement(w: WorldData, h: Heightfield, at: Vector3, heading: float,
 	var front := h.surface_at(at.x + fwd.x * BikeRide.AXLE, at.z + fwd.y * BikeRide.AXLE, floor_y)
 	var rear := h.surface_at(at.x - fwd.x * BikeRide.AXLE, at.z - fwd.y * BikeRide.AXLE, floor_y)
 	var grade := (front - rear) / (2.0 * BikeRide.AXLE)
-	if not is_finite(grade) or absf(grade) > BikeRide.CLIFF_GRADE: return {}
+	if not is_finite(grade) or absf(grade) > BikePhysicsConfig.current().cliff_grade: return {}
 	var low := floor_y
 	var high := floor_y
 	for along: float in ([-1.5, -BikeRide.AXLE, 0.0, BikeRide.AXLE, 1.5] if recovering else [-BikeRide.AXLE, 0.0, BikeRide.AXLE]):

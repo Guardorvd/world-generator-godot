@@ -23,10 +23,9 @@ func lane() -> TrailDefinition:
 
 
 ## Прямо 1 с на скорости `speed`, затем руль `steer` в течение `hold` с (газ держит скорость), затем руль прямо 0,6 с.
-func ride(h: Heightfield, contact: bool, hz: int, speed: float, steer: float, hold: float, start: Vector2, trace := false) -> Dictionary:
+func ride(h: Heightfield, hz: int, speed: float, steer: float, hold: float, start: Vector2, trace := false) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = contact
 	b.x = start.x
 	b.z = start.y
 	b.y = h.surface_at(b.x, b.z, -INF)
@@ -90,18 +89,17 @@ func run() -> void:
 		return
 	var h: Heightfield = prepared.heights
 	if "--trace" in OS.get_cmdline_user_args():
-		ride(h, true, 60, 14.0, 1.0, 1.5, Vector2(128, 205), true)
+		ride(h, 60, 14.0, 1.0, 1.5, Vector2(128, 205), true)
 		quit(0)
 		return
 	var hz_list := [60]
 	if "--hz" in OS.get_cmdline_user_args(): hz_list = [30, 60, 120]
 	print("Покрытие: ", "трава (вне полотна)" if grass else "плотный грунт")
-	print("скорость руль модель Гц | рыскание рад/с | рывки рад/с за такт | радиус м | снос ° | потеря м/с | шина перед (мин…макс, сред) | успокоение с")
+	print("скорость руль Гц | рыскание рад/с | рывки рад/с за такт | радиус м | снос ° | потеря м/с | шина перед (мин…макс, сред) | успокоение с")
 	for speed: float in [6.0, 10.0, 14.0, 18.0]:
 		for steer: float in [0.5, 1.0]:
-			for contact in [false, true]:
-				for hz: int in hz_list:
-					var r := ride(h, contact, hz, speed, steer, 1.5, Vector2(128, 205))
-					print("%4.0f %4.1f %-6s %3d | %5.2f | %6.3f | %5.1f | %4.1f | %5.2f | %.2f…%.2f (%.2f) | %.2f%s" % [speed, steer, "новая" if contact else "старая", hz,
-						r.yaw, r.jerk, r.radius, r.slip, r.loss, r.load_lo, r.load_hi, r.load, r.settle, " ПАДЕНИЕ" if r.crashed else ""])
+			for hz: int in hz_list:
+				var r := ride(h, hz, speed, steer, 1.5, Vector2(128, 205))
+				print("%4.0f %4.1f %3d | %5.2f | %6.3f | %5.1f | %4.1f | %5.2f | %.2f…%.2f (%.2f) | %.2f%s" % [speed, steer, hz,
+					r.yaw, r.jerk, r.radius, r.slip, r.loss, r.load_lo, r.load_hi, r.load, r.settle, " ПАДЕНИЕ" if r.crashed else ""])
 	quit(0)

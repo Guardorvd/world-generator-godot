@@ -30,19 +30,18 @@ func check(ok: bool, label: String) -> void:
 	print("auto_pump: ", "PASS " if ok else "FAIL ", label)
 	if not ok: failures += 1
 
-func bike(enabled := true, pace := 8.0, contact := true) -> BikeRide:
+func bike(enabled := true, pace := 8.0) -> BikeRide:
 	var b := BikeRide.new()
 	b.pump_enabled = enabled
-	b.contact_model = contact
 	b.y = ground.surface_at(0.0, 0.0, -INF)
 	b.mount(PlayerState.new())
 	b.speed = pace
 	b.pump_pressed = held # сценарии механики при удержании ЛКМ
 	return b
 
-func ride(profile: Callable, enabled := true, pace := 8.0, seconds := 4.0, hz := 60, contact := true, action := "") -> Dictionary:
+func ride(profile: Callable, enabled := true, pace := 8.0, seconds := 4.0, hz := 60, action := "") -> Dictionary:
 	ground.profile = profile
-	var b := bike(enabled, pace, contact)
+	var b := bike(enabled, pace)
 	var p := PlayerState.new()
 	var out := {air = 0.0, motion = 0.0, accel = 0.0, load = 0.0, boost = 0.0, speed = pace, height = 0.0, popped = false}
 	for i in roundi(seconds * hz):
@@ -74,13 +73,12 @@ func run() -> void:
 		var on := ride(profile)
 		var off := ride(profile, false)
 		check(on.accel < 0.00001 and on.motion < 0.001 and absf(on.speed - off.speed) < 0.0001, "плоскость и постоянный уклон не создают памп или ускорение")
-	for contact: bool in [false, true]:
-		for profile: Callable in [waves, rolling, single]:
-			var on := ride(profile, true, 8.0, 4.0, 60, contact)
-			var off := ride(profile, false, 8.0, 4.0, 60, contact)
-			print("PROFILE contact=%s: air %.3f/%.3f motion %.3f dv %.3f boost %.3f" % [contact, on.air, off.air, on.motion, on.speed - off.speed, on.boost])
-			check(on.motion > 0.015 and on.boost > 0.0005 and not on.bike.crashed and not on.popped, "рельеф без разметки: работа телом и ограниченная помощь, без баннихопа")
-			check(on.air <= off.air + 0.1, "памп не создаёт дополнительных отрывов на волнах")
+	for profile: Callable in [waves, rolling, single]:
+		var on := ride(profile, true, 8.0, 4.0, 60)
+		var off := ride(profile, false, 8.0, 4.0, 60)
+		print("PROFILE: air %.3f/%.3f motion %.3f dv %.3f boost %.3f" % [on.air, off.air, on.motion, on.speed - off.speed, on.boost])
+		check(on.motion > 0.015 and on.boost > 0.0005 and not on.bike.crashed and not on.popped, "рельеф без разметки: работа телом и ограниченная помощь, без баннихопа")
+		check(on.air <= off.air + 0.1, "памп не создаёт дополнительных отрывов на волнах")
 	var a := ride(waves, true, 8.0, 5.0, 30)
 	var b := ride(waves, true, 8.0, 5.0, 120)
 	check(absf(a.speed - b.speed) < 0.03 and absf(a.bike.z - b.bike.z) < 0.05, "30/120 Гц совпадают")
@@ -110,7 +108,7 @@ func run() -> void:
 		check(absf(calm.air - off.air) < 0.08 and absf(calm.height - off.height) < 0.1, "без зажатого пампа трамплин, край и ступень — штатный отрыв")
 	# 30.10: ручной Q→E на волне при опущенном переднем — памп, а не прыжок; ручной прыжок проверяется на ровном
 	for action: String in ["manual", "space"]:
-		var on := ride(flat if action == "manual" else waves, true, 8.0, 2.0, 60, true, action)
+		var on := ride(flat if action == "manual" else waves, true, 8.0, 2.0, 60, action)
 		check(on.popped and on.height > 0.1, "ручное действие перехватывает памп: " + action)
 	# 30.10: прыжок и тормоз снимают памп в том же подшаге и с паузой; Q/E — сами работа пампа (знак нагрузки по
 	# направлению рывка), руль — автоматика плавно уступает ему, без выключения.
@@ -166,7 +164,7 @@ func run() -> void:
 	var reverse := ride(waves, true, -1.5)
 	check(reverse.accel == 0.0 and reverse.motion == 0.0, "задним ходом памп отключён")
 	var repeat := ride(waves, true, 12.0, 25.0)
-	check(repeat.bike.horizontal_velocity().length() < BikeRide.PUMP_TOP + 0.5 and not repeat.bike.crashed, "долгая серия волн не разгоняет бесконечно")
+	check(repeat.bike.horizontal_velocity().length() < repeat.bike.config.pump_top + 0.5 and not repeat.bike.crashed, "долгая серия волн не разгоняет бесконечно")
 	repeat.bike.reset_motion()
 	check(repeat.bike.pump_motion == 0.0 and repeat.bike.pump_accel == 0.0 and repeat.bike._pump_reach == 0.0, "сброс очищает автоматику")
 	print("auto_pump: %d failures / %d checks" % [failures, checks])

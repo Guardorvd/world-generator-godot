@@ -30,7 +30,7 @@ const ALL_VIEWS := ["map", "spawn", "peak", "valley", "road", "mountain_road", "
 const NOON := 12.0
 const SETTLE_FRAMES := 12   # кадров после переноса камеры до снимка
 const WARMUP_S := 1.5       # первые кадры компилируют шейдеры, их не считаем
-const ROAD_SPEED := GameConfig.BIKE_SPEED
+const ROAD_SPEED := 11.0
 
 var main: Node
 var out := ""

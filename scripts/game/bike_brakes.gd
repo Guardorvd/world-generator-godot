@@ -1,32 +1,9 @@
 extends RefCounted
 ## One combined brake. Forces are per unit mass (m/s²); no scene dependencies.
-## Load transfer: N_front / N = 0.5 + h/L * (a/g_normal - grade) - rider_shift/L; uphill grade counts at CLIMB_TRANSFER.
+## Load transfer: N_front / N = 0.5 + h/L * (a/g_normal - grade) - rider_shift/L; uphill grade counts at climb_transfer.
 const WHEELBASE := GameConfig.BIKE_WHEELBASE
-const COM_HEIGHT := 1.1
-const RIDER_RESPONSE := 0.55
-const SURGE_DECAY := 0.7
-## 20.11: предупреждение перелёта читается по раме: за OVERLOAD_GRACE заднее колесо приподнимается на WARN_LIFT
-## (было 0,04 рад ≈ 2°, не видно). Порог опрокидывания поднят на ту же добавку (0,32 → 0,38), поэтому время от конца
-## предупреждения до перелёта прежнее; 0,38 рад (22°) ещё ниже точки равновесия над передней осью (~26°).
-const WARN_LIFT := 0.10
-const TIP_ANGLE := 0.38
-const MIN_TIP_SPEED := 14.0
-# Arcade balance assistance: ordinary emergency stops stay safe, sustained
-# overload on a fast steep descent still allows a readable, avoidable pitch-over.
-const BALANCE_MARGIN := 0.22
-const OVERLOAD_GRACE := 1.0
-const HARD_BRAKE := 0.85
-const SHARE_LIMIT := 0.9 # долю другого колеса седок добирает до этой доли его запаса
-## 31.10: на подъёме седок подаётся грудью к рулю и прижимает переднее колесо: уклон переносит на заднее только
-## эту долю. Раньше переносил полностью (h/L ≈ 1,04 на единицу уклона): на 30 % на переднем оставалось 19 % веса,
-## а поворот считается по переднему — на крутом подъёме руль почти не поворачивал. Спуск не меняется.
-const CLIMB_TRANSFER := 0.45
-## 20.11: положение корпуса (BikeRide.body_x, Q назад / E вперёд) на весь ход сдвигает центр масс на столько
-## для равновесия торможения: откинувшись назад, седок тормозит в полную силу на крутом спуске без перелёта
-## через руль, а с весом вперёд перелёт ближе. Нагрузки шин и запас сцепления не меняет: перенос веса корпусом
-## в них уже учтён (BikeRide.unweight), здесь только опрокидывающий момент.
-const RIDER_BACK_SHIFT := 0.25
 
+var config: BikePhysicsConfig = BikePhysicsConfig.current()
 var pressure := 0.0
 var deceleration := 0.0
 var front_load := 0.5
@@ -40,6 +17,12 @@ var _surge := 0.0
 var _pitch_rate := 0.0
 var _overload_time := 0.0
 var tipped := false
+
+
+func _init(cfg: BikePhysicsConfig = null) -> void:
+	if cfg != null:
+		config = cfg
+
 
 func reset() -> void:
 	pressure = 0.0
@@ -56,18 +39,19 @@ func reset() -> void:
 	_overload_time = 0.0
 	tipped = false
 
-## loads — нагрузки шин переднего и заднего колеса (BikeRide, модель двух контактов), доли веса; тогда запас каждого
-## колеса — от его нагрузки, а не от front_load. Отрицательные — прежняя модель.
+
+## loads — нагрузки шин переднего и заднего колеса (BikeRide), доли веса.
 ## rider_back — положение корпуса от −1 (вперёд) до 1 (назад), влияет только на перелёт через руль.
-func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true, loads := Vector2(-1.0, -1.0), rider_back := 0.0) -> void:
+func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true, loads := Vector2(0.5, 0.5), rider_back := 0.0, cross := 0.0) -> void:
 	if dt <= 0.0 or not is_finite(dt): return
+	var cfg := config if config != null else BikePhysicsConfig.current()
 	command = clampf(command, 0.0, 1.0) if grounded else 0.0
 	var previous := pressure
-	var response := GameConfig.BIKE_BRAKE_RISE if command > pressure else GameConfig.BIKE_BRAKE_RELEASE
+	var response := cfg.brake_rise if command > pressure else cfg.brake_release
 	pressure = lerpf(pressure, command, 1.0 - exp(-dt / response))
-	brace = lerpf(brace, pressure, 1.0 - exp(-dt / RIDER_RESPONSE))
-	_surge *= exp(-dt / SURGE_DECAY)
-	_surge = maxf(_surge, maxf(0.0, pressure - previous) / dt * 0.12 * smoothstep(8.0, 18.0, speed))
+	brace = lerpf(brace, pressure, 1.0 - exp(-dt / cfg.brake_rider_response))
+	_surge *= exp(-dt / cfg.brake_surge_decay)
+	_surge = maxf(_surge, maxf(0.0, pressure - previous) / dt * cfg.brake_surge_gain * smoothstep(8.0, 18.0, speed))
 	# Перенос нагрузки зависит от самого торможения: начинаем с прошлого подшага и сходимся за три итерации
 	# с усреднением (без него итерация по силе и нагрузке колеблется, а с одним задним колесом — заметно).
 	var guess := deceleration if grounded and command > 0.0 else 0.0
@@ -75,61 +59,65 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	rear_force = 0.0
 	deceleration = 0.0
 	skid = 0.0
-	var normal_g := GameConfig.GRAVITY / sqrt(1.0 + grade * grade)
-	var capacity := GameConfig.BIKE_GRIP * maxf(grip, 0.0) / sqrt(1.0 + grade * grade)
-	var reserve := capacity * GameConfig.BIKE_CORNER_RESERVE * clampf(corner, 0.0, 1.0)
+	var inv_cos := sqrt(1.0 + grade * grade + cross * cross)
+	var normal_g := cfg.ground_gravity / inv_cos
+	var capacity := cfg.base_grip() * maxf(grip, 0.0) / inv_cos
+	var reserve := capacity * cfg.brake_corner_reserve * clampf(corner, 0.0, 1.0)
 	var available := sqrt(maxf(0.0, capacity * capacity - reserve * reserve))
 	# запас на долю веса: нагрузки шин уже включают косинус уклона
-	var per_load := available * sqrt(1.0 + grade * grade)
-	var shift := brace * GameConfig.BIKE_BRAKE_SHIFT - _surge * 0.18
-	var lean_grade := grade * CLIMB_TRANSFER if grade > 0.0 else grade
-	var demand := GameConfig.BIKE_BRAKE * pressure
+	var per_load := available * inv_cos
+	var shift := brace * cfg.brake_shift - _surge * cfg.brake_surge_shift
+	var lean_grade := grade * cfg.brake_climb_transfer if grade > 0.0 else grade
+	var demand := cfg.brake_decel * pressure
+	var com_h := cfg.brake_com_height
 	for i in 3:
-		front_load = 0.5 + COM_HEIGHT / WHEELBASE * (guess / normal_g - lean_grade) - shift / WHEELBASE
-		var front_share := clampf(front_load, 0.65, 1.0)
-		var cap_f := per_load * loads.x if loads.x >= 0.0 else available * clampf(front_load, 0.0, 1.0)
+		front_load = 0.5 + com_h / WHEELBASE * (guess / normal_g - lean_grade) - shift / WHEELBASE
+		var front_share := clampf(front_load, cfg.brake_front_share_min, 1.0)
+		front_share = lerpf(front_share, maxf(0.45, front_share - 0.15), smoothstep(0.2, 0.8, corner))
+		var cap_f := per_load * loads.x
 		# Тормозной перенос разгружает заднее колесо сразу, даже если переднее ещё в воздухе: момент торможения
 		# опускает нос, а не держится поднятым. Иначе заднее тормозило бы под полным весом, и при возврате
 		# переднего тормоз проваливался, пока его шина набирает силу.
-		var cap_r := per_load * minf(loads.y, clampf(1.0 - front_load, 0.0, 1.0) / sqrt(1.0 + grade * grade)) if loads.y >= 0.0 else available * clampf(1.0 - front_load, 0.0, 1.0)
+		var cap_r := per_load * minf(loads.y, clampf(1.0 - front_load, 0.0, 1.0) / inv_cos)
 		# Седок распределяет один тормоз: что не держит одно колесо (разгружено, скользит), берёт другое,
 		# но не до самого предела — остаётся резерв для курса.
 		var want_f := demand * front_share
 		var want_r := demand - want_f
 		front_force = minf(want_f, cap_f)
 		rear_force = minf(want_r, cap_r)
-		var spare_r := maxf(0.0, cap_r * SHARE_LIMIT - rear_force)
-		var spare_f := maxf(0.0, cap_f * SHARE_LIMIT - front_force)
+		var spare_r := maxf(0.0, cap_r * cfg.brake_share_limit - rear_force)
+		var spare_f := maxf(0.0, cap_f * cfg.brake_share_limit - front_force)
 		var moved_r := minf(want_f - front_force, spare_r)
 		front_force += minf(want_r - rear_force, spare_f)
 		rear_force += moved_r
-		deceleration = minf(front_force + rear_force, maxf(speed, 0.0) / dt) if grounded and speed > 0.05 else 0.0
+		deceleration = minf(front_force + rear_force, absf(speed) / dt) if grounded and absf(speed) > 0.05 else 0.0
 		guess = (guess + deceleration) * 0.5
 	_match_forces()
-	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - lean_grade) - shift / WHEELBASE
-	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
+	front_load = 0.5 + com_h / WHEELBASE * (deceleration / normal_g - lean_grade) - shift / WHEELBASE
+	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and absf(speed) > 1.0 else 0.0
 	# Пороги скорости и силы нажатия — плавные: у их границы перегрузка нарастает постепенно, а не включается сразу.
-	var near := smoothstep(MIN_TIP_SPEED - 2.0, MIN_TIP_SPEED + 2.0, speed) * smoothstep(HARD_BRAKE - 0.1, HARD_BRAKE + 0.05, minf(command, pressure))
-	var balance := front_load - clampf(rider_back, -1.0, 1.0) * RIDER_BACK_SHIFT / WHEELBASE
-	var overload := (balance - 1.0 - BALANCE_MARGIN) * near
+	var near := smoothstep(cfg.brake_min_tip_speed - 2.0, cfg.brake_min_tip_speed + 2.0, speed) \
+		* smoothstep(cfg.brake_hard - 0.1, cfg.brake_hard + 0.05, minf(command, pressure))
+	var balance := front_load - clampf(rider_back, -1.0, 1.0) * cfg.brake_rider_back_shift / WHEELBASE
+	var overload := (balance - 1.0 - cfg.brake_balance_margin) * near
 	var danger := grounded and overload > 0.0
 	if danger:
 		_overload_time += dt * near
-		if _overload_time <= OVERLOAD_GRACE:
+		if _overload_time <= cfg.brake_overload_grace:
 			# Small visual warning first; no hidden angular momentum during the grace period.
-			lift = move_toward(lift, WARN_LIFT * _overload_time / OVERLOAD_GRACE, dt * WARN_LIFT * 2.0)
+			lift = move_toward(lift, cfg.brake_warn_lift * _overload_time / cfg.brake_overload_grace, dt * cfg.brake_warn_lift * 2.0)
 			_pitch_rate = 0.0
 		else:
 			var torque := overload * normal_g * WHEELBASE
-			_pitch_rate += torque / (COM_HEIGHT * COM_HEIGHT * 0.5) * dt
+			_pitch_rate += torque / (com_h * com_h * 0.5) * dt
 			_pitch_rate *= exp(-dt * 6.0)
 			lift = maxf(0.0, lift + _pitch_rate * dt)
 	else:
 		_overload_time = maxf(0.0, _overload_time - dt * 3.0)
 		lift = move_toward(lift, 0.0, dt * 0.8)
 		_pitch_rate = 0.0
-	risk = clampf(maxf(_overload_time / OVERLOAD_GRACE * 0.8, lift / TIP_ANGLE), 0.0, 1.0) if danger else 0.0
-	tipped = danger and lift >= TIP_ANGLE
+	risk = clampf(maxf(_overload_time / cfg.brake_overload_grace * 0.8, lift / cfg.brake_tip_angle), 0.0, 1.0) if danger else 0.0
+	tipped = danger and lift >= cfg.brake_tip_angle
 
 
 ## Итоговый тормоз ограничен (остановка, сопротивление уже гасит ход): силы колёс уменьшаются в той же доле,

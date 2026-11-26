@@ -118,6 +118,6 @@ func ride_seam() -> Dictionary:
 		control.ride(1.0 / 60, p, b, h.world, h, input.throttle, input.turn, input.run, input.jump, false)
 		off = maxf(off, d.nearest(Vector2(b.x, b.z), 12.0).z)
 		if b.crashed: break
-	var ok := not b.crashed and pilot.station > 40.0 and pilot.station < 180.0 and off < d.width * 0.5 and b.contact_model
+	var ok := not b.crashed and pilot.station > 40.0 and pilot.station < 180.0 and off < d.width * 0.5
 	print("XC SEAM ", "PASS" if ok else "FAIL", " station ", pilot.station, " off ", off)
 	return {passed = ok, station = pilot.station, off = off, crashed = b.crashed}

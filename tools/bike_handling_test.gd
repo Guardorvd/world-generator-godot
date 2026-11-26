@@ -122,7 +122,7 @@ func _init() -> void:
 	var loose := corner(16.0, RoadSurface.SAND)
 	check(tight.heading < fast.heading and fast.heading < 0.0, "на скорости дуга шире, направление предсказуемо")
 	check(absf(loose.heading) < absf(fast.heading), "песок расширяет дугу по сравнению с плотной землёй")
-	check(fast.lean < -0.15 and absf(fast.lean) <= BikeRide.LEAN_MAX_FLAT + 0.001, "скоростной поворот на ровном даёт сдержанный крен до 23°")
+	check(fast.lean < -0.15 and absf(fast.lean) <= BikePhysicsConfig.current().lean_max_flat + 0.001, "скоростной поворот на ровном даёт сдержанный крен до 23°")
 	check(fast.speed < bike(16.0).speed and fast.speed > 12.0, "резкий поворот плавно теряет часть скорости")
 	w.surface = RoadSurface.PACKED
 	var straight := bike(16.0)
@@ -228,7 +228,7 @@ func _init() -> void:
 		geo_prev = atan(hills._slope(ground))
 	check(hill_flights <= 2 and jerk < 1.5, "холмы с изломами: отрывов %d, рывок по вертикали на земле %.2f м/с за такт" % [hill_flights, jerk])
 	# 7.1: подвеска отрабатывает изломы, не пробиваясь, рама идёт за колёсами без рывков
-	check(hill_travel > 0.005 and hill_travel < BikeRide.SAG_MAX * 0.8 and tilt_jerk < geo_jerk * 0.5,
+	check(hill_travel > 0.005 and hill_travel < hills.config.sag_max * 0.8 and tilt_jerk < geo_jerk * 0.5,
 		"холмы: ход подвески %.3f м, рывок наклона рамы %.4f при %.4f у рельефа" % [hill_travel, tilt_jerk, geo_jerk])
 	# ступенька 8 см: сначала сжимается вилка, задний ход — на базу позже
 	ground.profile = func(d: float) -> float: return 0.08 if d > 1.0 else 0.0

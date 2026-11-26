@@ -40,7 +40,8 @@ func _bake() -> void:
 		state.crank += 5.0 * DT
 		state.wheel += state.speed / 0.34 * DT
 		state._step_effort(1.0, DT)
-		state.drive_force = GameConfig.BIKE_ACCEL * 1.75 * state.effort * 0.5
+		var cfg := BikePhysicsConfig.current()
+		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
 		bike.tick(state, DT, 1.0, false)
 	bike.draw(1.0)
 	for id: String in preload("res://scripts/render/bike_palette.gd").SCHEMES:

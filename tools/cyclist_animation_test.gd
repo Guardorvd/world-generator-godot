@@ -56,7 +56,8 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 	_speed_before = state.speed
 	state.grade_now = state.tilt
 	state._step_effort(maxf(throttle, 0.0) if not state.airborne else 0.0, dt)
-	state.drive_force = GameConfig.BIKE_ACCEL * 1.75 * state.effort * 0.5
+	var cfg := state.config if state.config != null else BikePhysicsConfig.current()
+	state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
 	var braking := maxf(0.0, -state.feel_acceleration) if throttle < 0.0 else 0.0
 	state.brake_force = Vector2(braking * 0.6, braking * 0.4)
 	bike.tick(state, dt, throttle, boost)

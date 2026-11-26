@@ -105,7 +105,8 @@ func _initialize() -> void:
 	if capture:
 		_setup_capture()
 	# Порог падения: ровное приземление с 2 м держится, в лоб в подъём с той же силой — уже нет
-	check(GameConfig.BIKE_CRASH - BikeRide.FACE_CRASH < 9.0 and GameConfig.BIKE_CRASH > 9.0, "в подъём роняет удар слабее, чем на ровном")
+	var cfg := BikePhysicsConfig.current()
+	check(cfg.crash_impact - cfg.face_crash < 9.0 and cfg.crash_impact > 9.0, "в подъём роняет удар слабее, чем на ровном")
 	if not selected_cases.is_empty():
 		case_i = selected_cases[0]
 

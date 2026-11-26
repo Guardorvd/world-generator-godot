@@ -58,7 +58,6 @@ func ride(h: Heightfield, d: TrailDefinition, e: TrailElement, v: float, lip: fl
 	var dt := 1.0 / 60.0
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var from := e.station - e.length * 0.5 - 30.0
 	var at := d.point_at(from)
 	b.x = at.x

@@ -93,7 +93,6 @@ static func body_input(manner: int, t: float, t_front: float, t_rear: float, shi
 func ride(h: Heightfield, d: TrailDefinition, manner: int, speed: float, hz: int, shift := 0.0) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var start := d.point_at(2.0)
 	b.x = start.x
 	b.z = start.y
@@ -204,7 +203,6 @@ func line(name: String, speed: float, r: Dictionary) -> String:
 func hop(h: Heightfield, d: TrailDefinition, delay: float, space := false, hz := 60) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var start := d.point_at(4.0)
 	b.x = start.x
 	b.z = start.y

@@ -118,7 +118,6 @@ func ride(spec: Dictionary) -> Dictionary:
 	if spec.mode == "no_gap": pilot.gaps.clear()
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	b.pump_enabled = spec.get("pump", true)
 	var tangent := d.tangent_at(spec.from)
 	var at: Vector2 = d.point_at(spec.from) + Vector2(tangent.y, -tangent.x) * spec.get("offset", 0.0)

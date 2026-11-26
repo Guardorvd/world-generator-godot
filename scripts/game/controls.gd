@@ -130,29 +130,9 @@ func release_motion() -> void:
 ## Если клавишу держат дольше KEY_PRESS_FROM, дуга плавно дожимается до полной к KEY_PRESS_FULL — долгий поворот
 ## срабатывает всегда. Раньше было наоборот: нажатие давало 0,45 руля, полный набирался за 0,55 с, и на 18 м/с
 ## короткое нажатие доворачивало на 3,7°.
-const KEY_STEER_KICK := 1.0
-const KEY_STEER_KICK_FAST := 0.8 # на большой скорости доворот чуть мягче: полный руль с полным тормозом ронял на 18 м/с
-const KEY_KICK_PACE := Vector2(13.0, 20.0)
-const KEY_KICK_TIME := 0.14   # с: столько держится резкий доворот
-const KEY_KICK_FADE := 0.3    # с: за столько он переходит в дугу удержания
-## 13.11: было 0,8 — на 18 м/с дуга через 0,6 с удержания проседала до 38 °/с при 46 в начале и в конце
-## (резко, туго, снова резко в одном повороте); теперь провал вдвое меньше, дожим до полной остался.
-const KEY_STEER_HOLD := 0.9   # руль широкой дуги на скорости
-const KEY_HOLD_PACE := Vector2(4.0, 12.0) # м/с: ниже — удержание полным рулём, выше — KEY_STEER_HOLD
-const KEY_STEER_CROSS := 0.3  # цель руля, пока он ещё на прежней стороне (перекладка)
-const KEY_PRESS_FROM := 0.5   # с удержания: отсюда дуга дожимается
-const KEY_PRESS_FULL := 1.2   # и здесь она полная
-const KEY_STEER_RESPONSE := 26.0
-const KEY_STEER_RELEASE := 14.0
-const KEY_STEER_ARC_RELEASE := 6.0 # отпускание заложенной дуги (руль больше половины)
-const KEY_HOLD_FORGET := 1.0 # секунд удержания забывается за секунду без нажатия
 var _key_steer := 0.0
 var _key_direction := 0.0
 var _key_hold := 0.0
-## 31.10: тормоз с клавиатуры ступенями — нажатие подтормаживает (BRAKE_TAP), удержание за BRAKE_RAMP доводит до
-## полного. Раньше любое нажатие S было полным тормозом: 0,15 с снимали 3 м/с, подтормозить перед поворотом было нечем.
-const BRAKE_TAP := 0.35
-const BRAKE_RAMP := 0.45
 var _brake_hold := 0.0
 
 ## Газ/тормоз велосипеда: газ проходит как есть, тормоз с клавиатуры набирается удержанием; аналоговый — как есть.
@@ -160,35 +140,31 @@ func bike_brake(raw: float, dt: float) -> float:
 	if raw >= 0.0 or joypad or not is_equal_approx(raw, -1.0):
 		_brake_hold = 0.0
 		return raw
+	var cfg := BikePhysicsConfig.current()
 	_brake_hold += dt
-	return -lerpf(BRAKE_TAP, 1.0, smoothstep(0.0, BRAKE_RAMP, _brake_hold))
+	return -lerpf(cfg.key_brake_tap, 1.0, smoothstep(0.0, cfg.key_brake_ramp, _brake_hold))
 
-func bike_steer(raw: float, dt: float, pace := 0.0) -> float:
+func bike_steer(raw: float, dt: float, _pace := 0.0) -> float:
+	var cfg := BikePhysicsConfig.current()
 	var digital := is_zero_approx(raw) or is_equal_approx(absf(raw), 1.0)
 	if joypad or not digital:
 		_key_steer = raw
 		_key_direction = 0.0
 		_key_hold = 0.0
+		if absf(cfg.stick_steer_exp - 1.0) > 0.001 and not is_zero_approx(raw):
+			return signf(raw) * pow(clampf(absf(raw), 0.0, 1.0), cfg.stick_steer_exp)
 		return raw
 	if is_zero_approx(raw):
-		_key_hold = maxf(0.0, _key_hold - dt * KEY_HOLD_FORGET)
+		_key_hold = maxf(0.0, _key_hold - dt * cfg.key_hold_forget)
 	elif raw != _key_direction:
 		_key_hold = 0.0
 		_key_direction = raw
 	else:
 		_key_hold += dt
-	var hold := lerpf(1.0, KEY_STEER_HOLD, smoothstep(KEY_HOLD_PACE.x, KEY_HOLD_PACE.y, absf(pace)))
-	hold = lerpf(hold, 1.0, smoothstep(KEY_PRESS_FROM, KEY_PRESS_FULL, _key_hold))
-	var kick := lerpf(KEY_STEER_KICK, KEY_STEER_KICK_FAST, smoothstep(KEY_KICK_PACE.x, KEY_KICK_PACE.y, absf(pace)))
-	var strength := lerpf(maxf(kick, hold), hold, smoothstep(KEY_KICK_TIME, KEY_KICK_TIME + KEY_KICK_FADE, _key_hold))
+	var strength := lerpf(cfg.key_steer_tap, 1.0, smoothstep(0.0, cfg.key_steer_ramp, _key_hold))
 	var target := raw * strength
 	var reversing := raw * _key_steer < 0.0
-	var rate := KEY_STEER_RESPONSE
-	if reversing:
-		rate = KEY_STEER_RELEASE
-		target = raw * KEY_STEER_CROSS # через нейтраль без рывка; резкий доворот начинается уже на новой стороне
-	elif is_zero_approx(raw):
-		rate = lerpf(KEY_STEER_RELEASE, KEY_STEER_ARC_RELEASE, smoothstep(0.3, 0.8, absf(_key_steer)))
+	var rate := cfg.key_steer_reverse if reversing else (cfg.key_steer_release if is_zero_approx(raw) else cfg.key_steer_response)
 	_key_steer = lerpf(_key_steer, target, Util.damp(rate, dt))
 	return _key_steer
 

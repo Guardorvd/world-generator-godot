@@ -318,7 +318,6 @@ func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route
 	if changed.call("overview", lab.overview): _event("вид сверху " + ("включён" if lab.overview else "выключен"), {})
 	if changed.call("lane", lab.lane): _event("трасса", {lane = lab.lane, title = route.title})
 	if changed.call("auto", lab.autopilot.style if lab.autopilot != null else ""): _event("автопилот", {style = lab.autopilot.style if lab.autopilot != null else "выкл"})
-	if changed.call("contact_model", lab.contact_model): _event("F6 модель контактов", {two_contacts = lab.contact_model})
 	# стоит с газом: так остановка видна как отдельное событие, а не как минута нулевой скорости
 	if bike.riding and absf(bike.speed) < STUCK_SPEED and raw.fwd > 0.3 and not lab.crash.active():
 		_stuck += dt
@@ -478,7 +477,7 @@ func _header(lab) -> Dictionary:
 		godot = Engine.get_version_info().string,
 		route = {preset = lab.preset + 1, lane = lab.lane, id = route.id, title = route.title, length = snappedf(route.route_length(), 0.1),
 			width = route.width, ground = lab.ground_kind, elements = elements, generator = _generator(lab)},
-		contact_model = lab.contact_model,
+		bike_physics = BikePhysicsConfig.current().to_dict(),
 		settings = {fov = settings.fov, mouse = settings.mouse, invert_y = settings.invert_y, head_bob = settings.head_bob},
 		rate_hz = Engine.physics_ticks_per_second,
 		columns = Array(_columns),
@@ -584,5 +583,5 @@ func _snapshot(lab) -> Dictionary:
 	for point in route.points: points.append([point.x, point.y])
 	return {ride = _ride, preset = lab.preset + 1, id = route.id, title = route.title,
 		ground = lab.ground_kind, generator = _generator(lab), width = route.width, points = points, elements = elements, features = analysis.features.duplicate(true),
-		contact_model = lab.contact_model, code = _code_version(),
+		code = _code_version(),
 		settings = {fov = lab.services.settings.fov, mouse = lab.services.settings.mouse, invert_y = lab.services.settings.invert_y}}

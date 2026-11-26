@@ -29,12 +29,11 @@ func obstacle_stations(d: TrailDefinition, solids: PackedFloat32Array) -> Packed
 	return out
 
 
-func ride(h: Heightfield, d: TrailDefinition, contact: bool, style: Array, sim: float, obstacles := PackedFloat32Array()) -> Dictionary:
+func ride(h: Heightfield, d: TrailDefinition, style: Array, sim: float, obstacles := PackedFloat32Array()) -> Dictionary:
 	var hz := 60
 	var dt := 1.0 / hz
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = contact
 	var at := d.point_at(1.0)
 	b.x = at.x
 	b.z = at.y
@@ -156,7 +155,7 @@ func run() -> void:
 			presets.append(pool.pop_at(rng.randi() % pool.size()))
 	var sim := float(args[args.find("--sim") + 1]) if "--sim" in args else 40.0
 	print("Трассы: ", presets)
-	print("трасса | манера | модель | конец | время | ср. м/с | падения | вне трассы с | с оси макс/ср м | боком с (макс м/с) | руль упёрт с | курс отстаёт с | снос °")
+	print("трасса | манера | конец | время | ср. м/с | падения | вне трассы с | с оси макс/ср м | боком с (макс м/с) | руль упёрт с | курс отстаёт с | снос °")
 	for number: int in presets:
 		var kit := TrailLabCatalog.routes(number - 1, Fixture)
 		var prepared := Fixture.prepare(kit, true, TrailLabCatalog.LIST[number - 1].ground)
@@ -169,18 +168,17 @@ func run() -> void:
 		var d := kit[0]
 		var stations := obstacle_stations(d, technical.collide)
 		for style: Array in STYLES:
-			for contact in [false, true]:
-				h.obstacles.update(d.points[0].x, d.points[0].y, PackedFloat32Array(), 1, true)
-				var r := ride(h, d, contact, style, sim, stations)
-				var n := maxf(1, r.ticks)
-				print("%d %s | %s | %s | %s | %.1f | %.1f | %s | %.1f | %.2f/%.2f | %.1f (%.1f) | %.1f | %.1f | %.0f%s" % [number, d.title, style[0], "новая" if contact else "старая",
-					"да" if r.done else "%.0f м" % r.station, r.time, r.speed_sum / n, str(r.crash) if not r.crash.is_empty() else "-", r.off_time,
-					r.off_max, r.off_sum / n, r.side_time, r.side_max, r.sat_time, r.lag_time, rad_to_deg(r.slip),
-					"" if r.side_where.is_empty() else "  · боком: " + "; ".join(r.side_where)])
-				print("    препятствий встречено %d (потеря %.1f м/с), рывков Q %d, без опоры на земле %.1f с, приземлений %d (сильнейшее %.1f м/с)" % [
-					r.hits, r.hit_loss, r.pulls, r.light_time, r.landings, r.land_max])
-				if r.sat_time > 0.5:
-					var st: float = r.sat_time
-					print("    руль упёрт %.1f с: скорость %.1f м/с, шина перед %.2f (нагрузка %.2f), лёгкое перед %.0f%%, в полёте %.0f%%, снос %.0f°" % [st,
-						r.sat_speed / st, r.sat_side / st, r.sat_load / st, 100.0 * r.sat_light / st, 100.0 * r.sat_air / st, rad_to_deg(r.sat_slip / st)])
+			h.obstacles.update(d.points[0].x, d.points[0].y, PackedFloat32Array(), 1, true)
+			var r := ride(h, d, style, sim, stations)
+			var n := maxf(1, r.ticks)
+			print("%d %s | %s | %s | %.1f | %.1f | %s | %.1f | %.2f/%.2f | %.1f (%.1f) | %.1f | %.1f | %.0f%s" % [number, d.title, style[0],
+				"да" if r.done else "%.0f м" % r.station, r.time, r.speed_sum / n, str(r.crash) if not r.crash.is_empty() else "-", r.off_time,
+				r.off_max, r.off_sum / n, r.side_time, r.side_max, r.sat_time, r.lag_time, rad_to_deg(r.slip),
+				"" if r.side_where.is_empty() else "  · боком: " + "; ".join(r.side_where)])
+			print("    препятствий встречено %d (потеря %.1f м/с), рывков Q %d, без опоры на земле %.1f с, приземлений %d (сильнейшее %.1f м/с)" % [
+				r.hits, r.hit_loss, r.pulls, r.light_time, r.landings, r.land_max])
+			if r.sat_time > 0.5:
+				var st: float = r.sat_time
+				print("    руль упёрт %.1f с: скорость %.1f м/с, шина перед %.2f (нагрузка %.2f), лёгкое перед %.0f%%, в полёте %.0f%%, снос %.0f°" % [st,
+					r.sat_speed / st, r.sat_side / st, r.sat_load / st, 100.0 * r.sat_light / st, 100.0 * r.sat_air / st, rad_to_deg(r.sat_slip / st)])
 	quit(0)

@@ -33,7 +33,6 @@ func _rest_time(mode: String) -> float:
 ## Установившаяся скорость велосипеда (м/с) на уклоне без мира: только продольная модель _step_speed
 func _steady(slope: float, surge := 0.0) -> float:
 	var b := BikeRide.new()
-	b.contact_model = false
 	b.surge = surge
 	for i in int(60.0 / DT):
 		b._step_speed(1.0, surge > 0.0, slope, 1.0, DT)
@@ -75,7 +74,7 @@ func _init() -> void:
 	_check(absf(foot - 1.0 / Stamina.REST) < 0.5, "пешком полная за %.1f с" % foot)
 	# 15.0: подъём легче — установившаяся скорость в гору на педалях (гравий, без пампа и кочек)
 	var flat := _steady(0.0)
-	_check(absf(flat - GameConfig.BIKE_SPEED) < 0.6, "по ровному крейсерская прежняя: %.1f км/ч" % (flat * 3.6))
+	_check(absf(flat - BikePhysicsConfig.current().cruise_speed) < 0.6, "по ровному крейсерская прежняя: %.1f км/ч" % (flat * 3.6))
 	for slope in [0.1, 0.2, 0.3]:
 		var v := _steady(slope)
 		print("  подъём %d %%: %.1f км/ч, с рывком %.1f км/ч" % [roundi(slope * 100.0), v * 3.6, _steady(slope, 1.0) * 3.6])

@@ -50,7 +50,8 @@ func advance(ticks: int, throttle := 0.0, crank_rate := 0.0, boost := false) -> 
 		_speed_before = state.speed
 		state.grade_now = state.tilt
 		state._step_effort(maxf(throttle, 0.0) if not state.airborne else 0.0, DT)
-		state.drive_force = GameConfig.BIKE_ACCEL * 1.75 * state.effort * 0.5
+		var cfg := BikePhysicsConfig.current()
+		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
 		bike.tick(state, DT, throttle, boost)
 		state.land_impact = 0
 	bike.draw(1.0)
@@ -111,7 +112,7 @@ func look() -> void:
 	reset(8.0)
 	for i in 25:
 		state.speed -= 5.0 * DT
-		state.brake_applied = GameConfig.BIKE_BRAKE
+		state.brake_applied = BikePhysicsConfig.current().brake_decel
 		advance(1, -1.0)
 	anim.append(await shot(side, mid))
 	reset(8.0)
@@ -141,7 +142,7 @@ func look() -> void:
 	absorb.append(await shot(side, mid))
 	reset(11.0)
 	advance(20)
-	state._pump_absorb_v = BikeRide.PUMP_ABSORB_V * BikeRide.PUMP_PASSIVE
+	state._pump_absorb_v = state.config.pump_absorb_v * state.config.pump_passive
 	advance(12)
 	absorb.append(await shot(side, mid))
 	state._pump_absorb_v = 0.0

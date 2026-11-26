@@ -36,7 +36,6 @@ func check(ok: bool, label: String) -> void:
 
 func bike(pace := 12.0) -> BikeRide:
 	var b := BikeRide.new()
-	b.contact_model = true
 	b.y = ground.surface_at(0, 0)
 	b.mount(p)
 	b.speed = pace
@@ -81,7 +80,7 @@ func hop_ride(grade: float, delay: float, hz := 60, auto := false, overlap := fa
 	return {bike = b, takeoffs = takeoffs, clearance = clearance, nose = nose, popped = popped}
 
 func run() -> void:
-	check(BikeRide.new().contact_model, "игра создаёт велосипед с новой моделью контактов по умолчанию")
+	check(BikeRide.new().config != null, "игра создаёт велосипед с конфигурацией физики по умолчанию")
 	var controls := Controls.new()
 	var input_bike := bike()
 	Input.action_press("bike_back")
@@ -157,7 +156,7 @@ func run() -> void:
 	var edge := bike()
 	edge.airborne = true
 	edge.air_time = 0.03
-	edge._coyote = BikeRide.HOP_COYOTE
+	edge._coyote = edge.config.hop_coyote
 	edge.y += 0.1
 	tick(edge, 0.0, true)
 	check(edge.vy > 1.0 and edge._coyote == 0.0, "Space прощает нажатие сразу после схода с кромки")

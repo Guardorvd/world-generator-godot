@@ -77,7 +77,6 @@ func ride(b: Dictionary, v: float, hold_to := INF, line := 0.0, look := 6.0, fre
 	var h: Heightfield = b.h
 	var p := PlayerState.new()
 	var bike := BikeRide.new()
-	bike.contact_model = true
 	var from := e.station - e.length * 0.5 - 30.0
 	var at := d.point_at(from)
 	bike.x = at.x
@@ -115,11 +114,11 @@ func ride(b: Dictionary, v: float, hold_to := INF, line := 0.0, look := 6.0, fre
 				r.hits += 1
 				r.max_hit = maxf(r.max_hit, hit)
 			if bike.bottom_out > 0.0: r.bottoms += 1
-			if bike._o_f > BikeRide.SLICK_BUMP or bike._o_r > BikeRide.SLICK_BUMP: r.on_rock += 1
+			if bike._o_f > bike.config.slick_bump or bike._o_r > bike.config.slick_bump: r.on_rock += 1
 			r.rock_top = maxf(r.rock_top, maxf(bike._o_f, bike._o_r))
 			r.max_slip = maxf(r.max_slip, absf(rad_to_deg(bike.slip)))
 			if not bike.airborne and absf(bike.speed) > 2.0:
-				r.max_lateral_g = maxf(r.max_lateral_g, absf(bike.speed * bike._yaw_rate) / GameConfig.GRAVITY)
+				r.max_lateral_g = maxf(r.max_lateral_g, absf(bike.speed * bike._yaw_rate) / bike.config.ground_gravity)
 		if station <= finish + 8.0:
 			r.exit = bike.speed
 			r.exit_off = off

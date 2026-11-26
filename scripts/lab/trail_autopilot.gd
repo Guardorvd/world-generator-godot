@@ -98,7 +98,7 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 			var here_y := _heights.surface_at(here.x, here.y, INF)
 			var ahead_at := d.point_at(fposmod(station + 12.0, length) if d.closed else minf(station + 12.0, length))
 			var fall := (here_y - _heights.surface_at(ahead_at.x, ahead_at.y, INF)) / 12.0
-			brake = maxf(1.5, BRAKE - GameConfig.GRAVITY * maxf(0.0, fall) * 0.8)
+			brake = maxf(1.5, BRAKE - BikePhysicsConfig.current().ground_gravity * maxf(0.0, fall) * 0.8)
 		var k_at := 0.0
 		while k_at <= LOOK:
 			var s := fposmod(station + k_at, length) if d.closed else minf(station + k_at, length)

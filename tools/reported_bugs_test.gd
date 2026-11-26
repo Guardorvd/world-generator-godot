@@ -105,7 +105,7 @@ func check_speed() -> void:
 	var camera := Camera3D.new()
 	root.add_child(camera)
 	bike.riding = true
-	bike.speed = GameConfig.BIKE_SPEED
+	bike.speed = bike.config.cruise_speed
 	for i in 120: controller.update(1.0, 1.0 / 60, player, bike, camera, i / 60.0, false, false, false, false, 70, 0)
 	check(controller._speed_rush > 0.2, "wind is visible at normal cruising speed")
 	bike.riding = false

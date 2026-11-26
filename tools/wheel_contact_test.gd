@@ -49,10 +49,9 @@ func section() -> TrailDefinition:
 
 ## Заезд с station `from` на скорости `speed` до station `to`. brake — [от, до] станции полного тормоза;
 ## follow — рулить к оси (иначе руль прямо). Возвращает скорость на входе и выходе из окна тормоза, снос от оси и нагрузки.
-func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: float, to: float, speed: float, brake := Vector2(-1, -1), follow := false, zone := Vector2(-1, -1), trace := false, turn := Vector2(-1, -1)) -> Dictionary:
+func ride(h: Heightfield, d: TrailDefinition, hz: int, from: float, to: float, speed: float, brake := Vector2(-1, -1), follow := false, zone := Vector2(-1, -1), trace := false, turn := Vector2(-1, -1)) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = contact
 	var at := d.point_at(from)
 	b.x = at.x
 	b.z = at.y
@@ -106,10 +105,9 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: floa
 
 
 ## Накатом к бревну на станции LOG: проехал / встал / через руль (OBSTACLE) / упал иначе
-func over_log(h: Heightfield, d: TrailDefinition, contact: bool, speed: float) -> Dictionary:
+func over_log(h: Heightfield, d: TrailDefinition, speed: float) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = contact
 	var at := d.point_at(LOG - 10.0)
 	b.x = at.x
 	b.z = at.y
@@ -139,7 +137,6 @@ func consistency(h: Heightfield, d: TrailDefinition) -> void:
 	for hz: int in [30, 60, 120]:
 		var p := PlayerState.new()
 		var b := BikeRide.new()
-		b.contact_model = true
 		var at := d.point_at(ROLLER - 16.0)
 		b.x = at.x
 		b.z = at.y
@@ -217,7 +214,6 @@ func reverse_hit(h: Heightfield, d: TrailDefinition, technical: Dictionary) -> v
 	h.obstacles.update(at.x, at.y, PackedFloat32Array(), 1, true)
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var start := d.point_at(LOG + 2.5)
 	b.x = start.x
 	b.z = start.y
@@ -232,14 +228,13 @@ func reverse_hit(h: Heightfield, d: TrailDefinition, technical: Dictionary) -> v
 		fastest = maxf(fastest, -b.speed)
 		hits = b.impacts.x + b.impacts.y
 	print("Задний ход в бревно: наибольшая скорость назад %.2f м/с, встреч %d" % [fastest, hits])
-	check(hits > 0 and fastest <= GameConfig.BIKE_REVERSE + 0.01, "задним ходом удар о бревно не разгоняет назад (%.2f м/с)" % fastest)
+	check(hits > 0 and fastest <= b.config.reverse_speed + 0.01, "задним ходом удар о бревно не разгоняет назад (%.2f м/с)" % fastest)
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 
 
 func cross(h: Heightfield, d: TrailDefinition, hz: int, speed: float) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var at := d.point_at(LOG - 10.0)
 	b.x = at.x
 	b.z = at.y
@@ -309,63 +304,49 @@ func run() -> void:
 	var result := {}
 	for hz in [60, 120]:
 		for name: String in ["crest", "trough"]:
-			for contact in [false, true]:
-				var r := ride(h, d, contact, hz, ROLLER - 16.0, ROLLER + 10.0, 9.0, crest if name == "crest" else trough)
-				result["%s_%s_%d" % [name, "new" if contact else "old", hz]] = r
+			result["%s_%d" % [name, hz]] = ride(h, d, hz, ROLLER - 16.0, ROLLER + 10.0, 9.0, crest if name == "crest" else trough)
 	if "--trace" in OS.get_cmdline_user_args():
-		ride(h, d, true, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, crest, false, Vector2(-1, -1), true)
+		ride(h, d, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, crest, false, Vector2(-1, -1), true)
 	for hz in [60, 120]:
-		var crest_ratio: float = result["crest_new_%d" % hz].decel / maxf(result["crest_old_%d" % hz].decel, 0.01)
-		var trough_ratio: float = result["trough_new_%d" % hz].decel / maxf(result["trough_old_%d" % hz].decel, 0.01)
-		print("%d Гц: замедление на гребне %.2f → %.2f м/с² (×%.2f, нагрузка %.2f, в воздухе %d), в ложбине %.2f → %.2f м/с² (×%.2f, нагрузка %.2f)" % [hz,
-			result["crest_old_%d" % hz].decel, result["crest_new_%d" % hz].decel, crest_ratio, result["crest_new_%d" % hz].brake_load, result["crest_new_%d" % hz].brake_air,
-			result["trough_old_%d" % hz].decel, result["trough_new_%d" % hz].decel, trough_ratio, result["trough_new_%d" % hz].brake_load])
-		check(crest_ratio < 0.95 and trough_ratio > crest_ratio + 0.1, "%d Гц: тормоз на гребне держит хуже, чем в ложбине" % hz)
-	check(absf(result.crest_new_60.decel - result.crest_new_120.decel) < 0.6, "гребень: 60 и 120 Гц совпадают (%.2f / %.2f)" % [result.crest_new_60.decel, result.crest_new_120.decel])
+		var cr: Dictionary = result["crest_%d" % hz]
+		var tr: Dictionary = result["trough_%d" % hz]
+		print("%d Гц: замедление на гребне %.2f м/с² (нагрузка %.2f, в воздухе %d), в ложбине %.2f м/с² (нагрузка %.2f)" % [hz,
+			cr.decel, cr.brake_load, cr.brake_air, tr.decel, tr.brake_load])
+		check(cr.decel < tr.decel - 0.5 and tr.brake_load > cr.brake_load + 0.1, "%d Гц: тормоз на гребне держит хуже, чем в ложбине" % hz)
+	check(absf(result.crest_60.decel - result.crest_120.decel) < 0.6, "гребень: 60 и 120 Гц совпадают (%.2f / %.2f)" % [result.crest_60.decel, result.crest_120.decel])
 	# 1б. Поворот: на гребне переднее колесо разгружено — велосипед поворачивает слабее, чем в ложбине.
-	var turns := {}
-	for name: String in ["crest", "trough"]:
-		for contact in [false, true]:
-			turns["%s_%s" % [name, "new" if contact else "old"]] = ride(h, d, contact, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, Vector2(-1, -1), false, Vector2(-1, -1), false, crest if name == "crest" else trough).yaw
-	var crest_turn: float = turns.crest_new / maxf(turns.crest_old, 0.001)
-	var trough_turn: float = turns.trough_new / maxf(turns.trough_old, 0.001)
-	print("Поворот: на гребне %.2f → %.2f рад/с (×%.2f), в ложбине %.2f → %.2f рад/с (×%.2f)" % [turns.crest_old, turns.crest_new, crest_turn, turns.trough_old, turns.trough_new, trough_turn])
-	check(crest_turn < 0.95 and trough_turn > crest_turn + 0.05, "на гребне поворот слабее, чем в ложбине")
+	var crest_turn: float = ride(h, d, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, Vector2(-1, -1), false, Vector2(-1, -1), false, crest).yaw
+	var trough_turn: float = ride(h, d, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, Vector2(-1, -1), false, Vector2(-1, -1), false, trough).yaw
+	print("Поворот: на гребне %.2f рад/с, в ложбине %.2f рад/с" % [crest_turn, trough_turn])
+	check(crest_turn < trough_turn - 0.05, "на гребне поворот слабее, чем в ложбине")
 	# 2. Контруклон: тяжесть поперёк тянет вниз; тормоз отнимает запас у заднего колеса и сносит сильнее.
 	var zone := Vector2(CAMBER - 12.0, CAMBER + 12.0)
-	var old_coast := ride(h, d, false, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
-	var new_coast := ride(h, d, true, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
-	var new_brake := ride(h, d, true, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(CAMBER - 4.0, CAMBER + 2.0), true, zone)
-	print("Контруклон: снос от оси %.2f м (прежняя) / %.2f м (два контакта) / %.2f м с тормозом; заднее колесо до %.0f%% / %.0f%%; поперечный уклон до %.0f%%" % [
-		old_coast.offset, new_coast.offset, new_brake.offset, new_coast.peak_use_r * 100.0, new_brake.peak_use_r * 100.0, new_coast.bank * 100.0])
-	check(new_coast.offset > old_coast.offset + 0.05, "контруклон сносит вниз в модели двух контактов")
-	# Полный тормоз останавливает велосипед в зоне; до 30.10 удержание у остановки включало задний ход, и откат
-	# назад давал «снос» 3 м. Теперь стоянка, поэтому проверяется сам расход запаса заднего колеса и снос не меньше.
-	# 31.10: порог относительный — тяжесть поперёк теперь 10 м/с² (SIDE_GRAVITY), а не 16, и запас расходуется меньше.
-	check(new_brake.peak_use_r > new_coast.peak_use_r + 0.05 and new_brake.offset >= new_coast.offset, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
-	check(not new_coast.crashed and not new_brake.crashed, "контруклон проезжается без падения")
+	var coast := ride(h, d, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
+	var braked := ride(h, d, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(CAMBER - 4.0, CAMBER + 2.0), true, zone)
+	print("Контруклон: снос от оси %.2f м / %.2f м с тормозом; заднее колесо до %.0f%% / %.0f%%; поперечный уклон до %.0f%%" % [
+		coast.offset, braked.offset, coast.peak_use_r * 100.0, braked.peak_use_r * 100.0, coast.bank * 100.0])
+	check(coast.offset > 0.05, "контруклон сносит вниз по склону")
+	check(braked.peak_use_r > coast.peak_use_r + 0.05 and braked.offset >= coast.offset, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
+	check(not coast.crashed and not braked.crashed, "контруклон проезжается без падения")
 	# 3. Корни: удар прижимает переднее колесо, отскок его разгружает.
-	var roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
+	var roots := ride(h, d, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
 	print("Корни: нагрузка переднего колеса %.2f … %.2f доли веса (стоя 0,5)" % [roots.min_load_f, roots.max_load_f])
 	check(technical.bumps.size() > 0, "корни разложены (%d)" % (technical.bumps.size() / ForestObstacles.BUMP_STRIDE))
-	# влияние корней: тот же заезд без них — корни должны заметно отнимать ход (BUMP_DRAG) или раскачивать нагрузку
+	# влияние корней: тот же заезд без них — корни должны заметно отнимать ход (bump_drag) или раскачивать нагрузку
 	h.obstacles.set_trail(technical.collide, PackedFloat32Array())
-	var bare := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
+	var bare := ride(h, d, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 	print("Корни: скорость после %.2f против %.2f м/с без корней; размах нагрузки %.2f против %.2f" % [roots.exit, bare.exit, roots.max_load_f - roots.min_load_f, bare.max_load_f - bare.min_load_f])
 	check(roots.max_load_f - roots.min_load_f > bare.max_load_f - bare.min_load_f, "корни раскачивают нагрузку переднего колеса")
 	# корни скользкие: тормоз на них держит хуже, чем на голой земле
 	var window := Vector2(ROOTS - 6.0, ROOTS - 2.0)
-	var brake_roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 10.0, window)
+	var brake_roots := ride(h, d, 60, ROOTS - 12.0, ROOTS + 10.0, 10.0, window)
 	h.obstacles.set_trail(technical.collide, PackedFloat32Array())
-	var brake_bare := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 10.0, window)
+	var brake_bare := ride(h, d, 60, ROOTS - 12.0, ROOTS + 10.0, 10.0, window)
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 	print("Тормоз на корнях: %.2f м/с² против %.2f без корней" % [brake_roots.decel, brake_bare.decel])
-	# корень узкий (0,2 м): на 10 м/с колесо скользит на нём сотые доли секунды, тормозной путь почти тот же —
-	# заметен срыв только при повороте и торможении на частых корнях. Проверяем, что тормоз на корнях не сильнее.
 	check(brake_roots.decel <= brake_bare.decel + 0.05, "тормоз на корнях не держит лучше, чем на голой земле")
-	# 4. Бревно поперёк: в прежней модели — стена; в новой колесо встречает кромку: медленно встаёт, средне
-	# переваливает с потерей скорости, быстро — полёт через руль. Низкое бревно проезжается на любой скорости.
+	# 4. Бревно поперёк: колесо встречает кромку: медленно встаёт, средне переваливает с потерей скорости, быстро — полёт через руль.
 	for tall: float in [0.1, 0.4]:
 		var at := d.point_at(LOG)
 		var base := h.ground_at(at.x, at.y)
@@ -374,19 +355,16 @@ func run() -> void:
 		h.obstacles.update(at.x, at.y, PackedFloat32Array(), 1, true)
 		var line := PackedStringArray()
 		for speed: float in [2.5, 5.0, 10.0]:
-			for contact in [false, true]:
-				var r := over_log(h, d, contact, speed)
-				line.append("%s %.0f м/с: %s %.1f→%.1f" % ["новая" if contact else "старая", speed, r.result, r.before, r.after])
-				if not contact:
-					check(r.result != "проехал", "%.1f м, %.0f м/с, прежняя модель: бревно — стена" % [tall, speed])
-				elif tall < 0.2:
-					check(r.result == "проехал" and r.after > r.before * 0.6, "%.1f м, %.0f м/с: низкое бревно проезжается, теряя меньше 40%% скорости" % [tall, speed])
-				elif speed < 3.0:
-					check(r.result == "встал", "%.1f м, %.0f м/с накатом: колесо упирается, велосипед встаёт без падения" % [tall, speed])
-				elif speed < 6.0:
-					check(r.result == "проехал" and r.after < r.before * 0.75, "%.1f м, %.0f м/с: переваливает с заметной потерей скорости" % [tall, speed])
-				else:
-					check(r.result == "через руль", "%.1f м, %.0f м/с: полёт через руль" % [tall, speed])
+			var r := over_log(h, d, speed)
+			line.append("%.0f м/с: %s %.1f→%.1f" % [speed, r.result, r.before, r.after])
+			if tall < 0.2:
+				check(r.result == "проехал" and r.after > r.before * 0.6, "%.1f м, %.0f м/с: низкое бревно проезжается, теряя меньше 40%% скорости" % [tall, speed])
+			elif speed < 3.0:
+				check(r.result == "встал", "%.1f м, %.0f м/с накатом: колесо упирается, велосипед встаёт без падения" % [tall, speed])
+			elif speed < 6.0:
+				check(r.result == "проехал" and r.after < r.before * 0.75, "%.1f м, %.0f м/с: переваливает с заметной потерей скорости" % [tall, speed])
+			else:
+				check(r.result == "через руль", "%.1f м, %.0f м/с: полёт через руль" % [tall, speed])
 		print("Бревно %.1f м: %s" % [tall, " · ".join(line)])
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 	consistency(h, d)

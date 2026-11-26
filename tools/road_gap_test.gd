@@ -148,7 +148,6 @@ func _ride(h: Heightfield, center: Vector2, axis: Vector2, speed: float) -> bool
 	var start := center - axis * 15.0
 	var p := PlayerState.new()
 	var bike := BikeRide.new()
-	bike.contact_model = true
 	bike.x = start.x
 	bike.z = start.y
 	bike.y = _height(h, start)
@@ -195,7 +194,6 @@ func _ride_bypass(h: Heightfield, line: Array, direction: float) -> bool:
 	route.points = points
 	var player := PlayerState.new()
 	var bike := BikeRide.new()
-	bike.contact_model = true
 	bike.x = points[0].x
 	bike.z = points[0].y
 	bike.y = _height(h, points[0])

@@ -333,7 +333,8 @@ func capture_pair(camera: Camera3D, mode: String, frame: int, snapshot: bool) ->
 			var target := Vector3(state.x, state.y + 1.4 - bike.view_squash() * 0.25, state.z)
 			camera.position = target + Basis(Vector3.UP, state.heading) * Vector3(0, sin(0.3) * GameConfig.BIKE_CAM, cos(0.3) * GameConfig.BIKE_CAM)
 			camera.look_at(target)
-		camera.fov = 70 + GameConfig.BIKE_FOV * clampf((absf(state.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0, 1.3)
+		var cruise := BikePhysicsConfig.current().cruise_speed
+		camera.fov = 70 + GameConfig.BIKE_FOV * clampf((absf(state.speed) - 2.0) / (cruise - 2.0), 0, 1.3)
 		await process_frame
 		await RenderingServer.frame_post_draw
 		var picture := root.get_texture().get_image()

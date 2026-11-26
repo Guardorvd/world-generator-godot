@@ -42,7 +42,6 @@ func ride(h: Heightfield, d: TrailDefinition, target: float) -> Dictionary:
 	var dt := 1.0 / 60.0
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = true
 	var at := d.point_at(1.0)
 	b.x = at.x
 	b.z = at.y

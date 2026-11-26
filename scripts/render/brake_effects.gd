@@ -393,7 +393,7 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 		var slick := b.slick_f if is_front else b.slick_r
 		var lat_force := absf(b.force_f.y if is_front else b.force_r.y)
 
-		var brake_ratio := clampf(b_force / (GameConfig.BIKE_BRAKE * (0.62 if is_front else 0.42)), 0.0, 1.4)
+		var brake_ratio := clampf(b_force / (BikePhysicsConfig.current().brake_decel * (0.62 if is_front else 0.42)), 0.0, 1.4)
 		var skid_ratio := clampf(b.brakes.skid * (0.85 if is_front else 1.15) + maxf(0.0, grip_use - 0.72) * 2.2, 0.0, 1.2)
 		var drift_ratio := clampf(smoothstep(0.04, 0.24, absf(b.slip)) * (0.75 if is_front else 1.15) + lat_force / 7.5, 0.0, 1.2)
 		var root_slip := clampf((1.0 - slick) * 1.8, 0.0, 1.0) * clampf(brake_ratio + drift_ratio, 0.0, 1.0)

@@ -13,7 +13,7 @@ extends SceneTree
 const Dev := preload("res://tools/control/control.gd")
 const LOAD_TIMEOUT_MS := 300000
 const WARMUP_S := 1.5   # первые кадры компилируют шейдеры, их не считаем
-const ROAD_SPEED := GameConfig.BIKE_SPEED   # пролёт со скоростью велосипеда, м/с
+const ROAD_SPEED := 11.0   # пролёт со скоростью велосипеда, м/с
 
 var main: Node
 var out := ""

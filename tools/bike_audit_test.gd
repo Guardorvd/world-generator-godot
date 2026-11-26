@@ -76,7 +76,6 @@ func _initialize() -> void:
 
 func slot(lateral: float, low := -0.005, high := 0.005) -> NarrowSlotBike:
 	var b := NarrowSlotBike.new()
-	b.contact_model = true
 	b.low = low
 	b.high = high
 	b.y = 100.0
@@ -144,14 +143,14 @@ func run() -> void:
 	check(grounded.speed > 6.0 and rear_up.speed < 6.0, "A3 газ с поднятым задним: на земле %.4f, поднято %.4f м/с" % [grounded.speed, rear_up.speed])
 	# скользкое заднее на ходу тянет в пределах запаса, у старта — помощь в полную силу
 	var slick := bike(8.0)
-	slick.slick_r = BikeRide.ROOT_GRIP
+	slick.slick_r = BikePhysicsConfig.current().root_grip
 	var full := bike(8.0)
 	slick.effort = 1.0
 	full.effort = 1.0
 	slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
 	full._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
 	var start_slick := bike(0.5)
-	start_slick.slick_r = BikeRide.ROOT_GRIP
+	start_slick.slick_r = BikePhysicsConfig.current().root_grip
 	var start := bike(0.5)
 	start_slick.effort = 1.0
 	start.effort = 1.0

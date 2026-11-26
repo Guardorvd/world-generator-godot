@@ -14,12 +14,11 @@ func _initialize() -> void:
 	run.call_deferred()
 
 
-func ride(h: Heightfield, d: TrailDefinition, contact: bool, target: float, careful: bool, sim: float) -> Dictionary:
+func ride(h: Heightfield, d: TrailDefinition, target: float, careful: bool, sim: float) -> Dictionary:
 	var hz := 60
 	var dt := 1.0 / hz
 	var p := PlayerState.new()
 	var b := BikeRide.new()
-	b.contact_model = contact
 	var at := d.point_at(1.0)
 	b.x = at.x
 	b.z = at.y
@@ -94,7 +93,7 @@ func run() -> void:
 	var courses := [1, 2, 3, 4, 5, 6, 7, 8, 9]
 	if "--courses" in args: courses = Array(args[args.find("--courses") + 1].split(",")).map(func(x: String) -> int: return int(x))
 	var sim := float(args[args.find("--sim") + 1]) if "--sim" in args else 40.0
-	print("курс | манера | модель | конец | время с | средн м/с | падений | с оси макс/средн м | рывки | снос ° | предел перед/зад % | без опоры с | полёт с")
+	print("курс | манера | конец | время с | средн м/с | падений | с оси макс/средн м | рывки | снос ° | предел перед/зад % | без опоры с | полёт с")
 	var totals := {}
 	for index: int in courses:
 		var kit := Fixture.course(index)
@@ -107,22 +106,20 @@ func run() -> void:
 		h.obstacles.set_trail(technical.collide, technical.bumps)
 		var d := kit[0]
 		for style: Array in STYLES:
-			for contact in [false, true]:
-				var r := ride(h, d, contact, style[1], style[2], sim)
-				var n := maxf(1, r.ticks)
-				var model := "новая" if contact else "старая"
-				print("%d %s | %s | %s | %s | %5.1f | %4.1f | %d | %4.2f / %4.2f | %5.3f | %4.1f | %4.1f / %4.1f | %4.2f | %4.2f" % [index, d.title, style[0], model,
-					"да" if r.done else "%.0f м" % r.station, r.time, r.speed_sum / n, r.crashes, r.off_max, r.off_sum / n, r.jerk / n, rad_to_deg(r.slip),
-					100.0 * r.sat_f / n, 100.0 * r.sat_r / n, r.unload, r.air])
-				var key: String = model + " · " + str(style[0])
-				var tot: Dictionary = totals.get(key, {runs = 0, done = 0, crashes = 0, time = 0.0, off = 0.0, jerk = 0.0})
-				tot.runs += 1
-				tot.done += int(r.done)
-				tot.crashes += r.crashes
-				tot.time += r.time
-				tot.off += r.off_sum / n
-				tot.jerk += r.jerk / n
-				totals[key] = tot
+			var r := ride(h, d, style[1], style[2], sim)
+			var n := maxf(1, r.ticks)
+			print("%d %s | %s | %s | %5.1f | %4.1f | %d | %4.2f / %4.2f | %5.3f | %4.1f | %4.1f / %4.1f | %4.2f | %4.2f" % [index, d.title, style[0],
+				"да" if r.done else "%.0f м" % r.station, r.time, r.speed_sum / n, r.crashes, r.off_max, r.off_sum / n, r.jerk / n, rad_to_deg(r.slip),
+				100.0 * r.sat_f / n, 100.0 * r.sat_r / n, r.unload, r.air])
+			var key: String = str(style[0])
+			var tot: Dictionary = totals.get(key, {runs = 0, done = 0, crashes = 0, time = 0.0, off = 0.0, jerk = 0.0})
+			tot.runs += 1
+			tot.done += int(r.done)
+			tot.crashes += r.crashes
+			tot.time += r.time
+			tot.off += r.off_sum / n
+			tot.jerk += r.jerk / n
+			totals[key] = tot
 	print("\nИтог по манерам:")
 	for key: String in totals:
 		var tot: Dictionary = totals[key]

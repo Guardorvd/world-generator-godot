@@ -22,20 +22,11 @@ const BRAKE_RESPONSE := 6.0     # 30.10: торможение видно: кам
 const BRAKE_DIST := 1.1         # м ближе при полном торможении
 const BRAKE_DIP := 0.3          # м ниже
 const BRAKE_FOV := 6.0          # градусов уже
-const LEAD_ANGLE := 8.5         # доворот внутрь поворота при полном руле, градусы
-const LEAD_SLIP := 0.25         # и доля угла сноса
-const LEAD_RESPONSE := 4.0
 const FOV_RESPONSE := 4.0       # смена угла обзора
 const FOV_RESPONSE_PHOTO := 9.0 # и в видоискателе
 const BOB_RESPONSE := 8.0       # нарастание и затихание покачивания шага
 const BOB_AMP := 0.05           # покачивание шага, м
 const BOB_PHOTO := 0.3          # доля покачивания в видоискателе
-const FOLLOW_START := 0.6      # через столько секунд после мыши камера начинает следовать за курсом
-const FOLLOW_FULL := 1.6       # и через столько следует полностью
-const FOLLOW_RATE := 2.0        # скорость следования за курсом при полном следовании
-const FOLLOW_PITCH := -0.3      # наклон камеры за велосипедом, рад
-const FOLLOW_SLOPE := 0.3       # доля наклона рамы, которую повторяет камера
-const FOLLOW_SLOPE_MAX := 0.12
 const DIP_SPRING := 120.0       # пружина проседания при приземлении, 1/с²
 const DIP_DAMP := 18.0          # её затухание, 1/с
 const DIP_MIN := -0.6           # пределы проседания, м
@@ -49,7 +40,6 @@ var settings: GameSettings
 var heights: Heightfield
 var yaw := 0.0       # смотрим на север, на костёр
 var pitch := -0.05
-var _looked_at := 0.0   # время последнего движения мыши, чтобы камера на велосипеде не спорила с ней
 var _cam_y := 0.0       # высота, за которой следит камера на велосипеде: мягко, чтобы не дёргало на приземлении
 var _cam_dist := GameConfig.BIKE_CAM  # расстояние до седока: короче, если сзади склон
 var _bob_amp := 0.0     # сила покачивания при ходьбе: нарастает и стихает плавно
@@ -60,7 +50,6 @@ var _seat_drop := 0.0
 var _fov_kick := 0.0    # 20.11: толчок обзора при падении, градусы; гаснет сам по кадрам (update)
 var _fov_kick_shown := 0.0 # какая доля толчка сейчас в camera.fov: плавное следование идёт без неё
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
-var _cam_lead := 0.0    # 12.7: доворот камеры внутрь поворота, рад (только пока мышь не трогали)
 var _speed_rush := 0.0
 var _brake_feel := 0.0  # 30.10: торможение 0..1 по фактическому замедлению тормозом (не подъёму): камера ближе, ниже и уже (нос «клюёт»)
 var _prev := Vector3()  # игрок (x, ноги, z) на предпоследнем такте: кадр показывает его между тактами
@@ -109,7 +98,8 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
 	var fov_goal := settings.fov
 	if riding:
-		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3) - BRAKE_FOV * _brake_feel
+		var cruise := BikePhysicsConfig.current().cruise_speed
+		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (cruise - 2.0), 0.0, 1.3) - BRAKE_FOV * _brake_feel
 	else:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	if photo_active:
@@ -156,9 +146,6 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 
 
 
-func auto_follow(time: float) -> float:
-	return smoothstep(FOLLOW_START, FOLLOW_FULL, time - _looked_at)
-
 ## 20.11: резкий короткий толчок обзора (падение): мгновенно шире на degrees, возвращается за ~0,3 с
 func kick_fov(degrees: float) -> void:
 	_fov_kick = degrees
@@ -166,10 +153,6 @@ func kick_fov(degrees: float) -> void:
 func shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
 		_trauma = minf(1.0, _trauma + (impact - soft) * TRAUMA_GAIN)
-
-## Угол обзора задаётся мышью; поворот велосипеда его не изменяет.
-func follow_bike(_bike: BikeRide, _heading_delta: float, _time: float, _dt: float) -> void:
-	pass
 
 static func _smooth(rate: float, dt: float) -> float:
 	return Util.damp(rate, dt)

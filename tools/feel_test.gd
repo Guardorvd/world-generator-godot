@@ -577,7 +577,7 @@ func _downhill_test() -> void:
 	_check(cliff.crash_velocity.is_finite() and cliff.crash_velocity.y < 0.0, "ragdoll получает скорость вниз по скале")
 	h.profile = func(d: float) -> float: return 0.0 if d < 2.0 else -20.0
 	var edge := _descent_ride(h, 4.0, 2.0)
-	_check(edge.crashed and edge.land_impact > GameConfig.BIKE_CRASH, "съезд с обрыва 20 м заканчивается жёстким приземлением и падением")
+	_check(edge.crashed and edge.land_impact > edge.config.crash_impact, "съезд с обрыва 20 м заканчивается жёстким приземлением и падением")
 	h.profile = func(_d: float) -> float: return 0.0
 	var small_drop := BikeRide.new()
 	var p := PlayerState.new()
