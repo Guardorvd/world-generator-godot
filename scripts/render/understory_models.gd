@@ -141,7 +141,7 @@ static func build_meshes() -> Array[Mesh]:
 	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed, hazel, hazel_tall,
 		_sword_fern(false, false), _low_shrub(false, false, false), _low_shrub(true, false, false), _broadleaf_herb(false, false), _moss_mound(false),
 		_sword_fern(false, true), _low_shrub(false, false, true), _low_shrub(true, false, true), _broadleaf_herb(false, true),
-		_salal(false, false), _salal(false, true), _devils_club(false, false), _devils_club(false, true), _low_shrub(true, false, true, true)]
+		_salal(false, false), _salal(false, true), _devils_club(false, false), _devils_club(false, true), _tall_berry(false)]
 
 
 ## 15.0: упрощённые формы для дальнего подлеска (дальше FAR_FORM_R от игрока), ключ - номер формы.
@@ -173,7 +173,7 @@ static func build_far_meshes() -> Dictionary:
 		SWORD_FERN_TALL: _sword_fern(true, true), ALPINE_SHRUB_CREEPING: _low_shrub(false, true, true),
 		BERRY_SHRUB_SPREAD: _low_shrub(true, true, true), BROADLEAF_HERB_TALL: _broadleaf_herb(true, true),
 		SALAL: _salal(true, false), SALAL_TALL: _salal(true, true), DEVILS_CLUB: _devils_club(true, false),
-		DEVILS_CLUB_TALL: _devils_club(true, true), BERRY_SHRUB_TALL: _low_shrub(true, true, true, true)}
+		DEVILS_CLUB_TALL: _devils_club(true, true), BERRY_SHRUB_TALL: _tall_berry(true)}
 
 
 ## Две розетки: широкая дуга внешних вай и тесный пучок поднятых внутренних.
@@ -182,17 +182,20 @@ static func _sword_fern(far: bool, upright: bool) -> ArrayMesh:
 	var ribs: Array = []
 	var count := 7 if upright else 9
 	for arm in count:
-		var a := arm * TAU / count + 0.23 * sin(arm * 2.399)
+		var inner := arm >= count - 3
+		var a := (arm - count + 3) * TAU / 3.0 + 0.72 if inner else arm * TAU / (count - 3)
+		a += 0.16 * sin(arm * 2.399)
 		var dir := Vector3(cos(a), 0, sin(a))
 		var side := Vector3(-dir.z, 0, dir.x)
-		var inner := arm >= count - 3
 		var reach := (0.72 if inner else (1.0 if upright else 1.32)) * (0.86 + 0.18 * sin(arm * 1.9))
 		var lift := (1.68 if inner or upright else 1.47) * (0.91 + 0.14 * cos(arm * 1.7))
+		# Обе детализации следуют одной дуге. Молодые вайи стоят прямо, старые свисают.
+		var hook := side * (0.16 * sin(arm * 2.1 + 0.4)) + Vector3.UP * (lift * (0.48 if inner else -0.05))
 		if far:
 			# Сохраняем черешок и редкие цельные пары перьев вместо широкой сплошной ленты.
 			for segment in 3:
-				var p0 := _fern_point(segment / 3.0, dir * reach, lift)
-				var p1 := _fern_point((segment + 1) / 3.0, dir * reach, lift)
+				var p0 := _sword_fern_point(segment / 3.0, dir * reach, lift, hook)
+				var p1 := _sword_fern_point((segment + 1) / 3.0, dir * reach, lift, hook)
 				var w0 := 0.027 - segment * 0.006
 				var w1 := w0 - 0.006
 				if segment == 2:
@@ -200,32 +203,41 @@ static func _sword_fern(far: bool, upright: bool) -> ArrayMesh:
 				else:
 					ribs.append([p0 - side * w0, p0 + side * w0, p1 + side * w1, p1 - side * w1])
 			for t: float in [0.29, 0.45, 0.62, 0.79]:
-				var p0 := _fern_point(t, dir * reach, lift)
-				var p1 := _fern_point(t + 0.115, dir * reach, lift)
+				var p0 := _sword_fern_point(t, dir * reach, lift, hook)
+				var p1 := _sword_fern_point(t + 0.115, dir * reach, lift, hook)
 				var width := (0.129 if inner else 0.218) * sin(PI * pow(t, 0.86))
 				var tip := p0.lerp(p1, 0.78) + dir * width * 0.24 + Vector3.UP * 0.018
 				ribs.append([p0, tip + side * width, p1])
 				ribs.append([p0, p1, tip - side * width])
 			continue
 		for segment in 3:
-			var p0 := _fern_point(segment / 3.0, dir * reach, lift)
-			var p1 := _fern_point((segment + 1) / 3.0, dir * reach, lift)
+			var p0 := _sword_fern_point(segment / 3.0, dir * reach, lift, hook)
+			var p1 := _sword_fern_point((segment + 1) / 3.0, dir * reach, lift, hook)
 			ribs.append([p0 - side * 0.011, p0 + side * 0.011, p1 + side * 0.009, p1 - side * 0.009])
-		for n in 9:
-			var t := 0.19 + n * 0.084
-			var p := _fern_point(t, dir * reach, lift)
-			var end := _fern_point(t + 0.095, dir * reach, lift)
+		var pairs := 7 if inner else 9
+		for n in pairs:
+			var t := 0.17 + n * 0.70 / (pairs - 1)
+			var p := _sword_fern_point(t, dir * reach, lift, hook)
+			var end := _sword_fern_point(t + 0.095, dir * reach, lift, hook)
 			var width := (0.12 if inner else 0.22) * sin(PI * pow(t, 0.86))
 			for sign_side: float in [-1.0, 1.0]:
 				var tip := p.lerp(end, 0.55) + side * sign_side * width + dir * width * 0.35
-				var shape := [p, tip - dir * width * 0.16 + Vector3.UP * 0.012, tip + dir * width * 0.19, end]
-				if n in [0, 7, 8]:
+				# Один заострённый листочек; лёгкая асимметрия разбивает силуэт гребёнки.
+				tip += dir * sign_side * width * 0.13 - Vector3.UP * width * 0.14
+				var shape := [p, tip, end]
+				if n == 0 or n == pairs - 1:
 					blades.append(shape)
 				else:
 					ribs.append(shape)
 	var persistent := blades.size()
 	blades.append_array(ribs)
 	return _leaves(blades, Color("46773a"), persistent)
+
+
+static func _sword_fern_point(t: float, forward: Vector3, lift: float, hook: Vector3) -> Vector3:
+	# Изгиб линейный между узлами черешка, так что доли листа остаются прикреплены.
+	var bend := maxf(0.0, t * 3.0 - 1.0) * 0.22 + maxf(0.0, t * 3.0 - 2.0) * 0.56
+	return _fern_point(t, forward, lift) + hook * bend
 
 
 static func _broadleaf_herb(far: bool, upright: bool) -> ArrayMesh:
@@ -258,12 +270,12 @@ static func _broadleaf_herb(far: bool, upright: bool) -> ArrayMesh:
 
 
 ## Карликовая берёза: низкие колена ветвей. Ягодник: короткие побеги из разнесённых куртин.
-static func _low_shrub(berry: bool, far: bool, spreading: bool, tall := false) -> ArrayMesh:
+static func _low_shrub(berry: bool, far: bool, spreading: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var dots: Array = []
 	var leaves: Array = []
-	var count := 11 if tall else (7 if berry or spreading else 5)
+	var count := 7 if berry or spreading else 5
 	var bark := Color("6b6850") if berry else Color("665340")
 	for n in count:
 		var a := n * 2.399
@@ -274,9 +286,6 @@ static func _low_shrub(berry: bool, far: bool, spreading: bool, tall := false) -
 		var height := (0.34 if berry else (0.57 if spreading else 0.81)) * (0.8 + 0.22 * cos(n * 2.6))
 		var knee := root + dir * reach * 0.65 + side * reach * 0.18 + Vector3.UP * height * 0.50
 		var tip := root + dir * reach + Vector3.UP * height
-		if tall:
-			knee = root + (knee - root) * Vector3(2.3, 3.6, 2.3)
-			tip = root + (tip - root) * Vector3(2.7, 4.4 + 0.6 * sin(n * 1.4), 2.7)
 		if not far:
 			_add_open_branch(st, root, knee, 0.016 if berry else 0.046, 0.009 if berry else 0.028, 4, bark)
 			_add_open_branch(st, knee, tip, 0.009 if berry else 0.028, 0.005 if berry else 0.011, 4, bark)
@@ -304,6 +313,45 @@ static func _low_shrub(berry: bool, far: bool, spreading: bool, tall := false) -
 	return st.commit()
 
 
+## Высокий ягодник: от общего основания расходятся дуги с двумя облиственными верхушками.
+static func _tall_berry(far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var leaves: Array = []
+	var fruit: Array = []
+	for n in 5:
+		var a := n * 2.399
+		var out := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-out.z, 0, out.x)
+		var h := 1.28 + 0.30 * cos(n * 1.8)
+		var root := out * (0.09 + 0.034 * n)
+		var fork := root + out * (0.23 + 0.12 * sin(a)) + Vector3.UP * h * 0.49
+		_add_open_branch(st, root, fork, 0.025, 0.015, 3, Color("64553f"))
+		for arm in 2:
+			var flank := -1.0 if arm == 0 else 1.0
+			var tip := fork + out * (0.40 - arm * 0.14) + side * flank * 0.27 + Vector3.UP * h * (0.33 + arm * 0.18)
+			_add_open_branch(st, fork, tip, 0.015, 0.005, 3, Color("776a48"))
+			for k in range(0, 7, 5 if far else 1):
+				var t := 0.13 + 0.14 * k
+				var at := fork.lerp(tip, t)
+				var phi := a + k * 2.399 + flank * 0.85
+				var dir := Vector3(cos(phi), 0.58 * t - 0.18, sin(phi))
+				var across := Vector3(-dir.z, 0, dir.x)
+				var length := (0.25 - 0.065 * t) * (1.18 if far else 1.0)
+				var mid := at + dir * length * 0.54 + Vector3.UP * 0.027
+				leaves.append([at, mid + across * length * 0.38, at + dir * length, mid - across * length * 0.38])
+			if not far and arm == 0:
+				var joint := fork.lerp(tip, 0.55)
+				var bottom := joint - Vector3.UP * 0.060
+				fruit.append([joint, joint + side * 0.024 - Vector3.UP * 0.031, bottom, joint - side * 0.024 - Vector3.UP * 0.031])
+	st.index()
+	st.append_from(_leaves(leaves, Color("527344"), 0), 0, Transform3D.IDENTITY)
+	if not fruit.is_empty():
+		st.append_from(_leaves(fruit, Color("454561"), 0), 0, Transform3D.IDENTITY)
+	st.index()
+	return st.commit()
+
+
 ## Салал: овальные кожистые листья ярусами вдоль коленчатых, расходящихся побегов.
 static func _salal(far: bool, tall: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -318,22 +366,21 @@ static func _salal(far: bool, tall: bool) -> ArrayMesh:
 		var top := knee + out * (0.29 if tall else 0.43) + Vector3.UP * h * 0.53
 		_add_open_branch(st, base, knee, 0.032, 0.019, 3, Color("514c31"))
 		_add_open_branch(st, knee, top, 0.019, 0.007, 3, Color("5f5631"))
-		var count := 5 if far else 9
-		for k in count:
-			var t := (k + 0.5) / count
+		for k in range(0, 7, 2 if far else 1):
+			var t := (k + 0.5) / 7.0
 			var at := knee.lerp(top, t) if k > 0 else base.lerp(knee, 0.80)
-			var phi := a + k * 2.31
-			var forward := Vector3(cos(phi), 0.22 + 0.55 * cos(k * 1.7), sin(phi))
+			var phi := a + k * 2.399 + 0.18 * sin(n * 1.7 + k)
+			var forward := Vector3(cos(phi), 0.62 * t - 0.24 + 0.16 * cos(k * 1.7), sin(phi))
 			var side := Vector3(-sin(phi), 0, cos(phi))
-			var length := (0.28 + 0.085 * sin(n + k * 1.9)) * (1.22 if far else 1.0)
+			var length := (0.37 - 0.10 * t + 0.045 * sin(n + k * 1.9)) * (1.12 if far else 1.0)
 			var end := at + forward * length
 			var mid := at.lerp(end, 0.56) + Vector3.UP * length * 0.18
-			var width := length * 0.35
+			var width := length * (0.40 - 0.08 * t)
 			if far:
 				leaves.append([at, mid + side * width, end, mid - side * width])
 			else:
-				leaves.append([at, mid - forward * length * 0.19 + side * width * 0.86, mid + side * width,
-					end, mid - side * width, mid - forward * length * 0.19 - side * width * 0.86])
+				leaves.append([at, mid + side * width, mid + forward * length * 0.19 + side * width * 0.86,
+					end, mid + forward * length * 0.19 - side * width * 0.86, mid - side * width])
 	st.index()
 	st.append_from(_leaves(leaves, Color("48683a") if tall else Color("536e36"), leaves.size() / 3), 0, Transform3D.IDENTITY)
 	st.index()
@@ -349,31 +396,71 @@ static func _devils_club(far: bool, tall: bool) -> ArrayMesh:
 		var a := n * 2.399 + 0.6
 		var out := Vector3(cos(a), 0, sin(a))
 		var root := out * (0.10 + n * 0.047)
-		var h := (1.64 if tall else 1.02) * (0.54 + 0.45 * absf(sin(n * 2.9 + 0.9)))
-		var cane := root + out * (0.22 + 0.09 * n) + Vector3.UP * h
-		var knee := root.lerp(cane, 0.45) - out * 0.09
-		_add_open_branch(st, root, knee, 0.036, 0.028, 4, Color("8c784e"))
-		_add_open_branch(st, knee, cane, 0.028, 0.017, 4, Color("8a8250"))
+		var h := (1.64 if tall else 1.02) * (0.76 + 0.22 * cos(n * 2.1))
+		var sideways := Vector3(-out.z, 0, out.x)
+		# Сначала побег стелется от основания, затем верхушка поднимается к свету.
+		var cane_reach := (0.39 if tall else 0.57) + 0.14 * sin(n * 1.7)
+		var cane := root + out * cane_reach + sideways * h * 0.12 * sin(a) + Vector3.UP * h
+		var low := root + out * cane_reach * 1.30 + Vector3.UP * h * 0.16
+		var high := cane - Vector3.UP * h * 0.34 + sideways * h * 0.085
+		var steps := 3 if far else 5
+		var axis := PackedVector3Array()
+		for i in steps + 1:
+			axis.append(root.bezier_interpolate(low, high, cane, float(i) / steps))
+		_club_cane(st, axis, sideways)
 		for k in (2 if far else 3):
 			var angle := a + k * 2.3
 			var forward := Vector3(cos(angle), 0, sin(angle))
 			var side := Vector3(-forward.z, 0, forward.x)
-			var at := cane.lerp(knee, k * 0.32)
+			var node := (1.0 - k * 0.19) * steps
+			var i := mini(floori(node), steps - 1)
+			var at := axis[i].lerp(axis[i + 1], node - i)
 			var joint := at + forward * (0.28 + k * 0.075) + Vector3.UP * (0.13 + k * 0.018)
 			_add_open_branch(st, at, joint, 0.017, 0.009, 3, Color("84964e"))
 			var blade: Array = [joint]
-			var length := (0.27 + 0.07 * cos(n * 2.2 + k)) * (1.13 if far else 1.0)
-			var lobes := 5 if far else 7
+			var length := (0.37 + 0.065 * cos(n * 2.2 + k)) * (1.09 if far else 1.0)
+			var lobes := 3 if far else (7 if k == 0 else 5)
+			var pitch := 0.22 - k * 0.27 + 0.15 * sin(a)
 			for l in range(lobes * 2 + 1):
 				var t := float(l) / (lobes * 2)
 				var phi := lerpf(-2.1, 2.1, t)
 				var reach := length * (0.68 + 0.32 * sin(t * PI)) * (1.0 if l % 2 == 1 else 0.58)
-				blade.append(joint + (forward * cos(phi) + side * sin(phi)) * reach + Vector3.UP * (0.035 - 0.19 * reach))
+				var drop := length * 0.19 * pow(reach / length, 2.0)
+				var lift := reach * (pitch * cos(phi) + 0.17 * sin(phi + a)) - drop
+				blade.append(joint + (forward * cos(phi) + side * sin(phi)) * reach + Vector3.UP * lift)
 			leaves.append(blade)
 	st.index()
 	st.append_from(_leaves(leaves, Color("678441"), 0), 0, Transform3D.IDENTITY)
 	st.index()
 	return st.commit()
+
+
+## Соседние сегменты используют одно сечение на стыке, включая его нормали.
+static func _club_cane(st: SurfaceTool, axis: PackedVector3Array, side: Vector3) -> void:
+	var prev := PackedVector3Array()
+	var prev_normals := PackedVector3Array()
+	st.set_uv2(Vector2.ZERO)
+	for i in axis.size():
+		var t := float(i) / (axis.size() - 1)
+		var tangent := (axis[mini(i + 1, axis.size() - 1)] - axis[maxi(0, i - 1)]).normalized()
+		var front := tangent.cross(side).normalized()
+		var across := front.cross(tangent)
+		var ring := PackedVector3Array()
+		var normals := PackedVector3Array()
+		for j in 3:
+			var a := TAU * j / 3.0
+			var normal := across * cos(a) - front * sin(a)
+			normals.append(normal)
+			ring.append(axis[i] + normal * lerpf(0.038, 0.013, t))
+		if i > 0:
+			st.set_color(Color("897c53"))
+			for j in 3:
+				var k := (j + 1) % 3
+				for corner: int in [j, k, k + 3, j, k + 3, j + 3]:
+					st.set_normal(prev_normals[corner] if corner < 3 else normals[corner - 3])
+					st.add_vertex(prev[corner] if corner < 3 else ring[corner - 3])
+		prev = ring
+		prev_normals = normals
 
 
 static func _moss_mound(far: bool) -> ArrayMesh:

@@ -104,9 +104,14 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 	elif hemlock:
 		bark = Color("55483f")
 	var path: Array[Vector3] = []
+	var light_dir := bend.normalized()
+	var shaped_crown := larch or douglas or western
 	for t: float in [0.0, 0.063, 0.18, 0.36, 0.55, 0.78, 1.0]:
-		# _path_at интерполирует по индексу, поэтому ярусы привязываются к фактической высоте ниже.
-		path.append(Vector3.UP * height * t + bend * t * t + bend.cross(Vector3.UP) * sin(t * TAU) * 0.22)
+		var offset := bend * t * t + bend.cross(Vector3.UP) * sin(t * TAU) * 0.22
+		if shaped_crown:
+			# Небольшое отклонение в одном направлении; основание почти вертикально.
+			offset = bend * (0.70 * t * t * (3.0 - 2.0 * t))
+		path.append(Vector3.UP * height * t + offset)
 	if hemlock:
 		var leader := Vector3(cos(angle + 0.7), 0, sin(angle + 0.7)) * height
 		path.insert(path.size() - 1, Vector3.UP * height * 0.96 + bend * 0.92 + leader * 0.024)
@@ -140,10 +145,21 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 		span_max = height * [0.160, 0.145, 0.199, 0.170][form]
 	if douglas:
 		span_max = height * [0.150, 0.123, 0.166, 0.141][form]
+		if giant:
+			span_max *= 1.28
+	if larch:
+		span_max *= 1.32 if age != YOUNG_AGE else 1.12
+	if western and age != OLD_AGE:
+		base *= 0.76
 	var tiers := 7 if siberian else (9 if larch or douglas else 11)
+	if larch or douglas:
+		tiers -= 1 if age == ADULT_AGE and form != 2 else 2
 	var top := 0.925 if hemlock else 0.985
 	for tier in tiers:
 		var t := float(tier) / tiers
+		if shaped_crown:
+			# У вершины междоузлия короче: верхние ветви сходятся к лидеру.
+			t = 1.0 - pow(1.0 - t, 1.38)
 		var crown_y := lerpf(base, top, t)
 		var profile := pow(1.0 - t, 0.51 if siberian else (0.58 if western else (0.72 if larch else 0.68)))
 		if siberian:
@@ -151,35 +167,55 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 		if hemlock:
 			profile *= (0.87 + 0.17 * sin(tier * 1.48 + form)) * (0.96 + 0.22 * sin(t * PI))
 		elif douglas:
-			profile = lerpf(0.61, 1.16, sin(t * PI)) * pow(1.0 - t, 0.38 if giant else 0.64)
+			profile = lerpf(0.78, 1.21, sin(t * PI)) * pow(1.0 - t, 0.33 if giant else 0.64)
+		elif larch:
+			profile *= 0.85 + 0.34 * sin(PI * t)
+		elif western:
+			profile *= 1.22 - 0.28 * t
 		var arms := 3 if larch or tier >= tiers - 2 else 4
 		for arm in arms:
 			var a := angle + tier * 2.399 + arm * TAU / arms + rng.randf_range(-0.26, 0.26)
 			var dir := Vector3(cos(a), 0.0, sin(a))
 			var y := height * crown_y + rng.randf_range(-0.022, 0.022) * height
-			var start := path[0]
-			for ring in range(1, path.size()):
-				if path[ring].y >= y:
-					start = path[ring - 1].lerp(path[ring], inverse_lerp(path[ring - 1].y, path[ring].y, y))
-					break
+			if shaped_crown:
+				y += height * (1.0 - t) * 0.036 * sin(a - angle + tier * 0.74)
+				y = maxf(y, height * 0.045)
+			var start := _conifer_axis_at_height(path, y)
 			var span := span_max * profile * rng.randf_range(0.75, 1.18) * (1.0 + 0.24 * maxf(0.0, dir.dot(bend.normalized())) * float(form == 2))
+			if larch or douglas:
+				# Одна и та же освещённая сторона просматривается сквозь несколько ярусов.
+				var exposure := dir.dot(light_dir) * (1.0 - 0.65 * t)
+				span *= 1.07 + exposure * (0.34 if form == 2 or giant else 0.17)
 			var tip_slope := -0.31 if western else (0.27 if siberian else (-0.17 if not larch and tier < 3 else 0.13))
 			if hemlock or douglas:
 				span *= 0.89 + 0.20 * sin(arm * 1.57 + tier * 0.74 + form)
 				tip_slope = -0.36 - 0.11 * sin(a + tier) if hemlock else 0.12 + 0.17 * sin(a + tier * 0.6)
 			var lift := 0.20 if western or siberian else (-0.17 if douglas else -0.085)
+			if western:
+				tip_slope = lerpf(-0.49, -0.12, t) + 0.08 * sin(a)
 			var elbow := start + dir * span * 0.48 + Vector3.UP * span * lift
 			var tip := start + dir * span + Vector3.UP * span * tip_slope
+			if larch or douglas:
+				# Под тяжестью хвои ветка опускается, светлый конец снова растёт вверх.
+				var lateral := dir.cross(Vector3.UP) * sin(a - angle + tier * 0.67)
+				elbow += lateral * span * 0.13 - Vector3.UP * span * (0.18 - 0.12 * t)
+				tip += lateral * span * 0.24 + Vector3.UP * span * (0.13 + 0.15 * t)
 			if hemlock or dense_spruce:
 				tip.y = maxf(tip.y, height * 0.025)
 			if tier < tiers - 2:
 				var thick := radius * (0.37 if douglas else (0.25 if siberian or western else 0.22)) * (1.0 - t * 0.74)
-				branches.append([[start, elbow, tip], thick, thick * 0.16, bark, false, true])
+				var limb := [start, elbow, tip]
+				if shaped_crown and (t > 0.37 or arm % 2 == 1):
+					# Древесина скрыта хвоей после первого веера; достаточно открытой части ветви.
+					limb = [start, elbow.lerp(tip, 0.30)]
+				branches.append([limb, thick, thick * 0.16, bark, false, true])
 			var center := elbow.lerp(tip, 0.36 if larch or western or hemlock else 0.26)
 			if dense_spruce or hemlock:
 				center.y = maxf(center.y, height * 0.055)
 			if western or hemlock:
 				var size := Vector3(span * (0.69 if hemlock else 0.62), span * (0.28 if hemlock else 0.24), span * 0.43)
+				if western:
+					size *= Vector3(1.03, 1.12, 1.22)
 				var phase := rng.randf() * TAU
 				var frame := _frame(tip - elbow)
 				foliage.append([center, size, a, phase, frame, 1.12])
@@ -194,6 +230,9 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 				if dense_spruce:
 					depth *= 1.16
 				foliage.append([center, Vector3(span * (0.57 if larch or siberian else 0.69), depth, span * 0.55), a, rng.randf() * TAU])
+				if larch and t < 0.85:
+					var fringe := elbow.lerp(tip, 0.70) - Vector3.UP * depth * 0.65
+					foliage.append([fringe, Vector3(0.35 * span, depth * 1.80, 0.30 * span), a, sin(a + tier) * PI])
 				if douglas and (arm + tier) % 3 == 0:
 					var fork := dir.rotated(Vector3.UP, 0.58)
 					foliage.append([elbow + fork * span * 0.49 + Vector3.UP * depth,
@@ -205,6 +244,8 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 		# Внутренние пучки связывают верхние ярусы с осью, оставляя просветы у концов ветвей.
 		if not siberian and (not larch or tier % 2 == 0 or t > 0.64):
 			var core := path[5].lerp(path[6], clampf((crown_y - 0.78) / 0.22, 0.0, 1.0)) if crown_y > 0.78 else Vector3.UP * height * crown_y + bend * crown_y * crown_y
+			if shaped_crown:
+				core = _conifer_axis_at_height(path, height * crown_y)
 			var width := span_max * profile * (0.52 if larch else (0.57 if western else 0.65))
 			var vertical := height * (0.045 if larch else 0.053)
 			var inner := [core + Vector3.UP * vertical * 0.47, Vector3(width, vertical, width * 0.9),
@@ -243,6 +284,13 @@ static func _expedition_conifer(kind: int, variant: int) -> Dictionary:
 		crown_texture = _texture(true, true), ref = _ref(kind, age, height)}
 
 
+static func _conifer_axis_at_height(path: Array[Vector3], y: float) -> Vector3:
+	for ring in range(1, path.size()):
+		if path[ring].y >= y:
+			return path[ring - 1].lerp(path[ring], inverse_lerp(path[ring - 1].y, path[ring].y, y))
+	return path[-1]
+
+
 static func _alder(variant: int) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 81379 + variant * 439
@@ -250,6 +298,8 @@ static func _alder(variant: int) -> Dictionary:
 	var form := variant % VARIANTS if age == ADULT_AGE else variant % AGE_FORMS
 	var height: float = NOMINAL[Biomes.T_ALDER] * ([0.43, 0.52][form] if age == YOUNG_AGE else ([1.12, 1.22][form] if age == OLD_AGE else [0.89, 1.04, 0.80, 0.97][form]))
 	var stems: int = [3, 2, 4, 3][form]
+	if age == YOUNG_AGE:
+		stems = 1 + form
 	var branches: Array = []
 	var foliage: Array = []
 	var angle := rng.randf() * TAU
@@ -259,18 +309,27 @@ static func _alder(variant: int) -> Dictionary:
 		var dir := Vector3(cos(a), 0, sin(a))
 		var h := height * (0.98 if n == 0 else rng.randf_range(0.56, 0.87))
 		var spread: float = h * ([0.29, 0.18, 0.39, 0.27][form] + n * 0.028)
-		var path := _rowan_trunk(dir * h * 0.015, dir, h, spread, h * 0.035, a, 6)
+		var young := age == YOUNG_AGE
+		if young:
+			spread *= 0.55
+		elif age == OLD_AGE:
+			spread *= 1.14
+		var path := _rowan_trunk(dir * h * 0.015, dir, h, spread, h * 0.035, a, 4 if young else 5)
 		var r := h * (0.028 if n == 0 else 0.024)
 		branches.append([path, r, r * 0.16, bark, false])
 		for limb in 3:
-			var phi := a + (limb - 1) * 0.92
+			# У подроста ветви обходят лидер, у многоствольной ольхи тянутся из общей кроны к свету.
+			var phi: float = a + limb * 2.399 if young else a + [0.92, -1.25, 0.12][limb] * (-1.0 if n % 2 else 1.0)
 			var forward := Vector3(cos(phi), 0, sin(phi))
-			var origin := _path_at(path, 0.46 + limb * 0.19)
-			var end := origin + forward * h * (0.24 - limb * 0.045) + Vector3.UP * h * (0.24 - limb * 0.07)
-			branches.append([[origin, origin.lerp(end, 0.54) + Vector3.UP * h * 0.06, end], r * 0.46, r * 0.1, bark, false, true])
-			foliage.append([end, Vector3(0.16, 0.106, 0.14) * h, phi, rng.randf() * TAU])
-			foliage.append([origin.lerp(end, 0.63) + Vector3.UP * h * 0.085,
-				Vector3(0.14, 0.122, 0.12) * h, phi + 0.8, rng.randf() * TAU])
+			var origin := _path_at(path, 0.40 + limb * 0.19 + 0.035 * sin(a + limb))
+			var reach := (0.27 - limb * 0.045) * (0.74 if young else 1.0)
+			var end := origin + forward * h * reach + Vector3.UP * h * (0.25 - limb * 0.045)
+			var elbow := origin.lerp(end, 0.54) - Vector3.UP * h * (0.026 if young else 0.052)
+			branches.append([[origin, elbow, end], r * 0.46, r * 0.1, bark, false, true])
+			var pad := h * (1.0 - limb * 0.085)
+			foliage.append([end, Vector3(0.185, 0.138, 0.16) * pad, phi, rng.randf() * TAU])
+			if limb != 2:
+				foliage.append([elbow.lerp(end, 0.40), Vector3(0.145, 0.112, 0.14) * pad, phi + 0.8, rng.randf() * TAU])
 		foliage.append([path[-1] - Vector3.UP * h * 0.09, Vector3(0.14, 0.115, 0.12) * h, a, rng.randf() * TAU, true])
 	return _leafy(branches, foliage, _expedition_colors(Biomes.T_ALDER), false, _ref(Biomes.T_ALDER, age, height))
 

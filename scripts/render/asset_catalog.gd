@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 18 # Фаза 8.2: хвойные, подлесок, валежник и ковёр экспедиции
+const VERSION := 23 # Кроны хвойных экспедиции
 const PATH := "res://resources/catalog/standard.res"
 @export var version := 0 # Запекание записывает версию явно; ResourceSaver пропускает значение по умолчанию.
 @export var trees: Dictionary = {}
