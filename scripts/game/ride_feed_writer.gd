@@ -78,6 +78,8 @@ func migrate(records: Array, template_id: String, seed: String, map_image: Image
 		if map_image != null and not FileAccess.file_exists(path):
 			jobs.append({snapshot = snapshot.duplicate(true), path = path, id = entry.id})
 	if not jobs.is_empty():
+		for job: Dictionary in jobs:
+			Feed.begin_thumb(str(job.path))
 		var result := {error = OK}
 		var folder: String = feed.directory
 		_result = result
@@ -87,13 +89,15 @@ func migrate(records: Array, template_id: String, seed: String, map_image: Image
 				var image: Image = Thumb.render(map_image, world_size, job.snapshot)
 				if image == null:
 					result.error = ERR_INVALID_DATA
+					Feed.end_thumb(str(job.path))
 					continue
 				var temporary: String = job.path + ".tmp"
 				var save_err := image.save_png(temporary)
 				if save_err == OK:
 					save_err = Feed.publish_thumb(folder, str(job.id), temporary, job.path)
 				if save_err != OK:
-					result.error = save_err, false, "Превью прежних заездов")
+					result.error = save_err
+				Feed.end_thumb(str(job.path)), false, "Превью прежних заездов")
 	return OK
 
 
@@ -101,6 +105,8 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 	if not Feed.accepts(snapshot, development):
 		return OK
 	if force:
+		if not _pending_thumb.is_empty():
+			Feed.end_thumb(str(_pending_thumb.path))
 		_pending_thumb.clear() # финальный снимок новее ожидающего
 		finish()
 	elif _task != -1 and WorkerThreadPool.is_task_completed(_task):
@@ -124,14 +130,19 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 		if _task == -1:
 			_start_thumb(job)
 		elif _task_id != entry.id:
+			if not _pending_thumb.is_empty():
+				Feed.end_thumb(str(_pending_thumb.path))
 			_pending_thumb = job
+			Feed.begin_thumb(str(job.path))
 	if force:
 		finish()
 	return OK
 
 
-func _start_thumb(job: Dictionary) -> void:
+func _start_thumb(job: Dictionary, already_marked := false) -> void:
 	_last_thumb = Time.get_ticks_msec() / 1000.0
+	if not already_marked:
+		Feed.begin_thumb(str(job.path))
 	var result := {error = OK}
 	var folder: String = feed.directory
 	_result = result
@@ -140,11 +151,13 @@ func _start_thumb(job: Dictionary) -> void:
 		var image: Image = Thumb.render(job.image, job.world_size, job.snapshot)
 		if image == null:
 			result.error = ERR_INVALID_DATA
+			Feed.end_thumb(str(job.path))
 			return
 		var temporary: String = job.path + ".tmp"
 		result.error = image.save_png(temporary)
 		if result.error == OK:
-			result.error = Feed.publish_thumb(folder, job.id, temporary, job.path), false, "Превью заезда")
+			result.error = Feed.publish_thumb(folder, job.id, temporary, job.path)
+		Feed.end_thumb(str(job.path)), false, "Превью заезда")
 
 
 func poll() -> void:
@@ -153,7 +166,7 @@ func poll() -> void:
 	if _task == -1 and not _pending_thumb.is_empty():
 		var job := _pending_thumb
 		_pending_thumb = {}
-		_start_thumb(job)
+		_start_thumb(job, true)
 
 
 func finish() -> void:
@@ -161,7 +174,7 @@ func finish() -> void:
 	if not _pending_thumb.is_empty():
 		var job := _pending_thumb
 		_pending_thumb = {}
-		_start_thumb(job)
+		_start_thumb(job, true)
 		_wait_task()
 
 

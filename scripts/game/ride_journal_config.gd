@@ -75,6 +75,8 @@ extends Resource
 @export var card_wide_height := 150.0
 ## Увеличение делает карту в карточке главного меню крупнее.
 @export var card_wide_thumb_size := Vector2(156, 98)
+## Максимальная высота большой карты ленты меню; пропорции сохраняются на узком экране.
+@export var feed_preview_max_height := 260.0
 ## Увеличение делает дату в карточке главного меню крупнее.
 @export var card_wide_title_font := 16
 ## Увеличение делает подписи в карточке главного меню крупнее.
@@ -92,7 +94,7 @@ extends Resource
 ## Увеличение делает заголовок ленты крупнее.
 @export var feed_title_font := 18
 ## Увеличение делает заголовок общего журнала крупнее.
-@export var feed_wide_title_font := 24
+@export var feed_wide_title_font := 28
 ## Увеличение оставляет больше места списку поездок.
 @export var feed_list_height := 260.0
 ## Увеличение быстрее заполняет длинную ленту, но добавляет работы в кадре.

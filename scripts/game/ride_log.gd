@@ -294,6 +294,14 @@ static func date_text(unix: float) -> String:
 	return "%d %s, %02d:%02d" % [d.day, MONTHS[clampi(int(d.month) - 1, 0, 11)], d.hour, d.minute]
 
 
+## Полная дата для журнала, без изменения сохранённого timestamp.
+static func journal_date_text(unix: float) -> String:
+	const MONTHS := ["янв.", "февр.", "марта", "апр.", "мая", "июня", "июля", "авг.", "сент.", "окт.", "нояб.", "дек."]
+	var bias := int(Time.get_time_zone_from_system().get("bias", 0)) * 60
+	var d := Time.get_datetime_dict_from_unix_time(int(unix) + bias)
+	return "%d %s %d, %02d:%02d" % [d.day, MONTHS[clampi(int(d.month) - 1, 0, 11)], d.year, d.hour, d.minute]
+
+
 static func duration_text(seconds: float) -> String:
 	var s := int(seconds)
 	return "%d:%02d:%02d" % [s / 3600, s / 60 % 60, s % 60] if s >= 3600 else "%d:%02d" % [s / 60, s % 60]

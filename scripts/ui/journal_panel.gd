@@ -541,8 +541,8 @@ func _select(tab: Tab) -> void:
 	if tab == Tab.PATH and _path_page.get_child_count() == 0:
 		feed_opening.emit()
 		_fill_path(_data)
-	elif tab == Tab.PATH and _feed_view != null and _feed_view.same_world(_feed_view._selected):
-		_select_feed_ride(_feed_view._selected, false)
+	elif tab == Tab.PATH and _feed_view != null and _feed_view.same_world(_feed_view._map_selected):
+		_select_feed_ride(_feed_view._map_selected, false)
 	if tab == Tab.ALBUM and _album_scroll == null:
 		_fill_album(_data)
 	if tab == Tab.ALBUM and not _card_jobs.is_empty():

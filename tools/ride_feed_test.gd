@@ -8,6 +8,7 @@ const Journal = preload("res://scripts/game/map_journal.gd")
 const Explore = preload("res://scripts/game/exploration.gd")
 const Thumb = preload("res://scripts/ui/ride_thumb.gd")
 const Writer = preload("res://scripts/game/ride_feed_writer.gd")
+const Presentation = preload("res://scripts/ui/ride_presentation.gd")
 var failures := 0
 
 
@@ -40,9 +41,32 @@ func _initialize() -> void:
 	var file := FileAccess.open(folder.path_join("feed.json"), FileAccess.WRITE)
 	file.store_string("{broken")
 	file.close()
-	check(reload.load_feed() == OK and reload.entries.is_empty() and FileAccess.file_exists(folder.path_join("feed.json.bad")), "повреждённый файл сохранён")
-	check(reload.upsert(first) == OK, "запись после восстановления")
+	check(reload.load_feed() == ERR_FILE_CORRUPT and FileAccess.get_file_as_string(folder.path_join("feed.json")) == "{broken", "повреждённый журнал не подменяется пустым")
+	check(reload.upsert(first) == ERR_UNAUTHORIZED and FileAccess.get_file_as_string(folder.path_join("feed.json")) == "{broken", "повреждённый файл защищён от записи")
+	check(Feed.new(folder).load_feed() == ERR_FILE_CORRUPT, "ошибка сохраняется при повторном открытии")
+	check(Feed.new(folder).upsert(first) == ERR_FILE_CORRUPT and FileAccess.get_file_as_string(folder.path_join("feed.json")) == "{broken", "новый объект не перезаписывает файл без предварительного чтения")
+	file = FileAccess.open(folder.path_join("feed.json"), FileAccess.WRITE)
+	var invalid_entry := '{"version":2,"entries":[{"id":"incomplete"}],"deleted":[]}'
+	file.store_string(invalid_entry)
+	file.close()
+	check(reload.load_feed() == ERR_FILE_CORRUPT and reload.upsert(first) == ERR_UNAUTHORIZED and FileAccess.get_file_as_string(folder.path_join("feed.json")) == invalid_entry, "повреждённая запись не исчезает при последующем сохранении")
+	file = FileAccess.open(folder.path_join("feed.json"), FileAccess.WRITE)
+	var newer := '{"version":999,"entries":[],"deleted":[]}'
+	file.store_string(newer)
+	file.close()
+	check(reload.load_feed() == ERR_FILE_UNRECOGNIZED and reload.upsert(first) == ERR_UNAUTHORIZED and FileAccess.get_file_as_string(folder.path_join("feed.json")) == newer, "новый формат не перезаписывается")
+	for future in ['{"version":999,"new_layout":true}', '{"version":2,"entries":[{"id":"future","version":2,"start":1}],"deleted":[]}']:
+		file = FileAccess.open(folder.path_join("feed.json"), FileAccess.WRITE)
+		file.store_string(future)
+		file.close()
+		check(reload.load_feed() == ERR_FILE_UNRECOGNIZED and FileAccess.get_file_as_string(folder.path_join("feed.json")) == future, "будущий формат или запись сохранены и распознаны")
+	for damaged in ['{"version":2.5,"entries":[],"deleted":[]}', '{"version":2,"entries":[{"id":"same","version":1,"start":1},{"id":"same","version":1,"start":2}],"deleted":[]}']:
+		file = FileAccess.open(folder.path_join("feed.json"), FileAccess.WRITE)
+		file.store_string(damaged)
+		file.close()
+		check(reload.load_feed() == ERR_FILE_CORRUPT and reload.upsert(first) == ERR_UNAUTHORIZED and FileAccess.get_file_as_string(folder.path_join("feed.json")) == damaged, "дробная версия и повтор id не приводят к потере исходного файла")
 	_stats()
+	_presentation()
 	_thumbs(folder)
 	_writer(folder.path_join("writer"))
 	_busy_writer(folder.path_join("busy"))
@@ -94,6 +118,19 @@ func _stats() -> void:
 	check(hill.climb == 12.0 and hill.descent == 12.0 and hill.alt_min == 0.0 and hill.alt_max == 12.0, "набор, сброс и пределы высоты")
 
 
+func _presentation() -> void:
+	var saved := {id = "partial", version = 1, start = 1.0e20, walk = "unknown", bike = "bad", falls = -1,
+		profile = [1, "bad", 2], places = ["Поляна", 17], photo_paths = [null, "user://photo.png"],
+		fall_marks = [{x = 1, z = 2, progress = "bad"}, {x = 3}, null],
+		track = [[[0, 0], [1, 1], null, [2, 2], [3, 3]]]}
+	var original := saved.duplicate(true)
+	var shown: Dictionary = Presentation.make(saved)
+	check(not shown.has("bike") and not shown.has("falls") and not shown.has("walk") and not shown.has("start"), "ошибочные показатели и дата не превращаются в нули")
+	check(shown.profile.is_empty() and shown.places == ["Поляна"] and shown.photo_paths == ["user://photo.png"], "неполные поля безопасны для интерфейса")
+	check(shown.track.size() == 2 and shown.fall_marks.size() == 1 and not shown.fall_marks[0].has("progress"), "повреждённая точка не соединяет участки и не создаёт метку профиля")
+	check(saved == original, "снимок интерфейса не изменяет сохранённые данные")
+
+
 func _thumbs(folder: String) -> void:
 	var map := Image.create(256, 256, false, Image.FORMAT_RGB8)
 	map.fill(Color(0.2, 0.4, 0.3))
@@ -112,6 +149,9 @@ func _thumbs(folder: String) -> void:
 			colors.foot = colors.foot or _near_color(pixel, Config.foot_color)
 			colors.fall = colors.fall or _near_color(pixel, Config.fall_color)
 	check(colors.outline and colors.bike and colors.foot and colors.fall, "обводка, пеший и велосипедный пути и падение видны на карте")
+	var without_mark: Image = Thumb.render(map, Vector2(1024, 1024), {legs = entry.legs})
+	var invalid_mark: Image = Thumb.render(map, Vector2(1024, 1024), {legs = entry.legs, fall_marks = [{}]})
+	check(without_mark.get_data() == invalid_mark.get_data(), "падение без координат не рисуется в начале карты")
 	var joints := PackedVector2Array([Vector2(100, 100), Vector2(220, 180), Vector2(370, 280), Vector2(500, 410)])
 	var joint_entry := {legs = [joints]}
 	var joint_image: Image = Thumb.render(map, Vector2(1024, 1024), joint_entry)
@@ -194,9 +234,13 @@ func _busy_writer(folder: String) -> void:
 	var id := Feed.ride_id("test", "seed", 222.0)
 	var err: Error = writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128))
 	check(err == OK and not FileAccess.file_exists(writer.feed.thumb_path(id)), "превью ждёт занятого рабочего потока")
+	check(Feed.thumb_is_preparing(writer.feed.thumb_path(id)), "ожидающее превью помечено как подготавливаемое")
+	snapshot.start = 223.0
+	var next_id := Feed.ride_id("test", "seed", 223.0)
+	check(writer.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128)) == OK and not Feed.thumb_is_preparing(writer.feed.thumb_path(id)) and Feed.thumb_is_preparing(writer.feed.thumb_path(next_id)), "замена ожидающего задания снимает старое состояние")
 	gate.post()
 	writer.finish()
-	check(FileAccess.file_exists(writer.feed.thumb_path(id)), "ожидающее превью строится после освобождения потока")
+	check(FileAccess.file_exists(writer.feed.thumb_path(next_id)) and not Feed.thumb_is_preparing(writer.feed.thumb_path(next_id)), "ожидающее превью строится и снимает состояние подготовки")
 
 
 func _walk_setting(path: String) -> void:

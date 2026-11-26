@@ -6,12 +6,16 @@ const VERSION := 1
 const FORMAT_VERSION := 2
 const DEFAULT_DIR := "user://ride_journal"
 static var _thumb_lock := Mutex.new()
+static var _thumb_revisions := {}
+static var _thumb_generation := 0
+static var _thumb_jobs := {}
 
 var directory: String
 var config: Resource
 var entries: Array[Dictionary] = [] # новые первыми
 var deleted: Array[String] = [] # не переносить повторно удалённые старые заезды
 var _writable := true
+var _loaded := false
 
 
 func _init(folder := DEFAULT_DIR, tuning: Resource = CONFIG) -> void:
@@ -36,8 +40,9 @@ func thumb_path(id: String) -> String:
 	return directory.path_join("thumbs").path_join(thumb_name(id))
 
 
-## При повреждении сначала сохраняем оригинал. Если это не удалось, запись запрещена.
+## Повреждённый или неизвестный файл остаётся на месте и не может быть перезаписан.
 func load_feed() -> Error:
+	_loaded = true
 	entries.clear()
 	deleted.clear()
 	_writable = true
@@ -52,30 +57,46 @@ func load_feed() -> Error:
 	var err := parser.parse(file.get_as_text())
 	file.close()
 	var content: Variant = parser.data
-	if err == OK and content is Dictionary and (content.get("version") is int or content.get("version") is float) and int(content.version) > FORMAT_VERSION:
+	if err != OK:
 		_writable = false
-		return ERR_FILE_UNRECOGNIZED
-	if err != OK or not (content is Array or (content is Dictionary and content.get("entries") is Array and content.get("deleted") is Array)):
-		var bad := path + ".bad"
-		var suffix := 1
-		while FileAccess.file_exists(bad):
-			bad = path + ".bad." + str(suffix)
-			suffix += 1
-		err = DirAccess.rename_absolute(path, bad)
-		if err != OK:
+		return ERR_FILE_CORRUPT
+	if content is Dictionary and content.has("version"):
+		var format: Variant = content.version
+		if not (format is int or format is float) or not is_finite(float(format)) or float(format) < 0.0 or floorf(float(format)) != float(format):
 			_writable = false
-		return err
+			return ERR_FILE_CORRUPT
+		if float(format) > FORMAT_VERSION:
+			_writable = false
+			return ERR_FILE_UNRECOGNIZED
+	if not (content is Array or (content is Dictionary and content.get("entries") is Array and content.get("deleted") is Array)):
+		_writable = false
+		return ERR_FILE_CORRUPT
 	if content is Dictionary:
 		for id: Variant in content.deleted:
-			if id is String and not id in deleted:
+			if not id is String:
+				_writable = false
+				deleted.clear()
+				return ERR_FILE_CORRUPT
+			if not id in deleted:
 				deleted.append(id)
 		content = content.entries
 	var seen := {}
 	for item: Variant in content:
+		if item is Dictionary and (item.get("version") is int or item.get("version") is float) and is_finite(float(item.version)) and floorf(float(item.version)) == float(item.version) and float(item.version) > VERSION:
+			_writable = false
+			entries.clear()
+			deleted.clear()
+			return ERR_FILE_UNRECOGNIZED
 		if not item is Dictionary or not _valid(item):
-			continue
+			_writable = false
+			entries.clear()
+			deleted.clear()
+			return ERR_FILE_CORRUPT
 		if seen.has(item.id):
-			continue
+			_writable = false
+			entries.clear()
+			deleted.clear()
+			return ERR_FILE_CORRUPT
 		seen[item.id] = true
 		entries.append(item)
 	_sort(entries)
@@ -84,6 +105,10 @@ func load_feed() -> Error:
 
 ## Изменения видны в памяти только после успешной атомарной замены файла.
 func upsert(entry: Dictionary) -> Error:
+	if not _loaded:
+		var load_error := load_feed()
+		if load_error != OK:
+			return load_error
 	if not _valid(entry):
 		return ERR_INVALID_DATA
 	if entry.id in deleted:
@@ -108,6 +133,10 @@ func upsert(entry: Dictionary) -> Error:
 
 
 func erase(id: String) -> Error:
+	if not _loaded:
+		var load_error := load_feed()
+		if load_error != OK:
+			return load_error
 	var next: Array[Dictionary] = entries.duplicate(true)
 	var found := false
 	for i in range(next.size() - 1, -1, -1):
@@ -141,10 +170,53 @@ static func publish_thumb(folder: String, id: String, temporary: String, path: S
 				break
 	if err == OK and found:
 		err = DirAccess.rename_absolute(temporary, path)
+		if err == OK:
+			_thumb_generation += 1
+			_thumb_revisions[path] = _thumb_generation
 	elif FileAccess.file_exists(temporary):
 		DirAccess.remove_absolute(temporary)
 	_thumb_lock.unlock()
 	return err
+
+
+## Версии существуют только в процессе и меняются после атомарной публикации PNG.
+static func thumb_generation() -> int:
+	_thumb_lock.lock()
+	var generation := _thumb_generation
+	_thumb_lock.unlock()
+	return generation
+
+
+static func thumb_revision(path: String) -> int:
+	_thumb_lock.lock()
+	var revision: int = _thumb_revisions.get(path, 0)
+	_thumb_lock.unlock()
+	return revision
+
+
+static func begin_thumb(path: String) -> void:
+	_thumb_lock.lock()
+	_thumb_jobs[path] = int(_thumb_jobs.get(path, 0)) + 1
+	_thumb_generation += 1
+	_thumb_lock.unlock()
+
+
+static func end_thumb(path: String) -> void:
+	_thumb_lock.lock()
+	var remaining: int = int(_thumb_jobs.get(path, 0)) - 1
+	if remaining <= 0:
+		_thumb_jobs.erase(path)
+	else:
+		_thumb_jobs[path] = remaining
+	_thumb_generation += 1
+	_thumb_lock.unlock()
+
+
+static func thumb_is_preparing(path: String) -> bool:
+	_thumb_lock.lock()
+	var preparing: bool = _thumb_jobs.has(path)
+	_thumb_lock.unlock()
+	return preparing
 
 
 func _save(list: Array[Dictionary]) -> Error:
@@ -169,6 +241,7 @@ func _save(list: Array[Dictionary]) -> Error:
 
 func _remove_thumb(id: String) -> void:
 	var path := thumb_path(id)
+	_thumb_revisions.erase(path) # вызывается под _thumb_lock
 	if FileAccess.file_exists(path):
 		var err := DirAccess.remove_absolute(path)
 		if err != OK:
@@ -180,7 +253,7 @@ static func _valid(entry: Dictionary) -> bool:
 		return false
 	var version: Variant = entry.get("version")
 	var start: Variant = entry.get("start")
-	return (version is int or version is float) and int(version) == VERSION \
+	return (version is int or version is float) and float(version) == VERSION \
 		and (start is int or start is float) and is_finite(float(start))
 
 

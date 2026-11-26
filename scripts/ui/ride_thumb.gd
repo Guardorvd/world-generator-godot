@@ -60,7 +60,11 @@ static func render(map_image: Image, world_size: Vector2, entry: Dictionary) -> 
 		_marker(canvas, _pixel(first, frame, Vector2(width, height)), CONFIG.start_color, false)
 		_marker(canvas, _pixel(last, frame, Vector2(width, height)), CONFIG.finish_color, false)
 	for mark: Dictionary in entry.get("fall_marks", []):
-		_marker(canvas, _pixel(Vector2(float(mark.get("x", 0.0)), float(mark.get("z", 0.0))), frame, Vector2(width, height)), CONFIG.fall_color, true)
+		if not mark.has("x") or not mark.has("z") or not (mark.x is float or mark.x is int) or not (mark.z is float or mark.z is int):
+			continue
+		var point := Vector2(float(mark.x), float(mark.z))
+		if point.is_finite():
+			_marker(canvas, _pixel(point, frame, Vector2(width, height)), CONFIG.fall_color, true)
 	return canvas
 
 

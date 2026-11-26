@@ -4,11 +4,25 @@ extends Button
 const RideLog = preload("res://scripts/game/ride_log.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const Config = preload("res://resources/ride_journal.tres")
+const Feed = preload("res://scripts/game/ride_feed.gd")
+const Presentation = preload("res://scripts/ui/ride_presentation.gd")
 var _preview: TextureRect
 var _missing: Label
+var preview_path := ""
+var preview_revision := -1
+var _failed_previews := {}
+var _feed_box: VBoxContainer
+var _feed_preview_box: PanelContainer
+var _feed_metrics: GridContainer
+var _compact_preview_box: PanelContainer
 
 
-func setup(entry: Dictionary, feed, wide := false) -> void:
+func setup(entry: Dictionary, feed, wide := false, failed_previews := {}) -> void:
+	_failed_previews = failed_previews
+	preview_path = feed.thumb_path(str(entry.id))
+	if wide:
+		_setup_feed_card(entry)
+		return
 	toggle_mode = true
 	clip_contents = true
 	custom_minimum_size.y = Config.card_wide_height if wide else Config.card_height
@@ -25,6 +39,7 @@ func setup(entry: Dictionary, feed, wide := false) -> void:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(row)
 	var preview_box := PanelContainer.new()
+	_compact_preview_box = preview_box
 	var thumb_size: Vector2 = Config.card_wide_thumb_size if wide else Config.card_thumb_size
 	var text_size: int = Config.card_wide_text_font if wide else Config.card_text_font
 	preview_box.custom_minimum_size = thumb_size
@@ -39,19 +54,19 @@ func setup(entry: Dictionary, feed, wide := false) -> void:
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview_box.add_child(preview)
-	var path: String = feed.thumb_path(str(entry.id))
-	update_preview(path)
-	if preview.texture == null:
-		var missing := Label.new()
-		_missing = missing
-		missing.text = "Нет карты"
-		missing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		missing.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		missing.add_theme_font_size_override("font_size", text_size)
-		missing.add_theme_color_override("font_color", HudStyle.SURFACE)
-		missing.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		preview.add_child(missing)
-		missing.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	update_preview(preview_path)
+	var missing := Label.new()
+	_missing = missing
+	missing.text = "Нет карты"
+	missing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	missing.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	missing.add_theme_font_size_override("font_size", text_size)
+	missing.add_theme_color_override("font_color", HudStyle.SURFACE)
+	missing.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview.add_child(missing)
+	missing.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	missing.visible = preview.texture == null
+	update_preview_status()
 	var lines := VBoxContainer.new()
 	lines.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lines.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -59,7 +74,8 @@ func setup(entry: Dictionary, feed, wide := false) -> void:
 	lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(lines)
 	var date := Label.new()
-	date.text = RideLog.date_text(float(entry.get("start", 0.0)))
+	var full_date := RideLog.journal_date_text(float(entry.start)) if entry.has("start") else "Дата неизвестна"
+	date.text = full_date.get_slice(", ", 0)
 	date.add_theme_font_size_override("font_size", Config.card_wide_title_font if wide else Config.card_title_font)
 	date.add_theme_color_override("font_color", HudStyle.CREAM)
 	date.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -68,9 +84,9 @@ func setup(entry: Dictionary, feed, wide := false) -> void:
 	lines.add_child(date)
 	var tid := str(entry.get("template_id", ""))
 	var type_config := WorldTemplate.config(tid) if WorldTemplate.exists(tid) else null
-	var type_title: String = type_config.title if type_config != null else tid
+	var type_title: String = type_config.title if type_config != null else "Неизвестный тип мира"
 	var world := Label.new()
-	world.text = str(entry.get("world_title", ""))
+	world.text = Presentation.world_name(entry)
 	world.add_theme_font_size_override("font_size", text_size)
 	world.add_theme_color_override("font_color", HudStyle.MUTED)
 	world.clip_text = true
@@ -104,8 +120,10 @@ func setup(entry: Dictionary, feed, wide := false) -> void:
 	kind.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	kind_row.add_child(kind)
 	var stats := Label.new()
-	var distance := float(entry.get("foot", 0.0)) if bool(entry.get("walk", false)) else float(entry.get("bike", 0.0))
-	stats.text = "%s · %s" % [Util.distance_text(distance), RideLog.duration_text(float(entry.get("time", 0.0)))]
+	var distance_key := "foot" if bool(entry.get("walk", false)) else "bike"
+	var distance_text := Util.distance_text(float(entry[distance_key])) if entry.has(distance_key) else "—"
+	var duration_text := RideLog.duration_text(float(entry.time)) if entry.has("time") else "—"
+	stats.text = "%s · %s" % [distance_text, duration_text]
 	stats.add_theme_font_size_override("font_size", text_size)
 	stats.add_theme_color_override("font_color", HudStyle.CREAM)
 	stats.clip_text = true
@@ -113,29 +131,170 @@ func setup(entry: Dictionary, feed, wide := false) -> void:
 	stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lines.add_child(stats)
 	var extra := Label.new()
-	var ascent := "%d м" % roundi(float(entry.climb)) if entry.has("climb") else "—"
 	var falls := str(int(entry.falls)) if entry.has("falls") else "—"
-	extra.text = "↑ %s · падений %s" % [ascent, falls]
+	extra.text = "Падения · %s" % falls
 	extra.add_theme_font_size_override("font_size", text_size)
 	extra.add_theme_color_override("font_color", HudStyle.MUTED)
 	extra.clip_text = true
 	extra.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	extra.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lines.add_child(extra)
-	accessibility_name = "%s, %s, %s, %s" % ["Пешая прогулка" if bool(entry.get("walk", false)) else "Поездка", date.text, world.text, stats.text]
-	tooltip_text = "%s · %s · %s" % [world.text, type_title, date.text]
+	accessibility_name = "%s, %s, %s, %s, %s, падения: %s" % ["Пешая прогулка" if bool(entry.get("walk", false)) else "Поездка", full_date, world.text, type_title, stats.text, falls]
+	tooltip_text = "%s · %s · %s" % [world.text, type_title, full_date]
+	resized.connect(_fit_compact_card)
+	_fit_compact_card.call_deferred()
 
 
 func update_preview(path: String) -> void:
+	if Feed.thumb_is_preparing(path):
+		update_preview_status()
+		return
 	if not FileAccess.file_exists(path):
+		return
+	var revision := Feed.thumb_revision(path)
+	if int(_failed_previews.get(path, -2)) == revision:
 		return
 	var image := Image.load_from_file(path)
 	if image == null or image.is_empty():
+		_failed_previews[path] = revision
 		return
+	_failed_previews.erase(path)
 	_preview.texture = ImageTexture.create_from_image(image)
+	preview_revision = revision
 	if is_instance_valid(_missing):
-		_missing.queue_free()
-		_missing = null
+		_missing.hide()
+
+
+func update_preview_status() -> void:
+	if is_instance_valid(_missing) and _preview.texture == null:
+		_missing.text = ("Подготавливаем карту…" if _feed_box != null else "Готовится…") if Feed.thumb_is_preparing(preview_path) else ("Карта поездки недоступна" if _feed_box != null else "Нет карты")
+		_missing.show()
+
+
+func unload_preview() -> void:
+	if is_instance_valid(_preview):
+		_preview.texture = null
+		if is_instance_valid(_missing):
+			_missing.show()
+
+
+func _fit_compact_card() -> void:
+	if not is_instance_valid(_compact_preview_box) or size.x <= 0.0:
+		return
+	var thumb_size: Vector2 = Vector2(58, 37) if size.x < 260.0 else Config.card_thumb_size
+	_compact_preview_box.custom_minimum_size = thumb_size
+	_preview.custom_minimum_size = thumb_size
+
+
+func _setup_feed_card(entry: Dictionary) -> void:
+	toggle_mode = true
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clip_contents = true
+	var normal := HudStyle.panel(Color(0.07, 0.10, 0.11, 0.94), Color(0.72, 0.67, 0.55, 0.45), 10, Vector2.ZERO, false)
+	var hover := HudStyle.panel(Color(0.12, 0.14, 0.14, 0.97), Color(0.95, 0.80, 0.50, 0.8), 10, Vector2.ZERO, false)
+	add_theme_stylebox_override("normal", normal)
+	add_theme_stylebox_override("hover", hover)
+	add_theme_stylebox_override("pressed", hover)
+	add_theme_stylebox_override("hover_pressed", hover)
+	var focus := HudStyle.panel(Color.TRANSPARENT, HudStyle.AMBER, 10, Vector2.ZERO, false)
+	focus.draw_center = false
+	focus.set_border_width_all(2)
+	add_theme_stylebox_override("focus", focus)
+	var box := VBoxContainer.new()
+	_feed_box = box
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 18
+	box.offset_right = -18
+	box.offset_top = 16
+	box.offset_bottom = -16
+	box.add_theme_constant_override("separation", 8)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(box)
+	var walking := bool(entry.get("walk", false))
+	var kind := "ПЕШАЯ ПРОГУЛКА" if walking else ("ВЕЛОПОЕЗДКА" if entry.has("walk") else "ПОЕЗДКА")
+	var date := RideLog.journal_date_text(float(entry.start)) if entry.has("start") else "Дата неизвестна"
+	var header := HBoxContainer.new()
+	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_theme_constant_override("separation", 8)
+	box.add_child(header)
+	var kind_label := _add_label(header, kind, 15, HudStyle.AMBER)
+	kind_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var date_label := _add_label(header, date, 14, HudStyle.MUTED)
+	date_label.clip_text = false
+	date_label.custom_minimum_size.x = 156.0
+	date_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var tid := str(entry.get("template_id", ""))
+	var type_title: String = WorldTemplate.config(tid).title if WorldTemplate.exists(tid) else "Неизвестный тип мира"
+	var world := Presentation.world_name(entry)
+	_add_label(box, "%s · %s" % [world, type_title], 18, HudStyle.CREAM)
+	var preview_box := PanelContainer.new()
+	_feed_preview_box = preview_box
+	preview_box.custom_minimum_size.y = 270
+	preview_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	preview_box.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.PAPER, HudStyle.BORDER, 4, Vector2.ZERO, false))
+	preview_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(preview_box)
+	_preview = TextureRect.new()
+	_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_box.add_child(_preview)
+	_missing = Label.new()
+	_missing.text = "Карта поездки недоступна"
+	_missing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_missing.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	HudStyle.label(_missing, 14, HudStyle.SURFACE)
+	_preview.add_child(_missing)
+	_missing.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	update_preview_status()
+	var stats := GridContainer.new()
+	_feed_metrics = stats
+	stats.columns = 3
+	stats.add_theme_constant_override("separation", 8)
+	stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(stats)
+	var distance_key := "foot" if walking or (not entry.has("walk") and not entry.has("bike") and entry.has("foot")) else "bike"
+	var distance_caption := "Пешком" if distance_key == "foot" else ("На велосипеде" if entry.has("walk") or entry.has("bike") else "Расстояние")
+	var distance := Util.distance_text(float(entry[distance_key])) if entry.has(distance_key) else "—"
+	var duration := RideLog.duration_text(float(entry.time)) if entry.has("time") else "—"
+	var falls := str(int(entry.falls)) if entry.has("falls") else "—"
+	_add_metric(stats, distance_caption, distance)
+	_add_metric(stats, "Длительность", duration)
+	_add_metric(stats, "Падения", falls)
+	_add_label(box, "Подробнее о поездке  ›", 15, HudStyle.AMBER)
+	custom_minimum_size.y = 485
+	resized.connect(_fit_feed_card)
+	_fit_feed_card.call_deferred()
+	accessibility_name = "%s, %s, %s, %s. %s: %s, длительность: %s, падения: %s. Подробнее о поездке" % [kind, date, world, type_title, distance_caption, distance, duration, falls]
+	tooltip_text = "%s · %s · %s" % [world, type_title, date]
+
+
+func _fit_feed_card() -> void:
+	if size.x <= 0.0 or not is_instance_valid(_feed_box):
+		return
+	_feed_metrics.columns = 1 if size.x < 400.0 else 3
+	var map_height := clampf((size.x - 36.0) * 0.625, 100.0, maxf(100.0, Config.feed_preview_max_height))
+	_feed_preview_box.custom_minimum_size = Vector2(map_height * 1.6, map_height)
+	custom_minimum_size.y = _feed_box.get_combined_minimum_size().y + 32.0
+
+
+func _add_label(parent: Node, value: String, font_size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.text = value
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	HudStyle.label(label, font_size, color)
+	parent.add_child(label)
+	return label
+
+
+func _add_metric(parent: Node, caption: String, value: String) -> void:
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(column)
+	_add_label(column, caption, 13, HudStyle.MUTED)
+	_add_label(column, value, 18, HudStyle.CREAM)
 
 
 class FootIcon extends Control:

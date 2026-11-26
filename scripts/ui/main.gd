@@ -291,31 +291,30 @@ func _ready() -> void:
 	%OpenShop.pressed.connect(_open_shop)
 	var ride_screen := PanelContainer.new()
 	ride_screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	ride_screen.theme = RideStyle.theme()
-	ride_screen.add_theme_stylebox_override("panel", RideStyle.panel(Color("#101e1c"), Color("#101e1c"), 0, Vector2.ZERO, false))
+	ride_screen.add_theme_stylebox_override("panel", RideStyle.panel(Color(0.03, 0.05, 0.06, 0.35), Color.TRANSPARENT, 0, Vector2.ZERO, false))
 	ride_screen.hide()
 	%Menu.get_parent().add_child(ride_screen)
-	var ride_margin := MarginContainer.new()
-	for edge: String in ["left", "top", "right", "bottom"]:
-		ride_margin.add_theme_constant_override("margin_" + edge, 24)
-	ride_screen.add_child(ride_margin)
-	var ride_center := HBoxContainer.new()
-	ride_margin.add_child(ride_center)
-	var left_space := Control.new()
-	left_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ride_center.add_child(left_space)
+	var ride_canvas := Control.new()
+	ride_screen.add_child(ride_canvas)
 	var ride_box := VBoxContainer.new()
+	ride_box.name = "RideColumn"
 	ride_box.add_theme_constant_override("separation", 12)
-	ride_center.add_child(ride_box)
-	var right_space := Control.new()
-	right_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ride_center.add_child(right_space)
+	ride_canvas.add_child(ride_box)
 	var fit_ride_column := func() -> void:
-		ride_box.custom_minimum_size.x = minf(900.0, maxf(200.0, get_viewport().get_visible_rect().size.x - 48.0))
+		var available := ride_canvas.size
+		var window_size := get_window().size
+		var portrait := window_size.y > window_size.x and window_size.x > 0
+		var factor := clampf(available.x / float(window_size.x), 1.0, 2.0) if portrait else 1.0
+		var width := minf(620.0, maxf(200.0, (available.x - 48.0) / factor))
+		ride_box.scale = Vector2.ONE * factor
+		ride_box.position = Vector2((available.x - width * factor) * 0.5, 24.0)
+		ride_box.size = Vector2(width, maxf(0.0, (available.y - 48.0) / factor))
 	get_viewport().size_changed.connect(fit_ride_column)
-	fit_ride_column.call()
+	ride_canvas.resized.connect(fit_ride_column)
+	fit_ride_column.call_deferred()
 	var ride_back := Button.new()
 	ride_back.text = "← В меню"
+	ride_back.theme_type_variation = &"MenuLink"
 	ride_back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	ride_back.pressed.connect(_return_to_menu_screen)
 	ride_box.add_child(ride_back)
@@ -330,7 +329,8 @@ func _ready() -> void:
 			_ride_feed_view.refresh()
 			_active_screen = "ride_feed"
 			_ui_stack.push("ride_feed", {dimmer = 0.35, enter_duration = 0.20, return_focus = %OpenRides, sound = &"panel_open"})
-			_sync_backdrop_visibility("ride_feed"))
+			_sync_backdrop_visibility("ride_feed")
+			ride_back.grab_focus())
 	_pause_settings_btn = get_node_or_null("UI/Root/Pause/Panel/Box/Settings") as Button
 	_type_catalog = WorldTypeCatalog.new()
 	_type_catalog.name = "WorldTypeCatalog"
@@ -419,11 +419,11 @@ func _opener_focus(fallback: Control) -> Control:
 
 func _sync_backdrop_visibility(screen := _active_screen) -> void:
 	if screens.has("back") and screens.back != null:
-		screens.back.visible = screen in ["menu", "world_hub", "loading", "shop", "type_catalog"] or (screen == "settings" and game == null)
+		screens.back.visible = screen in ["menu", "world_hub", "loading", "shop", "type_catalog", "ride_feed"] or (screen == "settings" and game == null)
 	if screen != "menu" and _startup_cover != null:
 		_lift_startup_cover()
 	if _progress_enabled:
-		var mode := "frozen" if screen == "loading" else ("live" if screens.has("back") and screens.back.visible else "")
+		var mode := "frozen" if screen in ["loading", "ride_feed"] else ("live" if screens.has("back") and screens.back.visible else "")
 		_set_backdrop_mode(mode)
 		if _backdrop != null:
 			_backdrop.process_mode = Node.PROCESS_MODE_DISABLED if screen == "shop" else Node.PROCESS_MODE_INHERIT
