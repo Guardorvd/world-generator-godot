@@ -30,7 +30,10 @@ func run() -> void:
 				var foot_pose := sk.get_bone_global_pose(sk.find_bone("Foot" + side))
 				check((foot_pose * CyclistRig.PEDAL_CONTACT_LOCAL).distance_to(bike.to_local(pedal.global_position)) < 0.001, "Foot stays on pedal")
 				var hand := sk.get_bone_global_pose(sk.find_bone("Hand" + side)).origin
-				var grip := bike._steering.position + bike._steering.basis * Vector3(-0.24 if side == "L" else 0.24, 0.22, -0.015)
+				var grip_rest := BikeView.GRIP
+				if side == "L":
+					grip_rest.x = -grip_rest.x
+				var grip := bike.to_local(bike._steering.to_global(grip_rest - BikeView.STEERING_PIVOT))
 				check(hand.distance_to(grip) < 0.001, "Hand stays on grip")
 			for i in sk.get_bone_count():
 				check(sk.get_bone_global_pose(i).is_finite(), "Finite pose")

@@ -419,47 +419,86 @@ func helmet_strip(x: float, width: float, mat: Vector2i) -> void:
 
 
 func _limbs(side: float) -> void:
-	var s := "L" if side < 0 else "R"
 	_arm(side)
-	# Ладонь и согнутый большой палец вместо двух шаров. Весь хват жёстко следует Hand.
-	local_loft("Hand" + s, [Vector3(0, -0.035, -0.018), Vector3(0, -0.016, -0.022), Vector3(0, 0.02, -0.012), Vector3(0, 0.038, 0)], [Vector2(0.035, 0.024), Vector2(0.044, 0.042), Vector2(0.043, 0.042), Vector2(0.032, 0.025)], navy, 8)
-	local_loft("Hand" + s, [Vector3(-side * 0.03, -0.025, -0.005), Vector3(-side * 0.046, -0.012, -0.018), Vector3(-side * 0.032, 0.006, -0.036)], [Vector2(0.015, 0.017), Vector2(0.018, 0.019), Vector2(0.012, 0.014)], navy, 8)
-	box("Hand" + s, Vector3(0.053, 0.009, 0.027), Vector3(0, 0.035, -0.008), panel)
-	box("Hand" + s, Vector3(0.038, 0.004, 0.008), Vector3(0, 0.041, -0.007), cream)
-	# 17.11: четыре пальца перчатки — круглые трубки по дуге хвата (три фаланги), мизинец тоньше и короче;
-	# на костяшках — накладка. Раньше пальцы были коробочками в два звена.
-	for i in 4:
-		var fx := (float(i) - 1.5) * 0.0205
-		var k := 0.86 if (i == 0 and side > 0.0) or (i == 3 and side < 0.0) else 1.0 # мизинец снаружи
-		path_loft("Hand" + s, [Vector3(fx, 0.017, -0.034), Vector3(fx, -0.003, -0.047), Vector3(fx, -0.024, -0.043 * k), Vector3(fx, -0.036 * k, -0.026 * k)],
-			[0.0098 * k, 0.0094 * k, 0.0088 * k, 0.0078 * k], navy, 6)
-	box("Hand" + s, Vector3(0.076, 0.009, 0.014), Vector3(0, 0.017, -0.046), panel, Basis(Vector3.RIGHT, 0.45))
+	_glove(side)
 	_leg(side)
-	# 17.11: обувь — колодка вдоль стопы (сечения поперёк, от пятки к носку): поднятый задник, вырез у щиколотки,
-	# носок ниже и уже; подошва плоская с рантом и чуть загнута у носка. Ремешки, задник и резиновый носок —
-	# участки самой поверхности. Раньше — вертикальная «лодка» шириной 13 см с накладками-коробками.
-	var zs := [0.088, 0.072, 0.035, -0.005, -0.045, -0.085, -0.12, -0.148, -0.162]
-	var upper_w := [0.032, 0.043, 0.047, 0.049, 0.051, 0.052, 0.048, 0.036, 0.016]
-	var upper_h := [0.034, 0.042, 0.045, 0.038, 0.030, 0.024, 0.018, 0.013, 0.007]
-	var upper_c: Array[Vector3] = []
-	var upper_s: Array[Vector2] = []
-	var sole_c: Array[Vector3] = []
-	var sole_s: Array[Vector2] = []
-	for i in zs.size():
-		upper_c.append(Vector3(0, upper_h[i] - 0.040, zs[i]))
-		upper_s.append(Vector2(upper_w[i], upper_h[i]))
-		sole_c.append(Vector3(0, -0.041 + (0.003 if i == 7 else (0.006 if i == 8 else 0.0)), zs[i] - (0.004 if i == 8 else 0.0)))
-		sole_s.append(Vector2(upper_w[i] + 0.005, 0.0075 if i < 8 else 0.006))
-	var shoe_decals := [
-		{from = 0, to = 2, angle = -PI * 0.5, half = 1.35, mat = panel},
-		{from = 3, to = 4, angle = PI * 0.5, half = 1.15, mat = navy},
-		{from = 4, to = 5, angle = PI * 0.5, half = 1.2, mat = navy},
-		{from = 4, to = 6, angle = 0.0, half = 0.3, mat = panel},
-		{from = 4, to = 6, angle = PI, half = 0.3, mat = panel},
-		{from = 6, to = 8, angle = -PI * 0.5, half = 1.45, mat = dark},
-	]
-	axis_loft("Foot" + s, upper_c, upper_s, shoe, 12, shoe_decals)
-	axis_loft("Foot" + s, sole_c, sole_s, dark, 12)
+	_shoe(side)
+
+
+func _glove(side: float) -> void:
+	var hand := "Hand" + ("L" if side < 0 else "R")
+	# Hand sits on the grip axis. The heel of the palm meets the cuff behind
+	# the bar, the knuckles cross above it and the fingertips curl underneath.
+	axis_loft(hand, [Vector3(0, 0.009, 0.029), Vector3(0, 0.020, 0.017),
+			Vector3(-side * 0.002, 0.031, -0.003), Vector3(0, 0.022, -0.020)],
+		[Vector2(0.029, 0.018), Vector2(0.039, 0.018), Vector2(0.043, 0.014), Vector2(0.039, 0.011)],
+		navy, 10, [{from = 1, to = 3, angle = PI * 0.5, half = PI * 0.3, mat = panel}])
+	for i in 4: # index to little finger, medial to lateral on both hands
+		var x := side * (-0.029 + 0.019 * i)
+		var reach: float = [0.96, 1.0, 0.92, 0.74][i]
+		var r: float = [0.0095, 0.010, 0.0092, 0.0080][i]
+		var sweep := 0.065 * side * x # backsweep of the grip
+		path_loft(hand, [Vector3(x, 0.023, sweep - 0.016), Vector3(x, 0.012, sweep - 0.026),
+				Vector3(x, -0.011 * reach, sweep - 0.026), Vector3(x, -0.024 * reach, sweep - 0.012),
+				Vector3(x, -0.025 * reach, sweep - 0.012 + 0.017 * reach)],
+			[r, r, r * 0.94, r * 0.85, r * 0.65], navy)
+	path_loft(hand, [Vector3(-side * 0.021, 0.016, 0.019), Vector3(-side * 0.034, 0.004, 0.027),
+			Vector3(-side * 0.043, -0.013, 0.021), Vector3(-side * 0.042, -0.023, 0.006)],
+		[0.015, 0.014, 0.012, 0.009], navy, 7)
+
+
+func _shoe(side: float) -> void:
+	var suffix := "L" if side < 0 else "R"
+	var foot := skeleton.find_bone("Foot" + suffix)
+	var toe := skeleton.find_bone("Toe" + suffix)
+	var at := skeleton.get_bone_global_pose(foot)
+	# Heel to toe: longitudinal position, half-width, upper height above sole, sole bottom.
+	var last := [Vector4(0.088, 0.027, 0.064, -0.042), Vector4(0.070, 0.040, 0.088, -0.047),
+		Vector4(0.032, 0.043, 0.091, -0.048), Vector4(-0.012, 0.040, 0.081, -0.048),
+		Vector4(-0.050, 0.046, 0.063, -0.048), Vector4(-0.085, 0.052, 0.051, -0.048),
+		Vector4(-0.119, 0.050, 0.043, -0.047), Vector4(-0.147, 0.039, 0.035, -0.043),
+		Vector4(-0.162, 0.019, 0.022, -0.037)]
+	# Closed perimeter viewed from the toes. Flat tread, bevel, welt, vamp.
+	var outline := [Vector2(0.82, 0), Vector2(1, 0.05), Vector2(1, 0.14), Vector2(0.90, 0.52),
+		Vector2(0.55, 0.86), Vector2(0, 1), Vector2(-0.55, 0.86), Vector2(-0.90, 0.52),
+		Vector2(-1, 0.14), Vector2(-1, 0.05), Vector2(-0.82, 0)]
+	var rows: Array[Array] = []
+	for station: Vector4 in last:
+		var row := []
+		var blend := smoothstep(0.086, 0.145, -station.x)
+		var shift := -side * 0.009 * smoothstep(0.085, 0.162, -station.x)
+		for uv: Vector2 in outline:
+			row.append({position = at * Vector3(shift + uv.x * station.y, station.w + uv.y * station.z, station.x),
+				bones = PackedInt32Array([foot, toe, 0, 0]), weights = PackedFloat32Array([1.0 - blend, blend, 0, 0])})
+		rows.append(row)
+	# Smooth the leather across stations. Keep hard normals on tread and end caps.
+	for i in rows.size():
+		var prev := rows[maxi(0, i - 1)]
+		var next := rows[mini(rows.size() - 1, i + 1)]
+		for j in range(2, 9):
+			var along: Vector3 = next[j].position - prev[j].position
+			var around: Vector3 = rows[i][j + 1].position - rows[i][j - 1].position
+			rows[i][j].normal = along.cross(around).normalized()
+	for i in rows.size() - 1:
+		for j in outline.size():
+			var k := (j + 1) % outline.size()
+			var mat := shoe
+			if j < 2 or j >= 8 or i == 7 or (i == 6 and j in [2, 7]):
+				mat = dark
+			elif i == 0 or (i == 3 and j in [3, 4, 5, 6]) or (i in [4, 5] and j in [2, 7]):
+				mat = panel
+			triangle(rows[i][j], rows[i + 1][j], rows[i][k], mat)
+			triangle(rows[i][k], rows[i + 1][j], rows[i + 1][k], mat)
+	for end in [0, rows.size() - 1]:
+		var row := rows[end]
+		for vertex: Dictionary in row:
+			vertex.erase("normal")
+		for j in range(1, row.size() - 1):
+			if end == 0:
+				triangle(row[0], row[j], row[j + 1], panel)
+			else:
+				triangle(row[0], row[j + 1], row[j], dark)
+
 
 
 const DOWN_BASIS := Basis(Vector3.RIGHT, Vector3.DOWN, Vector3.FORWARD)
@@ -497,11 +536,11 @@ func _arm(side: float) -> void:
 	rings.append_array(bend_rings(forearm.origin, arm.basis, forearm.basis, 0.036, Vector2(0.045, 0.047), Vector2(0.049, 0.048), "UpperArm" + s, "Forearm" + s, 0.065, 0.15))
 	# 17.11: предплечье — широкое у локтя (мышцы-сгибатели), к запястью плоское
 	rings.append_array([
-		ring(forearm.origin.lerp(hand.origin, 0.38), forearm.basis, 0.049, 0.044, "Forearm" + s, "", 0.0, Vector2(side * 0.002, 0.001)),
-		ring(forearm.origin.lerp(hand.origin, 0.64), forearm.basis, 0.040, 0.033, "Forearm" + s),
+		ring(forearm.origin.lerp(hand.origin, 0.38), forearm.basis, 0.048, 0.043, "Forearm" + s, "", 0.0, Vector2(side * 0.004, -0.003)),
+		ring(forearm.origin.lerp(hand.origin, 0.64), forearm.basis, 0.039, 0.032, "Forearm" + s, "", 0.0, Vector2(side * 0.003, -0.001)),
 		ring(forearm.origin.lerp(hand.origin, 0.80), forearm.basis, 0.034, 0.027, "Forearm" + s),
 		ring(forearm.origin.lerp(hand.origin, 0.804), forearm.basis, 0.038, 0.035, "Forearm" + s),
-		ring(hand.origin, forearm.basis, 0.037, 0.034, "Forearm" + s),
+		ring(hand.origin + hand.basis.z * 0.020 + hand.basis.y * 0.008, forearm.basis, 0.029, 0.025, "Forearm" + s, "Hand" + s, 0.50),
 	])
 	var mats := []
 	for i in root_count + 2:
@@ -539,14 +578,14 @@ func _leg(side: float) -> void:
 	rings.append_array(bend_rings(calf.origin, thigh.basis, calf.basis, 0.046, Vector2(0.056, 0.059), Vector2(0.050, 0.053), "UpperLeg" + s, "LowerLeg" + s, 0.070, 0.13))
 	rings.append_array([
 		ring(calf.origin.lerp(foot.origin, 0.25), calf.basis, 0.058, 0.065, "LowerLeg" + s, "", 0.0, Vector2(side * 0.003, -0.009)),
-		ring(calf.origin.lerp(foot.origin, 0.36), calf.basis, 0.061, 0.069, "LowerLeg" + s, "", 0.0, Vector2(side * 0.003, -0.012)),
-		ring(calf.origin.lerp(foot.origin, 0.48), calf.basis, 0.053, 0.060, "LowerLeg" + s, "", 0.0, Vector2(side * 0.002, -0.008)),
+		ring(calf.origin.lerp(foot.origin, 0.36), calf.basis, 0.061, 0.069, "LowerLeg" + s, "", 0.0, Vector2(-side * 0.004, -0.014)),
+		ring(calf.origin.lerp(foot.origin, 0.48), calf.basis, 0.053, 0.060, "LowerLeg" + s, "", 0.0, Vector2(-side * 0.004, -0.010)),
 		ring(calf.origin.lerp(foot.origin, 0.62), calf.basis, 0.042, 0.047, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.004)),
 		ring(calf.origin.lerp(foot.origin, 0.76), calf.basis, 0.036, 0.040, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
 		ring(calf.origin.lerp(foot.origin, 0.764), calf.basis, 0.040, 0.044, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
 		ring(calf.origin.lerp(foot.origin, 0.79), calf.basis, 0.040, 0.044, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
-		ring(calf.origin.lerp(foot.origin, 0.89), calf.basis, 0.034, 0.039, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
-		ring(foot.origin, calf.basis.slerp(foot.basis, 0.35), 0.036, 0.040, "LowerLeg" + s, "Foot" + s, 0.35, Vector2(0.0, -0.002)),
+		ring(calf.origin.lerp(foot.origin, 0.89), calf.basis, 0.031, 0.036, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
+		ring(foot.origin, calf.basis.slerp(foot.basis * DOWN_BASIS, 0.35), 0.036, 0.040, "LowerLeg" + s, "Foot" + s, 0.35, Vector2(0.0, -0.002)),
 	])
 	# Сегменты: шорты до кромки (7), кожа через колено и икру, носок от своей кромки до щиколотки (4).
 	var mats := [navy, navy, navy, navy, panel, navy, navy]
@@ -555,7 +594,7 @@ func _leg(side: float) -> void:
 	mats.append_array([cream, cream, cream, cream])
 	var outer := PI if side < 0 else 0.0
 	# вставка другой ткани по внешней стороне бедра — участок самой поверхности
-	loft(rings, skin, null, mats, 12, true, [{from = 2, to = 6, angle = outer, half = 0.2, mat = panel}])
+	loft(rings, skin, null, mats, 12, false, [{from = 2, to = 6, angle = outer, half = 0.2, mat = panel}])
 
 
 ## Сгиб локтя/колена. Ось конечности в зоне сустава идёт по дуге, касательной к обеим костям на расстоянии
@@ -622,7 +661,7 @@ func path_loft(bone_name: String, points: Array, radii: Array, mat: Vector2i, si
 		var y := (next - prev).normalized()
 		var x := (Vector3.RIGHT - y * y.x).normalized()
 		rings.append(ring(at * (points[i] as Vector3), at.basis * Basis(x, y, x.cross(y)), radii[i], radii[i], bone_name))
-	loft(rings, mat, null, [], sides)
+	loft(rings, mat, null, [], sides, false)
 
 
 func ring(center: Vector3, basis: Basis, rx: float, rz: float, bone_name: String, other := "", weight := 0.0, offset := Vector2.ZERO, bias := Vector2.ZERO, fold := Vector3.ZERO) -> Dictionary:
