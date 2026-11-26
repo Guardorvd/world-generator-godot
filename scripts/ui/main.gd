@@ -22,6 +22,7 @@ const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
 const RideStyle := preload("res://scripts/ui/hud_style.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
+const WorldTypeCatalog := preload("res://scripts/ui/world_type_catalog.gd")
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
 const UiAudio := preload("res://scripts/ui/ui_audio.gd")
 const UiStack := preload("res://scripts/ui/ui_stack.gd")
@@ -128,6 +129,19 @@ var _favorites_notice_tween: Tween
 var _fov_dragging := false
 var _volume_dragging := false
 var _volume_tick_ms := 0
+var _type_catalog: WorldTypeCatalog
+var _catalog_return: Control
+var _menu_scroll: ScrollContainer
+var _menu_content: VBoxContainer
+var _menu_spacer: Control
+var _menu_panel: Control
+var _draft_form: VBoxContainer
+var _draft_seed: LineEdit
+var _draft_create: Button
+var _draft_active := false
+var _draft_type := ""
+var _draft_selected_seed := ""
+var _launch_from_draft := false
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -232,6 +246,10 @@ func _ready() -> void:
 		button.add_theme_constant_override("icon_max_width", 22)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
 	carousel.type_changed.connect(_on_type_changed)
+	carousel.displayed_type_changed.connect(_on_displayed_type_changed)
+	carousel.catalog_requested.connect(_open_type_catalog)
+	_setup_menu_layout()
+	_setup_new_world_form()
 	var cli_template := WorldTemplate.cmdline_template()
 	if cli_template != WorldTemplate.DEFAULT_ID:
 		carousel.select_type(cli_template)
@@ -314,8 +332,26 @@ func _ready() -> void:
 			_ui_stack.push("ride_feed", {dimmer = 0.35, enter_duration = 0.20, return_focus = %OpenRides, sound = &"panel_open"})
 			_sync_backdrop_visibility("ride_feed"))
 	_pause_settings_btn = get_node_or_null("UI/Root/Pause/Panel/Box/Settings") as Button
+	_type_catalog = WorldTypeCatalog.new()
+	_type_catalog.name = "WorldTypeCatalog"
+	_type_catalog.hide()
+	%Menu.get_parent().add_child(_type_catalog)
+	_type_catalog.closed.connect(_close_type_catalog)
+	_type_catalog.type_requested.connect(_choose_catalog_type)
+	_type_catalog.unavailable_requested.connect(func() -> void: _play_ui(&"error_deny"))
+	screens.type_catalog = _type_catalog
+	var hub_type := Button.new()
+	hub_type.name = "HubType"
+	hub_type.custom_minimum_size.y = 40
+	hub_type.theme_type_variation = &"MenuLink"
+	hub_type.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	hub_type.text = "Тип путешествия: %s  ▾" % carousel.WORLD_TYPES[carousel._type_index].title
+	%AllWorlds.get_node("Panel/Box").add_child(hub_type)
+	%AllWorlds.get_node("Panel/Box").move_child(hub_type, 1)
+	hub_type.pressed.connect(func() -> void: _open_type_catalog(hub_type))
 	_ui_stack.setup(self, {menu = %Menu, world_hub = %AllWorlds,
-		loading = %Loading, pause = %Pause, settings = %Settings, shop = shop_screen, ride_feed = ride_screen}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
+		loading = %Loading, pause = %Pause, settings = %Settings, shop = shop_screen, ride_feed = ride_screen,
+		type_catalog = _type_catalog}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
 	for launch_btn: Button in [%Start, %PlaySelected, %CreateWorld]:
 		launch_btn.set_meta(&"ui_sound_custom", true)
 	%FovSlider.drag_started.connect(func() -> void:
@@ -331,7 +367,7 @@ func _ready() -> void:
 	_shop.sound_requested.connect(_play_ui)
 	hud.journal_panel.shop_panel.sound_requested.connect(_play_ui)
 	hud.journal_panel.controls_created.connect(_ui_audio.bind_tree)
-	for subtree: Node in [%Menu, %AllWorlds, %Loading, %Pause, %Settings, _shop, ride_screen, hud.journal_panel]:
+	for subtree: Node in [%Menu, %AllWorlds, %Loading, %Pause, %Settings, _shop, ride_screen, _type_catalog, hud.journal_panel]:
 		_ui_audio.bind_tree(subtree)
 	get_viewport().size_changed.connect(_fit_menu)
 	(%AllWorlds.get_node("Panel") as Control).resized.connect(_fit_hub)
@@ -383,7 +419,7 @@ func _opener_focus(fallback: Control) -> Control:
 
 func _sync_backdrop_visibility(screen := _active_screen) -> void:
 	if screens.has("back") and screens.back != null:
-		screens.back.visible = screen in ["menu", "world_hub", "loading", "shop"] or (screen == "settings" and game == null)
+		screens.back.visible = screen in ["menu", "world_hub", "loading", "shop", "type_catalog"] or (screen == "settings" and game == null)
 	if screen != "menu" and _startup_cover != null:
 		_lift_startup_cover()
 	if _progress_enabled:
@@ -399,7 +435,7 @@ func _focus_screen_default(screen: String) -> void:
 		"menu":
 			_fit_menu()
 			(%Carousel as Carousel)._set_mode(0)
-			_grab_focus_quiet(%Start if (%Carousel as Carousel).type_available() else (%Carousel as Carousel)._next)
+			_grab_focus_quiet(_draft_seed if _draft_active else %Start)
 		"world_hub":
 			_update_selection()
 			_grab_focus_quiet(seed_edit)
@@ -460,6 +496,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		_cancel_confirm()
 		get_viewport().set_input_as_handled()
 		return
+	if _is_screen("type_catalog"):
+		_close_type_catalog()
+		get_viewport().set_input_as_handled()
+		return
+	if _is_screen("menu") and _draft_active:
+		_cancel_new_world()
+		get_viewport().set_input_as_handled()
+		return
 	if _is_screen("settings"):
 		if display_options != null and display_options.close_open_popup():
 			get_viewport().set_input_as_handled()
@@ -490,15 +534,157 @@ static func _is_back_press(event: InputEvent) -> bool:
 
 
 func _open_new_world() -> void:
-	if _is_screen("menu") and not (%Carousel as Carousel).type_available():
+	if not _is_screen("menu") or busy or _draft_active or not (%Carousel as Carousel).displayed_type_available():
 		return
-	if _is_screen("menu"):
-		seed_edit.text = random_seed()
-		while _has_save(seed_edit.text):
-			seed_edit.text = random_seed()
-	_open_all_worlds(%NewWorld)
-	if _is_screen("world_hub"):
-		_grab_focus_quiet(seed_edit)
+	_draft_type = _active_template_id()
+	_draft_selected_seed = _selected_seed
+	_draft_seed.text = random_seed()
+	while _has_save(_draft_seed.text):
+		_draft_seed.text = random_seed()
+	_set_draft_visible(true)
+	_play_ui(&"panel_open")
+	_grab_focus_quiet(_draft_seed)
+
+
+func _cancel_new_world() -> void:
+	if not _draft_active: return
+	var carousel := %Carousel as Carousel
+	carousel._select_type_from_ui(_draft_type)
+	if _draft_selected_seed.is_empty():
+		_select_world("")
+	else:
+		_pick_seed(_draft_selected_seed)
+	_set_draft_visible(false)
+	_play_ui(&"panel_close")
+	_grab_focus_quiet(%NewWorld)
+
+
+func _setup_menu_layout() -> void:
+	_menu_panel = %Menu.get_node("Panel") as Control
+	(_menu_panel as VBoxContainer).add_theme_constant_override("separation", 5)
+	%Start.custom_minimum_size.y = 48
+	%NewWorld.custom_minimum_size.y = 40
+	var actions := _menu_panel.get_node("Actions") as VBoxContainer
+	actions.add_theme_constant_override("separation", 2)
+	for action: Control in actions.get_children():
+		action.custom_minimum_size.y = 38
+	_menu_scroll = ScrollContainer.new()
+	_menu_scroll.name = "MenuScroll"
+	_menu_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_menu_scroll.follow_focus = true
+	%Menu.add_child(_menu_scroll)
+	_menu_content = VBoxContainer.new()
+	_menu_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_menu_content.add_theme_constant_override("separation", 8)
+	_menu_scroll.add_child(_menu_content)
+	%Carousel.reparent(_menu_content)
+	%Carousel.custom_minimum_size.y = 254
+	_menu_spacer = Control.new()
+	_menu_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_menu_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_menu_content.add_child(_menu_spacer)
+	_menu_panel.reparent(_menu_content)
+
+
+func _setup_new_world_form() -> void:
+	_draft_form = VBoxContainer.new()
+	_draft_form.name = "NewWorldForm"
+	_draft_form.add_theme_constant_override("separation", 7)
+	_menu_panel.add_child(_draft_form)
+	_menu_panel.move_child(_draft_form, %NewWorld.get_index() + 1)
+	var label := Label.new()
+	label.text = "НОВОЕ ПУТЕШЕСТВИЕ"
+	label.theme_type_variation = &"SectionLabel"
+	_draft_form.add_child(label)
+	var hint := Label.new()
+	hint.text = "Зерно позволяет повторить мир"
+	hint.theme_type_variation = &"MenuFootnote"
+	_draft_form.add_child(hint)
+	var row := HBoxContainer.new()
+	_draft_form.add_child(row)
+	_draft_seed = LineEdit.new()
+	_draft_seed.name = "DraftSeed"
+	_draft_seed.placeholder_text = "Зерно мира (случайное)"
+	_draft_seed.max_length = 32
+	_draft_seed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_draft_seed.custom_minimum_size.y = 44
+	_draft_seed.text_submitted.connect(func(_value: String) -> void: _on_create_world())
+	_draft_seed.text_changed.connect(func(value: String) -> void:
+		if _draft_active: (%Carousel as Carousel).set_draft(true, value))
+	row.add_child(_draft_seed)
+	var dice := Button.new()
+	dice.text = "↻"
+	dice.tooltip_text = "Случайное зерно"
+	dice.custom_minimum_size = Vector2(44, 44)
+	dice.pressed.connect(func() -> void:
+		_draft_seed.text = random_seed()
+		(%Carousel as Carousel).set_draft(true, _draft_seed.text))
+	row.add_child(dice)
+	_draft_create = Button.new()
+	_draft_create.name = "DraftCreate"
+	_draft_create.text = "Создать и начать"
+	_draft_create.custom_minimum_size.y = 48
+	_draft_create.theme_type_variation = &"PrimaryButton"
+	_draft_create.set_meta(&"ui_sound_custom", true)
+	_draft_create.pressed.connect(_on_create_world)
+	_draft_form.add_child(_draft_create)
+	var cancel := Button.new()
+	cancel.text = "← Отмена"
+	cancel.custom_minimum_size.y = 44
+	cancel.theme_type_variation = &"MenuLink"
+	cancel.pressed.connect(_cancel_new_world)
+	_draft_form.add_child(cancel)
+	_draft_form.hide()
+
+
+func _set_draft_visible(active: bool) -> void:
+	_draft_active = active
+	_draft_form.visible = active
+	%Start.visible = not active
+	%MenuStatus.visible = not active
+	%NewWorld.visible = not active
+	_menu_panel.get_node("Actions").visible = not active
+	var carousel := %Carousel as Carousel
+	carousel.set_draft(active, _draft_seed.text)
+	_sync_menu_focus_targets()
+	_fit_menu.call_deferred()
+
+
+func _open_type_catalog(source: Control) -> void:
+	if _type_catalog == null or not (_is_screen("menu") or _is_screen("world_hub")): return
+	_catalog_return = source
+	var carousel := %Carousel as Carousel
+	var focus_id: String = str(carousel.WORLD_TYPES[carousel._displayed_type].id) if _is_screen("menu") else carousel.selected_type_id()
+	_type_catalog.populate(carousel.WORLD_TYPES, carousel.selected_type_id(), focus_id)
+	_ui_audio.bind_tree(_type_catalog)
+	_active_screen = "type_catalog"
+	_ui_stack.push("type_catalog", {dimmer = 0.45, return_focus = source, sound = &"panel_open"})
+	_sync_backdrop_visibility("type_catalog")
+	_fit_type_catalog()
+	_type_catalog.focus_selected()
+
+
+func _fit_type_catalog() -> void:
+	if _type_catalog == null or not _type_catalog.is_node_ready(): return
+	var panel := _type_catalog.get_node("Panel") as Control
+	var available := get_viewport().get_visible_rect().size - Vector2(32, 32)
+	panel.custom_minimum_size = Vector2(minf(620.0, available.x), minf(540.0, available.y))
+
+
+func _close_type_catalog() -> void:
+	if not _is_screen("type_catalog"): return
+	var popped := _ui_stack.pop({sound = &"panel_close"})
+	_active_screen = str(popped.active)
+	_sync_backdrop_visibility(_active_screen)
+	if _active_screen == "world_hub" and _hub_needs_sync:
+		_show_seed_tab(_seed_tab)
+	_restore_focus(_catalog_return)
+
+
+func _choose_catalog_type(id: String) -> void:
+	if not _is_screen("type_catalog"): return
+	(%Carousel as Carousel)._select_type_from_ui(id)
+	_close_type_catalog()
 
 
 func _open_all_worlds(return_to: Control = null) -> void:
@@ -960,7 +1146,18 @@ func _on_type_changed() -> void:
 		GameContext.scope.cache.set_template(tid)
 		_selected_seed = GameContext.scope.settings.last_seed
 		_refresh_world_cards()
+		if _active_screen == "type_catalog" and _ui_stack != null:
+			_hub_needs_sync = true
+	var hub_type := %AllWorlds.get_node_or_null("Panel/Box/HubType") as Button
+	if hub_type != null:
+		hub_type.text = "Тип путешествия: %s  ▾" % carousel.WORLD_TYPES[carousel._type_index].title
 	_update_menu_selection()
+
+
+func _on_displayed_type_changed() -> void:
+	_update_menu_selection()
+	if _draft_create != null:
+		_draft_create.disabled = not (%Carousel as Carousel).displayed_type_available()
 
 
 ## Превью карты мира из кэша (null — мир ещё не запускали)
@@ -1518,6 +1715,10 @@ func _on_seed_changed(_text: String) -> void:
 func _select_world(seed_text: String) -> void:
 	_hub_reveal_seed = ""
 	_selected_seed = seed_text
+	if seed_text.is_empty():
+		(%Carousel as Carousel).show_world("")
+		_update_selection()
+		return
 	if not seed_text.is_empty() and seed_text not in _carousel_seeds:
 		_carousel_seeds.push_front(seed_text)
 		_hub_needs_sync = true
@@ -1554,16 +1755,23 @@ func _update_menu_selection() -> void:
 	%OpenShop.text = "Экипировка  ·  %d" % _shop_progress.balance if _shop_progress.load_error == OK else "Экипировка"
 	if seed_text.is_empty():
 		%Start.text = "Создать мир"
-	var type_ready := (%Carousel as Carousel).type_available()
+	var type_ready := (%Carousel as Carousel).displayed_type_available()
 	%Start.disabled = not type_ready
 	%NewWorld.disabled = not type_ready
-	%OpenWorlds.disabled = not type_ready
-	var type_next: Control = (%Carousel as Carousel)._next
-	type_next.focus_neighbor_bottom = type_next.get_path_to(%Start if type_ready else %OpenShop)
-	%OpenShop.focus_neighbor_top = %OpenShop.get_path_to(%OpenWorlds if type_ready else type_next)
+	%OpenWorlds.disabled = not (%Carousel as Carousel).type_available()
+	_sync_menu_focus_targets()
 	if not type_ready:
 		%Start.text = "Скоро появится"
 		%MenuStatus.text = "Этот тип мира пока недоступен"
+
+
+func _sync_menu_focus_targets() -> void:
+	var carousel := %Carousel as Carousel
+	var target: Control = _draft_seed if _draft_active else (%Start if carousel.displayed_type_available() else %OpenWorlds)
+	for button: Button in carousel._type_buttons:
+		button.focus_neighbor_bottom = button.get_path_to(target)
+	carousel._showcase_all.focus_neighbor_bottom = carousel._showcase_all.get_path_to(target)
+	%OpenShop.focus_neighbor_top = %OpenShop.get_path_to(%OpenWorlds)
 
 
 func _update_selection() -> void:
@@ -1814,36 +2022,34 @@ func _restore_author_worlds() -> void:
 func _fit_menu() -> void:
 	var vs := get_viewport().get_visible_rect().size
 	var showcase: Control = %Carousel
-	var panel: Control = %Menu.get_node("Panel")
 	var lab: Control = %TrailLab
-	# Вся колонка помещается между равными верхним и нижним отступами.
-	var column_width := maxf(388.0, panel.get_combined_minimum_size().x)
-	var panel_height := panel.get_combined_minimum_size().y
-	var card_height := 200.0
-	var total_height := card_height + 12.0 + panel_height + 12.0 + 44.0
-	var column_scale := minf(1.0, minf(maxf(0.3, (vs.y - 56.0) / total_height), maxf(0.3, (vs.x - 96.0) / column_width)))
+	var edge := 48.0 if vs.x >= 900.0 else 18.0
+	var top := 28.0 if vs.y >= 600.0 else 12.0
+	var column_width := minf(500.0, maxf(240.0, vs.x - edge * 2.0))
+	var lab_in_column := vs.x < column_width + 290.0
+	_menu_scroll.offset_left = edge
+	_menu_scroll.offset_top = top
+	_menu_scroll.offset_right = edge + column_width
+	_menu_scroll.offset_bottom = maxf(top + 100.0, vs.y - top - (50.0 if lab_in_column else 0.0))
+	_menu_content.custom_minimum_size = Vector2(maxf(0.0, column_width - 12.0), _menu_scroll.offset_bottom - top)
 	showcase.visible = true
-	showcase.scale = Vector2.ONE * column_scale
-	showcase.offset_left = 48.0
-	showcase.offset_top = 28.0
-	showcase.offset_right = 48.0 + column_width
-	showcase.offset_bottom = 28.0 + card_height
-	panel.scale = showcase.scale
-	panel.offset_left = 48.0
-	panel.offset_top = vs.y - 28.0 - (44.0 + 12.0 + panel_height) * column_scale
-	panel.offset_right = 48.0 + column_width
-	panel.offset_bottom = panel.offset_top + panel_height
-	lab.scale = showcase.scale
-	lab.offset_top = -28.0 - 44.0 * column_scale
-	lab.offset_bottom = lab.offset_top + 44.0
+	showcase.custom_minimum_size.y = 254.0
+	lab.anchor_left = 1.0
+	lab.anchor_right = 1.0
+	lab.offset_left = -edge - 220.0
+	lab.offset_right = -edge
+	lab.offset_top = -top - 44.0
+	lab.offset_bottom = -top
+	lab.scale = Vector2.ONE
 	var loading_panel: Control = %Loading.get_node("Panel")
-	loading_panel.scale = showcase.scale
-	loading_panel.offset_left = showcase.offset_left
-	loading_panel.offset_top = showcase.offset_top
-	loading_panel.offset_right = showcase.offset_right
+	loading_panel.scale = Vector2.ONE
+	loading_panel.offset_left = edge
+	loading_panel.offset_top = top
+	loading_panel.offset_right = edge + column_width
 	var worlds: Control = %AllWorlds.get_node("Panel")
 	worlds.custom_minimum_size = Vector2(clampf(vs.x * 0.75, 920.0, 1220.0), clampf(vs.y * 0.80, 550.0, 700.0))
 	_fit_hub.call_deferred()
+	_fit_type_catalog()
 	if _backdrop != null:
 		_backdrop.resize(_backdrop_size())
 
@@ -1933,7 +2139,7 @@ func _close_trail_lab() -> void:
 
 func _on_start() -> void:
 	# второй запуск во время загрузки не нужен: мир уже строится
-	if busy or (_is_screen("menu") and not (%Carousel as Carousel).type_available()):
+	if busy or (_is_screen("menu") and not (%Carousel as Carousel).displayed_type_available()):
 		return
 	if _selected_seed.is_empty():
 		_open_new_world()
@@ -1942,17 +2148,18 @@ func _on_start() -> void:
 
 
 func _on_create_world() -> void:
-	if busy:
+	if busy or (_is_screen("menu") and not (%Carousel as Carousel).displayed_type_available()):
 		return
-	var seed_text := seed_edit.text.strip_edges()
+	var input: LineEdit = _draft_seed if _is_screen("menu") and _draft_active else seed_edit
+	var seed_text := input.text.strip_edges()
 	if seed_text.is_empty():
 		seed_text = random_seed()
 		while _has_save(seed_text):
 			seed_text = random_seed()
-		seed_edit.text = seed_text
+		input.text = seed_text
 	if _has_save(seed_text):
 		_ask("Мир уже существует", "У мира «%s» уже есть сохранение. Открыть его? Чтобы создать новый мир, выберите другое зерно." % seed_text,
-			"Открыть мир", false, _launch_seed.bind(seed_text), seed_edit)
+			"Открыть мир", false, _launch_seed.bind(seed_text), input)
 		return
 	_launch_seed(seed_text)
 
@@ -1975,7 +2182,8 @@ func _launch_seed(seed_text: String) -> void:
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
 	_play_ui(&"confirm")
-	var launch_btn: Button = %CreateWorld if _is_screen("world_hub") and seed_edit.has_focus() else (%PlaySelected if _is_screen("world_hub") else %Start)
+	_launch_from_draft = _is_screen("menu") and _draft_active
+	var launch_btn: Button = _draft_create if _launch_from_draft else (%CreateWorld if _is_screen("world_hub") and seed_edit.has_focus() else (%PlaySelected if _is_screen("world_hub") else %Start))
 	UiAudio.pulse_confirm(launch_btn)
 	start_game(seed_text, WorldGenerator.START_SIZE, latest.slot)
 
@@ -2084,6 +2292,10 @@ func _finish_load(error_title := "", error_detail := "") -> void:
 		_exit_game()
 		return
 	_show("menu")
+	if _launch_from_draft:
+		_set_draft_visible(true)
+		_grab_focus_quiet(_draft_seed)
+	_launch_from_draft = false
 	if not was_cancelled and not error_title.is_empty():
 		_message(error_title, error_detail)
 
@@ -2224,6 +2436,9 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	_pending_save = {}
 	bar.value = 1.0
 	busy = false
+	if _draft_active:
+		_set_draft_visible(false)
+	_launch_from_draft = false
 	_load_cancel_flag = null
 	game.startup_input_locked = false
 	game.set_physics_process(true)

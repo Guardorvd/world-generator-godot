@@ -15,8 +15,10 @@ const MAX_TEXTURE_SIDE := 4096
 
 ## Каталог меню и файлов настроек: для нового типа мира достаточно добавить сюда строку и .tres-файл.
 const _CATALOG := [
-	{id = DEFAULT_ID, path = "res://resources/world_types/mountain_valley.tres"},
-	{id = EXPEDITION_ID, path = "res://resources/world_types/river_expedition.tres"},
+	{id = DEFAULT_ID, path = "res://resources/world_types/mountain_valley.tres",
+		description = "Дороги, поселения и свобода выбирать маршрут среди гор.", artwork = "res://resources/menu/type_valley.jpg"},
+	{id = EXPEDITION_ID, path = "res://resources/world_types/river_expedition.tres",
+		description = "Длинный путь вдоль реки, через лес и предгорья.", artwork = "res://resources/menu/type_expedition.jpg"},
 	{id = "future_3", title = "Будущий тип 3", available = false},
 	{id = "future_4", title = "Будущий тип 4", available = false},
 ]
@@ -96,7 +98,8 @@ static func menu_types() -> Array[Dictionary]:
 		var tid := str(item.id)
 		if exists(tid):
 			var cfg := config(tid)
-			out.append({id = tid, title = cfg.title, available = cfg.available})
+			out.append({id = tid, title = cfg.title, available = cfg.available and cfg.id == tid,
+				description = str(item.get("description", "")), artwork = str(item.get("artwork", ""))})
 		else:
 			out.append({id = tid, title = str(item.get("title", tid)), available = bool(item.get("available", false))})
 	return out

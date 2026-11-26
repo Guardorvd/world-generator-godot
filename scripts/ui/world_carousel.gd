@@ -8,6 +8,8 @@ signal map_changed
 signal stepped(direction: int)
 signal favorite_requested(seed_text: String, source: Control)
 signal type_changed
+signal catalog_requested(source: Control)
+signal displayed_type_changed
 
 const MapPreview := preload("res://scripts/ui/menu_map_preview.gd")
 const Icons := preload("res://scripts/ui/ui_icons.gd")
@@ -67,9 +69,29 @@ var _derived_order: Array[String] = []
 var _generated := {}
 var _provisional_derived := {}
 var _preview_errors := {}
+var _type_buttons: Array[Button] = []
+var _showcase_art: TextureRect
+var _showcase_title: Label
+var _showcase_description: Label
+var _showcase_world: Label
+var _showcase_status: Label
+var _showcase_all: Button
+var _displayed_type := 0
+var _showcase_counter: Label
+var _showcase_note: Label
+var _hero_center: Control
+var _carousel_previous: Button
+var _carousel_next: Button
+var _carousel_tween: Tween
+var _carousel_ghost: TextureRect
+var _art_cache := {}
+var _art_order: Array[String] = []
+var _draft_mode := false
+var _draft_seed := ""
 
 func setup(start_button: Button, actions: Array[Button], trail_lab: Button) -> void:
 	set_process(false)
+	_build_showcase()
 	_previous.pressed.connect(move_type.bind(-1))
 	_next.pressed.connect(move_type.bind(1))
 	_favorite.pressed.connect(func() -> void:
@@ -102,16 +124,291 @@ func setup(start_button: Button, actions: Array[Button], trail_lab: Button) -> v
 	_previous.set_meta(&"ui_sound_custom", true)
 	_next.set_meta(&"ui_sound_custom", true)
 	_mode_buttons.resized.connect(_position_indicator.bind(false))
-	var chain: Array[Control] = [_previous, _next, start_button]
+	var chain: Array[Control] = [_showcase_all, start_button]
 	chain.append_array(actions)
 	chain.append(trail_lab)
 	for i in chain.size():
 		chain[i].focus_neighbor_top = chain[i].get_path_to(chain[posmod(i - 1, chain.size())])
 		chain[i].focus_neighbor_bottom = chain[i].get_path_to(chain[(i + 1) % chain.size()])
+	for button: Button in _type_buttons:
+		button.focus_neighbor_bottom = button.get_path_to(start_button)
+		button.focus_neighbor_top = button.get_path_to(trail_lab)
 	for button in actions:
 		button.mouse_entered.connect(_hover_link.bind(button, true))
 		button.mouse_exited.connect(_hover_link.bind(button, false))
 	_set_mode(0)
+
+
+func _build_showcase() -> void:
+	# Старый узел карты остаётся источником превью для библиотеки, но не занимает витрину.
+	_slide.hide()
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for edge: String in ["left", "top", "right", "bottom"]:
+		margin.add_theme_constant_override("margin_" + edge, 12)
+	_card.add_child(margin)
+	_card.resized.connect(_refresh_showcase)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	margin.add_child(box)
+	var header := HBoxContainer.new()
+	box.add_child(header)
+	_showcase_counter = Label.new()
+	_showcase_counter.theme_type_variation = &"MenuFootnote"
+	_showcase_counter.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_showcase_counter.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	header.add_child(_showcase_counter)
+	_showcase_all = Button.new()
+	_showcase_all.text = "Все типы  ▾"
+	_showcase_all.tooltip_text = "Все типы путешествий"
+	_showcase_all.theme_type_variation = &"MenuLink"
+	_showcase_all.custom_minimum_size.y = 36
+	_showcase_all.pressed.connect(func() -> void: catalog_requested.emit(_showcase_all))
+	header.add_child(_showcase_all)
+	var hero := HBoxContainer.new()
+	hero.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	hero.add_theme_constant_override("separation", 7)
+	box.add_child(hero)
+	_carousel_previous = _make_neighbor(-1)
+	hero.add_child(_carousel_previous)
+	var center := HBoxContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	center.add_theme_constant_override("separation", 10)
+	hero.add_child(center)
+	_hero_center = center
+	var art_box := VBoxContainer.new()
+	art_box.custom_minimum_size.x = 138
+	art_box.add_theme_constant_override("separation", 2)
+	center.add_child(art_box)
+	_showcase_art = TextureRect.new()
+	_showcase_art.custom_minimum_size = Vector2(138, 82)
+	_showcase_art.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_showcase_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_showcase_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	art_box.add_child(_showcase_art)
+	_showcase_note = Label.new()
+	_showcase_note.text = "ПРИМЕР ЛАНДШАФТА"
+	_showcase_note.theme_type_variation = &"MenuFootnote"
+	_showcase_note.add_theme_font_size_override("font_size", 10)
+	art_box.add_child(_showcase_note)
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.alignment = BoxContainer.ALIGNMENT_CENTER
+	info.add_theme_constant_override("separation", 6)
+	center.add_child(info)
+	_showcase_title = Label.new()
+	_showcase_title.theme_type_variation = &"WorldName"
+	_showcase_title.add_theme_font_size_override("font_size", 18)
+	_showcase_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.add_child(_showcase_title)
+	_showcase_description = Label.new()
+	_showcase_description.theme_type_variation = &"MenuFootnote"
+	_showcase_description.add_theme_font_size_override("font_size", 14)
+	_showcase_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.add_child(_showcase_description)
+	_carousel_next = _make_neighbor(1)
+	hero.add_child(_carousel_next)
+	_type_buttons.assign([_carousel_previous, _carousel_next])
+	_showcase_world = Label.new()
+	_showcase_world.theme_type_variation = &"WorldName"
+	_showcase_world.add_theme_font_size_override("font_size", 15)
+	_showcase_world.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	box.add_child(_showcase_world)
+	_showcase_status = Label.new()
+	_showcase_status.theme_type_variation = &"MenuFootnote"
+	_showcase_status.add_theme_font_size_override("font_size", 12)
+	box.add_child(_showcase_status)
+	_refresh_showcase()
+
+
+func _make_neighbor(direction: int) -> Button:
+	var button := Button.new()
+	button.custom_minimum_size = Vector2(55, 70)
+	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	button.theme_type_variation = &"MenuLink"
+	button.clip_contents = true
+	button.set_meta(&"ui_sound_custom", true)
+	button.pressed.connect(move_type.bind(direction))
+	var image := TextureRect.new()
+	image.name = "Artwork"
+	image.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	image.modulate = Color(0.58, 0.62, 0.62, 0.65)
+	image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(image)
+	var arrow := Label.new()
+	arrow.name = "Arrow"
+	arrow.text = "‹" if direction < 0 else "›"
+	arrow.add_theme_font_size_override("font_size", 34)
+	arrow.add_theme_color_override("font_color", Color(1.0, 0.94, 0.78))
+	arrow.add_theme_color_override("font_outline_color", Color(0.03, 0.04, 0.05, 0.95))
+	arrow.add_theme_constant_override("outline_size", 4)
+	arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	arrow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(arrow)
+	var badge := Label.new()
+	badge.name = "Soon"
+	badge.text = "СКОРО"
+	badge.theme_type_variation = &"MenuFootnote"
+	badge.add_theme_font_size_override("font_size", 9)
+	badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	badge.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	badge.offset_top = -17
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(badge)
+	var focus_ring := Panel.new()
+	focus_ring.name = "Highlight"
+	focus_ring.theme_type_variation = &"CarouselNeighborFocus"
+	focus_ring.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	focus_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	focus_ring.visible = false
+	button.add_child(focus_ring)
+	button.mouse_entered.connect(_update_neighbor_highlight.bind(button, true, false))
+	button.mouse_exited.connect(_update_neighbor_highlight.bind(button, false, false))
+	button.focus_entered.connect(_update_neighbor_highlight.bind(button, true, true))
+	button.focus_exited.connect(_update_neighbor_highlight.bind(button, false, true))
+	return button
+
+
+func _update_neighbor_highlight(button: Button, active: bool, from_focus: bool) -> void:
+	button.set_meta(&"_neighbor_focus" if from_focus else &"_neighbor_hover", active)
+	var focused := bool(button.get_meta(&"_neighbor_focus", false))
+	var hovered := bool(button.get_meta(&"_neighbor_hover", false))
+	var highlight := button.get_node("Highlight") as Panel
+	highlight.visible = focused or hovered
+	highlight.modulate.a = 1.0 if focused else 0.65
+	var image := button.get_node("Artwork") as TextureRect
+	image.modulate = Color(0.85, 0.87, 0.84, 0.9) if focused or hovered else Color(0.58, 0.62, 0.62, 0.65)
+
+
+func set_draft(enabled: bool, seed_text := "") -> void:
+	_draft_mode = enabled
+	_draft_seed = seed_text
+	_update_world_summary()
+
+
+func _type_art(item: Dictionary) -> Texture2D:
+	var path := str(item.get("artwork", ""))
+	if path.is_empty(): return null
+	if _art_cache.has(path):
+		_art_order.erase(path)
+		_art_order.append(path)
+		return _art_cache[path]
+	if not ResourceLoader.exists(path): return null
+	var texture := load(path) as Texture2D
+	if texture == null: return null
+	while _art_order.size() >= 4:
+		_art_cache.erase(_art_order.pop_front())
+	_art_cache[path] = texture
+	_art_order.append(path)
+	return texture
+
+
+func displayed_type_available() -> bool:
+	return bool(WORLD_TYPES[_displayed_type].get("available", false))
+
+
+func _refresh_showcase() -> void:
+	if _showcase_title == null: return
+	var item: Dictionary = WORLD_TYPES[_displayed_type]
+	var ready := displayed_type_available()
+	_showcase_title.text = str(item.title)
+	_showcase_description.text = str(item.get("description", "")) if ready else "Новое путешествие появится позже."
+	var artwork := _type_art(item)
+	_showcase_art.texture = artwork if artwork != null else Icons.PEAK
+	_showcase_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED if artwork != null else TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_showcase_art.modulate = Color.WHITE if artwork != null else Color(0.72, 0.77, 0.75, 0.36)
+	_showcase_note.text = "ПРИМЕР ЛАНДШАФТА" if ready else "В РАЗРАБОТКЕ"
+	_showcase_counter.text = "ПУТЕШЕСТВИЕ   %d / %d" % [_displayed_type + 1, WORLD_TYPES.size()]
+	var previous: Dictionary = WORLD_TYPES[posmod(_displayed_type - 1, WORLD_TYPES.size())]
+	var next: Dictionary = WORLD_TYPES[(_displayed_type + 1) % WORLD_TYPES.size()]
+	(_carousel_previous.get_node("Artwork") as TextureRect).texture = _type_art(previous)
+	(_carousel_next.get_node("Artwork") as TextureRect).texture = _type_art(next)
+	(_carousel_previous.get_node("Soon") as Label).visible = not bool(previous.get("available", false))
+	(_carousel_next.get_node("Soon") as Label).visible = not bool(next.get("available", false))
+	_carousel_previous.tooltip_text = "Предыдущее: " + str(previous.title)
+	_carousel_next.tooltip_text = "Следующее: " + str(next.title)
+	_carousel_previous.disabled = WORLD_TYPES.size() < 2
+	_carousel_next.disabled = _carousel_previous.disabled
+	_update_world_summary()
+
+
+func _update_world_summary() -> void:
+	if _showcase_world == null: return
+	var ready := displayed_type_available()
+	var entry: Dictionary = _entries[_index] if _index >= 0 else {}
+	var seed := str(entry.get("seed", ""))
+	if not ready:
+		_showcase_world.text = "ЭТОТ ТИП ПОКА НЕДОСТУПЕН"
+		_showcase_world.tooltip_text = ""
+		_showcase_status.text = "Выберите другой тип, чтобы начать"
+	elif _draft_mode:
+		var draft := _draft_seed.strip_edges()
+		_showcase_world.text = "НОВЫЙ МИР  ·  " + ("Случайное зерно" if draft.is_empty() else draft)
+		_showcase_world.tooltip_text = draft
+		_showcase_status.text = "Зерно можно изменить до начала"
+	else:
+		_showcase_world.text = "ВАШ МИР  ·  " + ("Мир ещё не выбран" if seed.is_empty() else seed)
+		_showcase_world.tooltip_text = seed
+		_showcase_status.text = "Ошибка сохранения" if entry.get("corrupt", false) else ("Сохранение" if entry.get("saved", false) else ("Ещё не начат" if not seed.is_empty() else "Создайте новое путешествие"))
+
+
+func _animate_type_step(direction: int, old_texture: Texture2D, old_rect: Rect2) -> void:
+	if _carousel_tween != null and _carousel_tween.is_valid(): _carousel_tween.kill()
+	if is_instance_valid(_carousel_ghost): _carousel_ghost.queue_free()
+	_hero_center.pivot_offset = _hero_center.size * 0.5
+	_hero_center.scale = Vector2.ONE
+	_hero_center.modulate.a = 1.0
+	for tile: Button in _type_buttons:
+		tile.scale = Vector2.ONE
+		tile.modulate.a = 1.0
+	if DisplayServer.get_name() == "headless" and not force_animate_in_headless: return
+	var departing := _carousel_previous if direction > 0 else _carousel_next
+	var target_rect := departing.get_global_rect()
+	departing.pivot_offset = departing.size * 0.5
+	departing.scale = Vector2.ONE * 1.15
+	departing.modulate.a = 0.6
+	_hero_center.scale = Vector2.ONE * 0.94
+	_hero_center.modulate.a = 0.55
+	_carousel_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_carousel_tween.tween_property(_hero_center, "scale", Vector2.ONE, 0.20)
+	_carousel_tween.tween_property(_hero_center, "modulate:a", 1.0, 0.20)
+	_carousel_tween.tween_property(departing, "scale", Vector2.ONE, 0.20)
+	_carousel_tween.tween_property(departing, "modulate:a", 1.0, 0.20)
+	if old_texture != null and old_rect.size.x > 0:
+		_carousel_ghost = TextureRect.new()
+		_carousel_ghost.texture = old_texture
+		_carousel_ghost.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_carousel_ghost.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		_carousel_ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_carousel_ghost.position = old_rect.position - _card.get_global_rect().position
+		_carousel_ghost.size = old_rect.size
+		_card.add_child(_carousel_ghost)
+		_carousel_tween.tween_property(_carousel_ghost, "position", target_rect.position - _card.get_global_rect().position, 0.20)
+		_carousel_tween.tween_property(_carousel_ghost, "size", target_rect.size, 0.20)
+		_carousel_tween.tween_property(_carousel_ghost, "modulate:a", 0.0, 0.20)
+		var ghost := _carousel_ghost
+		_carousel_tween.chain().tween_callback(func() -> void:
+			if is_instance_valid(ghost): ghost.queue_free())
+
+
+func _select_type_from_ui(id: String) -> void:
+	if id == selected_type_id():
+		_displayed_type = _type_index
+		_refresh_showcase()
+		displayed_type_changed.emit()
+		return
+	for item: Dictionary in WORLD_TYPES:
+		if str(item.id) == id and bool(item.get("available", false)) and WorldTemplate.exists(id):
+			select_type(id, false)
+			type_changed.emit()
+			displayed_type_changed.emit()
+			stepped.emit(1)
+			return
 
 func set_entries(entries: Array[Dictionary], selected: String) -> void:
 	_cancel_slide()
@@ -122,6 +419,9 @@ func set_entries(entries: Array[Dictionary], selected: String) -> void:
 	show_world(selected)
 
 func show_world(seed_text: String, animate := false, direction := 0) -> void:
+	if seed_text.is_empty():
+		_show_index(-1)
+		return
 	for i in _entries.size():
 		if _entries[i].seed == seed_text:
 			if i == _index and _slide_tween != null: return
@@ -207,22 +507,32 @@ func type_available() -> bool:
 func selected_type_id() -> String:
 	return str(WORLD_TYPES[_type_index].id)
 
-func select_type(id: String) -> void:
+func select_type(id: String, refresh := true) -> void:
 	for i in WORLD_TYPES.size():
-		if str(WORLD_TYPES[i].id) == id:
+		if str(WORLD_TYPES[i].id) == id and bool(WORLD_TYPES[i].available) and WorldTemplate.exists(id):
+			_displayed_type = i
 			if _type_index != i:
 				_type_index = i
-				invalidate_preview()
-				_apply_entry()
+				# Данные прежнего типа ещё не сброшены: карту не обновляем до type_changed.
+				if refresh: _refresh_showcase()
 			return
 
 func move_type(direction: int) -> void:
-	if direction == 0: return
-	_type_index = posmod(_type_index + signi(direction), WORLD_TYPES.size())
-	invalidate_preview()
-	_apply_entry()
+	if direction == 0 or WORLD_TYPES.size() < 2: return
+	var old_texture := _showcase_art.texture
+	var old_rect := _showcase_art.get_global_rect()
+	_displayed_type = posmod(_displayed_type + signi(direction), WORLD_TYPES.size())
+	var item: Dictionary = WORLD_TYPES[_displayed_type]
+	var committed := false
+	if bool(item.get("available", false)) and WorldTemplate.exists(str(item.id)):
+		if str(item.id) != selected_type_id():
+			select_type(str(item.id), false)
+			type_changed.emit()
+			committed = true
+	if not committed: _refresh_showcase()
+	displayed_type_changed.emit()
 	stepped.emit(signi(direction))
-	type_changed.emit()
+	_animate_type_step(signi(direction), old_texture, old_rect)
 
 func move(direction: int) -> void:
 	if _entries.size() < 2 or direction == 0: return
@@ -233,7 +543,7 @@ func move(direction: int) -> void:
 
 func move_focused(direction: int) -> bool:
 	var focus := get_viewport().gui_get_focus_owner()
-	if focus == _previous or focus == _next:
+	if focus == _carousel_previous or focus == _carousel_next:
 		move_type(direction)
 		return true
 	return false
@@ -286,6 +596,7 @@ func _apply_entry() -> void:
 		var km := roundi(float(sz.y) * GameConfig.TILE / 1000.0)
 		detail = ("Сохранение · долина ~%d км" % km) if entry.get("saved", false) else ("Долина ~%d км" % km)
 	$Card/Slide/Frame/WorldInfo/Detail.text = detail
+	_refresh_showcase()
 	_count.text = "%d / %d" % [_type_index + 1, WORLD_TYPES.size()]
 	_previous.disabled = WORLD_TYPES.size() < 2
 	_next.disabled = _previous.disabled

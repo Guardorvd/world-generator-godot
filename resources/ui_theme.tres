@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=75 format=3]
+[gd_resource type="Theme" load_steps=76 format=3]
 
 [ext_resource type="Texture2D" path="res://resources/icons/checkbox_unchecked.svg" id="checkbox_unchecked"]
 
@@ -27,6 +27,18 @@ expand_margin_left = 2.0
 expand_margin_top = 2.0
 expand_margin_right = 2.0
 expand_margin_bottom = 2.0
+
+[sub_resource type="StyleBoxFlat" id="carousel_neighbor_focus"]
+draw_center = false
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.95, 0.8, 0.5, 1)
+corner_radius_top_left = 7
+corner_radius_top_right = 7
+corner_radius_bottom_right = 7
+corner_radius_bottom_left = 7
 
 [sub_resource type="StyleBoxFlat" id="btn_normal"]
 content_margin_left = 16.0
@@ -902,6 +914,8 @@ Button/styles/pressed = SubResource("btn_pressed")
 CaptionLabel/base_type = &"Label"
 CaptionLabel/colors/font_color = Color(0.72, 0.76, 0.82, 1)
 CaptionLabel/font_sizes/font_size = 13
+CarouselNeighborFocus/base_type = &"Panel"
+CarouselNeighborFocus/styles/panel = SubResource("carousel_neighbor_focus")
 CarouselTab/base_type = &"Button"
 CarouselTab/colors/font_color = Color(0.93, 0.93, 0.9, 1)
 CarouselTab/colors/font_disabled_color = Color(1, 1, 1, 0.32)

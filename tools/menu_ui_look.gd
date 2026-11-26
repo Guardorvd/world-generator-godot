@@ -67,7 +67,8 @@ func _run() -> void:
 	_check(chosen != "Мир-6" and chosen == _main._carousel_seeds[previous_index],
 		"при удалении выбран сосед (%s)" % chosen)
 	_main._open_new_world()
-	await _capture_screen("create", "%AllWorlds")
+	await _capture_screen("create", "%Menu")
+	_main._cancel_new_world()
 	_main._open_all_worlds()
 	await _capture_screen("worlds", "%AllWorlds")
 	_main.get_node("%Title").text = "Мир «Сохранение-с-очень-длинным-именем»"
@@ -161,7 +162,7 @@ func _capture_screen(label: String, screen_path: String) -> void:
 		root.size = dimensions
 		await process_frame
 		await process_frame
-		var panel: Control = _main.get_node(screen_path + "/Panel")
+		var panel: Control = _main._menu_scroll if screen_path == "%Menu" else _main.get_node(screen_path + "/Panel")
 		_check(root.get_visible_rect().encloses(panel.get_global_rect()), "%s %s помещается" % [label, dimensions])
 		if DisplayServer.get_name() != "headless":
 			await RenderingServer.frame_post_draw
@@ -174,37 +175,18 @@ func _navigation() -> void:
 	var start: Button = _main.get_node("%Start")
 	start.grab_focus()
 	var carousel = _main.get_node("%Carousel")
-	_check(carousel._previous.visible and carousel._next.visible and not carousel._mode_panel.visible,
-		"на главной доступны переключатели типа, а режимы карты скрыты")
-	_check(carousel._name.text == "Горная долина", "показан доступный тип мира")
+	_check(carousel._type_buttons.size() >= 2 and not carousel._mode_panel.visible,
+		"на главной видны доступные типы, режимы карты скрыты")
+	_check(carousel._showcase_title.text == "Горная долина", "показан доступный тип мира")
 	var saved_seed: String = _main._chosen_seed()
-	carousel._next.pressed.emit()
-	_check(carousel._name.text == "Будущий тип 2" and not carousel.type_available(), "переключение показывает будущий тип")
-	_check(_main.get_node("%Start").disabled and _main.get_node("%NewWorld").disabled and _main.get_node("%OpenWorlds").disabled,
-		"будущий тип не запускает текущую генерацию и сохранения")
-	_check(carousel._next.get_node(carousel._next.focus_neighbor_bottom) == _main.get_node("%OpenShop"),
-		"фокус обходит недоступные действия")
-	_check(carousel._map.texture == null and saved_seed not in carousel.get_node("Card/Slide/Frame/WorldInfo/Name").text,
-		"карта и имя текущего мира не выдаются за будущий тип")
-	await _capture_state("future_type")
-	_main._on_start()
-	_main._open_new_world()
-	_check(not _main.busy and _main._chosen_seed() == saved_seed and _main.get_node("%Menu").visible,
-		"заглушка не меняет и не запускает выбранный мир")
-	carousel._previous.pressed.emit()
-	_check(carousel.type_available() and not _main.get_node("%Start").disabled and _main._chosen_seed() == saved_seed,
-		"возврат восстанавливает текущий мир и действия")
-	carousel._previous.pressed.emit()
-	_check(carousel._type_index == carousel.WORLD_TYPES.size() - 1, "переключатель циклически возвращается к последней заглушке")
-	carousel._next.pressed.emit()
-	_check(carousel._type_index == 0, "переключатель циклически возвращается к горной долине")
-	carousel._next.grab_focus()
-	var right := InputEventAction.new()
-	right.action = "ui_right"
-	right.pressed = true
-	root.push_input(right)
-	_check(carousel._type_index == 1, "тип переключается стрелкой клавиатуры")
-	carousel._previous.pressed.emit()
+	_main._open_type_catalog(carousel._showcase_all)
+	_main._type_catalog._choose("future_3", false)
+	_check(_main._is_screen("type_catalog") and carousel.selected_type_id() == WorldTemplate.DEFAULT_ID and _main._chosen_seed() == saved_seed,
+		"заглушка не меняет выбранный мир")
+	_main._close_type_catalog()
+	carousel._select_type_from_ui(WorldTemplate.EXPEDITION_ID)
+	_check(carousel.selected_type_id() == WorldTemplate.EXPEDITION_ID, "доступный тип переключается")
+	carousel._select_type_from_ui(WorldTemplate.DEFAULT_ID)
 	start.grab_focus()
 	var pad := InputEventJoypadButton.new()
 	pad.button_index = JOY_BUTTON_DPAD_DOWN
@@ -212,8 +194,8 @@ func _navigation() -> void:
 	root.push_input(pad)
 	_check(_main.get_node("%NewWorld").has_focus(), "из запуска можно перейти к созданию")
 	_main.get_node("%NewWorld").pressed.emit()
-	_check(_main.get_node("%SeedEdit").has_focus(), "поле нового мира доступно")
-	_main.get_node("%SeedEdit").text = "Долина-27"
+	_check(_main._draft_seed.has_focus() and _main._is_screen("menu"), "поле нового мира доступно на главной")
+	_main._draft_seed.text = "Долина-27"
 	_main._on_create_world()
 	_check(_main._confirm != null and not _main.busy, "существующее зерно требует явного выбора")
 	_main._confirm.canceled.emit()
