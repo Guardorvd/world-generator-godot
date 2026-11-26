@@ -75,10 +75,6 @@ static func stone_bounds(variant: int) -> Array:
 	return _stone_bounds[posmod(variant, 3)]
 
 
-static func moisture_at(w: WorldData, k: int) -> float:
-	return ground_moisture(w.moist[k], w.dist_water[k])
-
-
 static func ground_moisture(moist: float, dist_water: float) -> float:
 	return clampf(moist + maxf(0.0, 1.0 - dist_water / 3.0) * 0.2, 0.0, 1.0)
 
@@ -89,10 +85,13 @@ static func rockiness(w: WorldData, k: int) -> float:
 
 ## Линейные RGBA-данные: фактический полог, доля хвойных, влажность, каменистость.
 ## Один проход по деревьям вместо поиска соседей для каждой клетки всей карты.
-static func surface_image(w: WorldData) -> Image:
+## moist — влажность мира после эрозии (Heightfield.ground_moisture); без неё — w.moist (Тип 1, инструменты).
+## Каменистость (rock) по-прежнему от полей мира: её считает и генерация, и карта.
+static func surface_image(w: WorldData, moist := PackedFloat32Array()) -> Image:
 	if w.generation.surface_rock.size()!=w.N:
 		w.generation.surface_rock=Surface.field(w.elev,w.slope,w.moist)
 	var rock := w.generation.surface_rock
+	var wet := moist if moist.size() == w.N else w.moist
 	var native := Grid.fast_grid()
 	if native != null:
 		var trees := PackedByteArray()
@@ -102,7 +101,7 @@ static func surface_image(w: WorldData) -> Image:
 		for biome: Dictionary in Biomes.LIST:
 			water.append(int(biome.get("water", false)))
 		var pixels: PackedByteArray = native.ForestSurface(w.W, w.H, w.obj_count, w.obj_x, w.obj_y, w.obj_k, w.obj_s,
-			trees, PackedFloat64Array(Biomes.CROWN_RADIUS), w.biome, water, w.river, w.moist, w.dist_water, rock)
+			trees, PackedFloat64Array(Biomes.CROWN_RADIUS), w.biome, water, w.river, wet, w.dist_water, rock)
 		return Image.create_from_data(w.W, w.H, false, Image.FORMAT_RGBA8, pixels)
 	var cover := PackedFloat32Array()
 	var needles := PackedFloat32Array()
@@ -128,7 +127,7 @@ static func surface_image(w: WorldData) -> Image:
 		var dry_ground: bool = not Biomes.LIST[w.biome[k]].get("water", false) and w.river[k] == 0
 		bytes[k * 4] = roundi(minf(1.0, cover[k]) * 255.0) if dry_ground else 0
 		bytes[k * 4 + 1] = roundi(needles[k] / maxf(cover[k], 0.001) * 255.0)
-		bytes[k * 4 + 2] = roundi(moisture_at(w, k) * 255.0)
+		bytes[k * 4 + 2] = roundi(ground_moisture(wet[k], w.dist_water[k]) * 255.0)
 		bytes[k * 4 + 3] = rock[k] if dry_ground else 0
 	return Image.create_from_data(w.W, w.H, false, Image.FORMAT_RGBA8, bytes)
 

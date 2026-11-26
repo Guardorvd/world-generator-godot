@@ -657,7 +657,7 @@ public partial class FastGrid
 		}
 		if (moistGain != 0.0)
 			for (int i = 0; i < n; i++)
-				m[i] = (float)Math.Clamp(moist[i] + moistGain * (wet[i] / (double)byte.MaxValue - 0.5), 0.0, 1.0);
+				m[i] = ReliefMaterial.FlowMoisture(moist[i], wet[i], moistGain);
 		return new Godot.Collections.Dictionary { ["elev"] = e, ["slope"] = s, ["moist"] = m };
 	}
 }

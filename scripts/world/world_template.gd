@@ -197,6 +197,15 @@ static func nature_cache_suffix(id: String) -> String:
 	return suffix + config(tid).relief_generation_suffix()
 
 
+## Суффикс картинок мира (подстилка леса): с эрозией влажность подстилки — после эрозии (этап 5 части 2 плана
+## рельефа, Heightfield.ground_moisture); прежние картинки Типа 2 с влажностью до эрозии не годятся. Пусто для Типа 1.
+static func view_cache_suffix(id: String) -> String:
+	var tid := normalize_id(id)
+	if tid == DEFAULT_ID or config(tid).relief_generation_suffix().is_empty():
+		return ""
+	return "|flow-moisture-1"
+
+
 ## Суффикс артефакта surface по параметрам микрорельефа тропы (пусто для Типа 1).
 static func surface_cache_suffix(id: String) -> String:
 	var tid := normalize_id(id)

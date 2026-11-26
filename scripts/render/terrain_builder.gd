@@ -309,20 +309,37 @@ func material(base: Image, forest: Image = null, template_id := "") -> ShaderMat
 ## среднее равно высоте — склоны не темнеют, гребни тоже. Влияет только на свет неба (AO), не на солнце: при солнце
 ## почти не видно, в тени и в пасмурную погоду впадины читаются. Карта — R8 на клетку плана (как forest_tex),
 ## ~десятки мс на загрузке; без неё (меню, Trail Lab, области за краем) шейдер берёт белый — без затенения.
-const CAVITY_NEAR := 0.18   # наибольшее ослабление света неба в мелких ложбинах
-const CAVITY_FAR := 0.12    # в днищах долин
+## 26.11.2026 (часть 2 плана рельефа, этап 5): та же карта несёт каналы стока эрозии — «карты поверхности».
+## Формулы — ReliefMaterial (C#), числа — WorldReliefDetailConfig (группы «Затенение впадин», «Материал по стоку»;
+## у Типа 1 — значения по умолчанию, равные прежним числам). Без карт стока — R8 как раньше, с ними — RGBA:
+## G — промытое дно лощины, B — нанос, A — выпуклость. Без C# карты нет (шейдер берёт белый).
+const ReliefDetailConfig := preload("res://scripts/world/world_relief_detail_config.gd")
 
-static func cavity_image(hv: PackedFloat32Array, W: int, H: int) -> Image:
-	var src := Image.create_from_data(W, H, false, Image.FORMAT_RF, hv.to_byte_array())
-	var near := _blurred(src, 2).get_data().to_float32_array()
-	var far := _blurred(src, 4).get_data().to_float32_array()
-	var out := PackedByteArray()
-	out.resize(W * H)
-	for k in W * H:
-		var h := hv[k]
-		var occ := CAVITY_NEAR * smoothstep(0.3, 1.6, near[k] - h) + CAVITY_FAR * smoothstep(0.6, 6.0, far[k] - h)
-		out[k] = clampi(roundi((1.0 - occ) * 255.0), 0, 255)
-	return Image.create_from_data(W, H, false, Image.FORMAT_R8, out)
+
+static func detail_config(template_id: String) -> ReliefDetailConfig:
+	var cfg: ReliefDetailConfig = WorldTemplate.config(template_id).relief_detail
+	return cfg if cfg != null else ReliefDetailConfig.new()
+
+
+static func surface_maps(heights: Heightfield) -> Image:
+	var w := heights.world
+	var W := w.W
+	var H := w.H
+	var fast := Grid.fast_grid()
+	if fast == null or heights.hv.size() != W * H:
+		return null
+	var cfg: ReliefDetailConfig = detail_config(w.template_id)
+	var src := Image.create_from_data(W, H, false, Image.FORMAT_RF, heights.hv.to_byte_array())
+	var near := _blurred(src, cfg.cavity_blur_levels.x).get_data().to_float32_array()
+	var far := _blurred(src, cfg.cavity_blur_levels.y).get_data().to_float32_array()
+	var flow := cfg.flow_material and cfg.valid_flow_material()
+	var area: PackedByteArray = heights.relief_flow.get("area", PackedByteArray()) if flow else PackedByteArray()
+	var deposit: PackedByteArray = heights.relief_flow.get("deposit", PackedByteArray()) if flow else PackedByteArray()
+	var bytes: PackedByteArray = fast.ReliefSurfaceMaps(heights.hv, near, far, W, H, area, deposit, cfg.surface_map_params(WorldTemplate.config(w.template_id).relief_generation))
+	if bytes.size() != W * H and bytes.size() != W * H * 4:
+		return null
+	heights.surface_maps = bytes
+	return Image.create_from_data(W, H, false, Image.FORMAT_R8 if bytes.size() == W * H else Image.FORMAT_RGBA8, bytes)
 
 
 ## Среднее по блокам 2^levels клеток (каждое уменьшение вдвое усредняет 2×2) и обратно до исходного размера
@@ -335,7 +352,10 @@ static func _blurred(src: Image, levels: int) -> Image:
 
 
 static func set_cavity(mat: ShaderMaterial, heights: Heightfield) -> void:
-	var img := cavity_image(heights.hv, heights.world.W, heights.world.H)
+	detail_config(heights.world.template_id).apply_flow_material(mat)
+	var img := surface_maps(heights)
+	if img == null:
+		return
 	img.generate_mipmaps()
 	mat.set_shader_parameter("cavity_tex", ImageTexture.create_from_image(img))
 

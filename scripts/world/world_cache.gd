@@ -100,6 +100,7 @@ func layer_keys() -> PackedStringArray:
 			suffixes["geo"] = WorldTemplate.geo_cache_suffix(template_id)
 			suffixes["places"] = str(suffixes.get("places", "")) + WorldTemplate.places_cache_suffix(template_id)
 			suffixes["nature"] = str(suffixes.get("nature", "")) + WorldTemplate.nature_cache_suffix(template_id)
+			suffixes["view"] = WorldTemplate.view_cache_suffix(template_id)
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
 			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]),
 			suffixes)

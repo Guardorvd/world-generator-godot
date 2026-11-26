@@ -485,8 +485,9 @@ public partial class FastGrid
 	}
 
 	private const int CarpetMeadow = 0, CarpetDry = 1, CarpetShade = 2, CarpetMoss = 5, CarpetLeaves = 6, CarpetBerry = 7, CarpetSedge = 8;
-	private const float ExpMixNoiseM = 4.7f, ExpMixMossEnd = 0.38f, ExpMixLeavesEnd = 0.68f, ExpMixBerryEnd = 0.87f;
-	private const float ExpMixParchedMoss = 0.10f, ExpMixParchedLeaves = 0.10f, ExpMixParchedBerry = 0.14f;
+	private const float ExpMixNoiseM = 4.7f, ExpMixMossEnd = 0.38f, ExpMixBerryEnd = 0.87f;
+	// Доля мха в лесном ковре ложбины; остальное — осока (прежние доли мха 0,38 и осоки 1 − 0,87 в общем ковре).
+	private const float ExpHollowMossShare = ExpMixMossEnd / (ExpMixMossEnd + 1.0f - ExpMixBerryEnd);
 	// [rBase, rParched, gBase, gParched, bBase, bJitter] для CARPET_MOSS..CARPET_SEDGE (как GroundCarpet.EXP_CARPET_PALETTE)
 	private static readonly float[][] ExpCarpetPalette =
 	{
@@ -501,7 +502,8 @@ public partial class FastGrid
 	/// </summary>
 	public Godot.Collections.Dictionary BuildCarpetGrassTile(RideGround ride, int tileI, int tileJ, float tileSize, int sub,
 		float cover, float shade, float parched, float straw, float tall, float grow, bool flowers,
-		float tcR, float tcG, float tcB, float surfaceR, float forestMix, bool expedition, float flowerMul = 1.0f)
+		float tcR, float tcG, float tcB, float surfaceR, float forestMix, float fern, float shrub, float berry,
+		bool expedition, float flowerMul = 1.0f)
 	{
 		if (ride == null || !ride.Ready() || sub <= 0)
 			return new Godot.Collections.Dictionary { ["ok"] = false };
@@ -568,12 +570,15 @@ public partial class FastGrid
 
 			if (forestMix > 0.0f && WgHash2(gx, gz, 295) < forestMix)
 			{
+				// Вид по сообществу клетки (VegetationLayer.forest_community): ложбина — мох и осока, склон — опад,
+				// ребро — ягодник; шум 4,7 м только перемешивает их на границах.
 				float mix = 0.75f * CarpetValueNoise(x / ExpMixNoiseM, z / ExpMixNoiseM, 297) + 0.25f * h2;
-				if (mix < ExpMixMossEnd - ExpMixParchedMoss * parched)
+				float mossEnd = fern * ExpHollowMossShare;
+				if (mix < mossEnd)
 					kind = CarpetMoss;
-				else if (mix < ExpMixLeavesEnd - ExpMixParchedLeaves * parched)
+				else if (mix < mossEnd + shrub)
 					kind = CarpetLeaves;
-				else if (mix < ExpMixBerryEnd - ExpMixParchedBerry * parched)
+				else if (mix < mossEnd + shrub + berry)
 					kind = CarpetBerry;
 				else
 					kind = CarpetSedge;

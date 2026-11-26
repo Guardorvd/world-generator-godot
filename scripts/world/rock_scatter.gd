@@ -8,6 +8,7 @@ const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
 const CONVEXITY_GAIN := 0.45
 const CONVEXITY_NORM_M := 0.9 # перепад высоты на базе 8 м (м), соответствующий полной выпуклости/вогнутости ±1.0
+const CONVEXITY_RADIUS := 2 # клеток: база выпуклости local_convexity — соседи на 8 м
 const MAX_CONVEXITY_FACTOR := 1.0 + CONVEXITY_GAIN
 const OUTCROP_CHANCE := 0.12
 const HILL_OUTCROP_CHANCE := 0.065
@@ -247,7 +248,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 
 ## Высота над средним соседей в метрах (радиус по умолчанию — 8 м). Положительная — выпуклое плечо.
 ## Весь план или его полоса соседей доступны в полях. На внешнем краю поля форма нейтральна.
-static func local_convexity(elev: PackedFloat32Array, i: int, stride: int, radius := 2) -> float:
+static func local_convexity(elev: PackedFloat32Array, i: int, stride: int, radius := CONVEXITY_RADIUS) -> float:
 	var x := i % stride
 	var d := radius * stride
 	if x < radius or x + radius >= stride or i < d or i + d >= elev.size():

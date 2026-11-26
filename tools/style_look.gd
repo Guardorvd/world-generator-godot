@@ -113,7 +113,8 @@ func _build_world(seed_text: String) -> void:
 	if VegetationLayer.contact_shade:
 		var cavity_started := Time.get_ticks_usec()
 		TerrainBuilder.set_cavity(terrain.material_override, heights)
-		var cav := TerrainBuilder.cavity_image(heights.hv, world.W, world.H)
+		var cav := TerrainBuilder.surface_maps(heights)
+		cav.convert(Image.FORMAT_R8)
 		var cav_data := cav.get_data()
 		var shaded := 0
 		var darkest := 255

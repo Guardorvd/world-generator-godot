@@ -99,9 +99,11 @@ const EXP_FOREST_CANOPY_RANGE := Vector2(0.10, 0.44)
 const EXP_FOREST_CFG_CANOPY_RANGE := Vector2(0.12, 0.48)
 const EXP_MIX_NOISE_M := 4.7
 const EXP_MIX_MOSS_END := 0.38
-const EXP_MIX_LEAVES_END := 0.68
 const EXP_MIX_BERRY_END := 0.87
-const EXP_MIX_PARCHED_SHIFT := Vector3(0.10, 0.10, 0.14)
+## 26.11.2026 (этап 5 части 2 плана рельефа): вид лесного ковра по сообществу клетки (VegetationLayer.forest_community)
+## — ложбина: мох и осока, склон: опад, ребро: ягодник. Доля мха в ковре ложбины — из прежних долей мха (0,38) и осоки
+## (1 − 0,87) общего ковра.
+const EXP_HOLLOW_MOSS_SHARE := EXP_MIX_MOSS_END / (EXP_MIX_MOSS_END + 1.0 - EXP_MIX_BERRY_END)
 ## [r_base, r_parched, g_base, g_parched, b_base, b_jitter] для CARPET_MOSS..CARPET_SEDGE
 const EXP_CARPET_PALETTE := [
 	[0.22, 0.06, 0.38, -0.05, 0.17, 0.03],
@@ -114,6 +116,7 @@ var world: WorldData
 var heights: Heightfield
 var layer: Node3D            # VegetationLayer: общие функции множителя травы и снимок леса
 var forest: Image
+var _moist := PackedFloat32Array() # влажность мира после эрозии (Heightfield.ground_moisture), как у травы
 var layers: Array = []       # вид × 2 + дальняя: {mesh, mat, tris, n, name, nodes: квадрат -> {node, mm}, pool}
 var stream := StreamPolicy.new()
 
@@ -170,6 +173,7 @@ func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image
 	world = w
 	heights = h
 	forest = forest_image
+	_moist = h.ground_moisture()
 	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
 	_atm_cfg = WorldTemplate.atmosphere_config(w.template_id)
 	_expedition = w.template_id == WorldTemplate.EXPEDITION_ID
@@ -868,7 +872,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	var gr: Dictionary = VegetationLayer.ROCK_GRASS if rocky else bd.grass
 	# Те же поля, что у раскладки пучков травы (_fill_grass): влага, свет, уклон, полог, сообщество места
 	var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
-	lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
+	lush *= (0.45 + 0.75 * _moist[k]) * (0.65 + 0.7 * light)
 	lush *= 1.0 - 0.65 * surface.r
 	lush *= layer.ground_grass_mul(i, j, surface, light)
 	if rocky:
@@ -897,7 +901,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	if _atm_cfg != null and _atm_cfg.autumn_strength > 0.0:
 		straw = clampf(straw + _atm_cfg.autumn_strength * 0.35, 0.0, 1.0)
 	# Сухость места: мало влаги, каменисто, сухой биом — здесь ковёр соломенный
-	var parched := clampf((0.5 - w.moist[k]) * 1.6 + surface.a * 0.8 + VegetationLayer.open_dry(w.biome[k]) * 0.5, 0.0, 1.0)
+	var parched := clampf((0.5 - _moist[k]) * 1.6 + surface.a * 0.8 + VegetationLayer.open_dry(w.biome[k]) * 0.5, 0.0, 1.0)
 	var shade := smoothstep(0.3, 0.6, surface.r)
 	var forest_mix := 0.0
 	if _expedition:
@@ -915,6 +919,11 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 		flower_mul = _veg_cfg.carpet_flowers_mul
 		flowers = flowers and flower_mul > 0.0
 	var tall: float = clampf(0.6 + 0.45 * lush, 0.55, 1.15) * grow
+	# Сообщество лесного ковра — то же, что у подлеска клетки (папоротник и мох в ложбине, ягодник на ребре).
+	var community: PackedFloat32Array = layer.forest_community(i, j, surface.b) if forest_mix > 0.0 else PackedFloat32Array([0.0, 0.0, 0.0])
+	var c_fern: float = community[VegetationLayer.Understory.E_FERN_HOLLOW]
+	var c_shrub: float = community[VegetationLayer.Understory.E_SHRUB_SLOPE]
+	var c_berry: float = community[VegetationLayer.Understory.E_BERRY_RIDGE]
 	var step := TILE / SUB
 	var refine = heights.road_refinement
 	var has_road_patch := false
@@ -926,7 +935,7 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 	if use_native_tiles and _ride != null and not has_road_patch and (refine != null or path < 2):
 		var fast: Variant = Grid.fast_grid()
 		if fast != null:
-			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r, forest_mix, _expedition, flower_mul)
+			var res: Variant = fast.BuildCarpetGrassTile(_ride, i, j, TILE, SUB, cover, shade, parched, straw, tall, grow, flowers, tc[0], tc[1], tc[2], surface.r, forest_mix, c_fern, c_shrub, c_berry, _expedition, flower_mul)
 			if res is Dictionary and res.get("ok", false):
 				if not res.get("any", false):
 					return []
@@ -989,11 +998,12 @@ func _grass_tile(i: int, j: int, ys: Array) -> Array:
 			dry = maxf(dry, 0.45)
 		if forest_mix > 0.0 and WGRandom.hash2(gx, gz, 295) < forest_mix:
 			var mix := 0.75 * VegetationLayer._value_noise(x / EXP_MIX_NOISE_M, z / EXP_MIX_NOISE_M, 297) + 0.25 * h2
-			if mix < EXP_MIX_MOSS_END - EXP_MIX_PARCHED_SHIFT.x * parched:
+			var moss_end := c_fern * EXP_HOLLOW_MOSS_SHARE
+			if mix < moss_end:
 				kind = Models.CARPET_MOSS
-			elif mix < EXP_MIX_LEAVES_END - EXP_MIX_PARCHED_SHIFT.y * parched:
+			elif mix < moss_end + c_shrub:
 				kind = Models.CARPET_WOODLAND_LEAVES
-			elif mix < EXP_MIX_BERRY_END - EXP_MIX_PARCHED_SHIFT.z * parched:
+			elif mix < moss_end + c_shrub + c_berry:
 				kind = Models.CARPET_BERRY
 			else:
 				kind = Models.CARPET_SEDGE

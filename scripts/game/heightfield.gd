@@ -355,6 +355,10 @@ var fine_relief: Object
 var fine_lod := false
 ## Карты стока эрозии (ReliefErosion): area, deposit, wet — PackedByteArray по узлам 4 м. Пусто без эрозии.
 var relief_flow := {}
+## Карты поверхности по узлам (TerrainBuilder.surface_maps, этап 5 части 2): RGBA — затенение впадин, промытое дно,
+## нанос, выпуклость; R8 без стока. Пусто, пока не собраны. Читают материал рельефа и подлесок (выпуклость).
+var surface_maps := PackedByteArray()
+var _ground_moisture := PackedFloat32Array()
 ## Изменение высот эрозией, м, — только до растительности при генерации (в кэш не идёт; загрузчик сбрасывает).
 var erosion_delta := PackedFloat32Array()
 ## Узлы, где RockRelief положил пласты (1), — эрозия их не трогает. Только при генерации с эрозией.
@@ -400,6 +404,23 @@ func relief_mask_inputs(with_objects := true) -> Dictionary:
 		rock = RockRelief.field_of(w), patches = PackedInt32Array(road_refinement.patches.keys() if road_refinement != null else []),
 		structures = PackedInt32Array(_cells.keys()), places = footprints,
 	}
+
+
+## Влажность мира после эрозии: w.moist + wet_moist_gain × (W − ½) — та же формула (ReliefMaterial.FlowMoisture),
+## что у раскладки леса при генерации. Без карт стока (Тип 1) — сам w.moist. Читают подстилка (ForestFloor), ковёр
+## и через неё материал рельефа и подлесок: одна влажность на всё. Считать до раздачи потокам (WorldLoader).
+func ground_moisture() -> PackedFloat32Array:
+	var w := world
+	if w == null or not _ground_moisture.is_empty():
+		return _ground_moisture
+	var cfg := WorldTemplate.config(w.template_id).relief_generation
+	var wet: PackedByteArray = relief_flow.get("wet", PackedByteArray())
+	var fast := Grid.fast_grid()
+	if cfg != null and cfg.wet_moist_gain != 0.0 and wet.size() == w.N and fast != null:
+		_ground_moisture = fast.FlowMoisture(w.moist, wet, cfg.wet_moist_gain)
+	if _ground_moisture.size() != w.N:
+		_ground_moisture = w.moist
+	return _ground_moisture
 
 
 ## После полотна, воды и генерации. Источник для маски — опубликованные игровые данные.

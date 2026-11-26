@@ -173,6 +173,7 @@ static func _plan_scrub(w: WorldData, h: Heightfield, rect: Rect2i, wooded: Dict
 	var out: Array = []
 	var rock_field := w.generation.surface_rock
 	var has_rock := rock_field.size() == w.N
+	var moist := h.ground_moisture() # влажность мира после эрозии, как у ближней раскладки и подстилки
 	var x0 := ceili(float(rect.position.x) / SCRUB_STEP) * SCRUB_STEP
 	var y0 := ceili(float(rect.position.y) / SCRUB_STEP) * SCRUB_STEP
 	for j in range(y0, mini(rect.end.y, w.H), SCRUB_STEP):
@@ -186,7 +187,7 @@ static func _plan_scrub(w: WorldData, h: Heightfield, rect: Rect2i, wooded: Dict
 				if wooded.has(cell + o): edge = 0.6
 			var rock := float(rock_field[k]) / 255.0 if has_rock else Floor.rockiness(w, k)
 			var light := StageClimate.natural_conditions(w, i, j).x
-			var site := scrub_site(w.seed_num, i, j, w.biome[k], Floor.ground_moisture(w.moist[k], w.dist_water[k]), light,
+			var site := scrub_site(w.seed_num, i, j, w.biome[k], Floor.ground_moisture(moist[k], w.dist_water[k]), light,
 				w.slope[k], w.elev[k], rock, w.dist_water[k], edge)
 			if site.is_empty(): continue
 			var p: Vector2 = site.at

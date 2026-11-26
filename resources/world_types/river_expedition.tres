@@ -246,6 +246,14 @@ windthrow_cover = 0.58
 windthrow_pair_m = 3.8
 windthrow_pit_share = 0.82
 windthrow_max_grade = 0.52
+flow_material = true
+bed_area_m2 = Vector2(2500, 20000)
+deposit_m = Vector2(0.1, 0.8)
+bed_stones = 0.6
+bed_tone = 0.55
+bed_color = Color(0.46, 0.42, 0.34, 1)
+deposit_wet = 0.45
+ridge_dry = 0.3
 tile_mib = 34
 mesh_mib = 26
 

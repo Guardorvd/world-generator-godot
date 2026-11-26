@@ -157,12 +157,6 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		r.world.generation.surface_rock = RockRelief.field_of(r.world)
 	if not view.is_empty():
 		r.forest_surface = view.forest
-	else:
-		var forest_job := func() -> void:
-			var t0 := Time.get_ticks_usec()
-			r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
-			forest_times.forest_surface_ms = (Time.get_ticks_usec() - t0) / 1000.0
-		forest_task = WorkerThreadPool.add_task(forest_job, true, "Подстилка леса")
 	# Обычно заливка готова к концу генерации. Рельеф из кэша готовит тот же поток.
 	if on_progress.is_valid() and view.is_empty() and (not side.is_started() or side.is_alive()):
 		on_progress.call(0.87, "Заливка карты и текстуры рельефа")
@@ -224,6 +218,15 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	r.heights.erosion_delta = PackedFloat32Array()
 	r.heights.erosion_allowed = PackedFloat32Array()
 	r.heights.rock_strata = PackedByteArray()
+	# Подстилка — после поверхности: её влажность — влажность мира после эрозии (Heightfield.ground_moisture,
+	# этап 5 части 2). Задача идёт параллельно сборке мешей и воды и ждётся вместе с картинками.
+	if view.is_empty():
+		var moist := r.heights.ground_moisture()
+		var forest_job := func() -> void:
+			var t0 := Time.get_ticks_usec()
+			r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world, moist)
+			forest_times.forest_surface_ms = (Time.get_ticks_usec() - t0) / 1000.0
+		forest_task = WorkerThreadPool.add_task(forest_job, true, "Подстилка леса")
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
 	r.timings.trail_ms = r.trail.get("ms", 0.0)
 	for message: String in r.trail.errors:

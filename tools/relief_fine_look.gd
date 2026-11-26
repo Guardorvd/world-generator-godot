@@ -16,6 +16,7 @@ const Frames := preload("res://scripts/core/frame_statistics.gd")
 const Source := preload("res://scripts/render/chunk_source.gd")
 const FrameBudget := preload("res://scripts/render/stream_frame_budget.gd")
 const FarForest := preload("res://scripts/render/distant_forest.gd")
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const RIDE_SPEED := 22.0
 const RIDE_SECONDS := 60.0
 const SHOT_SIZE := Vector2i(640, 360)
@@ -30,7 +31,7 @@ const FORM_AMBIENT_ENERGY := 0.22
 const FORM_ALBEDO := 0.4
 const CLAY_LINES := {
 	"ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));": "ALBEDO = vec3(%s);",
-	"AO = sky * (use_vertex_color ? 1.0 : texture(cavity_tex, UV).r);": "AO = 1.0;",
+	"AO = sky * relief_maps.r;": "AO = 1.0;",
 	"BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);": "BACKLIGHT = vec3(1.0, 0.0, 0.0);",
 	"NORMAL_MAP = detail_n;": "NORMAL_MAP = vec3(0.5, 0.5, 1.0);",
 }
@@ -257,7 +258,10 @@ func _build_scene(w: WorldData, h: Heightfield) -> void:
 	_scene.add_child(_terrain)
 	_terrain.frame_budget = _provider
 	var builder := TerrainBuilder.new()
-	var mat := builder.material(MapBaker.bake(w, WorldLoader.px_for(maxi(w.W, w.H)), true), null, w.template_id)
+	# Материал как в игре (GameWorld): подстилка и влажность леса, затенение впадин и карты стока (этап 5 части 2).
+	var mat := builder.material(MapBaker.bake(w, WorldLoader.px_for(maxi(w.W, w.H)), true), Floor.surface_image(w, h.ground_moisture()), w.template_id)
+	TerrainBuilder.set_cavity(mat, h)
+	TerrainBuilder.set_community_noise(mat, w)
 	_terrain.setup(chunks, mat, null, w, h, _source)
 	_terrain.far_material = builder.far_material(mat)
 	# Вода остаётся на том же меше; останавливаем только движение бликов для повторяемой съёмки.

@@ -223,6 +223,10 @@ const EXP_GUILD_ADD := {
 	Floor.FIRST + Floor.MOSS_LOG: Vector2(0.16, 0.40),
 }
 var heights: Heightfield
+## Карты поверхности RGBA по узлам (Heightfield.surface_maps): канал A — выпуклость после эрозии. Пусто — Тип 1.
+var _relief_convexity := PackedByteArray()
+## Влажность мира после эрозии (Heightfield.ground_moisture); у Типа 1 — сам world.moist. Трава и ковёр.
+var _moist := PackedFloat32Array()
 var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 ## 18.11.2026: ключи veg по чанкам (Vector2i -> Array[Vector3i]). _drop и refresh проверяют чанки, а не тысячи
 ## записей veg (замер стресс-теста в лесу: до 3600 записей, _drop в среднем 1,5 мс, до 5 мс). Пишется только через
@@ -349,7 +353,11 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	heights = h
 	placement = Placement.new(w, h)
 	road = RoadObstacles.new(w)
-	_forest_surface = forest if forest != null else Floor.surface_image(w)
+	_moist = h.ground_moisture() if h != null else w.moist
+	_forest_surface = forest if forest != null else Floor.surface_image(w, _moist)
+	# Выпуклость поверхности после эрозии — из карт поверхности (TerrainBuilder.surface_maps, канал A), та же, что
+	# у материала рельефа. Карты собирает материал (GameWorld до раскладки); без них — выпуклость полей мира.
+	_relief_convexity = h.surface_maps if h != null and h.surface_maps.size() == w.N * 4 else PackedByteArray()
 	RenderingServer.global_shader_parameter_set("veg_seeds", community_seeds(w.seed_num))
 	for kind: int in defs:
 		if not _expedition and kind % ForestModels.MODEL_STRIDE in Biomes.EXPEDITION_TREES:
@@ -2444,7 +2452,7 @@ func _scan_band(b: int, scan: Dictionary) -> void:
 			# Почвенная влага и освещение общие с генератором леса.
 			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
 			var light := StageClimate.natural_conditions(w, i, j).x
-			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
+			lush *= (0.45 + 0.75 * _moist[k]) * (0.65 + 0.7 * light)
 			lush *= 1.0 - 0.65 * surface.r
 			var t_u := Time.get_ticks_usec()
 			lush *= _fill_understory(i, j, surface, light, px, pz, ctx)
@@ -2718,9 +2726,7 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			weights[Understory.FIREWEED] *= _veg_cfg.forest_fireweed_mul
 			var verge_boost := lerpf(1.0, EXP_VERGE_BOOST_MAX, _verge(i, j)) if _in_plan(i, j) else 1.0
 			var wet_dark := clampf(wet_patch * 0.65 + moisture * 0.35, EXP_WET_DARK_RANGE.x, EXP_WET_DARK_RANGE.y)
-			var convexity := _cell_convexity(i, j)
-			var com_patch := _vnoise(i, j, EXP_COMMUNITY_PATCH_CELLS, (world.seed_num ^ EXP_COMMUNITY_PATCH_SALT) + EXP_COMMUNITY_PATCH_SEED_OFF)
-			var ec := Understory.expedition_forest_community(moisture, convexity, com_patch)
+			var ec := forest_community(i, j, moisture)
 			var c_fern := ec[Understory.E_FERN_HOLLOW]
 			var c_shrub := ec[Understory.E_SHRUB_SLOPE]
 			var c_berry := ec[Understory.E_BERRY_RIDGE]
@@ -2860,10 +2866,23 @@ func _sites(ctx) -> Array:
 	return _understory_sites if ctx == null else ctx.sites
 
 
+## Доли лесных сообществ Экспедиции клетки (Understory.E_FERN_HOLLOW, E_SHRUB_SLOPE, E_BERRY_RIDGE): одна раскраска
+## для подлеска и лесного ковра (GroundCarpet), чтобы папоротник и мох стояли в той же лощине, ягодник — на том же
+## ребре. moisture — влажность подстилки (влажность мира после эрозии), выпуклость — поверхности после эрозии;
+## шум пятен (~36 м) только колеблет границы сообществ.
+func forest_community(i: int, j: int, moisture: float) -> PackedFloat32Array:
+	var com_patch := _vnoise(i, j, EXP_COMMUNITY_PATCH_CELLS, (world.seed_num ^ EXP_COMMUNITY_PATCH_SALT) + EXP_COMMUNITY_PATCH_SEED_OFF)
+	return Understory.expedition_forest_community(moisture, _cell_convexity(i, j), com_patch)
+
+
 ## Нормализованная выпуклость клетки плана в 8 м (-1 — ложбина, +1 — ребро/плечо).
+## С картами стока — по поверхности после эрозии: канал A карт поверхности, высота над средним ~16 м в долях
+## полной ложбины затенения (ReliefMaterial) — та же величина, что ребро и ложбина у материала рельефа.
 func _cell_convexity(i: int, j: int) -> float:
 	if not _in_plan(i, j):
 		return 0.0
+	if not _relief_convexity.is_empty():
+		return _relief_convexity[(j * world.W + i) * 4 + 3] / 255.0 * 2.0 - 1.0
 	return clampf(RockScatter.local_convexity(world.elev, j * world.W + i, world.W) / RockScatter.CONVEXITY_NORM_M, -1.0, 1.0)
 
 

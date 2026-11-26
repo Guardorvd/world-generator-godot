@@ -54,6 +54,14 @@ uniform bool forest_enabled = false;
 uniform bool expedition_floor = false;
 // 16.11: затенение впадин для света неба (TerrainBuilder.set_cavity): 1 — открыто; без карты — белый, без затенения
 uniform sampler2D cavity_tex : hint_default_white, filter_linear_mipmap, repeat_disable;
+// 26.11.2026 (часть 2 плана рельефа, этап 5): земля по процессам. Карты поверхности (TerrainBuilder.set_cavity,
+// ReliefMaterial в C#) у Типа 2 — RGBA: G — промытое дно лощины (водосбор), B — нанос эрозии, A — положение
+// в рельефе (0,5 — ровно, 1 — ребро, 0 — ложбина; та же окрестность ~16 м, что у затенения R). Числа — WorldReliefDetailConfig, группа «Материал по стоку»; у Типа 1 нули — как раньше.
+uniform float flow_bed_stones = 0.0;   // доля гальки и щебня на промытом дне (как каменистый участок)
+uniform float flow_bed_tone = 0.0;     // насколько дно лощины берёт тон промытого грунта, виден и вдали
+uniform vec3 flow_bed_color : source_color = vec3(0.0);
+uniform float flow_deposit_wet = 0.0;  // прибавка влажности грунта на полном наносе: темнее, сочнее, мох
+uniform float flow_ridge_dry = 0.0;    // убавка влажности грунта на ребре: светлее и суше
 uniform sampler2D community_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool community_tex_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
@@ -225,6 +233,10 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	// Производные берутся до ветвлений и передаются в textureGrad: внутри условий неявные производные не определены.
 	vec2 gdx = dFdx(p);
 	vec2 gdy = dFdy(p);
+	// Карты поверхности: одна выборка на пиксель (затенение впадин в AO и каналы стока), до ветвлений.
+	vec4 relief_maps = use_vertex_color ? vec4(1.0, 0.0, 0.0, 0.5) : texture(cavity_tex, UV);
+	float flow_ridge = clamp(relief_maps.a * 2.0 - 1.0, 0.0, 1.0);
+	float flow_bed = relief_maps.g * flow_bed_stones;
 	vec2 ydxy = vec2(dFdx(wpos.y), dFdy(wpos.y));
 	vec4 mh = vec4(0.5, 0.5, 0.5, 0.0);
 	vec4 mn = vec4(0.5);
@@ -274,28 +286,30 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float wet = use_vertex_color ? UV.x : 0.45; // за краем влажность почвы передаёт меш
 	if (forest_enabled && !use_vertex_color) {
 		vec4 forest = texture(forest_tex, UV);
-		wet = forest.b;
+		// Влажность мира после эрозии (подстилка, ForestFloor) и грунт по процессу: сырой нанос, сухое ребро.
+		wet = clamp(forest.b + relief_maps.b * flow_deposit_wet - flow_ridge * flow_ridge_dry, 0.0, 1.0);
 		exposure = forest.a;
 		float cover = smoothstep(0.03, expedition_floor ? 0.57 : 0.8, forest.r) * (1.0 - snow);
 		canopy = cover;
 		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
-		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
+		float moss = smoothstep(0.48, 0.85, wet) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
 		float has_autumn = step(0.001, autumn_ground.x);
 		vec3 soil;
 		if (expedition_floor) {
 			vec3 damp_duff = mix(vec3(0.25, 0.151, 0.088), vec3(0.185, 0.137, 0.086), forest.g);
-			damp_duff *= mix(1.20, 0.68, forest.b) * mix(0.76, 1.25, n_mid);
+			damp_duff *= mix(1.20, 0.68, wet) * mix(0.76, 1.25, n_mid);
 			vec3 olive = mix(vec3(0.19, 0.23, 0.082), vec3(0.29, 0.34, 0.13), n_mid);
 			olive = mix(olive, olive * vec3(0.82, 0.78, 0.62), autumn_ground.z * has_autumn);
 			soil = mix(damp_duff, olive, moss * (0.66 + 0.48 * patch));
 		} else {
 			soil = mix(leaf_soil, needle_soil, forest.g);
-			soil *= mix(1.12, 0.72, forest.b);
+			soil *= mix(1.12, 0.72, wet);
 			vec3 moss_c = mix(floor_moss, floor_moss * vec3(0.76, 0.73, 0.56), autumn_ground.z * has_autumn);
 			soil = mix(soil, moss_c, moss * 0.7);
 		}
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
-		float stones = forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6);
+		// Промытое дно лощины — галька и щебень сквозь подстилку.
+		float stones = max(forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6), flow_bed);
 		soil = mix(soil, rock_color * 0.72, stones * 0.75);
 		if (near > 0.0) {
 			// Листья/иголки читаются вблизи, с производными для гашения мерцания.
@@ -376,7 +390,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float ground_w = (1.0 - rock) * (1.0 - canopy * (expedition_floor ? 1.0 : 0.85));
 	float n_zone = texture(detail_tex, vec2(dot(p, vec2(0.78, -0.62)), dot(p, vec2(0.62, 0.78))) * (1.0 / 97.0) + vec2(0.71, 0.29)).r;
 	if (ground_w > 0.01) {
-		float stony = smoothstep(0.54, 0.68, n_zone + (n_mid - 0.5) * 0.14 + slope * 0.9);
+		float stony = max(smoothstep(0.54, 0.68, n_zone + (n_mid - 0.5) * 0.14 + slope * 0.9), flow_bed);
 		float damp = smoothstep(0.54, 0.68, (1.0 - n_zone) + (n_mid - 0.5) * 0.14 + (wet - 0.45) * 0.6 - slope * 0.8);
 		float water_tone = smoothstep(0.02, 0.10, base_col.b - max(base_col.r, base_col.g));
 		float sand = smoothstep(0.52, 0.66, base_col.r) * smoothstep(0.12, 0.26, base_col.r - base_col.b) * (1.0 - snow_biome);
@@ -641,8 +655,10 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		}
 		ground_relief *= ground_w;
 	}
+	// Промытое дно лощины: тон промытого грунта, читается и вдали; на скале дальше своя порода.
+	col = mix(col, flow_bed_color, relief_maps.g * flow_bed_tone * (1.0 - snow));
 	if (rock > 0.01) {
-		float cliff = smoothstep(0.20, 0.40, slope + (n_big - 0.5) * 0.10);
+		float cliff =smoothstep(0.20, 0.40, slope + (n_big - 0.5) * 0.10);
 		// Осыпи — на склонах угла естественного откоса и пятнами по крупному шуму, не сплошным поясом.
 		float band = smoothstep(0.05, 0.11, slope) * (1.0 - smoothstep(0.24, 0.34, slope));
 		float scree = band * smoothstep(0.34, 0.66, n_macro * 0.75 + n_big * 0.25 + (n_mid - 0.5) * 0.1);
@@ -1126,7 +1142,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	ROUGHNESS = 1.0 - gloss_v * 0.12 - road_gloss * 0.15;
 	SPECULAR = 0.3 + gloss_v * 0.08;
 	BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);
-	AO = sky * (use_vertex_color ? 1.0 : texture(cavity_tex, UV).r);
+	AO = sky * relief_maps.r;
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
 	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n + 0.55 * lumps + 0.55 * forest_bumps, 0.5 + road_rough * 0.5, road) * near;
