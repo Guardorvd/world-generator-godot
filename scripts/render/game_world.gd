@@ -1046,6 +1046,7 @@ func _bike_mount_changed(riding: bool) -> void:
 		_cam_dist = GameConfig.BIKE_CAM
 	yaw = bike.heading
 	pitch = -0.3 if riding else -0.05
+	audio.mount_changed(riding)
 	_snap()
 
 
@@ -1794,7 +1795,7 @@ func _physics_process(dt: float) -> void:
 			# проседание камеры: заметное после высокого прыжка, едва заметное после обычного
 			_dip_v -= clampf(player.land_impact - 3.0, 0.0, 14.0) * 0.25
 			_shake_on_landing(player.land_impact, 10.0)
-			audio.land(player.x, player.z, player.feet, player.land_impact)
+			audio.land(player.x, player.z, player.feet, player.land_impact, false)
 			player.land_impact = 0.0
 	if bike.pump_pressed or _pump_feedback_latched:
 		_tick_pump_feedback(not _opening and not input_lock and not crash.active())
@@ -1809,6 +1810,7 @@ func _physics_process(dt: float) -> void:
 	if not crash.active():
 		bike_view.watch_requested = hud.summary_requested() and not input_lock and not _opening and not _placing_bike() and not startup_input_locked
 		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.surging(fw))
+	audio.tick_bike(bike, dt)
 	bike.clear_tick_events()
 	t0 = _tick_mark("effects", t0)
 	audio.tick(player, bike.riding)
@@ -2006,7 +2008,11 @@ func _process(delta: float) -> void:
 			_ocean.position = Vector3(pos.x, 0.0, pos.z)
 		update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta, decor_deadline)
 	t0 = _tick_mark("frame_lights_mist", t0)
-	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta,
+		bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0,
+		_bike_skid_sound() if bike.riding else 0.0, bike.riding, bike.airborne,
+		bike.brakes.skid if bike.riding else 0.0, bike.slip if bike.riding else 0.0, bike.effort if bike.riding else 0.0,
+		day.sunlight)
 
 	info_timer -= delta
 	if summary and info_timer <= 0.0:

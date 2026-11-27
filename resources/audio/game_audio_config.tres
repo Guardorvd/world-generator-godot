@@ -1,0 +1,6 @@
+[gd_resource type="Resource" script_class="GameAudioConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/game_audio_config.gd" id="1_cfg"]
+
+[resource]
+script = ExtResource("1_cfg")

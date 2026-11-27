@@ -38,11 +38,17 @@ var _last_hover_ms := -1000
 func _ready() -> void:
 	# 20.11: все звуки — сразу при создании (это загрузка экрана или меню): первый звон груза, тумблер фары или
 	# отклик открытия в игре не читают файл с диска посреди кадра. Файлы короткие, повторная загрузка — из кэша.
+	var ui_bus := &"UI"
+	if AudioServer.get_bus_index(ui_bus) == -1:
+		var idx := AudioServer.bus_count
+		AudioServer.add_bus(idx)
+		AudioServer.set_bus_name(idx, ui_bus)
+		AudioServer.set_bus_send(idx, &"Master")
 	for kind: StringName in SOUNDS:
 		_stream_for(SOUNDS[kind].path)
 	for i in POOL_SIZE:
 		var player := AudioStreamPlayer.new()
-		player.bus = &"Master"
+		player.bus = ui_bus
 		add_child(player)
 		_players.append(player)
 
@@ -163,7 +169,11 @@ static func pulse_confirm(button: Control) -> void:
 func _stream_for(path: String) -> AudioStream:
 	if _streams.has(path):
 		return _streams[path]
-	var stream: AudioStream = load(path) if ResourceLoader.exists(path) else null
+	var stream: AudioStream = null
+	if not OS.has_feature("template") and FileAccess.file_exists(path) and path.ends_with(".wav"):
+		stream = AudioStreamWAV.load_from_file(path)
+	if stream == null and ResourceLoader.exists(path):
+		stream = load(path)
 	_streams[path] = stream
 	return stream
 
