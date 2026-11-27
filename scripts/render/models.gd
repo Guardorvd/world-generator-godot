@@ -313,6 +313,7 @@ static func _build_carpet_grass_mesh(kind: int, far: bool) -> ArrayMesh:
 ## Настоящая геометрия поверх фактуры полотна: у камня есть силуэт, грани ловят свет, низ тёмный (тень у земли —
 ## теней от ковра нет). Раскладывает GroundCarpet по кромкам, обочинам и между колеями.
 ## Дальняя форма содержит те же камни, что остаются после поредения в шейдере.
+## Щебень на дороге: 7 угловатых невысоких камней со сколотыми верхними гранями (far — 4 крупных), открытое дно.
 static func _carpet_stones(far: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -321,37 +322,48 @@ static func _carpet_stones(far: bool) -> ArrayMesh:
 		var h1 := WGRandom.hash2(k, 51, 721)
 		var h2 := WGRandom.hash2(k, 53, 723)
 		var h3 := WGRandom.hash2(k, 57, 727)
-		var a := k * 2.39996 + h1
-		var r := 0.30 * sqrt((k + 0.5) / 7.0)
+		var a := k * 2.39996 + h1 * 1.2
+		var r := 0.29 * sqrt((k + 0.5) / 7.0)
 		var centre := Vector3(cos(a) * r, 0.0, sin(a) * r)
-		var w := 0.03 + 0.05 * h2 * h2
-		var h := w * (0.55 + 0.6 * h3)
+		var w := 0.032 + 0.048 * h2
+		var h := w * (0.36 + 0.34 * h3)
 		# The last three stones fade to zero before switching to the four-stone mesh.
 		var rank := 0.1 + 0.5 * h1 if k < 4 else CARPET_FAR_KEEP + 0.1 + h1 * 0.2
-		var tone := 0.8 + 0.35 * h3
+		var tone := 0.66 + 0.28 * h3
+		var warm := (h1 - 0.5) * 0.07
 		var low: Array[Vector3] = []
-		var mid: Array[Vector3] = []
+		var shoulder: Array[Vector3] = []
+		var crown_off := Vector3((h1 - 0.5) * w * 0.38, h, (h2 - 0.5) * w * 0.35)
 		for n in 5:
 			var b := n * TAU / 5.0 + h1 * 3.0
-			var rr := w * (0.75 + 0.5 * WGRandom.hash2(k * 7 + n, 59, 729))
-			low.append(centre + Vector3(cos(b) * rr, -0.01, sin(b) * rr * 0.8))
-			mid.append(centre + Vector3(cos(b) * rr * 0.72, h * 0.62, sin(b) * rr * 0.58))
-		var top := centre + Vector3((h1 - 0.5) * w * 0.5, h, (h2 - 0.5) * w * 0.5)
+			var rr := w * (0.72 + 0.46 * WGRandom.hash2(k * 7 + n, 59, 729))
+			var sx := cos(b) * rr
+			var sz := sin(b) * rr * (0.68 + 0.24 * h2)
+			low.append(centre + Vector3(sx, -0.012, sz))
+			var lift := 0.58 + 0.26 * sin(b * 2.0 + h2 * 4.0)
+			shoulder.append(centre + Vector3(sx * 0.64, h * lift, sz * 0.64) + crown_off * 0.32)
+		var top_a := shoulder[0].lerp(shoulder[2], 0.5) + Vector3(0.0, h * 0.14, 0.0)
 		var faces: Array = []
 		for n in 5:
 			var m := (n + 1) % 5
-			faces.append([low[n], mid[n], mid[m]])
-			faces.append([low[n], mid[m], low[m]])
-			faces.append([mid[n], top, mid[m]])
+			faces.append([low[n], shoulder[n], shoulder[m]])
+			faces.append([low[n], shoulder[m], low[m]])
+		# Скошенная колотая верхняя площадка вместо острой пирамиды.
+		faces.append([shoulder[0], shoulder[1], shoulder[2]])
+		faces.append([shoulder[0], shoulder[2], top_a])
+		faces.append([shoulder[2], shoulder[3], shoulder[4]])
+		faces.append([shoulder[2], shoulder[4], top_a])
+		faces.append([shoulder[4], shoulder[0], top_a])
 		for face: Array in faces:
 			var normal: Vector3 = (face[1] - face[0]).cross(face[2] - face[0]).normalized()
-			if normal.dot(face[0] + face[1] + face[2] - centre * 3.0 + Vector3.UP * 0.01) < 0.0:
+			if normal.dot(face[0] + face[1] + face[2] - centre * 3.0 + Vector3.UP * 0.02) < 0.0:
 				normal = -normal
 			for v: Vector3 in face:
-				var lit := 0.62 if v.y < 0.0 else (0.95 if v.y < h * 0.9 else 1.12)
+				var up_t := clampf((v.y + 0.012) / maxf(h, 0.01), 0.0, 1.0)
+				var lit := tone * lerpf(0.52, 0.96, up_t)
 				st.set_normal(normal)
-				st.set_color(Color(lit * tone, lit * tone, lit * tone))
-				st.set_uv(Vector2(float(k) / 7.0, clampf(v.y / h, 0.0, 1.0)))
+				st.set_color(Color(lit * (1.02 + warm), lit * 0.98, lit * (0.94 - warm)))
+				st.set_uv(Vector2(float(k) / 7.0, up_t))
 				st.set_uv2(Vector2(rank, 0.0))
 				st.add_vertex(v)
 	return st.commit()

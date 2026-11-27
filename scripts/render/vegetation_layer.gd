@@ -454,10 +454,27 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM, Understory.MOSS_MOUND]
 		var wind := CALM if still else _plant_wind(base)
-		var mat := _wind_mat(SHADER, wind, true)
+		var floor_shader: Shader = SHADER
+		var floor_rock := kind in [Floor.BOULDER, Floor.STONES]
+		var floor_bark := 0.0
+		if floor_rock:
+			floor_shader = preload("res://resources/rock.gdshader")
+		elif kind in [Floor.LOG, Floor.MOSS_LOG, Floor.BRANCH, Floor.TWIG, Floor.ROOT_SPAN]:
+			floor_shader = TRUNK_SHADER
+			floor_bark = 3.0
+		elif (base - Floor.FIRST) in [Floor.SNAG, Floor.SNAG_FORK, Floor.STUMP, Floor.STUMP_HOLLOW, Floor.ROOT_STUMP]:
+			floor_shader = TRUNK_SHADER
+			floor_bark = 4.0
+		var mat := _wind_mat(floor_shader, wind, true)
 		var has_group_lod: bool = groups.has(base) and mesh == far_forms[base]
 		var wind_mesh: Mesh = catalog_forms[base] if has_group_lod else mesh
 		mat.set_shader_parameter("height", maxf(wind_mesh.get_aabb().end.y, 0.2))
+		if floor_rock:
+			mat.set_shader_parameter("rock_contact", (0.20 if kind == Floor.STONES else ROCK_CONTACT) if contact_shade else 0.0)
+		elif floor_bark > 0.0:
+			mat.set_shader_parameter("use_vertex_color", true)
+			mat.set_shader_parameter("albedo_color", Color.WHITE)
+			mat.set_shader_parameter("bark_detail", floor_bark)
 		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE, Understory.STIPA]
 		mat.set_shader_parameter("grass_variation", blades)
 		var priority := Placement.priority(base)
@@ -470,7 +487,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var open_form := base in Understory.OPEN_FORMS
 		var far := priority < 2 or open_form or base in [Understory.SWORD_FERN, Understory.SWORD_FERN_TALL, Understory.BROADLEAF_HERB, Understory.BROADLEAF_HERB_TALL]
 		# Начальная ёмкость ближней формы меньше. При плотной раскладке буфер растёт по фактическому числу растений.
-		var expedition_form := (base >= Understory.EXPEDITION_FIRST and base < Floor.FIRST) or base >= Floor.FIRST + Floor.NURSE_LOG
+		var expedition_form := (base >= Understory.EXPEDITION_FIRST and base < Floor.FIRST) or Floor.is_expedition(base - Floor.FIRST)
 		var near_cap: bool = far_forms.has(base) and mesh != far_forms[base]
 		var cap := _detail_cap(far and not near_cap, expedition_form)
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
@@ -1899,6 +1916,7 @@ func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count
 			mono_node.visible = false
 		if mm != null:
 			mm.visible_instance_count = 0
+			mm.custom_aabb = frame.bounds
 		return _present_sectors(group, sectors, frame) or had_mono
 	snapshots.commit(group, frame, stream.clock)
 	var had_sectors: bool = sectors is Dictionary and not sectors.nodes.is_empty()
@@ -3517,7 +3535,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 			pos = xf.origin
 		elif not placement.terrain_fits(xf, local_box, 0.25 if on_road and floor_kind == Floor.STONES else 0.18):
 			return RoadPlacement.TERRAIN
-	elif _expedition and floor_kind in [Floor.STUMP, Floor.BOULDER] and (kind - Floor.FIRST) >= Floor.NURSE_LOG:
+	elif _expedition and floor_kind in [Floor.STUMP, Floor.BOULDER] and Floor.is_expedition(kind - Floor.FIRST):
 		xf = placement.seat_embedded_solid(xf, local_box, sink)
 		if xf == Transform3D.IDENTITY:
 			return RoadPlacement.TERRAIN

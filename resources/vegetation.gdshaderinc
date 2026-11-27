@@ -91,6 +91,7 @@ varying vec3 rock_local;
 // У комля ствол темнее, с северной стороны — мох. Рельеф — светом, гаснет по размеру пикселя.
 uniform float bark_detail = 0.0;
 varying vec3 bark_local;
+varying vec3 bark_local_nrm;
 varying float bark_north;
 #endif
 
@@ -113,6 +114,7 @@ void vertex() {
 	bool lod_hidden = v_lod.x >= min(v_lod.y, 1.0);
 #ifdef BARK
 	bark_local = VERTEX;
+	bark_local_nrm = NORMAL;
 	bark_north = dot(normalize(mat3(MODEL_MATRIX) * NORMAL), vec3(-0.45, 0.0, -0.89));
 #endif
 	float h = clamp(VERTEX.y / (coarse_form ? form_group_lod.z : height), 0.0, 1.0);
@@ -211,8 +213,9 @@ void vertex() {
 		// склона (у выходов — между вертикалью и склоном). Метры над основанием вдоль оси; у земли меньше света неба —
 		// щель, куда не заглядывает небо. Полоса — от линии погружения на 0,1–0,45 м (у мелких камней короче).
 		float axis_m = length(MODEL_MATRIX[1].xyz);
-		float up_m = VERTEX.y * axis_m - 0.1 * axis_m;
-		float band = clamp(axis_m * 0.35, 0.1, 0.45);
+		float h_rock = clamp(height, 0.16, 1.0);
+		float up_m = VERTEX.y * axis_m - (0.1 * h_rock) * axis_m;
+		float band = clamp(axis_m * 0.35 * h_rock, 0.06, 0.45);
 		v_ao *= 1.0 - rock_contact * (1.0 - smoothstep(0.0, band, up_m));
 #endif
 		if (use_vertex_color && !OUTPUT_IS_SRGB) {
@@ -276,18 +279,68 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = 1.0;
 #ifdef ROCK_DETAIL
-	// Мелкое зерно затухает по производным: не мерцает на дальнем LOD.
+	// Мелкое зерно и крап гранита затухают по производным: не мерцают на дальнем LOD.
 	float footprint = max(length(dFdx(rock_local)), length(dFdy(rock_local)));
+	float moss_rock = clamp((ALBEDO.g - ALBEDO.r) * 7.0, 0.0, 1.0);
 	vec3 grain_cell = floor(rock_local * 145.0);
 	float grain = fract(sin(dot(grain_cell, vec3(127.1, 311.7, 74.7))) * 43758.5453) * 2.0 - 1.0;
+	vec3 speck_cell = floor(rock_local * 36.0);
+	float speck = fract(sin(dot(speck_cell, vec3(269.5, 183.3, 419.2))) * 43758.5453) * 2.0 - 1.0;
 	float strata = sin(dot(rock_local, vec3(2.4, 8.0, 3.7)) + sin(rock_local.x * 5.0) * 0.8 + sin(rock_local.z * 7.0) * 0.5);
-	float vein = (1.0 - smoothstep(0.02, 0.07, abs(strata))) * (1.0 - smoothstep(0.015, 0.06, footprint));
-	ALBEDO *= 0.94 + grain * 0.045 * (1.0 - smoothstep(0.0025, 0.012, footprint));
-	ALBEDO = mix(ALBEDO, ALBEDO * 1.2, vein * 0.12);
-	ROUGHNESS = 0.91;
+	float vein = (1.0 - smoothstep(0.02, 0.07, abs(strata))) * (1.0 - smoothstep(0.015, 0.06, footprint)) * (1.0 - moss_rock * 0.8);
+	float micro_f = 1.0 - smoothstep(0.0025, 0.014, footprint);
+	ALBEDO *= 0.94 + (grain * 0.055 + speck * 0.04 * (1.0 - moss_rock * 0.6)) * micro_f;
+	ALBEDO = mix(ALBEDO, ALBEDO * 1.2, vein * 0.13);
+	ROUGHNESS = mix(0.90, 0.98, moss_rock);
 #endif
 #ifdef BARK
-	if (bark_detail > 0.0) {
+	if (bark_detail > 2.5) {
+		// Валежник, пни, сухостой и ветки: планарно-цилиндрическая проекция без полярных полос и швов на корнях.
+		float fp = max(length(dFdx(bark_local)), length(dFdy(bark_local)));
+		float vis = 1.0 - smoothstep(0.012, 0.055, fp);
+		if (vis > 0.001) {
+			float moss_w = clamp((ALBEDO.g - max(ALBEDO.r, ALBEDO.b)) * 7.0, 0.0, 1.0);
+			float heart_w = clamp((ALBEDO.r - ALBEDO.b * 1.32 - 0.06) * 5.5 * smoothstep(0.26, 0.38, ALBEDO.r), 0.0, 1.0) * (1.0 - moss_w);
+			bool upright = bark_detail >= 3.5;
+			float ax = upright ? bark_local.y : bark_local.x;
+			vec3 an = normalize(abs(bark_local_nrm) + vec3(0.001));
+			float ua = upright ? bark_local.x : bark_local.z;
+			float ub = upright ? bark_local.z : bark_local.y;
+			float wa = upright ? an.z : an.y;
+			float wb = upright ? an.x : an.z;
+			float blend_w = (wa * wa) / max(wa * wa + wb * wb, 1e-4);
+			float groove_damp = upright ? (1.0 - smoothstep(0.62, 0.90, an.y)) : 1.0;
+
+			float pua = ua / 0.048 + sin(ax * 2.1 + ua * 4.5) * 0.42 + sin(ax * 6.8 - ua * 12.0) * 0.20;
+			float fa = fract(pua);
+			float plates_a = smoothstep(0.04, 0.30, min(fa, 1.0 - fa));
+			float tone_a = 0.89 + 0.22 * fract(sin((floor(pua) + floor(ax * 1.65) * 7.0) * 78.233) * 43758.5453);
+
+			float pub = ub / 0.048 + sin(ax * 2.1 + ub * 4.5 + 1.3) * 0.42 + sin(ax * 6.8 - ub * 12.0) * 0.20;
+			float fb = fract(pub);
+			float plates_b = smoothstep(0.04, 0.30, min(fb, 1.0 - fb));
+			float tone_b = 0.89 + 0.22 * fract(sin((floor(pub) + floor(ax * 1.65) * 7.0) * 78.233) * 43758.5453);
+
+			float plates = mix(plates_b, plates_a, blend_w);
+			float plate_tone = mix(tone_b, tone_a, blend_w);
+			plates = mix(0.68, plates, groove_damp);
+			float micro_fib = 0.5 + 0.5 * sin((ua + ub) * 34.0 + sin(ax * 3.1) * 2.0) * cos(ax * 19.0 + sin(ua * 14.0));
+			float moss_grain = 0.5 + 0.5 * sin(bark_local.x * 58.0 + sin(bark_local.z * 43.0) * 2.0) * cos(bark_local.z * 52.0 + bark_local.y * 41.0);
+			vec3 bark_col = ALBEDO * mix(1.0, mix(0.66, 1.10, plates) * plate_tone * (0.94 + 0.12 * micro_fib), vis);
+			vec3 heart_col = ALBEDO * mix(1.0, mix(0.84, 1.08, micro_fib), vis);
+			vec3 moss_col = ALBEDO * mix(1.0, mix(0.86, 1.12, moss_grain), vis);
+			ALBEDO = mix(mix(bark_col, heart_col, heart_w), moss_col, moss_w);
+			float relief = mix(mix(plates * groove_damp + micro_fib * (1.0 - groove_damp) * 0.4, micro_fib * 0.45, heart_w), moss_grain * 0.65, moss_w);
+			float hh = relief * vis * 0.013;
+			vec3 dpx = dFdx(VERTEX);
+			vec3 dpy = dFdy(VERTEX);
+			vec3 r1 = cross(dpy, NORMAL);
+			vec3 r2 = cross(NORMAL, dpx);
+			float det = dot(dpx, r1);
+			NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2));
+			ROUGHNESS = mix(0.92, 0.98, moss_w);
+		}
+	} else if (bark_detail > 0.0) {
 		float fp = max(length(dFdx(bark_local)), length(dFdy(bark_local)));
 		float vis = 1.0 - smoothstep(0.012, 0.05, fp);
 		float y = bark_local.y;
