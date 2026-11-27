@@ -32,6 +32,8 @@ func _run() -> void:
 	panel._select_category(Shop.Progress.Category.SCHEME)
 	panel._rows.moss.grab_focus()
 	profile.set_purchase_goal("night")
+	await _shot("default")
+	panel._preview_tools_button.button_pressed = true
 	panel._compare_button.button_pressed = true
 	await _shot("comparison")
 	panel._activate()

@@ -1156,7 +1156,8 @@ func toast_now(text: String, kind: StringName = &"info") -> void:
 
 
 func _toast_allowed(kind: StringName) -> bool:
-	return kind == &"discovery" or _photo_mode or summary_requested()
+	# Важный ответ на действие игрока не должен зависеть от удержания сводки.
+	return kind in [&"discovery", &"quest", &"warning", &"album"] or _photo_mode or summary_requested()
 
 
 ## 19.11.2026: переполненная очередь теряет самое неважное (из равных — самое старое), а не последнее пришедшее:

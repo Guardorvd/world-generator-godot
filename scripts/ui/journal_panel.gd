@@ -76,7 +76,7 @@ var _album_page: VBoxContainer
 var _album_scroll: ScrollContainer
 var _album_content: VBoxContainer
 var _album_filter := -1
-var _album_personal := false
+var _album_personal := true
 var _personal_visible := 24
 var _album_modes: Array[Button] = []
 var _album_data := {}
@@ -145,7 +145,6 @@ func clear() -> void:
 	_album_scroll = null
 	_album_content = null
 	_album_filter = -1
-	_album_personal = false
 	_personal_visible = 24
 	_album_modes.clear()
 	_album_data = {}
@@ -274,7 +273,7 @@ func _build_header() -> void:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tabs.add_child(spacer)
-	_tab_shop = _tab("Магазин", group, tabs, Tab.SHOP)
+	_tab_shop = _tab("Экипировка", group, tabs, Tab.SHOP)
 	_tab_shop.hide()
 
 
@@ -424,6 +423,8 @@ func _build_map() -> void:
 	_map_info_toggle.custom_minimum_size.y = 40
 	_map_info_toggle.toggled.connect(func(on: bool) -> void:
 		_right_dock.visible = on and active_tab == Tab.MAP
+		_track_layer.visible = on
+		_photo_layer.visible = on
 		_update_narrow_docks())
 	footer.add_child(_map_info_toggle)
 	var zoom_out := Button.new()
@@ -443,6 +444,7 @@ func _build_map() -> void:
 	_track_layer.tooltip_text = "Показать пройденный путь"
 	_track_layer.toggle_mode = true
 	_track_layer.button_pressed = true
+	_track_layer.hide()
 	_track_layer.toggled.connect(func(on: bool) -> void: map_view.set_travel_track(on))
 	footer.add_child(_track_layer)
 	_photo_layer = Button.new()
@@ -450,6 +452,7 @@ func _build_map() -> void:
 	_photo_layer.tooltip_text = "Показать снимки на карте"
 	_photo_layer.toggle_mode = true
 	_photo_layer.button_pressed = true
+	_photo_layer.hide()
 	_photo_layer.toggled.connect(func(on: bool) -> void: map_view.set_photo_pins(on, _cache))
 	footer.add_child(_photo_layer)
 	var center := Button.new()
@@ -504,7 +507,8 @@ func _reflow() -> void:
 	var narrow := available_width < 800.0
 	var compact_tabs := available_width < 650.0
 	_update_tab_labels(compact_tabs)
-	_map_info_toggle.text = "Обозначения" if compact_tabs else "Легенда и задание"
+	_map_info_toggle.text = "Сведения" if compact_tabs else "Сведения и слои"
+	_map_info_toggle.tooltip_text = "Задание, обозначения и слои карты"
 	for button: Button in [_tab_map, _tab_path, _tab_album, _tab_shop]:
 		button.custom_minimum_size.x = 68 if compact_tabs else 110
 		button.add_theme_font_size_override("font_size", 13 if compact_tabs else 16)

@@ -18,6 +18,13 @@ func _run() -> void:
 	GameContext.scope.settings.settings_path = test_dir.path_join("settings.cfg")
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
+	var pause_controls := main.get_node("%PauseControlsToggle") as Button
+	var pause_box := main.get_node("%Pause/Panel/Box")
+	check(not pause_box.get_node("ControlsBox").visible, "список управления в паузе сначала скрыт")
+	pause_controls.button_pressed = true
+	check(pause_box.get_node("ControlsBox").visible and not pause_box.get_node("SavePanel").visible and pause_controls.text == "Назад к паузе", "управление открывается отдельным состоянием паузы")
+	pause_controls.button_pressed = false
+	check(not pause_box.get_node("ControlsBox").visible and pause_box.get_node("SavePanel").visible, "из управления можно вернуться к действиям паузы")
 	var hud: Hud = main.get_node("%Hud")
 	# Магазин не участвует в сценарии: не начинать фоновую загрузку портретов перед завершением теста.
 	hud.journal_panel._tab_shop.hide()
@@ -45,6 +52,16 @@ func _run() -> void:
 	check(hud._toast_left == 0.0, "в обычном режиме подсказка не появляется как уведомление")
 	hud.toast("Открыта деревня", &"discovery")
 	check(hud._toast_left > 0.0, "уведомление об открытии места остаётся")
+	hud._toast_left = 0.0
+	hud.toast("Задание выполнено", &"quest")
+	await process_frame
+	await process_frame
+	check(hud.toast_label.text == "Задание выполнено" and hud.get_node("Toast").visible, "завершение задания видно без удержания сводки")
+	hud._toast_left = 0.0
+	hud.toast("Груз повреждён", &"warning")
+	await process_frame
+	await process_frame
+	check(hud.toast_label.text == "Груз повреждён" and hud.get_node("Toast").visible, "предупреждение видно без удержания сводки")
 	hud.set_hints([], [])
 	check(not hud.prompt.visible and not hud.get_node("Crosshair").visible, "пустая подсказка скрыта")
 	hud.set_summary_blocked(true)

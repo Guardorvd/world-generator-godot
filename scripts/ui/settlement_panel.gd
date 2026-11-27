@@ -120,13 +120,13 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 			x = settlement.x, y = settlement.y, name = settlement.name}]
 	board_map = Atlas.new()
 	board_map.park = true
-	board_map.custom_minimum_size.y = 248
-	board_map.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	board_map.custom_minimum_size.y = 168
 	_box.add_child(board_map)
 	board_map.configure_board(source if source != null else MapData.new(world), destinations)
 	var can_travel := quests == null or not quests.cargo
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 8)
+	var actions := HFlowContainer.new()
+	actions.add_theme_constant_override("h_separation", 8)
+	actions.add_theme_constant_override("v_separation", 8)
 	_box.add_child(actions)
 	var travel_note: Label = null
 	if destinations.size() > 1:
@@ -145,17 +145,16 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 			func() -> void: travel_requested.emit(place), actions)
 		transfer.disabled = not can_travel
 		transfer.tooltip_text = "Переместиться сюда" if can_travel else "С грузом нужно доехать своим ходом"
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	actions.add_child(spacer)
 	var bicycle := _button("Велосипед рядом" if bicycle_near else "Вернуть велосипед", func() -> void: bike_requested.emit(), actions)
 	bicycle.disabled = bicycle_near
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.y = 270  # заголовок и листки объявлений целиком
+	scroll.custom_minimum_size.y = 230
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.follow_focus = true
 	_box.add_child(scroll)
+	_box.move_child(scroll, 1)
 	var quests_box := VBoxContainer.new()
 	quests_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	quests_box.add_theme_constant_override("separation", 8)
@@ -231,6 +230,7 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		var drop := _button("Отказаться от задания", func() -> void: pass, card)
 		_drop_button = drop
 		drop.theme_type_variation = &"DangerButton"
+		drop.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		drop.pressed.connect(func() -> void:
 			if drop.text == "Точно отказаться? Нажмите ещё раз":
 				quest_abandoned.emit()
@@ -255,9 +255,10 @@ func _quests_main(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 	var thanks: int = quests.by_giver.get(here, 0)
 	_label("Задания поселения «%s»%s" % [settlement.name, " · выполнено для него: %d" % thanks if thanks > 0 else ""], 14, page, MUTED)
 	# 19.11.2026: задания — листки объявлений на доске (QuestNotice), не больше Quests.BOARD_OFFERS
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 24)
+	var row := HFlowContainer.new()
+	row.alignment = FlowContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("h_separation", 24)
+	row.add_theme_constant_override("v_separation", 16)
 	page.add_child(row)
 	for q: QuestData in offers.slice(0, Quests.BOARD_OFFERS):
 		var distance := center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE

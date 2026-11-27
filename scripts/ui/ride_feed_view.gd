@@ -42,6 +42,8 @@ var _load_error: Error = OK
 var _detail_preview: TextureRect
 var _detail_missing: Label
 var _detail_legend: Label
+var _detail_extra: VBoxContainer
+var _detail_toggle: Button
 var _detail_preview_path := ""
 var _detail_revision := -1
 var _failed_previews := {}
@@ -361,7 +363,7 @@ func _needs_more_cards() -> bool:
 
 
 func _card_near_view(card: Control) -> bool:
-	return _scroll.get_global_rect().grow_individual(0, 600, 0, 600).intersects(card.get_global_rect())
+	return _scroll.get_global_rect().grow_individual(0, 400, 0, 400).intersects(card.get_global_rect())
 
 
 func _queue_preview_update() -> void:
@@ -404,6 +406,10 @@ func _update_visible_previews() -> void:
 			_list.add_child(slot)
 			_list.move_child(slot, index)
 			card.queue_free()
+			continue
+		# Карточка с фокусом остаётся в дереве, но её карта не нужна далеко за экраном.
+		if not _card_near_view(card):
+			card.unload_preview()
 			continue
 		if card._preview.texture == null:
 			card.update_preview(card.preview_path)
@@ -534,6 +540,7 @@ func _show_detail(entry: Dictionary) -> void:
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Config.detail_scroll_size.min(Vector2(available - Vector2i(32, 80)))
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
 	_dialog.add_child(scroll)
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -592,6 +599,31 @@ func _show_detail(entry: Dictionary) -> void:
 	if show_map != null:
 		box.add_child(show_map)
 	_refresh_detail_preview()
+	var summary := HFlowContainer.new()
+	summary.add_theme_constant_override("h_separation", 24)
+	summary.add_theme_constant_override("v_separation", 6)
+	box.add_child(summary)
+	var distance := Label.new()
+	var distance_value := float(entry.get("bike", 0.0)) + float(entry.get("foot", 0.0))
+	distance.text = "Путь · %s" % Util.distance_text(distance_value) if entry.has("bike") or entry.has("foot") else "Путь · —"
+	HudStyle.label(distance, 16, HudStyle.CREAM)
+	summary.add_child(distance)
+	var duration := Label.new()
+	duration.text = "Время · %s" % RideLog.duration_text(float(entry.time)) if entry.has("time") else "Время · —"
+	HudStyle.label(duration, 16, HudStyle.CREAM)
+	summary.add_child(duration)
+	_detail_toggle = Button.new()
+	_detail_toggle.text = "Больше о поездке"
+	_detail_toggle.toggle_mode = true
+	_detail_toggle.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	box.add_child(_detail_toggle)
+	_detail_extra = VBoxContainer.new()
+	_detail_extra.add_theme_constant_override("separation", Config.feed_spacing)
+	_detail_extra.hide()
+	box.add_child(_detail_extra)
+	_detail_toggle.toggled.connect(func(on: bool) -> void:
+		_detail_extra.visible = on
+		_detail_toggle.text = "Скрыть подробности" if on else "Больше о поездке")
 	var marked := 0
 	for mark: Dictionary in entry.get("fall_marks", []):
 		if mark.has("x") and mark.has("z") and (mark.x is float or mark.x is int) and (mark.z is float or mark.z is int) and Vector2(float(mark.x), float(mark.z)).is_finite():
@@ -601,11 +633,11 @@ func _show_detail(entry: Dictionary) -> void:
 		partial.text = "Координаты сохранены для %d из %d падений." % [marked, int(entry.falls)]
 		HudStyle.label(partial, 12, HudStyle.MUTED)
 		partial.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		box.add_child(partial)
+		_detail_extra.add_child(partial)
 	var statistics_title := Label.new()
 	statistics_title.text = "СТАТИСТИКА"
 	HudStyle.label(statistics_title, 12, HudStyle.AMBER)
-	box.add_child(statistics_title)
+	_detail_extra.add_child(statistics_title)
 	var labels := [
 		["Велосипед", Util.distance_text(float(entry.bike)) if entry.has("bike") else "—"],
 		["Пешком", Util.distance_text(float(entry.foot)) if entry.has("foot") else "—"],
@@ -622,7 +654,7 @@ func _show_detail(entry: Dictionary) -> void:
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", Config.detail_grid_gap)
 	grid.add_theme_constant_override("v_separation", Config.feed_spacing)
-	box.add_child(grid)
+	_detail_extra.add_child(grid)
 	for item: Array in labels:
 		var cell := VBoxContainer.new()
 		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -641,17 +673,17 @@ func _show_detail(entry: Dictionary) -> void:
 	var profile_title := Label.new()
 	profile_title.text = "ПРОФИЛЬ ВЫСОТЫ"
 	HudStyle.label(profile_title, 12, HudStyle.AMBER)
-	box.add_child(profile_title)
+	_detail_extra.add_child(profile_title)
 	var profile := Profile.new()
 	profile.values = entry.get("profile", [])
 	profile.marks = entry.get("fall_marks", [])
 	profile.custom_minimum_size.y = Config.detail_profile_height
-	box.add_child(profile)
+	_detail_extra.add_child(profile)
 	if profile.values.size() >= 2:
 		var limits := Label.new()
 		limits.text = "мин. %d м    ·    макс. %d м" % [roundi(float(profile.values.min())), roundi(float(profile.values.max()))]
 		HudStyle.label(limits, 12, HudStyle.MUTED)
-		box.add_child(limits)
+		_detail_extra.add_child(limits)
 	var places := Label.new()
 	places.text = "Места: " + (", ".join(entry.get("places", [])) if not entry.get("places", []).is_empty() else "—")
 	places.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -685,6 +717,7 @@ func _show_detail(entry: Dictionary) -> void:
 	var remove := Button.new()
 	remove.text = "Удалить запись"
 	remove.theme_type_variation = &"DangerButton"
+	remove.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	box.add_child(remove)
 	remove.pressed.connect(func() -> void:
 		var confirm := ConfirmationDialog.new()

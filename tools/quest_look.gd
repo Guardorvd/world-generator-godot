@@ -903,7 +903,9 @@ func _personal_map() -> void:
 	# посещённые и прочитанные на доске + место взятого задания (вышка «Сторожевая»): оно видно на карте сквозь туман ориентиров
 	_check(hud.big_map.places.size() == 5 and hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Сторожевая") and not hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Седая"),
 		"личная карта показывает посещённые, прочитанные и названные заданием места")
-	var cursor := Vector2(630.0, 320.0)
+	await process_frame
+	# На краю листа камера намеренно ограничена: проверяем опорную точку в центре.
+	var cursor := hud.big_map.size * 0.5
 	var before := hud.big_map.screen_to_world(cursor)
 	hud.big_map._zoom_at(cursor, 1.1)
 	_check(before.distance_to(hud.big_map.screen_to_world(cursor)) < 0.01, "масштабирование удерживает место под курсором")

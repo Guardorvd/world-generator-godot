@@ -213,6 +213,7 @@ func _ready() -> void:
 	GameContext.scope.cache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
 	_setup_save_controls()
+	%PauseControlsToggle.toggled.connect(_show_pause_controls)
 	# 14.4+: бесконечная генерация, с предупреждением, пока она не доделана.
 	# В стабильной версии пункт скрыт (в main.tscn), а ранее сохранённое «включено» сбрасывается.
 	if not %Infinite.visible:
@@ -2518,6 +2519,7 @@ func _toggle_pause() -> void:
 		_resume()
 	else:
 		game.set_paused(true)
+		%PauseControlsToggle.button_pressed = false
 		# 21.11.2026: сохранение при паузе — фоном, как автосохранение (было ~7,5 мс записи в кадре открытия паузы);
 		# выход и смена мира дожидаются его в _save_current
 		if _progress_enabled and game.quests != null:
@@ -2814,6 +2816,16 @@ func _setup_save_controls() -> void:
 
 ## Подсказки управления в паузе: клавиша — действие, по две пары в строке.
 ## Подписи берутся из раскладки (Controls.label): клавиатура или геймпад, как играют сейчас; перестраиваются при открытии паузы.
+func _show_pause_controls(on: bool) -> void:
+	var box := %Pause.get_node("Panel/Box")
+	box.get_node("ControlsBox").visible = on
+	for name: String in ["SavePanel", "Journey", "Settings", "Sep", "Leave"]:
+		box.get_node(name).visible = not on
+	%PauseControlsToggle.text = "Назад к паузе" if on else "Управление"
+	if on:
+		_fill_controls()
+
+
 func _control_rows() -> Array:
 	var c: Controls = GameContext.scope.controls
 	var pad := c.joypad

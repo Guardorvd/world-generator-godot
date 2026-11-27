@@ -1189,7 +1189,15 @@ layout_mode = 2
 text = "Настройки"
 icon = ExtResource("9_gear")
 
+[node name="PauseControlsToggle" type="Button" parent="UI/Root/Pause/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+toggle_mode = true
+text = "Управление"
+
 [node name="ControlsBox" type="VBoxContainer" parent="UI/Root/Pause/Panel/Box"]
+visible = false
 layout_mode = 2
 
 [node name="ControlsTitle" type="Label" parent="UI/Root/Pause/Panel/Box/ControlsBox"]

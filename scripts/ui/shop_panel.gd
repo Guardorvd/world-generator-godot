@@ -38,6 +38,7 @@ var _heading_eyebrow: Label
 var _scroll: ScrollContainer
 var _back: Button
 var _stage_controls: BoxContainer
+var _preview_tools_button: Button
 var _stage_caption: Label
 var _collection: Label
 var _category_buttons: Array[Button] = []
@@ -118,6 +119,7 @@ func _ready() -> void:
 	_heading_eyebrow.clip_text = true
 	_heading_title = _label(heading, "Выберите свой стиль", 27, Style.CREAM)
 	_heading_title.clip_text = true
+	_heading_eyebrow.visible = show_back
 	var wallet := VBoxContainer.new()
 	wallet.size_flags_vertical = SIZE_SHRINK_CENTER
 	wallet.add_theme_constant_override("separation", 0)
@@ -198,6 +200,12 @@ func _ready() -> void:
 	_fitting_button.tooltip_text = "Примеряйте сочетания без покупки и изменения экипировки"
 	_fitting_button.toggled.connect(_toggle_fitting)
 	fitting_controls.add_child(_fitting_button)
+	_preview_tools_button = Button.new()
+	_preview_tools_button.text = "Ракурс и сравнение"
+	_preview_tools_button.toggle_mode = true
+	_preview_tools_button.tooltip_text = "Показать ракурсы и сравнение с надетым"
+	_preview_tools_button.toggled.connect(_toggle_preview_tools)
+	fitting_controls.add_child(_preview_tools_button)
 	_fitting_zoom = Button.new()
 	_fitting_zoom.text = "Приблизить деталь"
 	_fitting_zoom.toggle_mode = true
@@ -270,6 +278,7 @@ func _ready() -> void:
 	_stage_controls.position = Vector2(16, 16)
 	_stage_controls.add_theme_constant_override("separation", 6)
 	stage_content.add_child(_stage_controls)
+	_stage_controls.hide()
 	_stage_caption = _label(_stage_controls, "РАКУРС", 14, Style.CREAM)
 	var views := ButtonGroup.new()
 	for index in 2:
@@ -703,8 +712,13 @@ func _reflow() -> void:
 	for button in _category_buttons:
 		button.add_theme_font_size_override("font_size", 13 if compact else 16)
 	_heading_eyebrow.text = "ЭКИПИРОВКА" if compact else "ЭКИПИРОВКА  /  МАГАЗИН"
-	_heading_title.text = "Магазин" if compact else "Выберите свой стиль"
-	_heading_title.add_theme_font_size_override("font_size", 22 if compact else 27)
+	_heading_title.text = ("Магазин" if compact else "Выберите свой стиль") if show_back else "Экипировка"
+	_heading_title.add_theme_font_size_override("font_size", 22 if compact or not show_back else 27)
+	_preview_tools_button.text = "Вид" if compact else "Ракурс и сравнение"
+	_fitting_zoom.text = "Деталь" if compact else "Приблизить деталь"
+	_fitting_apply.text = "Надеть" if compact else "Надеть купленное"
+	for button: Button in [_fitting_button, _preview_tools_button, _fitting_zoom, _fitting_reset, _fitting_apply]:
+		button.add_theme_font_size_override("font_size", 14 if compact else 18)
 	if _back != null:
 		_back.custom_minimum_size.x = 76 if compact else 100
 	_stage_controls.position = Vector2(10, 12) if compact else Vector2(16, 16)
@@ -714,12 +728,12 @@ func _reflow() -> void:
 		button.custom_minimum_size.x = 90 if compact else 112
 		button.add_theme_font_size_override("font_size", 13 if compact else 14)
 	_stage_controls.size = Vector2.ZERO
-	_preview.offset_top = 58 if compact else 0
+	_preview.offset_top = 58 if compact and _stage_controls.visible else 0
 	_preview_missing.offset_top = _preview.offset_top
 	if is_instance_valid(_fitting):
 		_fitting.offset_top = _preview.offset_top
-	_compare_root.offset_left = 8 if compact else 145
-	_compare_root.offset_top = 58 if compact else 18
+	_compare_root.offset_left = 145 if not compact and _stage_controls.visible else 8
+	_compare_root.offset_top = 58 if compact and _stage_controls.visible else 18
 	_row_grid.columns = 2 if _layout.vertical else 4
 	_actions.vertical = true
 	_review_actions.vertical = true
@@ -735,7 +749,7 @@ func _link_actions() -> void:
 	if _review_actions.visible:
 		first = _cancel_buy
 	elif first.disabled:
-		first = _view_buttons[1]
+		first = _view_buttons[1] if _stage_controls.visible else _preview_tools_button
 	var cards: Array = _rows.values().filter(func(row: Button) -> bool: return row.visible)
 	var columns := _row_grid.columns
 	for i in cards.size():
@@ -747,6 +761,8 @@ func _link_actions() -> void:
 			row.focus_neighbor_right = row.get_path_to(first) if not _layout.vertical and not first.disabled else NodePath()
 		if i >= columns:
 			row.focus_neighbor_top = row.get_path_to(cards[i - columns])
+		elif not _stage_controls.visible:
+			row.focus_neighbor_top = row.get_path_to(_preview_tools_button)
 		elif size.x < 520.0 and i % columns == 0:
 			row.focus_neighbor_top = row.get_path_to(_view_buttons[0])
 		else:
@@ -760,16 +776,20 @@ func _link_actions() -> void:
 	var category := _category_buttons[Progress.category_for(_selection)]
 	_view_buttons[0].focus_neighbor_top = _view_buttons[0].get_path_to(_fitting_button)
 	_fitting_button.focus_neighbor_top = _fitting_button.get_path_to(category)
-	_fitting_button.focus_neighbor_bottom = _fitting_button.get_path_to(_view_buttons[0])
-	_fitting_button.focus_neighbor_right = _fitting_button.get_path_to(_fitting_zoom) if _fitting_zoom.visible else NodePath()
-	_fitting_zoom.focus_neighbor_left = _fitting_zoom.get_path_to(_fitting_button)
+	_fitting_button.focus_neighbor_bottom = _fitting_button.get_path_to(_view_buttons[0] if _stage_controls.visible else selected)
+	_fitting_button.focus_neighbor_right = _fitting_button.get_path_to(_preview_tools_button)
+	_preview_tools_button.focus_neighbor_left = _preview_tools_button.get_path_to(_fitting_button)
+	_preview_tools_button.focus_neighbor_right = _preview_tools_button.get_path_to(_fitting_zoom) if _fitting_zoom.visible else NodePath()
+	_preview_tools_button.focus_neighbor_top = _preview_tools_button.get_path_to(category)
+	_preview_tools_button.focus_neighbor_bottom = _preview_tools_button.get_path_to(_view_buttons[0] if _stage_controls.visible else selected)
+	_fitting_zoom.focus_neighbor_left = _fitting_zoom.get_path_to(_preview_tools_button)
 	_fitting_zoom.focus_neighbor_right = _fitting_zoom.get_path_to(_fitting_reset)
-	_fitting_zoom.focus_neighbor_bottom = _fitting_zoom.get_path_to(_view_buttons[0])
+	_fitting_zoom.focus_neighbor_bottom = _fitting_zoom.get_path_to(_view_buttons[0] if _stage_controls.visible else selected)
 	_fitting_reset.focus_neighbor_left = _fitting_reset.get_path_to(_fitting_zoom)
 	_fitting_reset.focus_neighbor_right = _fitting_reset.get_path_to(_fitting_apply) if _fitting_apply.visible and not _fitting_apply.disabled else NodePath()
-	_fitting_reset.focus_neighbor_bottom = _fitting_reset.get_path_to(_view_buttons[0])
+	_fitting_reset.focus_neighbor_bottom = _fitting_reset.get_path_to(_view_buttons[0] if _stage_controls.visible else selected)
 	_fitting_apply.focus_neighbor_left = _fitting_apply.get_path_to(_fitting_reset)
-	_fitting_apply.focus_neighbor_bottom = _fitting_apply.get_path_to(_view_buttons[0])
+	_fitting_apply.focus_neighbor_bottom = _fitting_apply.get_path_to(_view_buttons[0] if _stage_controls.visible else selected)
 	for button: Button in _category_buttons:
 		button.focus_neighbor_bottom = button.get_path_to(_fitting_button)
 	if size.x < 520.0:
@@ -997,6 +1017,13 @@ func _set_compare(on: bool) -> void:
 		_scroll.scroll_vertical = 0
 
 
+func _toggle_preview_tools(on: bool) -> void:
+	_stage_controls.visible = on
+	if not on and _stage_controls.is_ancestor_of(get_viewport().gui_get_focus_owner()):
+		_preview_tools_button.grab_focus()
+	_reflow()
+
+
 func _portrait_crop(texture: Texture2D, accessory := false) -> Texture2D:
 	if texture == null:
 		return null
@@ -1178,7 +1205,7 @@ func dismiss_purchase() -> bool:
 	if _purchase_id == "":
 		if _compare_mode:
 			_compare_button.button_pressed = false
-			_compare_button.grab_focus()
+			(_compare_button if _stage_controls.visible else _preview_tools_button).grab_focus()
 			return true
 		if _fitting_button.button_pressed:
 			_fitting_button.button_pressed = false

@@ -53,6 +53,14 @@ func _run() -> void:
 	_check(panel._feed_view == feed and panel._path_center.visible and not panel._map_page.visible, "возврат сохраняет экземпляр ленты")
 	panel._select_feed_ride({})
 	_check(panel.active_tab == panel.Tab.PATH, "сброс выбранной записи не открывает карту")
+	panel._select(panel.Tab.ALBUM)
+	await process_frame
+	_check(panel._album_personal and panel._album_modes[1].button_pressed, "альбом сначала показывает личные снимки")
+	panel._album_modes[0].pressed.emit()
+	_check(not panel._album_personal and panel._album_modes[0].button_pressed, "коллекция доступна отдельным выбором")
+	panel.clear()
+	panel.open_tab(panel.Tab.ALBUM, "test")
+	_check(not panel._album_personal and panel._album_modes[0].button_pressed, "последний режим альбома сохраняется при повторном открытии")
 	var small_view := SubViewport.new()
 	small_view.size = Vector2i(400, 720)
 	root.add_child(small_view)
@@ -65,6 +73,26 @@ func _run() -> void:
 	await process_frame
 	_check(small_panel._tab_shop.get_global_rect().end.x <= 400 and small_panel._tab_path.text == "Поездки", "вкладки помещаются на узком экране")
 	small_view.queue_free()
+	for viewport_size: Vector2i in [Vector2i(1280, 720), Vector2i(1280, 800), Vector2i(1680, 720)]:
+		var view := SubViewport.new()
+		view.size = viewport_size
+		root.add_child(view)
+		var journal = preload("res://scripts/ui/journal_panel.gd").new()
+		view.add_child(journal)
+		journal.open_tab(journal.Tab.MAP, "test")
+		journal.enable_shop(preload("res://scripts/game/shop_progress.gd").new())
+		await process_frame
+		await process_frame
+		var bounds := Rect2(Vector2.ZERO, Vector2(viewport_size))
+		_check(bounds.encloses(journal._map_frame.get_global_rect()) and bounds.encloses(journal._map_footer.get_global_rect()) and bounds.encloses(journal._close.get_global_rect()),
+			"карта и управление помещаются: %dx%d" % [viewport_size.x, viewport_size.y])
+		journal.open_tab(journal.Tab.SHOP, "test")
+		await process_frame
+		await process_frame
+		var shop = journal.shop_panel
+		_check(bounds.encloses(shop._header.get_global_rect()) and shop._category_buttons.all(func(button: Button) -> bool: return bounds.encloses(button.get_global_rect())),
+			"заголовок и категории экипировки помещаются: %dx%d" % [viewport_size.x, viewport_size.y])
+		view.queue_free()
 	panel.queue_free()
 	await process_frame
 	quit(1 if failures else 0)

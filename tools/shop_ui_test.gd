@@ -71,6 +71,12 @@ func _run() -> void:
 	click.pressed = false
 	root.push_input(click)
 	_check(panel._selection == "moss", "карточка выбирается щелчком по изображению")
+	_check(not panel._stage_controls.visible, "ракурсы и сравнение сначала скрыты")
+	panel._rows.moss.grab_focus()
+	_press_action("ui_up")
+	_check(panel._preview_tools_button.has_focus(), "от карточки можно открыть инструменты предпросмотра")
+	_press_action("ui_accept")
+	_check(panel._stage_controls.visible, "инструменты открываются с клавиатуры")
 	panel._rows.moss.grab_focus()
 	_press_action("ui_up")
 	_check(panel._compare_button.has_focus(), "стрелка вверх ведёт к сравнению")
@@ -80,6 +86,10 @@ func _run() -> void:
 	_check(not panel._compare_mode, "повторное подтверждение закрывает сравнение")
 	_press_action("ui_down")
 	_check(panel._rows.moss.has_focus(), "стрелка вниз возвращает к выбранной карточке")
+	panel._compare_button.button_pressed = true
+	panel._preview_tools_button.button_pressed = false
+	_check(panel.dismiss_purchase() and panel._preview_tools_button.has_focus(), "закрытие сравнения возвращает фокус к скрытым инструментам")
+	panel._preview_tools_button.button_pressed = true
 	_check(panel._card_images.moss.texture is AtlasTexture and panel._card_status.ember.text == "Надето", "карточки показывают модель и статус")
 	panel._compare_button.button_pressed = true
 	_check(panel._compare_mode and panel._compare_root.visible and not panel._preview.visible and panel._compare_labels[0].text.contains("Закат") and panel._compare_labels[1].text.contains("Мох"), "сравнение подписывает надетый и выбранный комплекты")

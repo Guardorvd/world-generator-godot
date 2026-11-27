@@ -80,6 +80,9 @@ func _run() -> void:
 	_main._show("pause")
 	_main.get_node("%Back").show()
 	await _capture_screen("pause", "%Pause")
+	_main.get_node("%PauseControlsToggle").button_pressed = true
+	await _capture_screen("pause_controls", "%Pause")
+	_main.get_node("%PauseControlsToggle").button_pressed = false
 	await _clear_saves()
 	_main.queue_free()
 	await process_frame

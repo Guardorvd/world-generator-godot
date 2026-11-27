@@ -117,6 +117,10 @@ func _run() -> void:
 	await _shot("selected")
 	await _shot("detail")
 	_check(is_instance_valid(compact._dialog) and compact._dialog.visible, "подробная карточка открыта")
+	_check(not compact._detail_extra.visible and compact._detail_toggle.text == "Больше о поездке", "расширенная статистика сначала скрыта")
+	compact._detail_toggle.button_pressed = true
+	_check(compact._detail_extra.visible and compact._detail_toggle.text == "Скрыть подробности", "подробности раскрываются по запросу")
+	compact._detail_toggle.button_pressed = false
 	_check(chosen_map.entry.is_empty(), "открытие подробностей не меняет карту мира")
 	var photo_buttons := compact._dialog.find_children("*", "TextureButton", true, false)
 	_check(photo_buttons.size() == 6, "снимки загружаются первой порцией")
@@ -384,7 +388,7 @@ func _run() -> void:
 	for bulk_card in menu._cards.values():
 		if bulk_card._preview.texture != null:
 			loaded += 1
-	_check(loaded <= 5, "текстуры загружаются только рядом с видимой областью")
+	_check(loaded <= 5, "текстуры загружаются только рядом с видимой областью (загружено: %d)" % loaded)
 	print("200 карточек меню с PNG: %.1f мс, максимальный интервал кадра %.1f мс" % [float(Time.get_ticks_usec() - began) / 1000.0, float(max_frame) / 1000.0])
 	menu._scroll.scroll_vertical = 0
 	await process_frame
