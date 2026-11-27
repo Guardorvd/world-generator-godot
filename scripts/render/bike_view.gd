@@ -281,8 +281,11 @@ func _own_materials() -> void:
 ## Расцветка велосипеда и формы (BikePalette.SCHEMES)
 func set_scheme(scheme: String) -> void:
 	var colors: PackedColorArray = BikePalette.colors(scheme)
+	var finish: Dictionary = BikePalette.FINISHES.get(scheme, BikePalette.FINISH_NONE)
 	for mat in _skin_mats:
 		mat.set_shader_parameter("palette", colors)
+		for key: String in finish:
+			mat.set_shader_parameter("finish_" + key, finish[key])
 
 
 func set_tires(id: String) -> void:

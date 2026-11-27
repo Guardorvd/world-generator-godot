@@ -15,6 +15,15 @@ uniform vec4 grip_body : source_color = vec4(0.0);
 uniform vec4 grip_rib : source_color = vec4(0.0);
 uniform vec4 pedal_body : source_color = vec4(0.0);
 uniform vec4 pedal_trim : source_color = vec4(0.0);
+// Особая отделка расцветки (BikePalette.FINISHES, 27.11); нули — обычная краска, вид прежний.
+//   finish_flip — цвет перелива краски рамы и скорлупы шлема под скользящим углом (alpha — сила), finish_flip_power — его резкость;
+//   finish_flake — доля искр металлика в лаке, finish_flake_scale — их число на метр;
+//   finish_glow — свечение графики рамы и светлых деталей формы (места FRAME_ACCENT и CREAM).
+uniform vec4 finish_flip : source_color = vec4(0.0);
+uniform float finish_flip_power = 1.0;
+uniform float finish_flake = 0.0;
+uniform float finish_flake_scale = 1.0;
+uniform float finish_glow = 0.0;
 uniform float fixed_slot = -1.0;
 uniform float fixed_kind = -1.0;
 uniform float wind = 0.0;           // 0..1: скорость езды для трепета ткани (BikeView)
@@ -40,8 +49,10 @@ varying float v_kind;
 varying float v_slot;
 varying float v_tire;
 varying vec3 v_up; // мировое «вверх» в осях вида: для отражения неба в стекле
+varying vec3 v_local; // точка в осях меша: искры металлика держатся за поверхность
 
 void vertex() {
+	v_local = VERTEX;
 	v_ao = COLOR.r;
 	v_slot = fixed_slot >= 0.0 ? fixed_slot : UV.x;
 	v_kind = fixed_kind >= 0.0 ? fixed_kind : UV.y;
@@ -126,6 +137,27 @@ void fragment() {
 		rough = 0.75; spec = 0.35;
 	} else if (kind == KIND_COATING) {
 		rough = 0.22; metal = 0.65; spec = 0.65;
+	}
+	// Особая отделка: краска рамы и шлем (не графика) переливаются к краям, в лаке — искры металлика
+	bool lacquer = (kind == KIND_PAINT && slot != 1) || kind == KIND_SHELL;
+	if (lacquer && finish_flip.a > 0.0) {
+		float grazing = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), finish_flip_power);
+		base = mix(base, finish_flip.rgb, grazing * finish_flip.a);
+	}
+	if (lacquer && finish_flake > 0.0) {
+		vec3 cell_pos = v_local * finish_flake_scale;
+		vec3 cell = floor(cell_pos);
+		float pick = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+		// искры мельче пикселя гаснут, иначе вдали лак рябит
+		float visible = 1.0 - smoothstep(0.6, 1.4, length(fwidth(cell_pos)));
+		float sparkle = step(1.0 - finish_flake * 0.14, pick) * visible;
+		rough = mix(rough, 0.06, sparkle);
+		spec = mix(spec, 1.0, sparkle);
+		metal = mix(metal, 0.9, sparkle);
+		base += sparkle * 0.06;
+	}
+	if (finish_glow > 0.0 && (slot == 1 || slot == 10)) {
+		emit += base * finish_glow;
 	}
 	// Затенение в углублениях: и рассеянный свет (AO), и немного прямой — иначе на солнце стыки плоские
 	ALBEDO = base * mix(0.55, 1.0, ao);

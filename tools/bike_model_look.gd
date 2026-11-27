@@ -6,7 +6,7 @@ extends SceneTree
 ## --measure — ещё время отрисовки кадра с моделью и без (игровая камера, ~10 с);
 ## --schemes — лист расцветок bike_schemes.png (BikeView.set_scheme, BikePalette.SCHEMES).
 ## Режим отрисовки — как у игры (Forward+); Compatibility — ключом движка --rendering-method gl_compatibility.
-##   godot --path . --script res://tools/bike_model_look.gd -- [--out <папка>] [--tag <суффикс>] [--hour 10.5] [--measure]
+##   godot --path . --script res://tools/bike_model_look.gd -- [--out <папка>] [--tag <суффикс>] [--hour 10.5] [--measure] [--scheme <id>]
 const Stand := preload("res://tools/bike_stand.gd")
 const DT := 1.0 / 60.0
 var out := ""
@@ -72,6 +72,8 @@ func pose_cost() -> float:
 
 
 func look() -> void:
+	# 27.11: основной лист в нужной расцветке (особая отделка — FINISHES); здесь у велосипеда уже свои материалы
+	bike.set_scheme(Stand.arg("--scheme", "ember"))
 	print("Bike model cost: ", Stand.cost(bike), " pose %.0f us/frame" % pose_cost())
 	var frames: Array[Image] = []
 	ride(40, 6.0, 1.0, 5.0)

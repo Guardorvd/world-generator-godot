@@ -22,7 +22,7 @@ const DEFAULT_ITEMS := [DEFAULT_SCHEME, DEFAULT_TIRES, DEFAULT_GRIPS, DEFAULT_PE
 const EQUIPMENT_FIELDS := ["equipped", "tires", "grips", "pedals", "helmet"]
 ## 20.11: второй ряд — дорогие расцветки, чтобы очки работали дольше первых заданий
 const PRICES := {"ember": 0, "glacier": 50, "moss": 50, "night": 50, "lingon": 120, "fog": 150, "copper": 200,
-	"obsidian": 220, "heritage": 180, "pulse": 250, "salt": 230, "tide": 240, "ivory": 210,
+	"obsidian": 220, "heritage": 180, "pulse": 250, "salt": 230, "tide": 240, "ivory": 210, "aurora": 450,
 	DEFAULT_TIRES: 0, "tires_rose": 70, "tires_sage": 70, "tires_blue": 70, "tires_sand": 70, "tires_ivory": 70,
 	DEFAULT_GRIPS: 0, "grips_rose": 35, "grips_sage": 35, "grips_blue": 35, "grips_sand": 35, "grips_ivory": 35,
 	DEFAULT_PEDALS: 0, "pedals_rose": 45, "pedals_sage": 45, "pedals_blue": 45, "pedals_sand": 45, "pedals_ivory": 45,

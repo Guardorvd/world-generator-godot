@@ -26,6 +26,7 @@ const WORDS := {
 		bought = "Шлем «%s» куплен и надет.", confirm = "Купить и надеть · %s"},
 }
 const HELMET_NOTE := "Цвет шлема задаёт расцветка."
+const SPECIAL_TITLE := "РАСЦВЕТКА  /  ОСОБАЯ СЕРИЯ" # расцветки с особой отделкой (BikePalette.FINISHES)
 
 var show_back := false
 var _profile: Progress
@@ -308,6 +309,8 @@ func _ready() -> void:
 		else:
 			var scheme: Array = Progress.Palette.SCHEMES[id]
 			colors = [Color(scheme[0]), Color(scheme[2])]
+			if Progress.Palette.FINISHES.has(id):
+				colors.append(Color(Progress.Palette.FINISHES[id].flip, 1.0)) # третий цвет — перелив особой серии
 		for color: Color in colors:
 			var swatch := ColorRect.new()
 			swatch.color = color
@@ -701,7 +704,7 @@ func _show_selection() -> void:
 	var equipped := _selection == _profile.equipped_for(_selection)
 	_view_buttons[0].text = "Спереди" if category == Progress.Category.GRIPS else "Сбоку"
 	_name.text = Progress.item_name(_selection)
-	_detail_category.text = DETAIL_TITLES[category]
+	_detail_category.text = SPECIAL_TITLE if Progress.Palette.FINISHES.has(_selection) else DETAIL_TITLES[category]
 	match category:
 		Progress.Category.HELMET:
 			_description.text = Progress.Helmets.DESCRIPTIONS[_selection] + " " + HELMET_NOTE
