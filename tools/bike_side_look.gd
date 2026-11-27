@@ -51,7 +51,7 @@ func _scene() -> void:
 	view = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(view)
 	camera = Camera3D.new()
-	camera.fov = 50.0
+	camera.fov = 44.0
 	root.add_child(camera)
 	camera.make_current()
 
@@ -67,7 +67,8 @@ func _mesh(mesh: Mesh, at: Vector3, color: Color) -> void:
 
 
 func _frame(b: BikeRide) -> void:
-	camera.look_at_from_position(Vector3(b.x + 4.2, 101.1, b.z + 0.3), Vector3(b.x, 100.75, b.z))
+	var center := Vector3(b.x, 100.92 + 0.45 * b.air_clearance, b.z)
+	camera.look_at_from_position(center + Vector3(3.45, 0.25, 0.35), center)
 	await RenderingServer.frame_post_draw
 	var img := root.get_texture().get_image()
 	img.resize(480, 270)
@@ -87,8 +88,8 @@ func look() -> void:
 	var hit_f := false
 	var hit_r := false
 	var hop_at := -1
-	var nose := false
-	var pushed := false
+	var approach := false
+	var landing_tick := -1
 	var flew := false
 	var landed := false
 	var brake_at := -1
@@ -115,23 +116,21 @@ func look() -> void:
 		elif b.wheel_impact.y > 0.0 and not hit_r:
 			hit_r = true
 			event = "удар задним"
-		if hop_at >= 0 and not nose and b.lift_f > 0.1:
-			nose = true
-			label = "Q: нос вверх"
-		if nose and not pushed and b.body_x < -0.2:
-			pushed = true
-			label = "E: тело вперёд"
-		if b.airborne and not flew and b.vy < 0.3:
+		if hop_at >= 0 and b.airborne and not flew and b.vy < 0.3:
 			flew = true
 			label = "прыжок: вершина"
-		if flew and not landed and not b.airborne:
+		elif flew and not approach and b.airborne and b.clearance_closing_speed > 0.4 and b.air_clearance < 0.14 * b.clearance_closing_speed:
+			approach = true
+			label = "ноги встречают опору"
+		if flew and not landed and b.land_impact > 0.0:
 			landed = true
-			event = "посадка"
+			landing_tick = tick_i
+			event = "гашение удара"
+		if landing_tick >= 0 and tick_i == landing_tick + 18:
+			label = "выход из приседа"
 		if brake_at >= 0 and tick_i - brake_at == 18:
 			label = "тормоз 0,3 с"
-		b.land_impact = 0.0
-		b.wheel_impact = Vector2()
-		b.bottom_out = 0.0
+		b.clear_tick_events()
 		if event != "":
 			pending = tick_i + 5
 			pending_label = event

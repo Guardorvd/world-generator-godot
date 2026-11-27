@@ -175,7 +175,8 @@ func look() -> void:
 	balance.append(await shot(rear, frame_center, 44.0))
 	state.stance = BikeRide.Stance.FOOT_DOWN
 	state.foot_side = 1.0
-	ground.rotation.z = atan(0.30)
+	state.bank_slope = 0.30
+	ground.rotation.z = atan(state.bank_slope)
 	state.foot_ground_y = state.config.stop_foot_offset * tan(ground.rotation.z)
 	advance(55)
 	balance.append(await shot(rear, frame_center, 44.0))
@@ -196,4 +197,14 @@ func look() -> void:
 	advance(35)
 	balance.append(await shot(Vector3(3.1, 1.2, 0.0), frame_center, 44.0))
 	save(balance, "rider_balance", 4)
+	ground.rotation = Vector3.ZERO
+	reset(4.0)
+	advance(75)
+	var restart: Array[Image] = []
+	var pedal_camera := Vector3(1.70, 0.52, 0.12)
+	var spindle := Vector3(0, 0.38, 0)
+	for elapsed in [0, 4, 4, 8]:
+		advance(elapsed, 1.0, 4.0)
+		restart.append(await shot(pedal_camera, spindle, 34.0))
+	save(restart, "rider_pedal_restart", 4)
 	quit(0)

@@ -140,6 +140,8 @@ func contacts() -> void:
 		var sk := bike.rider.skeleton
 		var foot_pose := sk.get_bone_global_pose(sk.find_bone("Foot" + side))
 		check((foot_pose * CyclistRig.PEDAL_CONTACT_LOCAL).distance_to(bike.to_local(pedal.global_position)) < 0.001, "Foot contact")
+		var platform := bike.global_basis.inverse() * pedal.global_basis
+		check(absf(platform.z.y - foot_pose.basis.z.y) < 0.002, "Pedal platform follows heel pitch about the spindle")
 		var grip := bike._steering.position + bike._steering.basis * (BikeView.GRIP * Vector3(-1.0 if side == "L" else 1.0, 1, 1) - BikeView.STEERING_PIVOT)
 		check(bone("Hand" + side).distance_to(grip) < 0.001, "Hand contact")
 		var upper_arm := sk.get_bone_global_pose(sk.find_bone("UpperArm" + side)).basis
@@ -576,6 +578,8 @@ func run(finish := true) -> void:
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")
+	check_obstacle_transitions()
+	check_drive_transitions()
 	check_balance_reactions()
 	await check_ragdoll_skin()
 	var invalid: CyclistRig = load("res://scenes/cyclist.tscn").instantiate()
@@ -594,6 +598,101 @@ func run(finish := true) -> void:
 		quit(1 if fails else 0)
 
 
+func check_obstacle_transitions() -> void:
+	for side: float in [-1.0, 0.0, 1.0]:
+		reset()
+		state.wheel_impact = Vector2(1.0, 0.0)
+		state.fork_side_impulse = side
+		advance()
+		state.clear_tick_events()
+		for i in 3:
+			advance()
+		var steer := bike._cur[BikeView.S_STEER]
+		check(is_zero_approx(steer) if side == 0.0 else steer * side > 0.04, "Only an oblique front strike deflects the bar toward the physical impulse")
+		contacts()
+	reset()
+	for i in 48:
+		state.wheel_impact = Vector2(0.8, 0.0) if i % 12 == 0 else (Vector2(0.0, 0.8) if i % 12 == 6 else Vector2.ZERO)
+		advance()
+	var rough_stand := bike._cur[BikeView.S_STAND]
+	state.clear_tick_events()
+	for i in 120:
+		advance()
+	check(rough_stand < -0.18 and absf(bike._cur[BikeView.S_STAND]) < 0.03, "Repeated axle contacts lift the rider off the saddle and level trail releases the stance")
+	reset()
+	state.lift_f = 0.1
+	state.squash_fv = 2.0
+	for i in 30:
+		advance()
+	check(bike._cur[BikeView.S_FRONT_LOAD] < 0.01 and absf(bike._cur[BikeView.S_CROUCH]) < 0.001, "An unsupported fork stroke does not mimic a ground strike")
+	reset()
+	state.bottom_out = state.config.bottom_out_speed + 2.2
+	advance()
+	check(bike._cur[BikeView.S_FRONT_LOAD] > 0.7 and bike._cur[BikeView.S_REAR_LOAD] < 0.1, "Fork bottom-out reaches the arms even when the travel velocity is clipped to zero")
+	reset()
+	state.airborne = true
+	state.air_time = 0.4
+	state.clearance_closing_speed = 3.0
+	state.air_clearance = 2.0
+	for i in 48:
+		advance()
+	var tucked := bone("Hips").y
+	state.air_clearance = 0.14
+	for i in 12:
+		advance()
+	check(bone("Hips").y > tucked + 0.006, "Rider extends before touchdown only as the support gets close")
+	for pitch: float in [-0.32, 0.32]:
+		reset()
+		state.land_impact = 7.0
+		state.landing_info = {pitch_error = pitch}
+		advance()
+		var load_difference := bike._cur[BikeView.S_FRONT_LOAD] - bike._cur[BikeView.S_REAR_LOAD]
+		check(load_difference * -signf(pitch) > 0.20, "Landing pitch relative to the surface selects the leading limbs")
+		contacts()
+	reset()
+
+
+func check_drive_transitions() -> void:
+	reset()
+	for i in 70:
+		advance()
+	var level := bike._cur[BikeView.S_CRANK]
+	state.riding = false
+	bike.snap(state)
+	for i in 60:
+		advance()
+	check(absf(angle_difference(level, bike._cur[BikeView.S_CRANK])) < 0.0001, "Parked pedals hold their last ridden position")
+	state.riding = true
+	bike.snap(state)
+	state.crank += 0.025
+	advance(0.4)
+	check(absf(angle_difference(level, bike._cur[BikeView.S_CRANK]) - 0.025) < 0.0001, "First power stroke carries the level pedals forward at drivetrain cadence")
+	for i in 40:
+		state.wheel += 0.16
+		advance()
+	state.lift_f = 0.12
+	var front_before := bike.front_wheel.basis
+	for i in 12:
+		advance()
+	var travel := front_before.get_rotation_quaternion().angle_to(bike.front_wheel.basis.get_rotation_quaternion())
+	check(absf(travel - 12 * 0.16) < 0.015, "Lifted wheel retains spin while grounded rear wheel slows")
+	check(absf(angle_difference(bike._prev[BikeView.S_WHEEL_R], bike._cur[BikeView.S_WHEEL_R])) < 0.002, "Rear tread settles at road speed")
+	state.lift_f = 0.0
+	advance()
+	var landing_step := angle_difference(bike._prev[BikeView.S_WHEEL_F], bike._cur[BikeView.S_WHEEL_F])
+	check(landing_step > 0.04 and landing_step < 0.16, "Recontact synchronizes wheel speed progressively")
+	state.speed = 34.0
+	state.wheel = 0.0
+	bike.snap(state)
+	var long_tick := 1.0 / 30.0
+	var expected := state.speed * long_tick / BikeRide.WHEEL_R
+	state.wheel = fmod(expected, TAU)
+	advance(0.0, false, long_tick)
+	bike.draw(0.5)
+	check(absf(angle_difference(bike._mix[BikeView.S_WHEEL_F], expected * 0.5)) < 0.0001, "Fast wheel interpolates in the direction of travel beyond half a turn")
+	reset()
+
+
 func check_balance_reactions() -> void:
 	reset()
 	state.speed = 0.0
@@ -606,12 +705,26 @@ func check_balance_reactions() -> void:
 	state.stance = BikeRide.Stance.FOOT_DOWN
 	state.foot_side = 1.0
 	state.foot_ground_y = 0.09
+	state.bank_slope = 0.31
+	state.heading = 0.68
 	state.tilt = 0.18
 	for i in 90:
 		advance()
 	var sk := bike.rider.skeleton
 	var sole := sk.global_transform * sk.get_bone_global_pose(sk.find_bone("FootR")) * CyclistRig.PEDAL_CONTACT_LOCAL
 	check(absf(sole.y - state.y - state.foot_ground_y) < 0.003, "Uphill sole meets sampled support on a pitched frame")
+	var sole_up := (sk.global_basis * sk.get_bone_global_pose(sk.find_bone("FootR")).basis).y
+	var surface_up := Basis(Vector3.UP, state.heading) * Vector3(-state.bank_slope, 1, state.grade_now).normalized()
+	check(sole_up.dot(surface_up) > 0.999, "Planted shoe lies on the side slope at an oblique heading")
+	state.foot_side = -1.0
+	state.foot_ground_y = 0.02
+	state.bank_slope = -0.10
+	advance()
+	var departing := sk.global_transform * sk.get_bone_global_pose(sk.find_bone("FootR")) * CyclistRig.PEDAL_CONTACT_LOCAL
+	check(departing.y >= sole.y - 0.005, "Changing sides retracts from the old support height")
+	for i in 120:
+		advance()
+	check(bike._cur[BikeView.S_STOP] < -0.95, "Opposite foot takes support after retraction")
 	reset()
 	state.speed = -1.2
 	for i in 45:

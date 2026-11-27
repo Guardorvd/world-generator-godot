@@ -51,6 +51,7 @@ var _rig_checked := false
 var _rig_valid := false
 ## Изгиб спины дугой (0 — прямая, как в bind-позе; сборщик модели ставит 0 на время сборки).
 var spine_bow := 1.0
+var pedal_pitch := Vector2.ZERO # rotation about each pedal spindle for this solved pose
 var _hand_rest_l := Basis.IDENTITY # поворот кисти относительно предплечья в хвате: свободная рука держит его же
 var _hand_rest_r := Basis.IDENTITY
 
@@ -109,7 +110,7 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 ## («атака»: таз над седлом, вес на ногах), 0 — сидит.
 ## Поза строится от базовых архетипов (накат, спокойная езда, подъём стоя, спуск, торможение)
 ## с приоритетами над процедурными реакциями и раздельным приёмом переднего (руки) и заднего (ноги, таз) ударов.
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO, watch := 0.0, balance := 0.0) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO, watch := 0.0, balance := 0.0, ground_up := Vector3.ZERO) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
@@ -120,7 +121,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		return
 	if not is_finite(foot_down) or not is_finite(ground) or not is_finite(ground_lean) or not gaze.is_finite():
 		return
-	if not is_finite(hand_rest) or not hand_shake.is_finite() or not is_finite(watch) or not is_finite(balance):
+	if not is_finite(hand_rest) or not hand_shake.is_finite() or not is_finite(watch) or not is_finite(balance) or not ground_up.is_finite():
 		return
 	_poses.clear()
 	# 12.11: свободная рука. hand_rest — отдых на долгой стоянке: рука (знак — сторона) лежит на бедре, спина прямее;
@@ -183,12 +184,15 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		if fd > 0.0 and side == fd_side:
 			# стопа идёт с педали на землю по дуге наружу и встаёт плоско, носком чуть в сторону
 			var ground_basis := Basis.from_euler(Vector3(0.0, -side * 0.22, side * ground_lean))
+			if not ground_up.is_zero_approx():
+				ground_basis = Basis(Quaternion(ground_basis.y, ground_up.normalized())) * ground_basis
 			var contact := Vector3(side * 0.27, ground, -0.06)
 			foot_basis = foot_basis.slerp(ground_basis, fd).orthonormalized()
 			foot_pitch *= 1.0 - fd
 			ankle_at = ankle_at.lerp(contact - ground_basis * PEDAL_CONTACT_LOCAL, fd) + Vector3(side * 0.035, 0.05, 0.0) * sin(fd * PI)
 		var catch := smoothstep(0.2, 0.9, side * balance) * (1.0 - fd)
 		ankle_at += Vector3(side * 0.14, 0.055, -0.055) * catch
+		pedal_pitch[0 if side < 0.0 else 1] = foot_pitch * (1.0 - catch)
 		foot_pitches[side] = foot_pitch
 		foot_bases[side] = foot_basis
 		ankles[side] = ankle_at

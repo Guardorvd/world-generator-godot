@@ -5,10 +5,11 @@ extends "res://tools/bike_audit_test.gd"
 
 ## Бревно с кромкой поперёк пути на z от -1,3 до -1,0: колесо встречает его ударом
 class EdgeLog extends RootBump:
+	var edge_normal := Vector2(0, 1)
 	func wheel_support(_x: float, pz: float, _wheel_r: float, _climb: float) -> float:
 		return 100.15 if pz > -1.3 and pz < -1.0 else -INF
 	func wheel_contact(_x: float, pz: float, _wheel_r: float, _climb: float, _ground: float) -> Dictionary:
-		return {id = 1, angle = 0.6, normal = Vector2(0, 1)} if pz > -1.3 and pz < -1.0 else {}
+		return {id = 1, angle = 0.6, normal = edge_normal} if pz > -1.3 and pz < -1.0 else {}
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)
@@ -203,13 +204,27 @@ func run() -> void:
 		striker.step(p, 0.0, 0.0, false, false, 1.0 / 60.0, w, edged)
 		wheel_hits = Vector2(maxf(wheel_hits.x, striker.wheel_impact.x), maxf(wheel_hits.y, striker.wheel_impact.y))
 		landed = maxf(landed, striker.land_impact)
-		striker.wheel_impact = Vector2()
-		striker.land_impact = 0.0
+		striker.clear_tick_events()
+	for side: float in [-1.0, 1.0]:
+		root.edge_normal = Vector2(side, 1.0).normalized()
+		var angled := bike(5.0)
+		var impulse := 0.0
+		for i in 30:
+			angled.step(p, 0.0, 0.0, false, false, 1.0 / 60.0, w, edged)
+			impulse += angled.fork_side_impulse
+			angled.clear_tick_events()
+		check(impulse * side > 0.1 and angled.fork_side_impulse == 0.0, "Oblique edge records and clears signed fork impulse")
 	var dropped := bike(5.0)
 	dropped.airborne = true
 	dropped.y = 101.0
 	dropped.vy = -4.0
-	for i in 30: tick(dropped, 0.0, false, 60)
+	var closing := false
+	var sampled_touchdown := false
+	for i in 30:
+		tick(dropped, 0.0, false, 60)
+		closing = closing or (dropped.airborne and dropped.air_clearance > 0.0 and dropped.clearance_closing_speed > 3.0)
+		sampled_touchdown = sampled_touchdown or dropped.landing_info.has("pitch_error")
+	check(closing and sampled_touchdown and dropped.air_clearance == 0.0, "Drop reports decreasing physical clearance and captures relative touchdown pitch")
 	check(wheel_hits.x > 0.5 and wheel_hits.y > 0.5 and landed == 0.0 and dropped.land_impact > 0.0 and dropped.wheel_impact == Vector2(),
 		"удары раздельно: кромка перед %.2f, зад %.2f м/с, приземлений %.2f; посадка %.2f без удара колеса" % [wheel_hits.x, wheel_hits.y, landed, dropped.land_impact])
 	# T1: силы объясняют изменение скорости — педали, накат, тормоз на ровном и на спуске

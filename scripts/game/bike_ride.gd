@@ -129,6 +129,8 @@ var _o_f := 0.0       # высота корня или камня под кол�
 var _o_r := 0.0
 var _fresh := true    # колёса только встали на землю: прошлых высот нет, толчка не считаем
 var _dist := 0.0      # пройденный путь, для покачивания
+var air_clearance := 0.0 # vertical separation from the support used by _step_vertical
+var clearance_closing_speed := 0.0 # positive when that separation shrinks, m/s
 var air_time := 0.0   # сколько секунд в воздухе
 var _hop_wait := 0.0  # после приземления прыжок доступен не сразу
 var _hop_buf := 0.0   # пробел, нажатый чуть раньше, чем прыжок стал доступен
@@ -155,6 +157,7 @@ var bank_slope := 0.0  # наклон полотна поперёк: рост в
 var _crest_curve := 0.0 # кривизна профиля на базе осей (HUB), 1/м (для отрыва на гребне)
 var _ground_cross := 0.0 # несглаженный поперечный уклон полотна (для 2D-нормали и косогоров)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры); только приземления
+var fork_side_impulse := 0.0 # signed local-right change of front wheel speed on edges this tick
 var wheel_impact := Vector2() # удар переднего и заднего колеса о кромку за такт, м/с скорости колеса (GameWorld сбрасывает)
 var bottom_out := 0.0  # 12.7: скорость удара вилки в упор, м/с (для звука; GameWorld сбрасывает)
 var braking := 0.0     # 12.7: резкое торможение на скорости 0..1 (для хруста покрытия)
@@ -181,6 +184,7 @@ func clear_tick_events() -> void:
 	landing_info = {}
 	land_impact = 0.0
 	wheel_impact = Vector2()
+	fork_side_impulse = 0.0
 	bottom_out = 0.0
 
 
@@ -350,12 +354,15 @@ func reset_motion() -> void:
 	_yaw_rate = 0.0
 	_coyote = 0.0
 	vy = 0.0
+	air_clearance = 0.0
+	clearance_closing_speed = 0.0
 	air_time = 0.0
 	_hop_wait = 0.0
 	airborne = false
 	crashed = false
 	land_impact = 0.0
 	wheel_impact = Vector2()
+	fork_side_impulse = 0.0
 	bottom_out = 0.0
 	body_back = false
 	body_forward = false
@@ -1094,6 +1101,8 @@ func steer_shown() -> float:
 func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 	# Перекрытие ищется от высоты до шага: подъём сквозь настил не переносит седока на мост.
 	var feet0 := y
+	var was_flying := airborne
+	var previous_gap := air_clearance
 	_step_height(g, hop, dt, heights)
 	if airborne:
 		var top := _roof_over(x, z, heading, feet0, heights) - BikeRecovery.CLEARANCE
@@ -1101,6 +1110,8 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 			# Седок упёрся в свод: подъём гаснет, дальше обычное падение до опоры.
 			y = maxf(top, g)
 			vy = minf(vy, 0.0)
+	air_clearance = maxf(0.0, y - g) if airborne else 0.0
+	clearance_closing_speed = (previous_gap - air_clearance) / dt if airborne and was_flying else 0.0
 
 
 func _update_stance(dt: float, slope: float, heights: Heightfield) -> void:
@@ -1353,7 +1364,9 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	if front: hit_dv.x = dv.length()
 	else: hit_dv.y = dv.length()
 	# событие удара колеса — отдельно от приземления и пробоя: у переднего и заднего своя реакция
-	if front: wheel_impact.x = maxf(wheel_impact.x, strike.length() / share)
+	if front:
+		wheel_impact.x = maxf(wheel_impact.x, strike.length() / share)
+		fork_side_impulse -= dv.dot(side) / share
 	else: wheel_impact.y = maxf(wheel_impact.y, strike.length() / share)
 	if front:
 		squash_fv += kick
@@ -1796,14 +1809,15 @@ func _land(g: float, heights: Heightfield) -> void:
 	# поперёк по земле. Вектор в мировых X/Z: боком к склону важна траектория, а не курс рамы.
 	var forward := Vector2(-sin(heading), -cos(heading))
 	var right := Vector2(-forward.y, forward.x)
-	var gradient := forward * _slope(heights) + right * (_surface(heights, x + right.x * HUB, z + right.y * HUB, g)
+	var support_grade := _slope(heights)
+	var gradient := forward * support_grade + right * (_surface(heights, x + right.x * HUB, z + right.y * HUB, g)
 		- _surface(heights, x - right.x * HUB, z - right.y * HUB, g)) / (2.0 * HUB)
 	var normal := Vector3(-gradient.x, 1.0, -gradient.y).normalized()
 	var horizontal := horizontal_velocity()
 	var incoming := Vector3(horizontal.x, vy, horizontal.y)
 	var impact := maxf(0.0, -incoming.dot(normal))
 	var approach_grade := gradient.dot(horizontal.normalized()) if horizontal.length_squared() > 0.0001 else 0.0
-	landing_info = {air = air_time, impact = impact, speed = speed, vy = vy, hop = _hop_used, hop_height = hop_height if _hop_used else 0.0}
+	landing_info = {air = air_time, impact = impact, speed = speed, vy = vy, pitch_error = tilt - atan(support_grade), hop = _hop_used, hop_height = hop_height if _hop_used else 0.0}
 	airborne = false
 	y = g
 	# Седок автоматически принимает умеренную посадку ногами. Сильный удар
@@ -1822,7 +1836,7 @@ func _land(g: float, heights: Heightfield) -> void:
 		var keep := 1.0 - clampf((felt - config.soft_impact) * 0.05, 0.0, 0.5)
 		speed *= keep
 		lateral_speed *= keep
-	instability = maxf(instability, clampf((felt - config.soft_impact * 0.45) / maxf(config.crash_impact - config.soft_impact * 0.45, 1.0) + absf(tilt - atan(_slope(heights))) * 0.35, 0.0, 1.0))
+	instability = maxf(instability, clampf((felt - config.soft_impact * 0.45) / maxf(config.crash_impact - config.soft_impact * 0.45, 1.0) + absf(tilt - atan(support_grade)) * 0.35, 0.0, 1.0))
 	pitch_vel = 0.0
 	vy = gradient.dot(horizontal_velocity())
 	_coyote = config.hop_coyote
