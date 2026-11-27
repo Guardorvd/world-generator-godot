@@ -11,6 +11,7 @@ const WHEEL_Y := 0.34    # высота осей колёс над землёй
 ## и переднее колесо; вдоль неё ходят штаны вилки. Ось колеса вынесена вперёд от этой оси на 35 мм.
 const STEERING_PIVOT := Vector3(0.0, 0.9363, -0.3089)
 const FORK_CROWN_Y := 0.87 # высота короны вилки до наклона (ось вилки вертикальна)
+const MAX_FORK_VISUAL_TRAVEL := 0.12 # визуальный предел сжатия вилки, чтобы шина не задевала корону и раму
 const FORK_RAKE := 0.30
 const GRIP := Vector3(0.24, 1.0, -0.413) # середина правого грипса; левый — зеркально по X
 const CRANK_REST := Vector3(0.0, 0.3, 0.0) # для сборщиков; в игре опоры читаются из узлов сцены
@@ -140,6 +141,7 @@ var _air_pose := 0.0
 var _air_body_offset := 0.0
 var _prev_ground_mid := 0.0
 var _prev_lift_mid := 0.0
+var _tilt_align := 0.0
 var _takeoff := 0.0
 var _jump_prep := 0.0
 var _recovery := 0.0
@@ -416,11 +418,14 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_SQUASH] = b.squash
 	var sq_f := b.squash_f
 	var sq_r := b.squash_r
-	if not b.airborne and b.tick_time > 0.0 and b.contact_f() and b.contact_r():
+	var grounded_both := not b.airborne and b.tick_time > 0.0 and b.contact_f() and b.contact_r()
+	var target_align := 0.0
+	if grounded_both:
 		var terrain_tilt := atan2((b.ground_f - sq_f) - (b.ground_r - sq_r), 2.0 * BikeRide.HUB)
-		var tilt_err := clampf(clampf(terrain_tilt - (b.tilt - pull), -0.09, 0.09) * BikeRide.HUB, -0.05, 0.05)
-		sq_f += tilt_err
-		sq_r -= tilt_err
+		target_align = clampf(clampf(terrain_tilt - (b.tilt - pull), -0.09, 0.09) * BikeRide.HUB, -0.05, 0.05)
+	_tilt_align = lerpf(_tilt_align, target_align, Util.damp(24.0 if grounded_both else 14.0, dt)) if _has_state else target_align
+	sq_f += _tilt_align
+	sq_r -= _tilt_align
 	_cur[S_SQUASH_F] = sq_f
 	_cur[S_SQUASH_R] = sq_r
 	_update_wheel_spin(b, dt)
@@ -864,6 +869,7 @@ func snap(b: BikeRide) -> void:
 	_air_body_offset = 0.0
 	_prev_ground_mid = 0.0
 	_prev_lift_mid = 0.0
+	_tilt_align = 0.0
 	_pack_swing = Vector2.ZERO
 	_pack_velocity = Vector2.ZERO
 	_reaction_shift = 0.0
@@ -942,12 +948,13 @@ func draw(alpha: float, allow_watch := true) -> void:
 	# ходят вдоль неё. Ход вдоль оси взят таким, чтобы колесо поднялось ровно на ход подвески и осталось на земле.
 	var steer_axis := Basis(Vector3.RIGHT, FORK_RAKE).y
 	var turn := Basis(steer_axis, -_mix[S_STEER] * STEER_VIEW)
-	var fork_travel := _mix[S_SQUASH_F] / steer_axis.y
+	var visual_squash_f := minf(_mix[S_SQUASH_F], MAX_FORK_VISUAL_TRAVEL)
+	var fork_travel := visual_squash_f / steer_axis.y
 	_steering.basis = turn
 	front_wheel.position = STEERING_PIVOT + turn * (Vector3(0, WHEEL_Y, -BikeRide.HUB) + steer_axis * fork_travel - STEERING_PIVOT)
 	front_wheel.basis = turn * Basis(Vector3.RIGHT, -_mix[S_WHEEL_F])
 	for st: Strut in _front_struts:
-		_stretch(st, _mix[S_SQUASH_F])
+		_stretch(st, visual_squash_f)
 	for st: Strut in _rear_struts:
 		_stretch(st, _mix[S_SQUASH_R])
 	for lower in _fork_lowers:

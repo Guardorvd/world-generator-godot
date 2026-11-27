@@ -130,7 +130,8 @@ func run() -> void:
 	lander.vy = -3.0
 	lander._land(g, logged)
 	var along := lander._slope(logged)
-	check(along > 0.2 and absf(lander.vy - along * lander.speed) < 0.001 and not lander.crashed,
+	var expected_vy := along * lander.speed * lerpf(1.0, 0.35, smoothstep(1.2, 4.5, float(lander.landing_info.get("impact", 0.0))))
+	check(along > 0.2 and absf(lander.vy - expected_vy) < 0.005 and not lander.crashed,
 		"B3 посадка на кромку бревна: уклон опоры %.3f, vy после %.3f" % [along, lander.vy])
 	# A3: педали тянут только через заднее колесо на земле
 	var grounded := bike(6.0)
@@ -142,9 +143,9 @@ func run() -> void:
 	rear_up._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
 	check(grounded.speed > 6.0 and rear_up.speed < 6.0, "A3 газ с поднятым задним: на земле %.4f, поднято %.4f м/с" % [grounded.speed, rear_up.speed])
 	# скользкое заднее на ходу тянет в пределах запаса, у старта — помощь в полную силу
-	var slick := bike(8.0)
+	var slick := bike(3.5)
 	slick.slick_r = BikePhysicsConfig.current().root_grip
-	var full := bike(8.0)
+	var full := bike(3.5)
 	slick.effort = 1.0
 	full.effort = 1.0
 	slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)

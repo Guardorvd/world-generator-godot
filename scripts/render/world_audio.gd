@@ -53,7 +53,6 @@ var _sample_t := 0.0
 
 var _surface_id: StringName = &"dirt"
 var _legacy_surface := "soft"
-var _roll_rough := 0.25
 var _brush := 0.0
 var _water_depth := 0.0
 var _ducked := false
@@ -225,7 +224,6 @@ func _sample_surface(pos: Vector3) -> void:
 	var cls: Dictionary = SurfaceClassifier.classify(world, heights, pos.x, pos.z, pos.y, config)
 	_surface_id = cls.surface
 	_legacy_surface = String(cls.legacy)
-	_roll_rough = float(cls.rough)
 	_brush = float(cls.brush)
 	_water_depth = float(cls.depth)
 
@@ -245,8 +243,8 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float,
 		_sample_surface(pos)
 
 	var effective_skid := maxf(skid, braking * 0.65)
-	bike_layer.update_frame(dt, bike_speed, rolling, is_riding, airborne,
-		_surface_id, _roll_rough, bike_lean, crank, braking, effective_skid, slip, effort)
+	bike_layer.update_frame(dt, bike_speed, rolling, is_riding,
+		_surface_id, braking, effective_skid)
 
 	var move_speed := absf(bike_speed) if is_riding else 0.0
 	var on_ground := rolling if is_riding else true

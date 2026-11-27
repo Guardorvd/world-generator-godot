@@ -58,6 +58,7 @@ var _prev_dip := 0.0    # проседание и время на предпос
 var _prev_time := 0.0
 var _tick_yaw := 0.0    # насколько последний такт повернул камеру сам (вслед за велосипедом);
 var _tick_pitch := 0.0  # кадр доворачивает этот поворот плавно, а мышь — сразу
+var _cam_roll := 0.0    # лёгкий наклон горизонта в скоростных поворотах
 
 func _cam_blocked(p: Vector3, feet: float) -> bool:
 	if p.y < heights.surface_at(p.x, p.z, p.y) + CAM_PROBE_GAP:
@@ -138,8 +139,13 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + CAM_GROUND_GAP)
 		# в туннеле — не выше свода
 		cam.y = minf(cam.y, heights.ceiling_at(cam.x, cam.z, pos.y) - CAM_CEILING_GAP)
+		var roll_goal := clampf(bike.lean * 0.12, -0.045, 0.045) * smoothstep(4.0, 12.0, absf(bike.speed)) if settings.head_bob and not crash_active and not photo_active and not _opening else 0.0
+		_cam_roll = lerpf(_cam_roll, roll_goal, _smooth(8.0, dt))
 		camera.look_at_from_position(cam, target, Vector3.UP)
+		if absf(_cam_roll) > 0.0002:
+			camera.rotate_object_local(Vector3.BACK, _cam_roll)
 		return
+	_cam_roll = 0.0
 	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and settings.head_bob else 0.0, _smooth(BOB_RESPONSE, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
 	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * BOB_AMP * stride * _bob_amp * (BOB_PHOTO if photo_active else 1.0)

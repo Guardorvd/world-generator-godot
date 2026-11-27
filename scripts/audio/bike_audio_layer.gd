@@ -101,10 +101,8 @@ func tick_physics(bike: BikeRide, dt: float) -> void:
 	_was_stance = bike.stance
 
 
-## The argument list stays as the game calls it; values for removed layers are ignored.
-func update_frame(dt: float, speed: float, rolling: bool, riding: bool, _airborne: bool,
-		surface_id: StringName, _rough: float, _lean: float, _crank: float,
-		brake_pressure: float, skid: float, _slip: float, _effort: float) -> void:
+func update_frame(dt: float, speed: float, rolling: bool, riding: bool,
+		surface_id: StringName, brake_pressure: float, skid: float) -> void:
 	if _cfg == null:
 		return
 	if _physics_driven and _debounced_air:

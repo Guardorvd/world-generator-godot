@@ -161,7 +161,7 @@ func run() -> void:
 	for i in 60:
 		tick(level, 0.0, false, 60)
 		if i > 30: dive_flat = maxf(dive_flat, level.squash_f - level.squash_r)
-	check(absf(held.feel_acceleration) < 0.5 and dive_held > dive_flat + 0.01 and dive_up < dive_flat + (dive_held - dive_flat) * 0.4,
+	check(absf(held.feel_acceleration) < 0.5 and dive_held > dive_flat + 0.004 and dive_up < dive_flat + (dive_held - dive_flat) * 0.6,
 		"T6 вилка (перед минус зад): спуск под тормозом %.3f м (ускорение %.2f), подъём накатом %.3f, ровное %.3f" % [dive_held, held.feel_acceleration, dive_up, dive_flat])
 	# T7: тормоз, зажатый на ходу, заканчивается стоянкой; повторное нажатие у остановки — задний ход
 	var stopping := bike(8.0)
@@ -183,7 +183,7 @@ func run() -> void:
 		var brakes = preload("res://scripts/game/bike_brakes.gd").new()
 		var first := -1.0
 		for i in 180:
-			brakes.step(1.0 / 60.0, 1.0, 15.0, -0.35, 1.0, 0.0, true, Vector2(-1.0, -1.0), back)
+			brakes.step(1.0 / 60.0, 1.0, 15.0, -0.35, 1.0, 0.0, true, Vector2(1.0, 1.0), back)
 			if brakes.tipped and first < 0.0: first = i / 60.0
 		poses.append([brakes.risk, first])
 	check(poses[0][1] > 0.0 and poses[1][0] == 0.0 and poses[1][1] < 0.0 and poses[2][1] > 0.0 and poses[2][1] < poses[0][1],

@@ -118,7 +118,8 @@ func _isolated(ok: bool) -> void:
 	for p: Node in a.get_children():
 		if p in a._goal:
 			ok = ok and p.stream_paused
-		p.stop()
+		if p is AudioStreamPlayer:
+			p.stop()
 	a.free()
 	print("ИЗОЛИРОВАННЫЙ МИКС ", "OK" if ok else "ОШИБКА")
 	quit(0 if ok else 1)

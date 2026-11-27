@@ -311,7 +311,7 @@ const PATH := "res://resources/bike_physics.tres"
 ## Front wheel lift height yielding maximum bunny hop pop (m).
 @export var hop_front := 0.16
 ## Minimum front wheel lift height required to arm manual Q->E hop (m).
-@export var hop_arm_height := 0.015
+@export var hop_arm_height := 0.005
 ## Linking time window between Q front lift and E rear pop (s).
 @export var hop_link := 0.3
 ## Front wheel upward lift acceleration gain per excess pull ratio (g).
