@@ -668,7 +668,7 @@ func _zoom_at(at: Vector2, factor: float) -> void:
 
 ## Фон и засечки — в экранных координатах, сама подложка — слой _base
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color("#26372f") if field_sheet else (Paint.PARK_PAPER if _styled() else Data.EMPTY))
+	draw_rect(Rect2(Vector2.ZERO, size), Color("#293740") if field_sheet else (Paint.PARK_PAPER if _styled() else Data.EMPTY))
 
 
 ## Подложка в мировых метрах: положение и масштаб слоя задаёт _refresh_base

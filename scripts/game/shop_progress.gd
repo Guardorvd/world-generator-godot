@@ -182,6 +182,30 @@ func equip(id: String) -> Error:
 	return err
 
 
+## Сохранить набор одним снимком, чтобы ошибка записи не оставила частичный образ.
+func equip_set(items: Array) -> Error:
+	if items.size() != EQUIPMENT_FIELDS.size():
+		return ERR_INVALID_PARAMETER
+	var next := _state.duplicate()
+	var changed_items: Array[String] = []
+	for category in EQUIPMENT_FIELDS.size():
+		var id: Variant = items[category]
+		if not id is String or not PRICES.has(id) or category_for(id) != category or not owns(id):
+			return ERR_INVALID_PARAMETER
+		var field: String = EQUIPMENT_FIELDS[category]
+		if next[field] != id:
+			next[field] = id
+			changed_items.append(id)
+	if changed_items.is_empty():
+		return OK
+	var err := _commit(next)
+	if err == OK:
+		for id: String in changed_items:
+			_emit_equipped(id)
+		changed.emit()
+	return err
+
+
 static func _equipment_field(id: String) -> String:
 	return EQUIPMENT_FIELDS[category_for(id)]
 

@@ -732,7 +732,7 @@ theme_override_constants/separation = 24
 [node name="Worlds" type="VBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns"]
 layout_mode = 2
 size_flags_horizontal = 3
-size_flags_stretch_ratio = 1.2
+size_flags_stretch_ratio = 1.0
 
 [node name="WorldsLabel" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 unique_name_in_owner = true
@@ -844,7 +844,7 @@ toggle_mode = true
 text = "Высоты"
 
 [node name="MapSquare" type="AspectRatioContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
-custom_minimum_size = Vector2(170, 170)
+custom_minimum_size = Vector2(190, 190)
 layout_mode = 2
 size_flags_horizontal = 4
 size_flags_vertical = 3
@@ -1256,7 +1256,7 @@ horizontal_alignment = 0
 
 [node name="SettingsTabs" type="TabContainer" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(580, 520)
+custom_minimum_size = Vector2(580, 400)
 layout_mode = 2
 current_tab = 0
 
@@ -1730,6 +1730,12 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Покачивание и удары камеры"
 
+[node name="ReduceUiMotion" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Убрать движение при открытии окон и переключении вкладок интерфейса."
+text = "Меньше движения интерфейса"
+
 [node name="TrailClutter" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -1860,6 +1866,7 @@ text = "Готово"
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/InvertY" to="." method="_on_invert_toggled"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/FovSlider" to="." method="_on_fov_changed"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/HeadBob" to="." method="_on_head_bob_toggled"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/ReduceUiMotion" to="." method="_on_reduce_ui_motion_toggled"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/TrailClutter" to="." method="_on_trail_clutter_toggled"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/VolumeSlider" to="." method="_on_volume_changed"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Reset" to="." method="_on_reset_settings"]

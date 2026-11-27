@@ -6,9 +6,12 @@ func _ready() -> void:
 	resized.connect(queue_redraw)
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color("#354653"))
+	# Мягкий свет витрины не закрывает прозрачную сцену сплошным прямоугольником.
 	var center := Vector2(size.x * 0.55, size.y * 0.48)
-	var radius := size.y * 0.48
-	draw_circle(center, radius, Color("#4a5f6a"), true, -1, true)
-	draw_arc(center, radius * 1.07, 0, TAU, 96, Color(0.88, 0.9, 0.9, 0.19), 1.0, true)
-	draw_line(Vector2(0, size.y * 0.87), Vector2(size.x, size.y * 0.87), Color(0.1, 0.14, 0.18, 0.3), 1.0)
+	var radius := minf(size.x * 0.48, size.y * 0.72)
+	for i in range(12, 0, -1):
+		var k := float(i) / 12.0
+		draw_circle(center, radius * k, Color(0.55, 0.68, 0.69, 0.012), true, -1, true)
+	draw_arc(center, radius * 0.90, -2.7, 0.35, 96, Color(0.87, 0.85, 0.75, 0.15), 1.0, true)
+	draw_arc(center, radius * 1.02, 0.45, 2.7, 96, Color(0.87, 0.85, 0.75, 0.08), 1.0, true)
+	draw_line(Vector2(size.x * 0.08, size.y * 0.87), Vector2(size.x * 0.92, size.y * 0.87), Color(0.81, 0.81, 0.72, 0.12), 1.0)

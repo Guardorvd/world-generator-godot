@@ -135,7 +135,7 @@ static func bar(value: float, height := 6.0, fill_color := MINT, bg_color := Col
 ## 19.11.2026: лёгкое появление окна поверх игры (доска, «Путешествие», табличка, карта): 0,2 с проявление
 ## и масштаб from → 1 от центра. Только вход: закрытие остаётся мгновенным, игра по visible знает, что окно ушло
 static func pop_in(node: Control, from := 0.97, seconds := 0.2) -> void:
-	if not node.is_inside_tree() or DisplayServer.get_name() == "headless":
+	if not node.is_inside_tree() or DisplayServer.get_name() == "headless" or GameContext.scope.settings.reduce_ui_motion:
 		return
 	var old: Variant = node.get_meta(&"pop_tween") if node.has_meta(&"pop_tween") else null
 	if old is Tween and (old as Tween).is_valid():

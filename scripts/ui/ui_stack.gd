@@ -190,7 +190,7 @@ func _hide_world_transition_nodes(back_node: Control, loading_node: Control) -> 
 
 
 func should_animate(opts := {}) -> bool:
-	if bool(opts.get("instant", false)):
+	if bool(opts.get("instant", false)) or GameContext.scope.settings.reduce_ui_motion:
 		return false
 	if _host == null or not _host.is_inside_tree():
 		return false

@@ -7,6 +7,7 @@ const Config = preload("res://resources/ride_journal.tres")
 const Feed = preload("res://scripts/game/ride_feed.gd")
 const Presentation = preload("res://scripts/ui/ride_presentation.gd")
 var _preview: TextureRect
+var _cover: TextureRect
 var _missing: Label
 var preview_path := ""
 var preview_revision := -1
@@ -166,7 +167,7 @@ func update_preview(path: String) -> void:
 
 
 func update_preview_status() -> void:
-	if is_instance_valid(_missing) and _preview.texture == null:
+	if is_instance_valid(_missing) and _preview.texture == null and not (is_instance_valid(_cover) and _cover.visible):
 		_missing.text = ("Подготавливаем карту…" if _feed_box != null else "Готовится…") if Feed.thumb_is_preparing(preview_path) else ("Карта поездки недоступна" if _feed_box != null else "Нет карты")
 		_missing.show()
 
@@ -190,8 +191,8 @@ func _setup_feed_card(entry: Dictionary) -> void:
 	toggle_mode = true
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clip_contents = true
-	var normal := HudStyle.panel(Color(0.07, 0.10, 0.11, 0.94), Color(0.72, 0.67, 0.55, 0.45), 10, Vector2.ZERO, false)
-	var hover := HudStyle.panel(Color(0.12, 0.14, 0.14, 0.97), Color(0.95, 0.80, 0.50, 0.8), 10, Vector2.ZERO, false)
+	var normal := HudStyle.panel(Color(0.08, 0.12, 0.16, 0.86), Color(0.65, 0.70, 0.73, 0.35), 12, Vector2.ZERO, false)
+	var hover := HudStyle.panel(Color(0.14, 0.19, 0.23, 0.94), Color(0.95, 0.80, 0.50, 0.8), 12, Vector2.ZERO, false)
 	add_theme_stylebox_override("normal", normal)
 	add_theme_stylebox_override("hover", hover)
 	add_theme_stylebox_override("pressed", hover)
@@ -205,9 +206,9 @@ func _setup_feed_card(entry: Dictionary) -> void:
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	box.offset_left = 18
 	box.offset_right = -18
-	box.offset_top = 16
-	box.offset_bottom = -16
-	box.add_theme_constant_override("separation", 8)
+	box.offset_top = 14
+	box.offset_bottom = -14
+	box.add_theme_constant_override("separation", 6)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(box)
 	var walking := bool(entry.get("walk", false))
@@ -229,21 +230,29 @@ func _setup_feed_card(entry: Dictionary) -> void:
 	_add_label(box, "%s · %s" % [world, type_title], 18, HudStyle.CREAM)
 	var preview_box := PanelContainer.new()
 	_feed_preview_box = preview_box
-	preview_box.custom_minimum_size.y = 270
-	preview_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	preview_box.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.PAPER, HudStyle.BORDER, 4, Vector2.ZERO, false))
+	preview_box.custom_minimum_size.y = 150
+	preview_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	preview_box.add_theme_stylebox_override("panel", HudStyle.panel(Color(0.14, 0.19, 0.22, 0.9), Color(0.70, 0.74, 0.73, 0.18), 6, Vector2.ZERO, false))
 	preview_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(preview_box)
 	_preview = TextureRect.new()
 	_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_preview.clip_contents = true
 	_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview_box.add_child(_preview)
+	_cover = TextureRect.new()
+	_cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cover.hide()
+	_preview.add_child(_cover)
 	_missing = Label.new()
 	_missing.text = "Карта поездки недоступна"
 	_missing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_missing.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	HudStyle.label(_missing, 14, HudStyle.SURFACE)
+	HudStyle.label(_missing, 14, HudStyle.MUTED)
 	_preview.add_child(_missing)
 	_missing.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	update_preview_status()
@@ -262,7 +271,7 @@ func _setup_feed_card(entry: Dictionary) -> void:
 	_add_metric(stats, "Длительность", duration)
 	_add_metric(stats, "Падения", falls)
 	_add_label(box, "Подробнее о поездке  ›", 15, HudStyle.AMBER)
-	custom_minimum_size.y = 485
+	custom_minimum_size.y = 345
 	resized.connect(_fit_feed_card)
 	_fit_feed_card.call_deferred()
 	accessibility_name = "%s, %s, %s, %s. %s: %s, длительность: %s, падения: %s. Подробнее о поездке" % [kind, date, world, type_title, distance_caption, distance, duration, falls]
@@ -273,9 +282,18 @@ func _fit_feed_card() -> void:
 	if size.x <= 0.0 or not is_instance_valid(_feed_box):
 		return
 	_feed_metrics.columns = 1 if size.x < 400.0 else 3
-	var map_height := clampf((size.x - 36.0) * 0.625, 100.0, maxf(100.0, Config.feed_preview_max_height))
-	_feed_preview_box.custom_minimum_size = Vector2(map_height * 1.6, map_height)
+	var map_height := clampf((size.x - 36.0) * 0.34, 100.0, minf(160.0, maxf(100.0, Config.feed_preview_max_height)))
+	_feed_preview_box.custom_minimum_size = Vector2(0, map_height)
 	custom_minimum_size.y = _feed_box.get_combined_minimum_size().y + 32.0
+
+
+func set_cover(texture: Texture2D) -> void:
+	if not is_instance_valid(_cover):
+		return
+	_cover.texture = texture
+	_cover.visible = texture != null
+	if is_instance_valid(_missing):
+		_missing.visible = texture == null and _preview.texture == null
 
 
 func _add_label(parent: Node, value: String, font_size: int, color: Color) -> Label:

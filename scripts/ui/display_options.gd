@@ -340,7 +340,7 @@ func _on_tab_changed(tab: int) -> void:
 	_reset_tab_slides()
 	if tabs == null or not tabs.is_visible_in_tree():
 		return
-	if _host == null or not _host.is_processing() or DisplayServer.get_name() == "headless":
+	if _host == null or not _host.is_processing() or DisplayServer.get_name() == "headless" or GameContext.scope.settings.reduce_ui_motion:
 		return
 	var scroll := tabs.get_tab_control(tab) as Control
 	var page := scroll.get_node_or_null("Page") as Control if scroll != null else null

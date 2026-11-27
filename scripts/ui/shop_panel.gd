@@ -64,6 +64,7 @@ var _stage_content: Control
 var _fitting: SubViewportContainer
 var _fitting_button: Button
 var _fitting_reset: Button
+var _fitting_apply: Button
 var _fitting_zoom: Button
 var _fitting_items: Array = []
 var _stage: PanelContainer
@@ -101,7 +102,7 @@ var _portrait_job_generation := 0
 
 func _ready() -> void:
 	theme = preload("res://resources/ui_theme.tres")
-	var panel_background := Color(0.05, 0.08, 0.11, 0.90) if show_back else Color.TRANSPARENT
+	var panel_background := Color(0.045, 0.065, 0.10, 0.80) if show_back else Color.TRANSPARENT
 	add_theme_stylebox_override("panel", _flat_box(panel_background, Color.TRANSPARENT, 0, Vector2(24, 18)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 14)
@@ -209,11 +210,18 @@ func _ready() -> void:
 	_fitting_reset.hide()
 	_fitting_reset.pressed.connect(_reset_fitting)
 	fitting_controls.add_child(_fitting_reset)
+	_fitting_apply = Button.new()
+	_fitting_apply.text = "Надеть купленное"
+	_fitting_apply.tooltip_text = "Применить купленные вещи из примерки; остальные останутся только в примерке."
+	_fitting_apply.hide()
+	_fitting_apply.pressed.connect(_apply_fitting)
+	fitting_controls.add_child(_fitting_apply)
 	_stage = PanelContainer.new()
-	_stage.add_theme_stylebox_override("panel", _flat_box(Color("#354653"), Color.TRANSPARENT, 10, Vector2.ZERO))
+	_stage.add_theme_stylebox_override("panel", _flat_box(Color(0.11, 0.16, 0.20, 0.88), Color(0.65, 0.72, 0.74, 0.28), 12, Vector2.ZERO))
 	showcase.add_child(_stage)
 	var stage_content := Control.new()
 	_stage_content = stage_content
+	stage_content.clip_contents = true
 	stage_content.mouse_filter = MOUSE_FILTER_PASS
 	_stage.add_child(stage_content)
 	var backdrop := preload("res://scripts/ui/shop_stage.gd").new()
@@ -333,7 +341,7 @@ func _ready() -> void:
 		portrait_stage.mouse_filter = MOUSE_FILTER_IGNORE
 		content.add_child(portrait_stage)
 		var tile_bg := ColorRect.new()
-		tile_bg.color = Color("#354653")
+		tile_bg.color = Color(0.22, 0.30, 0.34, 0.72)
 		tile_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		tile_bg.mouse_filter = MOUSE_FILTER_IGNORE
 		portrait_stage.add_child(tile_bg)
@@ -715,7 +723,7 @@ func _reflow() -> void:
 	_row_grid.columns = 2 if _layout.vertical else 4
 	_actions.vertical = true
 	_review_actions.vertical = true
-	_stage.custom_minimum_size.y = clampf(size.y - 384.0, 230.0, 400.0) if not _layout.vertical else 260.0
+	_stage.custom_minimum_size.y = clampf(size.y - 424.0, 220.0, 360.0) if not _layout.vertical else 260.0
 	if _compare_mode and _profile != null:
 		_update_preview()
 	_link_actions()
@@ -758,7 +766,10 @@ func _link_actions() -> void:
 	_fitting_zoom.focus_neighbor_right = _fitting_zoom.get_path_to(_fitting_reset)
 	_fitting_zoom.focus_neighbor_bottom = _fitting_zoom.get_path_to(_view_buttons[0])
 	_fitting_reset.focus_neighbor_left = _fitting_reset.get_path_to(_fitting_zoom)
+	_fitting_reset.focus_neighbor_right = _fitting_reset.get_path_to(_fitting_apply) if _fitting_apply.visible and not _fitting_apply.disabled else NodePath()
 	_fitting_reset.focus_neighbor_bottom = _fitting_reset.get_path_to(_view_buttons[0])
+	_fitting_apply.focus_neighbor_left = _fitting_apply.get_path_to(_fitting_reset)
+	_fitting_apply.focus_neighbor_bottom = _fitting_apply.get_path_to(_view_buttons[0])
 	for button: Button in _category_buttons:
 		button.focus_neighbor_bottom = button.get_path_to(_fitting_button)
 	if size.x < 520.0:
@@ -1021,7 +1032,7 @@ func _update_preview() -> void:
 	_preview_missing.visible = preview == null and not fitting and not _compare_mode
 	if _preview.texture != preview:
 		_preview.texture = preview
-		if preview != null and DisplayServer.get_name() != "headless":
+		if preview != null and DisplayServer.get_name() != "headless" and not GameContext.scope.settings.reduce_ui_motion:
 			if _preview_tween != null and _preview_tween.is_valid():
 				_preview_tween.kill()
 			_preview.modulate.a = 0.72
@@ -1035,6 +1046,7 @@ func _toggle_fitting(on: bool) -> void:
 		return
 	_fitting_zoom.visible = on
 	_fitting_reset.visible = on
+	_fitting_apply.visible = on
 	if on:
 		_compare_mode = false
 		_compare_button.set_pressed_no_signal(false)
@@ -1086,6 +1098,40 @@ func _update_fitting() -> void:
 			items.append(_profile.equipped_in(category))
 	_fitting.apply_items(items)
 	_fitting.set_view(_view_index, _fitting_zoom.button_pressed, Progress.category_for(_selection))
+	_update_fitting_apply()
+
+
+func _update_fitting_apply() -> void:
+	if _profile == null or _fitting_items.size() != Progress.DEFAULT_ITEMS.size():
+		_fitting_apply.disabled = true
+		return
+	var has_changes := false
+	for category in _fitting_items.size():
+		var id: String = _fitting_items[category]
+		if _profile.owns(id) and id != _profile.equipped_in(category):
+			has_changes = true
+	_fitting_apply.disabled = not has_changes or _profile.load_error != OK
+	_link_actions()
+
+
+func _apply_fitting() -> void:
+	if _profile == null or _fitting_items.size() != Progress.DEFAULT_ITEMS.size():
+		return
+	var items: Array = []
+	var unowned := false
+	for category in _fitting_items.size():
+		var id: String = _fitting_items[category]
+		if _profile.owns(id):
+			items.append(id)
+		else:
+			items.append(_profile.equipped_in(category))
+			unowned = true
+	var err: Error = _profile.equip_set(items)
+	if err == OK:
+		_note.text = "Купленные вещи надеты. Остальные остаются в примерке." if unowned else "Образ надет."
+		_update_fitting_apply()
+	else:
+		_note.text = "Не удалось сохранить образ. Попробуйте ещё раз."
 
 static func _words(id: String) -> Dictionary:
 	match Progress.category_for(id):

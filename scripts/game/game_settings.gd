@@ -148,6 +148,7 @@ var recent_seeds: Array[String] = []    # последние запущенны�
 var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
 var hide_recommended_worlds := false # после очистки список остаётся пустым и при следующем запуске
 var show_walks := false # пешие прогулки в общей ленте заездов
+var reduce_ui_motion := false # меньше движения при переходах интерфейса
 var active_template := WorldTemplate.DEFAULT_ID
 var _template_worlds := {} # template_id -> {seed, recent, favorites, hide_recommended}
 ## 14.4+: бесконечная генерация — соседние области за краем стартовой готовятся и по ним можно ездить.
@@ -168,6 +169,7 @@ func load_settings() -> void:
 ## Повреждённое отдельное поле не мешает прочитать остальные настройки.
 func _apply_config(cfg: ConfigFile) -> void:
 	show_walks = _flag(cfg, "ride_journal", "show_walks", false)
+	reduce_ui_motion = _flag(cfg, "interface", "reduce_motion", false)
 	mouse = _number(cfg, "input", "mouse", mouse, MIN_MOUSE, MAX_MOUSE)
 	infinite_world = _flag(cfg, "world", "infinite", infinite_world)
 	invert_y = _flag(cfg, "input", "invert_y", invert_y)
@@ -314,6 +316,7 @@ func _flag(cfg: ConfigFile, section: String, key: String, fallback: bool) -> boo
 ## Возвращает настройки игрока к значениям по умолчанию; последнее зерно не трогает
 func reset_defaults() -> void:
 	show_walks = false
+	reduce_ui_motion = false
 	mouse = DEFAULT_MOUSE
 	invert_y = DEFAULT_INVERT_Y
 	fov = DEFAULT_FOV
@@ -350,6 +353,7 @@ func reset_defaults() -> void:
 func save_settings() -> Error:
 	var cfg := ConfigFile.new()
 	cfg.set_value("ride_journal", "show_walks", show_walks)
+	cfg.set_value("interface", "reduce_motion", reduce_ui_motion)
 	cfg.set_value("input", "mouse", mouse)
 	cfg.set_value("input", "invert_y", invert_y)
 	cfg.set_value("view", "fov", fov)

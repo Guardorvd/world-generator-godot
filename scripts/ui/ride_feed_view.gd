@@ -51,6 +51,12 @@ var _restore_scroll := -1
 var _restore_delay := 0
 var _focus_after_delete_id := ""
 var _slot_height := 0.0
+var _cover_thread: Thread
+var _cover_path := ""
+var _cover_queue := {}
+var _cover_cache := {}
+var _cover_order: Array[String] = []
+const COVER_CACHE_LIMIT := 12
 
 
 func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
@@ -71,8 +77,9 @@ func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
 		subtitle.text = "Все миры · до %d последних записей" % Config.entries_limit
 		HudStyle.label(subtitle, 14, HudStyle.MUTED)
 		add_child(subtitle)
+	var filter: OptionButton
 	if not world_seed.is_empty():
-		var filter := OptionButton.new()
+		filter = OptionButton.new()
 		_world_filter = filter
 		filter.add_item("Этот мир")
 		filter.add_item("Все миры")
@@ -80,7 +87,8 @@ func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
 		filter.item_selected.connect(func(index: int) -> void:
 			_only_world = index == 0
 			refresh(false))
-		add_child(filter)
+		if not _wide_cards:
+			add_child(filter)
 	var walks := CheckButton.new()
 	_walks = walks
 	walks.text = "Показывать прогулки" if world_seed.is_empty() else "Прогулки"
@@ -88,6 +96,9 @@ func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
 	var filter_row := HBoxContainer.new()
 	filter_row.add_theme_constant_override("separation", 8)
 	add_child(filter_row)
+	if filter != null and _wide_cards:
+		filter.custom_minimum_size.x = 128
+		filter_row.add_child(filter)
 	if world_seed.is_empty():
 		walks.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	walks.button_pressed = settings.show_walks
@@ -134,10 +145,15 @@ func refresh(reload_feed := true) -> void:
 	var old_scroll := _scroll.scroll_vertical
 	if reload_feed:
 		_failed_previews.clear()
+		for path: String in _cover_cache.keys():
+			if _cover_cache[path] == null:
+				_cover_cache.erase(path)
+				_cover_order.erase(path)
 	_restore_scroll = -1
 	var err: Error = feed.load_feed() if reload_feed else _load_error
 	_load_error = err
 	_pending_paths.clear()
+	_cover_queue.clear()
 	_pending_entries.clear()
 	_pending_elapsed = 0.0
 	_pending_poll = 0.0
@@ -299,6 +315,7 @@ func _navigate_cards(event: InputEvent, current: Button) -> void:
 func _process(delta: float) -> void:
 	if not is_visible_in_tree():
 		return
+	_poll_covers()
 	if not _pending_entries.is_empty() and _needs_more_cards():
 		_append_cards()
 	if _restore_scroll >= 0 and _restore_delay > 0:
@@ -361,6 +378,7 @@ func _apply_preview_update() -> void:
 func _update_visible_previews() -> void:
 	if not is_visible_in_tree():
 		return
+	_cover_queue.clear()
 	for child: Node in _list.get_children():
 		var row := child as Control
 		if row == null or not row.has_meta(&"ride_entry") or row.size.y <= 0.0:
@@ -389,6 +407,72 @@ func _update_visible_previews() -> void:
 			continue
 		if card._preview.texture == null:
 			card.update_preview(card.preview_path)
+		if _wide_cards:
+			_queue_cover(card, row.get_meta(&"ride_entry"))
+
+
+func _queue_cover(card: Button, entry: Dictionary) -> void:
+	var photos: Array = entry.get("photo_paths", [])
+	for value: Variant in photos:
+		if not value is String or value.is_empty():
+			continue
+		var path: String = value
+		if _cover_cache.has(path):
+			if _cover_cache[path] != null:
+				card.set_cover(_cover_cache[path])
+				return
+			continue
+		if path != _cover_path:
+			_cover_queue[path] = true
+		return
+	card.set_cover(null)
+
+
+func _poll_covers() -> void:
+	if _cover_thread != null and not _cover_thread.is_alive():
+		var image: Variant = _cover_thread.wait_to_finish()
+		_cover_thread = null
+		var texture: Texture2D = ImageTexture.create_from_image(image) if image is Image and not image.is_empty() else null
+		_cover_cache[_cover_path] = texture
+		_cover_order.erase(_cover_path)
+		_cover_order.append(_cover_path)
+		while _cover_order.size() > COVER_CACHE_LIMIT:
+			_cover_cache.erase(_cover_order.pop_front())
+		for card: Button in _cards.values():
+			var entry: Dictionary = card.get_meta(&"ride_entry")
+			var photos: Array = entry.get("photo_paths", [])
+			if _cover_path in photos:
+				_queue_cover(card, entry)
+		_cover_path = ""
+	if _cover_thread == null and not _cover_queue.is_empty():
+		_cover_path = str(_cover_queue.keys()[0])
+		_cover_queue.erase(_cover_path)
+		_cover_thread = Thread.new()
+		if _cover_thread.start(_load_cover.bind(_cover_path)) != OK:
+			_cover_thread = null
+			_cover_cache[_cover_path] = null
+			_cover_path = ""
+
+
+static func _load_cover(path: String) -> Image:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null or file.get_length() > 24 * 1024 * 1024:
+		return null
+	file.close()
+	var image := Image.load_from_file(path)
+	if image == null or image.is_empty():
+		return null
+	var longest := maxi(image.get_width(), image.get_height())
+	if longest > 640:
+		var factor := 640.0 / longest
+		image.resize(maxi(1, roundi(image.get_width() * factor)), maxi(1, roundi(image.get_height() * factor)), Image.INTERPOLATE_BILINEAR)
+	return image
+
+
+func _exit_tree() -> void:
+	if _cover_thread != null:
+		_cover_thread.wait_to_finish()
+		_cover_thread = null
 
 
 func _choose(entry: Dictionary) -> void:
@@ -457,7 +541,7 @@ func _show_detail(entry: Dictionary) -> void:
 	scroll.add_child(box)
 	var title := Label.new()
 	title.text = ("ПЕШАЯ ПРОГУЛКА · " if bool(entry.get("walk", false)) else "ПОЕЗДКА · ") + (RideLog.journal_date_text(float(entry.start)) if entry.has("start") else "Дата неизвестна")
-	HudStyle.label(title, 18, HudStyle.CREAM)
+	HudStyle.label(title, 20, HudStyle.CREAM)
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(title)
 	var world := Label.new()
@@ -467,13 +551,13 @@ func _show_detail(entry: Dictionary) -> void:
 	HudStyle.label(world, 14, HudStyle.MUTED)
 	world.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(world)
+	var show_map: Button
 	if same_world(entry):
-		var show_map := Button.new()
+		show_map = Button.new()
 		show_map.text = "Показать на карте мира"
 		show_map.disabled = entry.get("track", []).is_empty()
 		if show_map.disabled:
 			show_map.tooltip_text = "В этой записи нет координат маршрута"
-		box.add_child(show_map)
 		show_map.pressed.connect(func() -> void:
 			_map_selected = entry
 			ride_selected.emit(entry)
@@ -481,6 +565,10 @@ func _show_detail(entry: Dictionary) -> void:
 	var preview_path: String = feed.thumb_path(str(entry.id))
 	_detail_preview_path = preview_path
 	_detail_revision = -1
+	var route_title := Label.new()
+	route_title.text = "МАРШРУТ ПОЕЗДКИ"
+	HudStyle.label(route_title, 12, HudStyle.AMBER)
+	box.add_child(route_title)
 	var preview_box := PanelContainer.new()
 	preview_box.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.PAPER, HudStyle.BORDER, 6, Vector2(4, 4), false))
 	box.add_child(preview_box)
@@ -501,6 +589,8 @@ func _show_detail(entry: Dictionary) -> void:
 	HudStyle.label(_detail_legend, 12, HudStyle.MUTED)
 	_detail_legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_detail_legend)
+	if show_map != null:
+		box.add_child(show_map)
 	_refresh_detail_preview()
 	var marked := 0
 	for mark: Dictionary in entry.get("fall_marks", []):
@@ -512,6 +602,10 @@ func _show_detail(entry: Dictionary) -> void:
 		HudStyle.label(partial, 12, HudStyle.MUTED)
 		partial.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(partial)
+	var statistics_title := Label.new()
+	statistics_title.text = "СТАТИСТИКА"
+	HudStyle.label(statistics_title, 12, HudStyle.AMBER)
+	box.add_child(statistics_title)
 	var labels := [
 		["Велосипед", Util.distance_text(float(entry.bike)) if entry.has("bike") else "—"],
 		["Пешком", Util.distance_text(float(entry.foot)) if entry.has("foot") else "—"],

@@ -110,7 +110,7 @@ extends Resource
 ## Увеличение открывает подробную поездку в более крупном окне.
 @export var detail_window_size := Vector2i(620, 650)
 ## Увеличение делает крупное превью выше.
-@export var detail_preview_height := 240.0
+@export var detail_preview_height := 180.0
 ## Увеличение делает график высоты выше.
 @export var detail_profile_height := 100.0
 ## Увеличение сохраняет больше деталей загруженного снимка.

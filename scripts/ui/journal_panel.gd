@@ -13,9 +13,9 @@ const ShopPanel := preload("res://scripts/ui/shop_panel.gd")
 const MUTED := HudStyle.MUTED
 const CARD := Vector2(248, 206)
 const THUMB := Vector2(230, 126)
-const INK := Color(0.05, 0.08, 0.11, 0.90)
-const SURFACE := Color(0.09, 0.14, 0.18, 0.94)
-const LINE := Color(0.52, 0.61, 0.64, 0.5)
+const INK := Color(0.045, 0.065, 0.10, 0.80)
+const SURFACE := Color(0.09, 0.14, 0.19, 0.88)
+const LINE := Color(0.55, 0.64, 0.69, 0.34)
 const ACCENT := Color("#d2bd88")
 const THUMB_CACHE_LIMIT := 384
 const LARGE_CACHE_LIMIT := 4
@@ -44,8 +44,9 @@ var _dock: PanelContainer
 var _map_frame: PanelContainer
 var _right_dock: PanelContainer
 var _narrow_docks: HBoxContainer
-var _map_footer: HBoxContainer
+var _map_footer: HFlowContainer
 var _map_key: VBoxContainer
+var _map_info_toggle: Button
 var _details: BoxContainer
 var _dock_divider: HSeparator
 var _place_title: Label
@@ -407,14 +408,24 @@ func _build_map() -> void:
 	right_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_path_center.add_child(right_space)
 
-	var footer := HBoxContainer.new()
+	var footer := HFlowContainer.new()
 	_map_footer = footer
-	footer.add_theme_constant_override("separation", 8)
+	footer.add_theme_constant_override("h_separation", 8)
+	footer.add_theme_constant_override("v_separation", 6)
 	_map_page.add_child(footer)
 	_map_hint = _label("", 13, footer, MUTED)
 	_map_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_map_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_map_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_map_info_toggle = Button.new()
+	_map_info_toggle.text = "Легенда и задание"
+	_map_info_toggle.tooltip_text = "Показать обозначения карты и текущее задание"
+	_map_info_toggle.toggle_mode = true
+	_map_info_toggle.custom_minimum_size.y = 40
+	_map_info_toggle.toggled.connect(func(on: bool) -> void:
+		_right_dock.visible = on and active_tab == Tab.MAP
+		_update_narrow_docks())
+	footer.add_child(_map_info_toggle)
 	var zoom_out := Button.new()
 	zoom_out.text = "−"
 	zoom_out.tooltip_text = "Отдалить карту"
@@ -493,6 +504,7 @@ func _reflow() -> void:
 	var narrow := available_width < 800.0
 	var compact_tabs := available_width < 650.0
 	_update_tab_labels(compact_tabs)
+	_map_info_toggle.text = "Обозначения" if compact_tabs else "Легенда и задание"
 	for button: Button in [_tab_map, _tab_path, _tab_album, _tab_shop]:
 		button.custom_minimum_size.x = 68 if compact_tabs else 110
 		button.add_theme_font_size_override("font_size", 13 if compact_tabs else 16)
@@ -511,9 +523,9 @@ func _reflow() -> void:
 	elif not narrow and _dock.get_parent() != _map_row:
 		_dock.reparent(_map_row)
 		_right_dock.reparent(_map_row)
-	_narrow_docks.visible = narrow
-	_dock.custom_minimum_size = Vector2(0, 112) if narrow else Vector2(220, 0)
-	_right_dock.custom_minimum_size = Vector2(0, 112) if narrow else Vector2(220, 0)
+	_narrow_docks.visible = narrow and (_dock.visible or _right_dock.visible)
+	_dock.custom_minimum_size = Vector2(0, 112) if narrow else Vector2(190, 0)
+	_right_dock.custom_minimum_size = Vector2(0, 112) if narrow else Vector2(190, 0)
 	_dock.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
 	_right_dock.size_flags_horizontal = Control.SIZE_EXPAND_FILL if narrow else Control.SIZE_FILL
 	if narrow:
@@ -570,7 +582,7 @@ func _select(tab: Tab) -> void:
 	map_view.visible = _map_page.visible
 	_path_center.visible = tab == Tab.PATH
 	_details.visible = tab == Tab.MAP
-	_right_dock.visible = tab == Tab.MAP
+	_right_dock.visible = tab == Tab.MAP and _map_info_toggle.button_pressed
 	_album_page.visible = tab == Tab.ALBUM
 	shop_panel.visible = tab == Tab.SHOP
 	if tab in [Tab.PATH, Tab.ALBUM] and _data.is_empty() and data_provider.is_valid():
@@ -602,16 +614,20 @@ func _finish_tab_transition() -> void:
 		_tab_tween.kill()
 	if is_instance_valid(_animated_page):
 		_animated_page.modulate.a = 1.0
+		_animated_page.scale = Vector2.ONE
 	_animated_page = null
 
 
 func _animate_tab(page: Control) -> void:
-	if DisplayServer.get_name() == "headless":
+	if DisplayServer.get_name() == "headless" or GameContext.scope.settings.reduce_ui_motion:
 		return
 	_animated_page = page
-	page.modulate.a = 0.88
-	_tab_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_tab_tween.tween_property(page, "modulate:a", 1.0, 0.16)
+	page.pivot_offset = page.size * 0.5
+	page.modulate.a = 0.60
+	page.scale = Vector2.ONE * 0.985
+	_tab_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_tab_tween.tween_property(page, "modulate:a", 1.0, 0.20)
+	_tab_tween.tween_property(page, "scale", Vector2.ONE, 0.20)
 
 
 func refresh_inspector(place: Dictionary) -> void:
@@ -620,6 +636,8 @@ func refresh_inspector(place: Dictionary) -> void:
 	if place.is_empty():
 		place = _inspected_place if not _inspected_place.is_empty() else map_view.selected_place
 	_inspected_place = place
+	_dock.visible = active_tab == Tab.MAP and not place.is_empty()
+	_update_narrow_docks()
 	var title := str(place.get("name", ""))
 	var detail := "Наведитесь на метку или выберите её." if place.is_empty() else ""
 	if not place.is_empty():
@@ -652,6 +670,11 @@ func refresh_inspector(place: Dictionary) -> void:
 	_place_photo.visible = not str(place.get("map_photo", "")).is_empty()
 
 
+func _update_narrow_docks() -> void:
+	if is_instance_valid(_narrow_docks):
+		_narrow_docks.visible = get_viewport_rect().size.x < 800.0 and (_dock.visible or _right_dock.visible)
+
+
 ## Обновить карточку после изменения набора известных мест.
 func refresh_inspected_place() -> void:
 	var id := str(_inspected_place.get("key", ""))
@@ -678,6 +701,8 @@ func refresh_quest() -> void:
 		return
 	var data: Dictionary = quest_provider.call()
 	if data != _shown_quest or _checklist.get_child_count() == 0:
+		if data != _shown_quest and not data.is_empty():
+			_map_info_toggle.button_pressed = true
 		_shown_quest = data
 		_fill_checklist(data)
 
@@ -996,13 +1021,21 @@ func _rebuild_album_grid() -> void:
 	var groups: Array = _album_data.get("groups", [])
 	if pages.is_empty():
 		var empty := PanelContainer.new()
-		empty.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 10, Vector2(20, 18), false))
+		empty.custom_minimum_size.y = 190
+		empty.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 12, Vector2(24, 24), false))
 		_album_content.add_child(empty)
+		var center := CenterContainer.new()
+		empty.add_child(center)
 		var message := VBoxContainer.new()
 		message.add_theme_constant_override("separation", 8)
-		empty.add_child(message)
-		_label("Здесь появится ваш альбом", 19, message, HudStyle.CREAM)
-		_label("Снимайте интересные места во время путешествия.", 14, message, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		center.add_child(message)
+		var eyebrow := _label("ВАШИ ВОСПОМИНАНИЯ", 12, message, ACCENT)
+		eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var heading := _label("Здесь появится ваш альбом", 21, message, HudStyle.CREAM)
+		heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var description := _label("Снимайте интересные места во время путешествия.", 14, message, MUTED)
+		description.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_cards_loading.hide()
 		controls_created.emit(_album_content)
 		return
