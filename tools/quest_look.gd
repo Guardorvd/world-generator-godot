@@ -738,7 +738,17 @@ func _run() -> void:
 		return
 	var bike := _build()
 	await process_frame
-	bike.rider.pose(0.6, 0.3, Vector3(-0.24, 0.98, -0.43), Vector3(0.24, 0.98, -0.43))
+	var pose := CyclistRig.PoseInput.new()
+	pose.crank_angle = 0.6
+	pose.tuck = 0.3
+	pose.left_grip = Vector3(-0.24, 0.98, -0.43)
+	pose.right_grip = Vector3(0.24, 0.98, -0.43)
+	bike.crank.rotation.x = -pose.crank_angle
+	pose.left_pedal = bike.crank.transform * bike.pedal_l.position
+	pose.right_pedal = bike.crank.transform * bike.pedal_r.position
+	bike.pedal_l.rotation.x = pose.crank_angle
+	bike.pedal_r.rotation.x = pose.crank_angle
+	bike.rider.pose(pose)
 	hud = main.get_node("UI/Root/Hud")
 	for path: String in ["UI/Root/Back", "UI/Root/Menu"]:
 		main.get_node(path).visible = false

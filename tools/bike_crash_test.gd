@@ -463,8 +463,12 @@ func _check_lifecycle() -> void:
 	# Неполный снимок и NaN не должны менять скелет частично.
 	var short_pose: Array[Transform3D] = [Transform3D.IDENTITY]
 	rig.restore_pose(short_pose)
-	rig.pose(NAN, 0, Vector3.ZERO, Vector3.ZERO)
+	var pose := CyclistRig.PoseInput.new()
+	pose.crank_angle = NAN
+	rig.pose(pose)
 	check(rig.capture_pose() == original, "неверные данные анимации оставляют позу целой")
+	pose.crank_angle = 2.0
+	pose.tuck = 0.2
 	for target_phase in [BikeCrash.Phase.BALANCE, BikeCrash.Phase.RAGDOLL, BikeCrash.Phase.RECOVER]:
 		crash.start(view, bike, Vector3(0, 0, -8), heights)
 		check(not rig.procedural_pose and not player_animation.active, "рэгдолл блокирует обоих авторов анимации")
@@ -476,7 +480,7 @@ func _check_lifecycle() -> void:
 		if target_phase == BikeCrash.Phase.RECOVER:
 			crash._begin_recover(bike, w, heights)
 		var held := rig.capture_pose()
-		rig.pose(2, 0.2, Vector3.ZERO, Vector3.ZERO)
+		rig.pose(pose)
 		check(rig.capture_pose() == held, "процедурная поза не перезаписывает фазу %s" % target_phase)
 		crash.abort()
 		crash.abort()

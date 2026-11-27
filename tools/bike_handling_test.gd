@@ -99,9 +99,18 @@ func _init() -> void:
 	var coast_turn := bike(16.0)
 	var brake_turn := bike(16.0)
 	for i in 30:
+		tick(coast_turn, 1.0)
+		tick(brake_turn, 1.0, false, -1.0)
+	var side_with_brake := brake_turn._side_caps(1.0)
+	var applied := brake_turn.brake_applied
+	# Сравнить запас на том же такте и при той же развесовке: скорость и перенос веса уже изменились.
+	brake_turn.brakes.front_force = 0.0
+	var side_without_brake := brake_turn._side_caps(1.0)
+	check(applied > 1.0 and brake_turn.speed < coast_turn.speed and side_with_brake.x < side_without_brake.x - 0.01,
+		"реальный тормоз в повороте расходует боковой запас передней шины")
+	coast_turn = bike(16.0)
+	for i in 30:
 		coast_turn._step_turn(1.0, 1.0, DT)
-		brake_turn._step_turn(1.0, 1.0, DT, 1.0)
-	check(absf(brake_turn._yaw_rate) < absf(coast_turn._yaw_rate), "тормоз оставляет меньше сцепления для резкого поворота")
 	var packed_yaw := absf(coast_turn._yaw_rate)
 	coast_turn._step_turn(1.0, 0.75, DT)
 	check(absf(coast_turn._yaw_rate) < packed_yaw,

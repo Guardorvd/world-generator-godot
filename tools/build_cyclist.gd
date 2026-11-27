@@ -66,21 +66,27 @@ func _init() -> void:
 		bone("Toe" + s, "Foot" + s, Vector3(side * 0.14, 0.34, -0.07))
 	root.add_child(rider)
 	rider.skeleton = skeleton
-	rider.pose(0, 0, Vector3(-0.24, 0.98, -0.43), Vector3(0.24, 0.98, -0.43))
+	var bind_pose := CyclistRig.PoseInput.new()
+	bind_pose.left_grip = Vector3(-0.24, 0.98, -0.43)
+	bind_pose.right_grip = Vector3(0.24, 0.98, -0.43)
+	bind_pose.left_pedal = BikeView.CRANK_REST - BikeView.RIGHT_PEDAL_REST
+	bind_pose.right_pedal = BikeView.CRANK_REST + BikeView.RIGHT_PEDAL_REST
+	rider.pose(bind_pose)
 	# Симметричная средняя точка хода педалей в bind-позе: левая и правая ноги строятся
 	# зеркально, а отклонение тазобедренного и коленного суставов в верхней/нижней точках вдвое меньше.
 	var bind_hip := skeleton.get_bone_global_pose(skeleton.find_bone("Hips")).origin
 	for side: float in [-1.0, 1.0]:
 		var s := "L" if side < 0 else "R"
 		var h := bind_hip + Vector3(side * 0.11, 0, 0)
-		var ankle := Vector3(side * 0.14, 0.355, 0.025)
+		var pedal_center := BikeView.CRANK_REST + Vector3(side * BikeView.RIGHT_PEDAL_REST.x, 0.0, 0.0)
+		var ankle := pedal_center + CyclistRig.ANKLE_OFFSET
 		var knee := rider._joint(h, ankle, CyclistRig.LEG_LENGTH, Vector3(-side * 0.025, 0.3, -1.0))
 		var leg_x := (ankle - h).cross(knee - h)
 		rider._set_bone("UpperLeg" + s, h, rider._limb_basis(h, knee, leg_x))
 		rider._set_bone("LowerLeg" + s, knee, rider._limb_basis(knee, ankle, leg_x))
 		var foot_basis := Basis.from_euler(Vector3(0.0, -side * 0.03, 0.0))
 		rider._set_bone("Foot" + s, ankle, foot_basis)
-		rider._set_bone("Toe" + s, ankle + foot_basis * Vector3(0, -0.015, -0.095), foot_basis)
+		rider._set_bone("Toe" + s, ankle + foot_basis * CyclistRig.TOE_OFFSET, foot_basis)
 	for i in skeleton.get_bone_count():
 		skeleton.set_bone_rest(i, skeleton.get_bone_pose(i))
 	_body()
@@ -100,7 +106,7 @@ func _init() -> void:
 	body.skin = Skin.new()
 	for i in skeleton.get_bone_count():
 		body.skin.add_bind(i, skeleton.get_bone_global_rest(i).affine_inverse())
-	rider.pose(0, 0, Vector3(-0.24, 0.98, -0.43), Vector3(0.24, 0.98, -0.43))
+	rider.pose(bind_pose)
 	# Запас для полёта, работы плеч и физической позы: skinned меш не отсекается по старой посадке.
 	body.extra_cull_margin = BikeCrash.GROUND_R + 2.0
 	skeleton.add_child(body)

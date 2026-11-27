@@ -14,13 +14,15 @@ class PreviewWorld extends WorldData:
 		return {biome = Biomes.GRASS, path = 0}
 
 class PreviewGround extends Heightfield:
+	var grade := Vector2.ZERO
+	var reference := Vector2.ZERO
 	func _init(data: WorldData) -> void:
 		super()
 		world = data
-	func ground_at(_x: float, _z: float, _raw := false) -> float:
-		return 0.0
-	func surface_at(_x: float, _z: float, _feet := -INF) -> float:
-		return 0.0
+	func ground_at(x: float, z: float, _raw := false) -> float:
+		return grade.dot(Vector2(x, z) - reference)
+	func surface_at(x: float, z: float, _feet := -INF) -> float:
+		return ground_at(x, z)
 	func depth_at(_x: float, _z: float, _feet := -INF) -> float:
 		return 0.0
 	func known(_x: float, _z: float) -> bool:
@@ -180,6 +182,16 @@ func run(finish := true) -> void:
 		advance(0.65)
 	check(bike._cur[BikeView.S_WATCH] == 0.0, "Release returns the left hand to the grip")
 	bike.watch_requested = true
+	for i in 26:
+		advance(0.65)
+	check(bike._cur[BikeView.S_WATCH] > 0.9, "Watch pose is active before snapping to a new position")
+	bike.watch_requested = false
+	state.x += 10.0
+	bike.snap(state)
+	bike.draw(1.0)
+	check(bike._cur[BikeView.S_WATCH] == 0.0 and bone("HandL").distance_to(bike._rider_pose.left_grip) < 0.001,
+		"Snapping clears the watch pose and puts the hand back on the grip")
+	bike.watch_requested = true
 	for unsafe in ["speed", "air", "turn", "brake"]:
 		state.speed = 2.0
 		state.airborne = false
@@ -243,6 +255,22 @@ func run(finish := true) -> void:
 		advance(-1)
 	check(bone("Head").z > neutral.z + 0.025, "Braking shifts weight back")
 	reset()
+	state.speed = 0.0
+	state.brakes.pressure = 1.0
+	state.brakes.brace = 0.9
+	state.brakes.front_load = 0.98
+	for i in 30:
+		advance()
+	check(bike._cur[BikeView.S_BRAKE] > 0.95 and absf(bike._cur[BikeView.S_STAND]) < 0.02
+		and is_zero_approx(bike._cur[BikeView.S_BRAKE_POSE]), "Holding a brake lever without tyre force does not brace the body")
+	reset()
+	state.speed = 14.0
+	state.brakes.risk = 0.8
+	for i in 30:
+		advance()
+	check(bike._cur[BikeView.S_STAND] < -0.6 and bike._cur[BikeView.S_SHIFT] > 0.02,
+		"An actual tip-over warning still produces a braced stance")
+	reset()
 	state.tilt = 0.4
 	for i in 40:
 		advance()
@@ -295,6 +323,7 @@ func run(finish := true) -> void:
 	check(knee_power_x < knee_top_x - 0.008, "Knee tracks closer to frame during downward power stroke")
 	reset()
 	state.steer = 1
+	state._yaw_rate = -0.65
 	state.lean = -0.28
 	for i in 40:
 		advance()
@@ -306,6 +335,14 @@ func run(finish := true) -> void:
 	var foot_l_turn := sk_turn.get_bone_global_pose(sk_turn.find_bone("FootL"))
 	var foot_r_turn := sk_turn.get_bone_global_pose(sk_turn.find_bone("FootR"))
 	check(bone("FootL").y < bone("FootR").y - 0.10 and foot_l_turn.basis.get_euler().x > foot_r_turn.basis.get_euler().x + 0.08 and absf(bone("LowerLegL").x) < absf(bone("LowerLegR").x) - 0.015, "Outer leg drops heel, lowers pedal and presses knee toward frame in turn")
+	var head_before := sk_turn.get_bone_global_pose(sk_turn.find_bone("Head")).basis
+	var turn_pose := bike._rider_pose
+	turn_pose.look = 0.35
+	bike.rider.pose(turn_pose)
+	check(not sk_turn.get_bone_global_pose(sk_turn.find_bone("Head")).basis.is_equal_approx(head_before)
+		and sk_turn.get_bone_global_pose(sk_turn.find_bone("FootL")).is_equal_approx(foot_l_turn)
+		and sk_turn.get_bone_global_pose(sk_turn.find_bone("FootR")).is_equal_approx(foot_r_turn),
+		"Changing gaze at fixed turn support moves the head without redistributing pedal support")
 	reset()
 	state._yaw_rate = -1.2
 	state.slip = 0.18
@@ -398,12 +435,24 @@ func run(finish := true) -> void:
 	check(fatigued_max - fatigued_min > rest_breath_span * 1.25, "Breathing deepens and accelerates after heavy exertion")
 	check(loaded_pack_swing > 0.015 and absf(bike._cur[BikeView.S_PACK_PITCH]) + absf(bike._cur[BikeView.S_PACK_ROLL]) < 0.001, "Equipment responds to load and settles without constant oscillation")
 	bike.set_pack(false)
+	state.speed = 6.0
+	state.wheel_impact = Vector2(1.5, 0.0)
+	advance()
+	state.clear_tick_events()
+	check(bike._pack_swing == Vector2.ZERO and bike._pack_velocity == Vector2.ZERO,
+		"Hidden equipment does not accumulate impact motion")
+	bike.set_pack(true)
+	bike.draw(0.5)
+	check(bike._pack_bag.rotation.is_zero_approx(), "Equipping a hidden pack starts without residual swing")
+	bike.set_pack(false)
 	reset()
 	state.squash_fv = 2
 	state.squash_rv = -1
 	for i in 30:
 		advance()
 	check(bike._cur[BikeView.S_CROUCH] > 0.018, "Moving suspension is absorbed by body and elbows")
+	check(absf(bike._cur[BikeView.S_SHIFT]) < 0.001 and absf(bike._cur[BikeView.S_HEAD_NOD]) < 0.001,
+		"Suspension travel alone does not pull the rider fore-aft or nod the head")
 	contacts()
 	state.speed = 0
 	for i in 120:
@@ -428,10 +477,15 @@ func run(finish := true) -> void:
 	reset()
 	state.steer = 1
 	advance()
-	check(absf(bike._cur[BikeView.S_LOOK]) > absf(bike._cur[BikeView.S_BODY_LOOK]) * 2.0, "Head leads shoulders into a turn")
+	check(bike._cur[BikeView.S_LOOK] < -0.01 and is_zero_approx(bike._cur[BikeView.S_BODY_LOOK])
+		and is_zero_approx(bike._cur[BikeView.S_TURN_SUPPORT]), "Steering anticipates with the eyes before the shoulders or outside foot respond")
+	state._yaw_rate = -0.8
+	state.lean = -0.22
 	for i in 90:
 		advance()
-	check(absf(bike._cur[BikeView.S_LOOK] - bike._cur[BikeView.S_BODY_LOOK]) < 0.001, "Shoulders catch up to a steady turn")
+	check(bike._cur[BikeView.S_LOOK] < bike._cur[BikeView.S_BODY_LOOK] - 0.05
+		and bike._cur[BikeView.S_BODY_LOOK] < -0.1 and bike._cur[BikeView.S_TURN_SUPPORT] > 0.4,
+		"Shoulders and outside foot follow the steady turn while gaze leads")
 	reset()
 	state.crank += 4 * DT
 	advance(1)
@@ -442,17 +496,17 @@ func run(finish := true) -> void:
 	var loaded := bike._effort
 	advance()
 	check(bike._effort < loaded and bike._effort > loaded * 0.8, "Releasing pedals retains a brief body follow-through")
-	# Одинаковые толчки разными колёсами дают противоположный перенос веса.
-	var road_positions: Array[float] = []
+	# Выраженный удар о кромку всё ещё даёт разный перенос на каждой оси.
+	var impact_shift: Array[float] = []
 	for front in [true, false]:
 		reset()
-		state.squash_fv = 2.0 if front else 0.0
-		state.squash_rv = 0.0 if front else 2.0
-		for i in 30:
+		state.wheel_impact = Vector2(1.5, 0.0) if front else Vector2(0.0, 1.5)
+		for i in 10:
 			advance()
-		road_positions.append(bone("Head").z)
+			state.clear_tick_events()
+		impact_shift.append(bike._cur[BikeView.S_SHIFT])
 		contacts()
-	check(road_positions[0] > road_positions[1] + 0.01, "Front and rear bumps shift weight in opposite directions")
+	check(impact_shift[0] > 0.006 and impact_shift[1] < -0.003, "Front and rear edge impacts shift weight in opposite directions")
 	var pump_heads: Array[Vector3] = []
 	for motion: float in [1.0, -1.0]:
 		reset()
@@ -580,13 +634,15 @@ func run(finish := true) -> void:
 	check(not bike.rider.visible, "Dismount hides rig")
 	check_obstacle_transitions()
 	check_drive_transitions()
+	check_body_input()
+	check_secondary_motion()
 	check_balance_reactions()
 	await check_ragdoll_skin()
 	var invalid: CyclistRig = load("res://scenes/cyclist.tscn").instantiate()
 	root.add_child(invalid)
 	invalid.skeleton.set_bone_name(invalid.skeleton.find_bone("HandL"), "MissingHand")
 	var before := invalid.skeleton.get_bone_pose(0)
-	invalid.pose(0, 0, Vector3.ZERO, Vector3.ZERO)
+	invalid.pose(CyclistRig.PoseInput.new())
 	check(not invalid._rig_valid, "Incomplete skeleton rejected")
 	check(invalid.skeleton.get_bone_pose(0) == before, "Invalid rig does not write partial pose")
 	invalid.free()
@@ -649,10 +705,39 @@ func check_obstacle_transitions() -> void:
 		var load_difference := bike._cur[BikeView.S_FRONT_LOAD] - bike._cur[BikeView.S_REAR_LOAD]
 		check(load_difference * -signf(pitch) > 0.20, "Landing pitch relative to the surface selects the leading limbs")
 		contacts()
+	var landing_crouch := 0.0
+	for bottoming_fork: bool in [false, true]:
+		reset()
+		state.land_impact = 9.0
+		if bottoming_fork:
+			state.bottom_out = state.config.bottom_out_speed + 2.2
+			state.squash_fv = 3.0
+		advance()
+		if bottoming_fork:
+			check(bike._cur[BikeView.S_FRONT_LOAD] > 0.8, "Landing bottom-out still reaches the arms immediately")
+		state.clear_tick_events()
+		state.squash_fv = 0.0
+		for i in 10:
+			advance()
+		if bottoming_fork:
+			check(absf(bike._cur[BikeView.S_CROUCH] - landing_crouch) < 0.001, "Fork bottom-out does not crouch the rider twice for one landing")
+		else:
+			landing_crouch = bike._cur[BikeView.S_CROUCH]
 	reset()
 
 
 func check_drive_transitions() -> void:
+	reset()
+	var left_pedal_rest := bike.pedal_l.position
+	var right_pedal_rest := bike.pedal_r.position
+	bike.pedal_l.position += Vector3(-0.022, 0.019, -0.017)
+	bike.pedal_r.position += Vector3(0.015, 0.021, 0.016)
+	state.crank += 0.8
+	advance(1.0)
+	bike.draw(0.45)
+	contacts()
+	bike.pedal_l.position = left_pedal_rest
+	bike.pedal_r.position = right_pedal_rest
 	reset()
 	for i in 70:
 		advance()
@@ -693,6 +778,62 @@ func check_drive_transitions() -> void:
 	reset()
 
 
+func check_body_input() -> void:
+	var world := PreviewWorld.new()
+	var ground := PreviewGround.new(world)
+	for back: bool in [true, false]:
+		reset()
+		var player := PlayerState.new()
+		state.mount(player)
+		state.speed = 8.0
+		bike.snap(state)
+		for i in 60:
+			state.step(player, 0.0, 0.0, false, false, DT, world, ground)
+			bike.tick(state)
+			state.clear_tick_events()
+		var max_prep := 0.0
+		var max_crouch := 0.0
+		for i in 36:
+			state.body_back = back and i < 12
+			state.body_forward = not back and i < 12
+			state.step(player, 0.0, 0.0, false, false, DT, world, ground)
+			bike.tick(state)
+			bike.draw(1.0)
+			state.clear_tick_events()
+			contacts()
+			if i == 2:
+				var shift := bike._cur[BikeView.S_SHIFT]
+				check(shift * state.body_x > 0.0 and absf(shift) > 0.12 * absf(state.body_x),
+					"Manual weight shift follows Q/E during the first three physics ticks")
+			max_prep = maxf(max_prep, bike._jump_prep)
+			max_crouch = maxf(max_crouch, bike._cur[BikeView.S_CROUCH])
+		if back:
+			check(max_prep > 0.4 and max_crouch > 0.015, "Holding Q still preloads the rider")
+		else:
+			check(max_prep < 0.001 and max_crouch < 0.012, "Returning to neutral after E does not preload a jump")
+
+
+func check_secondary_motion() -> void:
+	reset()
+	for i in 16 * 60:
+		advance()
+		if i >= 14 * 60 and i % 10 == 0:
+			contacts()
+	reset()
+	state.brakes.pressure = 0.9
+	state.brakes.skid = 0.8
+	advance()
+	var lever_start := bike._levers[0].basis
+	var lever_moves := false
+	var steering_is_stable := true
+	for i in 12:
+		advance()
+		lever_moves = lever_moves or not bike._levers[0].basis.is_equal_approx(lever_start)
+		steering_is_stable = steering_is_stable and bike._steering.basis.is_equal_approx(Basis.IDENTITY)
+		contacts()
+	check(lever_moves and steering_is_stable, "Brake shudder reaches the levers without rotating the grips")
+
+
 func check_balance_reactions() -> void:
 	reset()
 	state.speed = 0.0
@@ -701,27 +842,43 @@ func check_balance_reactions() -> void:
 	for i in 40:
 		advance()
 	check(bike._cur[BikeView.S_TRACK] > 0.9 and is_zero_approx(bike._cur[BikeView.S_STOP]), "Trackstand balances with both feet on pedals")
+	check(bike._steering.basis.is_equal_approx(Basis.IDENTITY) and is_zero_approx(bike.rotation.z)
+		and is_zero_approx(bike._cur[BikeView.S_SIDE]), "A settled trackstand does not invent steering, roll or side sway")
 	contacts()
 	state.stance = BikeRide.Stance.FOOT_DOWN
 	state.foot_side = 1.0
-	state.foot_ground_y = 0.09
 	state.bank_slope = 0.31
 	state.heading = 0.68
 	state.tilt = 0.18
+	state.x = 12.0
+	state.z = -7.0
+	state.set_config(state.config.duplicate() as BikePhysicsConfig)
+	state.config.stop_foot_offset = 0.33
+	var heights := PreviewGround.new(PreviewWorld.new())
+	heights.reference = Vector2(state.x, state.z)
+	var grade_world := Basis(Vector3.UP, state.heading) * Vector3(state.bank_slope, 0.0, -state.tilt)
+	heights.grade = Vector2(grade_world.x, grade_world.z)
+	state._stop_timer = state.config.stop_settle_time
+	state._update_stance(DT, state.tilt, heights)
+	var expected := Vector3(state.x, state.y, state.z) + Basis(Vector3.UP, state.heading) * Vector3(0.33, 0.0, -0.06)
+	expected.y = heights.ground_at(expected.x, expected.z)
+	check(state.foot_support.distance_to(expected) < 0.0001, "Stop samples the configured lateral and forward foot offsets")
 	for i in 90:
 		advance()
 	var sk := bike.rider.skeleton
 	var sole := sk.global_transform * sk.get_bone_global_pose(sk.find_bone("FootR")) * CyclistRig.PEDAL_CONTACT_LOCAL
-	check(absf(sole.y - state.y - state.foot_ground_y) < 0.003, "Uphill sole meets sampled support on a pitched frame")
+	check(sole.distance_to(state.foot_support) < 0.003, "Uphill sole meets the sampled world-space point with a custom foot offset")
 	var sole_up := (sk.global_basis * sk.get_bone_global_pose(sk.find_bone("FootR")).basis).y
 	var surface_up := Basis(Vector3.UP, state.heading) * Vector3(-state.bank_slope, 1, state.grade_now).normalized()
 	check(sole_up.dot(surface_up) > 0.999, "Planted shoe lies on the side slope at an oblique heading")
 	state.foot_side = -1.0
-	state.foot_ground_y = 0.02
 	state.bank_slope = -0.10
+	state._update_stance(DT, state.tilt, heights)
 	advance()
 	var departing := sk.global_transform * sk.get_bone_global_pose(sk.find_bone("FootR")) * CyclistRig.PEDAL_CONTACT_LOCAL
-	check(departing.y >= sole.y - 0.005, "Changing sides retracts from the old support height")
+	var held_support := sk.global_transform * bike._rider_pose.ground_point
+	check(held_support.distance_to(expected) < 0.003 and departing.distance_to(sole) < 0.05,
+		"Changing sides retracts gradually from the old three-dimensional support")
 	for i in 120:
 		advance()
 	check(bike._cur[BikeView.S_STOP] < -0.95, "Opposite foot takes support after retraction")

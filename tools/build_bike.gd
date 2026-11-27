@@ -708,7 +708,7 @@ func drivetrain() -> void:
 	var chain_mat := P.fixed_material(shared, P.BLACK, P.HARD)
 	strut(bike, "ChainTop", Vector3(0.085, 0.397, 0), Vector3(0.085, 0.409, 0.53), 0.0045, chain_mat, 4)
 	strut(bike, "ChainBottom", Vector3(0.085, 0.202, 0), Vector3(0.085, 0.21, 0.57), 0.0045, chain_mat, 4)
-	var crank := node(bike, "Crank", Vector3(0, 0.3, 0))
+	var crank := node(bike, "Crank", BikeView.CRANK_REST)
 	# звезда: плоское кольцо с зубьями по краю
 	add(torus(0.08, 0.097, 24, 4), black, Transform3D(Basis(Vector3.FORWARD, PI * 0.5) * Basis.from_scale(Vector3(1.0, 0.35, 1.0)), Vector3(0.085, 0, 0)))
 	for i in 16:
@@ -718,10 +718,11 @@ func drivetrain() -> void:
 		var angle := TAU * i / 4.0 + 0.4
 		add_tube(Vector3(0.085, 0, 0), Vector3(0.085, cos(angle) * 0.084, sin(angle) * 0.084), 0.009, black, 0.007, 4, Vector2(0.4, 1.0))
 	for side: float in [-1.0, 1.0]:
-		add_tube(Vector3(side * 0.098, 0, 0), Vector3(side * 0.115, -side * 0.17, 0), 0.019, black, 0.013, 8, Vector2(0.5, 1.0))
+		var spindle_y := BikeView.RIGHT_PEDAL_REST.y * side
+		add_tube(Vector3(side * 0.098, 0, 0), Vector3(side * 0.115, spindle_y, 0), 0.019, black, 0.013, 8, Vector2(0.5, 1.0))
 		add_tube(Vector3(side * 0.1065, -side * 0.03, 0), Vector3(side * 0.1125, -side * 0.14, 0), 0.008, alloy, 0.006, 6, Vector2(0.4, 1.0))
 		add_disc(Vector3(side * 0.105, 0, 0), 0.02, 0.014, alloy, 10)
-		add_disc(Vector3(side * 0.12, -side * 0.17, 0), 0.008, 0.03, alloy, 6)
+		add_disc(Vector3(side * 0.12, spindle_y, 0), 0.008, 0.03, alloy, 6)
 	commit(crank, "Body")
 	for side: float in [-1.0, 1.0]:
 		# верх платформы — на уровне подошвы (центр узла), рамка с двумя окнами и шипами по краям
@@ -733,7 +734,7 @@ func drivetrain() -> void:
 		for x: float in [-0.045, 0.0, 0.045]:
 			add_box(Vector3(0.012 if x != 0.0 else 0.02, 0.014, 0.064), Vector3(x, -0.008, 0), black)
 		var pedal := commit(crank, "Pedal" + ("L" if side < 0 else "R"), false)
-		pedal.position = Vector3(side * 0.14, -side * 0.17, 0)
+		pedal.position = BikeView.RIGHT_PEDAL_REST * side
 
 
 func _init() -> void:

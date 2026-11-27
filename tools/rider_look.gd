@@ -1,9 +1,9 @@
 extends SceneTree
-## Вид седока без мира и без физики: листы 4×2 (модель) и 5×2 (позы).
+## Вид седока без мира и без физики: лист модели 4×2 и лист поз в пяти колонках.
 ##   rider_model_sheet.png — модель крупно: сбоку, спереди три четверти, сзади, голова, кисти на руле, стопа на педали,
 ##     спереди в лоб, игровая камера;
 ##   rider_anim_sheet.png — позы: езда сидя, подъём стоя, спуск («атака»), поворот, торможение, приземление,
-##     стоянка (нога на земле), долгая стоянка (отдых: рука на бедре) спереди и сзади, встряхивание кисти в спокойной езде.
+##     стоянка с ногой на земле, отдых на долгой стоянке, рывок стоя и вход в поворот.
 ## Нужно окно, секунды. «Было» — тем же запуском на прежнем коде с --tag _old. Свет — tools/bike_stand.gd.
 ##   godot --path . --script res://tools/rider_look.gd -- [--out <папка>] [--tag <суффикс>]
 const DT := 1.0 / 60.0
@@ -45,7 +45,7 @@ func reset(speed := 6.0) -> void:
 func advance(ticks: int, throttle := 0.0, crank_rate := 0.0, boost := false) -> void:
 	for i in ticks:
 		state.crank += crank_rate * DT
-		state.wheel += state.speed / 0.34 * DT
+		state.wheel += state.speed / BikeRide.WHEEL_R * DT
 		state.feel_acceleration = (state.speed - _speed_before) / DT
 		_speed_before = state.speed
 		state.grade_now = state.tilt
@@ -110,9 +110,9 @@ func look() -> void:
 	advance(60)
 	anim.append(await shot(Vector3(0.6, 1.3, -2.7), Vector3(0, 1.0, 0.0)))
 	reset(8.0)
+	state.brake_force = Vector2(3.0, 2.0)
 	for i in 25:
 		state.speed -= 5.0 * DT
-		state.brake_applied = BikePhysicsConfig.current().brake_decel
 		advance(1, -1.0)
 	anim.append(await shot(side, mid))
 	reset(8.0)
@@ -147,9 +147,6 @@ func look() -> void:
 	absorb.append(await shot(side, mid))
 	state._pump_absorb_v = 0.0
 	save(absorb, "rider_absorb", 2)
-	reset()
-	advance(872)
-	anim.append(await shot(Vector3(1.6, 1.5, -2.0), Vector3(0, 1.1, -0.05)))
 	# 12.11: рывок на Shift на скорости (стоя, велосипед раскачивается) и резкий доворот руля
 	reset(12.0)
 	state.surge = 1.0
@@ -177,7 +174,8 @@ func look() -> void:
 	state.foot_side = 1.0
 	state.bank_slope = 0.30
 	ground.rotation.z = atan(state.bank_slope)
-	state.foot_ground_y = state.config.stop_foot_offset * tan(ground.rotation.z)
+	state.foot_support = state.foot_probe(state.foot_side)
+	state.foot_support.y += state.bank_slope * state.foot_support.x
 	advance(55)
 	balance.append(await shot(rear, frame_center, 44.0))
 	reset(6.0)
@@ -191,8 +189,8 @@ func look() -> void:
 	state.tilt = -0.24
 	ground.rotation = Vector3(state.tilt, 0, 0)
 	state.brakes.pressure = 1.0
-	state.brakes.brace = 0.9
-	state.brakes.front_load = 1.1
+	state.brake_force = Vector2(6.0, 2.0)
+	state.brakes.risk = 0.65
 	state.brakes.lift = 0.16
 	advance(35)
 	balance.append(await shot(Vector3(3.1, 1.2, 0.0), frame_center, 44.0))

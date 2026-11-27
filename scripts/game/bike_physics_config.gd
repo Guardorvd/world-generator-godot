@@ -268,8 +268,6 @@ const PATH := "res://resources/bike_physics.tres"
 @export var rock_deflect := 0.18
 ## Heading kick per unit lateral rock impulse divided by speed (rad / (m/s)).
 @export var rock_steer := 0.5
-## Maximum front rock/root heading deflection per substep (rad).
-@export var rock_steer_max := 0.08
 ## Minimum obstacle height above which side-slope rock/root kick deflects front steering (m).
 @export var rock_steer_min_bump := 0.035
 ## Maximum angular velocity kick added to yaw rate from a rock/root side strike (rad/s).
@@ -354,8 +352,6 @@ const PATH := "res://resources/bike_physics.tres"
 @export var cliff_grade := 1.5
 ## Frame pitch alignment rate on ground (1/s).
 @export var tilt_response := 25.0
-## Frame pitch alignment rate toward velocity vector in air (1/s).
-@export var tilt_response_air := 5.0
 ## Maximum airborne frame trajectory pitch angle (rad).
 @export var air_tilt_max := 0.55
 ## Speed floor used when computing airborne trajectory pitch angle (m/s).

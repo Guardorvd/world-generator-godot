@@ -15,6 +15,7 @@ const WHEEL_REACH := 0.16 # колесо — круг: земля меряетс
 const SUB_HZ := 120.0   # частота подшагов движения и подвески, Гц
 const MOUNT_RISE := 1.5 # сесть можно, если велосипед не выше и не ниже ног на столько, м
 const BODY_LEAD := 0.1  # с от нажатия до пика рывка (для сценариев замеров)
+const STOP_FOOT_FORWARD := 0.06 # вынос опорной стопы перед серединой рамы, м
 
 var config: BikePhysicsConfig = BikePhysicsConfig.current()
 
@@ -146,7 +147,7 @@ var crash_velocity := Vector3() # скорость велосипеда пере
 enum Stance { RIDING, TRACKSTAND, FOOT_DOWN }
 var stance := Stance.RIDING
 var foot_side := -1.0    # сторона опорной ноги на стоянке: -1 левая, +1 правая
-var foot_ground_y := 0.0 # высота опоры ноги относительно рамы y, м
+var foot_support := Vector3.ZERO # измеренная точка опоры в мировых координатах
 var _stop_timer := 0.0
 var _manual_reverse := false
 var _stance_driven := false
@@ -327,7 +328,7 @@ func reset_motion() -> void:
 	_ground_cross = 0.0
 	stance = Stance.RIDING
 	foot_side = -1.0
-	foot_ground_y = 0.0
+	foot_support = Vector3(x, y, z)
 	_stop_timer = 0.0
 	_manual_reverse = false
 	_stance_driven = false
@@ -678,9 +679,6 @@ var pump_force := 0.0      # помощь автопампа
 var grade_now := 0.0       # геометрический уклон земли вдоль курса (без подвески и тела), м на м
 var feel_acceleration := 0.0 # продольное ускорение по мировой скорости за внешний шаг: перепроекция рамы его не даёт
 var tick_time := 0.0       # длительность последнего внешнего шага, с
-## Продольная сила в пятнах контакта за внешний шаг (тяга минус тормоз): перенос нагрузки, которую принимает тело
-var contact_acceleration: float:
-	get: return drive_force - brake_force.x - brake_force.y
 ## Фактически приложенный тормоз за внешний шаг (обе оси, среднее по подшагам): единый сигнал для седока и камер.
 ## brake_deceleration — значение последнего подшага, для замеров.
 var brake_applied: float:
@@ -852,7 +850,7 @@ func _step_effort(want: float, dt: float) -> void:
 func _step_heading(f: Footing, free_now: bool, turn: float, dt: float, w: WorldData, heights: Heightfield) -> float:
 	var grip := f.grip
 	var h0 := heading
-	heading += _step_turn(turn, grip, dt, brake_deceleration / maxf(config.base_grip() * grip, 0.1))
+	heading += _step_turn(turn, grip, dt)
 	# Вплотную к стене колесо не поворачивается в неё, накопленного рывка тоже нет.
 	if free_now and not fits(x, z, heading, w, heights):
 		heading = h0
@@ -1081,7 +1079,7 @@ func _align(dt: float) -> float:
 
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Боковая инерция и торможение делят общий запас сцепления.
-func _step_turn(turn: float, grip: float, dt: float, _brake := 0.0) -> float:
+func _step_turn(turn: float, grip: float, dt: float) -> float:
 	var steer_rate := config.steer_center if is_zero_approx(turn) else config.steer_rate
 	steer = move_toward(steer, turn, dt * steer_rate)
 	var pace := absf(speed)
@@ -1154,13 +1152,22 @@ func _update_stance(dt: float, slope: float, heights: Heightfield) -> void:
 		_stop_timer += dt
 		if stance != Stance.FOOT_DOWN:
 			foot_side = (1.0 if _ground_cross > 0.0 else -1.0) if absf(_ground_cross) > 0.03 else (1.0 if lean < -0.01 else -1.0)
-		var right := Vector2(cos(heading), -sin(heading))
-		var fp := Vector2(x, z) + right * (foot_side * config.stop_foot_offset)
-		foot_ground_y = clampf(_surface(heights, fp.x, fp.y, y) - y, -config.stop_foot_max_reach, 0.22)
+		var support := foot_probe(foot_side)
+		support.y = clampf(_surface(heights, support.x, support.z, y), y - config.stop_foot_max_reach, y + 0.22)
+		foot_support = support
 		stance = Stance.FOOT_DOWN if _stop_timer >= config.stop_settle_time else Stance.TRACKSTAND
 	elif absf(speed) > config.stop_exit_speed or effort >= 0.05 or _manual_reverse or absf(slope) > config.stop_hold_grade or absf(_ground_cross) >= config.stop_dismount_cross:
 		_stop_timer = 0.0
 		stance = Stance.RIDING
+
+
+## Горизонтальная цель опорной стопы до замера поверхности.
+func foot_probe(side: float) -> Vector3:
+	var lateral := side * config.stop_foot_offset
+	var sin_heading := sin(heading)
+	var cos_heading := cos(heading)
+	return Vector3(x + cos_heading * lateral - sin_heading * STOP_FOOT_FORWARD, y,
+		z - sin_heading * lateral - cos_heading * STOP_FOOT_FORWARD)
 
 
 func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
