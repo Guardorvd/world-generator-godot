@@ -73,7 +73,7 @@ const S_FOOT_GRADE_X := 46 # world-space surface gradient at the planted foot
 const S_FOOT_GRADE_Z := 47
 const STATE_SIZE := 48
 const SURGE_STAND := 0.85 # насколько седок встаёт в рывке (1 — как на крутом подъёме)
-const TURN_IN_SWAY := 0.014 # плечи доворачиваются в поворот на резком движении руля, рад на долю хода руля в секунду
+const TURN_IN_SWAY := 0.007 # плечи доворачиваются в поворот на резком движении руля, рад на долю хода руля в секунду
 const STOP_LEAN := 0.085 # наклон велосипеда к опорной ноге на стоянке, рад (только вид)
 const ROCK := 0.09 # 12.3: раскачка велосипеда под седоком, который едет стоя, рад
 const LOAD_EFFORT := 0.95 # медленная тяжёлая работа на подъёме, независимо от частоты
@@ -344,7 +344,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	# 11.11: стоя на педалях седок тянет руль в такт: колесо чуть виляет навстречу раскачке рамы (только вид)
 	_cur[S_STEER] -= sin(_cur[S_CRANK]) * maxf(_stand, 0.0) * 0.07 * (1.0 - smoothstep(4.0, 9.0, absf(b.speed)))
 	_cur[S_STEER] += _cur[S_BALANCE] * 0.22 + sin(_wobble_phase) * _cur[S_TRACK] * 0.20
-	_cur[S_ROLL] += (-_cur[S_BALANCE] * 0.11 + sin(_wobble_phase) * _cur[S_TRACK] * 0.025) * (1.0 - smoothstep(0.0, 1.0, absf(_cur[S_STOP])))
+	_cur[S_ROLL] += (-_cur[S_BALANCE] * 0.05 + sin(_wobble_phase) * _cur[S_TRACK] * 0.025) * (1.0 - smoothstep(0.0, 1.0, absf(_cur[S_STOP])))
 	# Нагрев тормозных дисков от мощности трения колодок и охлаждение встречным потоком воздуха
 	var spd := absf(b.speed)
 	# 20.11: нагрев считает BrakeEffects (искры у диска); вид берёт его значение, свой расчёт — только на стендах без эффектов
@@ -414,7 +414,7 @@ func _pedal_angle(b: BikeRide, dt: float) -> float:
 	if b.airborne:
 		target = level
 	else:
-		var corner := smoothstep(0.08, 0.22, absf(b.lean))
+		var corner := smoothstep(0.15, 0.34, absf(b.lean))
 		target = lerp_angle(target, PI if b.lean < 0.0 else 0.0, corner)
 		var ready := -0.9 if _stop_side < 0.0 else PI - 0.9
 		target = lerp_angle(target, ready, smoothstep(0.0, 1.0, _stop))
@@ -474,7 +474,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var fork_rate := b.squash_fv if b.contact_f() else 0.0
 	var rear_rate := b.squash_rv if b.contact_r() else 0.0
 	var stroke_rate := maxf(fork_rate, rear_rate)
-	var activity := maxf(smoothstep(0.3, 1.8, stroke_rate), maxf(_hit_f, _hit_r))
+	var activity := maxf(smoothstep(0.65, 2.2, stroke_rate), maxf(_hit_f, _hit_r))
 	activity *= smoothstep(0.6, 3.2, absf(b.speed)) if not b.airborne else 0.0
 	_rough_stance = lerpf(_rough_stance, activity, Util.damp(5.0 if activity > _rough_stance else 3.0, dt)) if continuous else 0.0
 	stand_target = lerpf(stand_target, -0.72, _rough_stance)
@@ -549,11 +549,12 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	shift -= backwards * (1.0 - reverse_look) * 0.07
 	shift += brace * 0.055
 	_wobble_phase = fmod(_wobble_phase + dt * 3.4, TAU) if continuous else 0.0
-	var distress := maxf(b.instability, maxf(b.brakes.skid, smoothstep(0.04, 0.35, absf(b.slip))))
+	var distress := maxf(smoothstep(0.18, 0.85, b.instability), maxf(b.brakes.skid * smoothstep(0.12, 0.35, absf(b.slip)), smoothstep(0.18, 0.45, absf(b.slip))))
 	var fall_side := clampf(b.lateral_speed * 1.8 + b.slip * 1.5 - b.bank_slope * 2.0 - b.lean, -1.0, 1.0)
 	var catch_goal := distress * fall_side * (1.0 - _stop) if not b.airborne else 0.0
 	_cur[S_BALANCE] = lerpf(_prev[S_BALANCE], catch_goal, Util.damp(9.0, dt)) if continuous else 0.0
-	var side := clampf(sin(_gaze_phase * 0.37) * 0.007 * _stop - b.lean * 0.13 - b.slip * 0.10 + b.steer * 0.012 * moving + sin(_cur[S_CRANK]) * active_effort * (0.012 + up * 0.02), -0.068, 0.068)
+	var carve_side := smoothstep(0.05, 0.22, absf(b.lean))
+	var side := clampf(sin(_gaze_phase * 0.37) * 0.007 * _stop - b.lean * 0.13 * carve_side - b.slip * 0.10 + sin(_cur[S_CRANK]) * active_effort * (0.012 + up * 0.02), -0.068, 0.068)
 	side -= _cur[S_BALANCE] * 0.10 + sin(_wobble_phase) * _cur[S_TRACK] * 0.035
 	# В полёте компактная стойка; на отрыве (_takeoff) седок сначала разгибается вверх из подготовки и вытягивает руль,
 	# затем группируется в полёте, на приземлении глубоко гасит удар и в фазе восстановления (rebound) возвращается в стойку.

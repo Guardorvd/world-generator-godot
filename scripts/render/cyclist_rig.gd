@@ -156,7 +156,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	var double_pulse := 1.0 - cos(crank_angle * 2.0)
 	var body_look := look + look_lag
 	# Поворот: отделяем наклон велосипеда (roll) от положения тела и выделяем наружную/внутреннюю сторону.
-	var corner_right := clampf(-roll * 2.2 + motion.y * 6.5 - look * 0.55, -1.0, 1.0)
+	var corner_right := clampf(-roll * 1.65 * smoothstep(0.06, 0.20, absf(roll)) + motion.y * 5.0 - look * 0.45, -1.0, 1.0)
 	var base := _blend_base_pose(drive_effort, up, attack, brake)
 	# 1. Опора стоп на педали: стопа качается вокруг точки контакта с педалью, смещая голеностоп.
 	# Задний удар и приземление (rear_load), а также упор наружной ногой в повороте опускают пятку вниз.

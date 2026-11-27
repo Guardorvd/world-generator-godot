@@ -24,8 +24,10 @@ const PATH := "res://resources/bike_physics.tres"
 @export var climb_assist := 0.45
 ## Extra pedal surge acceleration from stamina burst (m/s^2).
 @export var surge_push := 2.5
+## Fraction by which surge_push tapers on steep uphill grades (10%..35% slope) to prevent hilltop launches.
+@export var surge_climb_taper := 0.65
 ## Extra low-speed climb push when boosting on steep hills (m/s^2).
-@export var boost_climb_push := 1.5
+@export var boost_climb_push := 0.8
 ## Speed up to which rear drive ignores slip cap on start (m/s).
 @export var start_pace := 3.0
 ## Time constant for pedaling effort rise (s).
@@ -153,13 +155,15 @@ const PATH := "res://resources/bike_physics.tres"
 ## Peak handlebar yaw rate capability at reference speed (rad/s).
 @export var max_turn_rate := 2.3
 ## Handlebar turn rate toward target steer command (1/s).
-@export var steer_rate := 7.5
+@export var steer_rate := 12.0
 ## Handlebar re-center rate when input released (1/s).
-@export var steer_center := 9.0
+@export var steer_center := 16.0
 ## Yaw response rate at low speed (1/s).
-@export var turn_response_slow := 12.0
+@export var turn_response_slow := 16.0
 ## Yaw response rate at high speed (1/s).
-@export var turn_response_fast := 6.5
+@export var turn_response_fast := 12.0
+## Multiplier on yaw damping rate when straightening out or reversing direction.
+@export var turn_release_boost := 1.5
 ## Speed where low-speed yaw response begins blending to high-speed (m/s).
 @export var turn_pace_low := 2.5
 ## Speed where high-speed yaw response completes blend (m/s).
@@ -175,29 +179,37 @@ const PATH := "res://resources/bike_physics.tres"
 ## Rate at which yaw rate bleeds down when front grip drops (rad/s^2).
 @export var yaw_drop := 8.0
 ## Visual handlebar fraction tracking raw steer input at speed.
-@export var steer_shown_input := 0.3
+@export var steer_shown_input := 0.68
 ## Visual handlebar travel fraction at high speed.
-@export var steer_shown_fast := 0.4
+@export var steer_shown_fast := 0.72
 ## Speed range over which visual handlebar travel reduces (m/s).
 @export var steer_shown_pace := Vector2(5.0, 15.0)
+## Exponent (< 1.0) enhancing low-angle visual handlebar readability for gentle corrections.
+@export var steer_shown_exp := 0.72
 ## Initial digital key steer magnitude on tap (monotonically ramps to 1.0).
-@export var key_steer_tap := 0.45
+@export var key_steer_tap := 0.28
 ## Hold duration for digital key steer to ramp from tap to 1.0 (s).
 @export var key_steer_ramp := 0.30
 ## Digital key steer rise smoothing rate (1/s).
-@export var key_steer_response := 24.0
+@export var key_steer_response := 22.0
 ## Digital key steer release smoothing rate (1/s).
-@export var key_steer_release := 16.0
+@export var key_steer_release := 18.0
 ## Digital key steer counter-steer reversal rate (1/s).
-@export var key_steer_reverse := 22.0
+@export var key_steer_reverse := 28.0
 ## Rate at which accumulated digital hold time decays after release (s/s).
 @export var key_hold_forget := 1.4
 ## Analog stick response exponent (1.0 linear, >1.0 finer center precision).
 @export var stick_steer_exp := 1.5
 ## Roll lean response rate on ground (1/s).
-@export var lean_response := 9.0
+@export var lean_response := 8.0
 ## Roll lean relaxation rate in air (1/s).
 @export var lean_response_air := 2.5
+## Lean share relative to equilibrium during gentle low-g bends (handlebar-led steering).
+@export var lean_gentle_share := 0.18
+## Net lateral acceleration where frame lean begins ramping from gentle to full carve share (m/s^2).
+@export var lean_carve_from := 2.0
+## Net lateral acceleration where frame lean reaches full carve share (m/s^2).
+@export var lean_carve_full := 6.5
 ## Lean angle share relative to equilibrium on banked terrain.
 @export var lean_share := 0.7
 ## Maximum cornering lean angle on banked terrain (rad).
@@ -207,21 +219,25 @@ const PATH := "res://resources/bike_physics.tres"
 ## Maximum cornering lean angle on flat terrain (rad).
 @export var lean_max_flat := 0.4
 ## Cross-slope threshold where banked lean bonus starts (m/m).
-@export var lean_bank_from := 0.05
+@export var lean_bank_from := 0.14
 ## Cross-slope where banked lean bonus reaches full weight (m/m).
-@export var lean_bank_full := 0.2
+@export var lean_bank_full := 0.36
 ## Cross-slope grade above which tires lose off-camber edge hold and slide downhill (m/m).
-@export var offcamber_slide_grade := 0.42
+@export var offcamber_slide_grade := 0.50
 ## Cross-slope grade above which unbanked side-slope traversal loses balance and crashes (m/m).
-@export var offcamber_crash_grade := 0.72
+@export var offcamber_crash_grade := 0.85
+## Maximum tire grip reduction factor at full off-camber slide (0..1; leaves residual edge bite).
+@export var offcamber_grip_loss := 0.72
+## Sustained duration above offcamber_crash_grade required before balance loss triggers crash (s).
+@export var offcamber_crash_grace := 0.35
 
 @export_group("Suspension & Obstacles")
 ## Wheel suspension spring stiffness (1/s^2).
 @export var spring_k := 130.0
 ## Suspension compression damping rate (1/s).
-@export var spring_damp_comp := 16.0
+@export var spring_damp_comp := 23.0
 ## Suspension rebound damping rate (1/s).
-@export var spring_damp_rebound := 26.0
+@export var spring_damp_rebound := 34.0
 ## Maximum upward wheel travel / compression sag (m).
 @export var sag_max := 0.16
 ## Maximum downward wheel extension droop (m).
@@ -254,6 +270,10 @@ const PATH := "res://resources/bike_physics.tres"
 @export var rock_steer := 0.5
 ## Maximum front rock/root heading deflection per substep (rad).
 @export var rock_steer_max := 0.08
+## Minimum obstacle height above which side-slope rock/root kick deflects front steering (m).
+@export var rock_steer_min_bump := 0.035
+## Maximum angular velocity kick added to yaw rate from a rock/root side strike (rad/s).
+@export var rock_yaw_kick_max := 0.9
 ## Contact edge climb angle below which wheel rolls cleanly without impact (rad).
 @export var impact_angle := 0.12
 ## Front wheel longitudinal speed loss triggering endo crash at reference load (m/s).
@@ -354,12 +374,18 @@ const PATH := "res://resources/bike_physics.tres"
 @export var instability_rise := 6.0
 ## Rate at which rider instability recovers toward zero (1/s).
 @export var instability_decay := 2.2
+## Slip angle deadzone below which normal cornering does not raise instability (rad).
+@export var instab_slip_from := 0.16
+## Wheel impact threshold below which small twigs/bumps do not raise instability (m/s).
+@export var instab_impact_from := 1.8
+## Post-touchdown suspension settle window suppressing micro-rebound detaches (s).
+@export var landing_settle := 0.22
 
 @export_group("Pump & Profile")
 ## Longitudinal half-span for measuring terrain profile curvature (m).
 @export var profile_span := 1.5
 ## Lateral half-span for measuring road camber/bank slope (m).
-@export var bank_span := 0.7
+@export var bank_span := 0.5
 ## Lateral bank slope smoothing rate (1/s).
 @export var bank_response := 15.0
 ## Maximum track bank/cross slope magnitude used in physics (m/m).
@@ -395,7 +421,7 @@ const PATH := "res://resources/bike_physics.tres"
 ## Local wave slope range mapping Q to absorption vs manual lift.
 @export var pump_wave_press := 0.06
 ## Passive leg crest absorption share without holding pump button.
-@export var pump_passive := 0.25
+@export var pump_passive := 0.32
 ## Maximum local wave slope up to which passive leg crest absorption activates (m/m).
 @export var pump_passive_max_grade := 0.35
 

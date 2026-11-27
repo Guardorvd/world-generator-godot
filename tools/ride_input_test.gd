@@ -64,7 +64,7 @@ func run() -> void:
 			held = controls.bike_steer(1.0, 1.0 / 60, pace)
 			if held < prev - 0.0001:
 				monotonic = false
-		check(first > 0.1 and monotonic and held > 0.95, "монотонное и быстрое нарастание руля на %.0f м/с (%.2f)" % [pace, held])
+		check(first > 0.05 and monotonic and held > 0.95, "монотонное и быстрое нарастание руля на %.0f м/с (%.2f)" % [pace, held])
 		for i in 45: held = controls.bike_steer(1.0, 1.0 / 60, pace)
 		check(held > 0.99, "удержание дожимает руль до полного")
 		var reverse := controls.bike_steer(-1.0, 1.0 / 60, pace)
@@ -93,7 +93,7 @@ func run() -> void:
 	controls.reset()
 	var early := 0.0
 	for i in 6: early = controls.bike_steer(1.0, 1.0 / 60, 16.0)
-	check(early > 0.35 and early <= 0.75, "нажатие за 100 мс даёт предсказуемый отклик без провала (%.2f)" % early)
+	check(early > 0.22 and early <= 0.55, "нажатие за 100 мс даёт предсказуемый отклик без провала (%.2f)" % early)
 	# частые нажатия в одну сторону (0,25 с нажато, 0,12 с отпущено) ведут дугу, а не начинают её заново
 	controls.reset()
 	var pulsed := 0.0
@@ -124,6 +124,9 @@ func run() -> void:
 		"нажатие тормоза подтормаживает (%.2f), удержание — полный тормоз, газ и аналог как есть" % brake_tap)
 	var pose := BikeRide.new()
 	pose.speed = 12.0
+	for i in 120: pose._step_pose(0.0, 2.0, 1.0 / 60)
+	var gentle_lean := rad_to_deg(absf(pose.lean))
+	check(gentle_lean < 5.0, "мягкая дуга ведётся рулём почти без завала рамы (%.1f°)" % gentle_lean)
 	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
 	var flat_lean := rad_to_deg(pose.lean)
 	check(flat_lean > 12.0 and flat_lean <= rad_to_deg(pose.config.lean_max_flat) + 0.1, "сдержанный крен в быстром повороте на ровном (%.1f°)" % flat_lean)

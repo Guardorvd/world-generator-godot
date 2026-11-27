@@ -152,6 +152,8 @@ var _manual_reverse := false
 var _stance_driven := false
 var pitch_vel := 0.0     # угловая скорость тангажа рамы в полёте, рад/с
 var instability := 0.0   # потеря равновесия от сноса, удара, стоппи или косогора, 0..1
+var _offcamber_time := 0.0 # время непрерывной езды по критическому косогору до срыва, с
+var _land_settle := 0.0    # окно усадки подвески после касания земли, с
 var vertical_g := 0.0  # нагрузка профиля земли вдоль пути в g: впадина сжимает (+), гребень разгружает (−)
 var bank_slope := 0.0  # наклон полотна поперёк: рост высоты на метр вправо от курса, сглаженный
 var _crest_curve := 0.0 # кривизна профиля на базе осей (HUB), 1/м (для отрыва на гребне)
@@ -331,6 +333,8 @@ func reset_motion() -> void:
 	_stance_driven = false
 	pitch_vel = 0.0
 	instability = 0.0
+	_offcamber_time = 0.0
+	_land_settle = 0.0
 	lateral_speed = 0.0
 	brakes.reset()
 	grip_usage = 0.0
@@ -486,11 +490,21 @@ func _read_surface(heights: Heightfield, dt: float) -> void:
 	var g0 := _surface(heights, x, z, y)
 	var curve := (_surface(heights, x + ahead.x, z + ahead.y, y) + _surface(heights, x - ahead.x, z - ahead.y, y) - 2.0 * g0) / (config.profile_span * config.profile_span)
 	var wheel_ahead := Vector2(-sin(heading), -cos(heading)) * HUB
-	_crest_curve = (_surface(heights, x + wheel_ahead.x, z + wheel_ahead.y, y) + _surface(heights, x - wheel_ahead.x, z - wheel_ahead.y, y) - 2.0 * g0) / (HUB * HUB)
+	var c_f := (_surface(heights, x + wheel_ahead.x * 2.0, z + wheel_ahead.y * 2.0, y) + g0) * 0.5
+	var c_r := (_surface(heights, x - wheel_ahead.x * 2.0, z - wheel_ahead.y * 2.0, y) + g0) * 0.5
+	var c_0 := (_surface(heights, x + wheel_ahead.x, z + wheel_ahead.y, y) + _surface(heights, x - wheel_ahead.x, z - wheel_ahead.y, y)) * 0.5
+	_crest_curve = (c_f + c_r - 2.0 * c_0) / (HUB * HUB)
 	var goal := clampf(speed * speed * curve / config.ground_gravity, config.g_min, config.g_max)
 	vertical_g = lerpf(vertical_g, goal, Util.damp(config.g_response, dt))
 	var right := Vector2(cos(heading), -sin(heading)) * config.bank_span
-	var cross := (_surface(heights, x + right.x, z + right.y, y) - _surface(heights, x - right.x, z - right.y, y)) / (2.0 * config.bank_span)
+	var g_r := _surface(heights, x + right.x, z + right.y, y)
+	var g_l := _surface(heights, x - right.x, z - right.y, y)
+	var cross_r := (g_r - g0) / config.bank_span
+	var cross_l := (g0 - g_l) / config.bank_span
+	var cross := (cross_l + cross_r) * 0.5
+	# Крутая вогнутая выемка у склона слева/справа не должна превращать полотно в ложный контруклон.
+	if g_l + g_r - 2.0 * g0 > 0.08 * config.bank_span and maxf(absf(cross_l), absf(cross_r)) > 0.50:
+		cross = cross_r if absf(cross_r) < absf(cross_l) else cross_l
 	_ground_cross = cross
 	bank_slope = lerpf(bank_slope, clampf(cross, -config.bank_slope_max, config.bank_slope_max), Util.damp(config.bank_response, dt))
 
@@ -506,9 +520,10 @@ func _lifts(heights: Heightfield) -> bool:
 	# 30.10: на волне седок гасит ногами часть вертикальной скорости, набранной на подъёме гребня (pump_absorb_v):
 	# без этого на 12+ м/с каждый подъём волны 5–6 м выбрасывал велосипед в полёт
 	var lift_v := vy - _pump_absorb_v
+	var settle_margin := config.stretch_max * 0.75 * clampf(_land_settle / maxf(config.landing_settle, 0.01), 0.0, 1.0)
 	for t: float in config.look_times:
 		var fly := y + lift_v * t - config.air_gravity * t * t * 0.5
-		if fly - _contact(x + fx * t, z + fz * t, heights) > config.lift_threshold + _pump_reach:
+		if fly - _contact(x + fx * t, z + fz * t, heights) > config.lift_threshold + _pump_reach + settle_margin:
 			return true
 	return false
 
@@ -571,9 +586,10 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 		if clear:
 			local_grade = (levels[3] - levels[1]) / (2.0 * span)
 		if clear and not manual:
-			# 20.11: пассивный седок — тот же гребень, только на пологих волнах без крутых спусков и дропов
-			if absf(local_grade) <= config.pump_passive_max_grade and absf(levels[2] - levels[4]) < 0.45 * span:
-				var crest := smoothstep(0.01, 0.07, absf((levels[1] + levels[3]) * 0.5 - levels[2])) * smoothstep(2.0, 5.0, speed)
+			# 20.11: пассивный седок гасит гребни на пологих холмах, с плавным спадом на крутом уклоне
+			var grade_keep := 1.0 - smoothstep(config.pump_passive_max_grade, config.pump_passive_max_grade + 0.25, absf(local_grade))
+			if grade_keep > 0.001 and absf(levels[2] - levels[4]) < 0.45 * span:
+				var crest := smoothstep(0.01, 0.07, absf((levels[1] + levels[3]) * 0.5 - levels[2])) * smoothstep(2.0, 5.0, speed) * grade_keep
 				crest *= smoothstep(0.03, 0.12, maxf(levels[2], levels[3]) - levels[4])
 				_pump_reach = config.pump_reach * config.pump_passive * crest
 				_pump_absorb_v = config.pump_absorb_v * config.pump_passive * crest
@@ -925,18 +941,23 @@ func _step_pose(throttle: float, lateral: float, dt: float) -> void:
 		pitch_vel = 0.0
 		var tilt_goal := atan2((ground_f - squash_f) - (ground_r - squash_r), 2.0 * HUB) + unweight * config.pull_pitch
 		tilt = lerpf(tilt, tilt_goal, Util.damp(config.tilt_response, dt))
-	var instab_goal := 0.0 if airborne else clampf(absf(slip) / config.slide_crash * 0.75 + brakes.risk * 0.65 + _offcamber_slide() * 0.55 + clampf(wheel_impact.length() / 2.5, 0.0, 0.6), 0.0, 1.0)
+	var slip_stress := smoothstep(config.instab_slip_from, config.slide_crash * 0.85, absf(slip)) * 0.85
+	var hit_stress := smoothstep(config.instab_impact_from, config.instab_impact_from + 2.8, wheel_impact.length()) * 0.65
+	var camber_warn := clampf(_offcamber_time / maxf(config.offcamber_crash_grace, 0.05), 0.0, 1.0) * 0.45
+	var instab_goal := 0.0 if airborne else clampf(slip_stress + brakes.risk * 0.65 + _offcamber_slide() * 0.55 + hit_stress + camber_warn, 0.0, 1.0)
 	var instab_rate := config.instability_rise if instab_goal > instability else config.instability_decay
 	instability = lerpf(instability, instab_goal, Util.damp(instab_rate, dt))
 	# Крен от реального поворота, а не от кнопки: на месте не заваливаемся.
-	# Шин мало для крена на вираже: к ним добавлена тяжесть поперёк полотна; на прямом траверсе они гасят друг друга.
-	# На наклонном полотне (вираж, контруклон) крен полный — склон рядом, и угол читается; на ровной дороге
-	# тот же угол выглядел завалом, поэтому там он вдвое меньше и ограничен.
+	# На лёгкой коррекции курс задаёт руль почти без завала рамы; по мере роста бокового ускорения
+	# и на настоящих контруклонах/виражах крен плавно раскрывается до полного карвинга.
 	var cross := clampf(bank_slope, -config.bank_slope_max, config.bank_slope_max)
 	var bank_accel := config.ground_gravity * cross / sqrt(1.0 + cross * cross) * smoothstep(config.side_hold_speed * 0.5, config.side_hold_speed * 2.0, absf(speed))
+	var lat_net := lateral + bank_accel
 	var banked := smoothstep(config.lean_bank_from, config.lean_bank_full, absf(cross))
+	var carve := smoothstep(config.lean_carve_from, config.lean_carve_full, absf(lat_net))
+	var target_share := lerpf(config.lean_gentle_share, lerpf(config.lean_share_flat, config.lean_share, banked), carve)
 	var lean_max := lerpf(config.lean_max_flat, config.lean_max, banked)
-	var lean_goal := 0.0 if airborne else clampf(atan((lateral + bank_accel) / config.ground_gravity) * lerpf(config.lean_share_flat, config.lean_share, banked), -lean_max, lean_max)
+	var lean_goal := 0.0 if airborne else clampf(atan(lat_net / config.ground_gravity) * target_share, -lean_max, lean_max)
 	lean = lerpf(lean, lean_goal, Util.damp(config.lean_response_air if airborne else config.lean_response, dt))
 
 	# углы держим в пределах оборота, чтобы за долгую езду они не теряли точность
@@ -981,13 +1002,17 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		var s := clampf(bank_slope, -config.bank_slope_max, config.bank_slope_max)
 		var slide_camber := _offcamber_slide()
 		if absf(s) > config.offcamber_crash_grade and absf(speed) > 1.5 and _bank_press() < absf(s) * 0.5:
-			_crash(vy, Vector3(-cos(heading) * s, 1.0, sin(heading) * s).normalized(), CrashCause.FALL)
-			return 0.0
+			_offcamber_time += dt
+			if _offcamber_time >= config.offcamber_crash_grace:
+				_crash(vy, Vector3(-cos(heading) * s, 1.0, sin(heading) * s).normalized(), CrashCause.FALL)
+				return 0.0
+		else:
+			_offcamber_time = maxf(0.0, _offcamber_time - dt * 2.5)
 		var hold := smoothstep(config.side_hold_speed * 0.5, config.side_hold_speed * 2.0, absf(speed))
 		if slide_camber > 0.0:
 			hold = maxf(hold, smoothstep(0.25, 1.2, absf(speed)))
 		lateral_speed -= config.ground_gravity * s / sqrt(1.0 + s * s) * hold * dt
-		var bite := 1.0 - 0.9 * slide_camber
+		var bite := 1.0 - config.offcamber_grip_loss * slide_camber
 		var caps := _side_caps(grip)
 		var base := config.base_grip() * config.rider_grip * grip * bite
 		var cap_f := base * side_f * slick_f
@@ -1009,6 +1034,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		use_r = clampf(force_r.length() / maxf(cap_r, 0.01), 0.0, 1.0) if cap_r > 0.001 else (1.0 if absf(need) > 0.01 else 0.0)
 		grip_usage = clampf(Vector2(brake_deceleration, lateral).length() / maxf(cap_f + cap_r, 0.1), 0.0, 1.0)
 	else:
+		_offcamber_time = maxf(0.0, _offcamber_time - dt * 4.0)
 		grip_usage = 0.0
 		_side_use = 0.0
 		use_f = 0.0
@@ -1036,7 +1062,7 @@ func _rear_long() -> float:
 
 ## Один запас для запроса руля и удержания траектории; тормоз и тяга уже заняли свою часть.
 func _side_caps(grip: float) -> Vector2:
-	var bite := 1.0 - 0.9 * _offcamber_slide()
+	var bite := 1.0 - config.offcamber_grip_loss * _offcamber_slide()
 	var base := config.base_grip() * config.rider_grip * grip * bite
 	var cap_f := base * side_f * slick_f if contact_f() else 0.0
 	var cap_r := base * side_r * slick_r if contact_r() else 0.0
@@ -1079,7 +1105,9 @@ func _step_turn(turn: float, grip: float, dt: float, _brake := 0.0) -> float:
 		if contact_f():
 			slide = maxf(0.0, absf(wanted) - limit) * config.slide_yaw * (1.0 - smoothstep(config.slide_slip.x, config.slide_slip.y, slip * signf(wanted)))
 		wanted = clampf(wanted, -limit - slide, limit + slide)
-	_yaw_rate = move_toward(_yaw_rate, wanted, response * dt)
+	var straightening := absf(wanted) < absf(_yaw_rate) or wanted * _yaw_rate < 0.0
+	var yaw_resp := response * (config.turn_release_boost if straightening and not airborne else 1.0)
+	_yaw_rate = lerpf(_yaw_rate, wanted, Util.damp(yaw_resp, dt))
 	if not airborne and pace > 1.0:
 		_yaw_rate = move_toward(_yaw_rate, clampf(_yaw_rate, -limit - slide, limit + slide), config.yaw_drop * dt)
 	else:
@@ -1093,7 +1121,9 @@ func steer_shown() -> float:
 	var rate := config.max_turn_rate * clampf(pace / 1.8, 0.0, 1.0) / (1.0 + pace * 0.035)
 	var actual := clampf(-_yaw_rate * (1.0 if speed >= 0.0 else -1.0) / maxf(rate, 0.2), -1.0, 1.0)
 	var moving := smoothstep(0.5, 3.0, pace) * (0.0 if airborne else 1.0)
-	return lerpf(steer, lerpf(actual, steer, config.steer_shown_input), moving) * lerpf(1.0, config.steer_shown_fast, smoothstep(config.steer_shown_pace.x, config.steer_shown_pace.y, pace))
+	var shown := lerpf(steer, lerpf(actual, steer, config.steer_shown_input), moving)
+	shown = signf(shown) * pow(clampf(absf(shown), 0.0, 1.0), config.steer_shown_exp)
+	return shown * lerpf(1.0, config.steer_shown_fast, smoothstep(config.steer_shown_pace.x, config.steer_shown_pace.y, pace))
 
 
 ## Опора держит мелкие неровности и изломы; отрыв — только с края или когда рельеф впереди
@@ -1157,19 +1187,24 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 		_hop_front_v = _hop_front_v if armed else 0.0
 		_takeoff_hop()
 	if airborne:
+		_land_settle = 0.0
 		air_time += dt
 		y += (vy - config.air_gravity * dt * 0.5) * dt
 		vy -= config.air_gravity * dt
 		if y <= g:
 			_land(g, heights)
 	else:
+		_land_settle = maxf(0.0, _land_settle - dt)
 		var fly := y + (vy - config.air_gravity * dt * 0.5) * dt
 		var s0 := clampf(vy / maxf(absf(speed), 0.1), -config.cliff_grade, config.cliff_grade)
 		var crest_n := 1.0 / sqrt(1.0 + s0 * s0 + _ground_cross * _ground_cross) + speed * speed * _crest_curve / config.ground_gravity
-		var crest_unload := not (_on_f >= 0 and _on_r < 0) and _pump_absorb_v <= 0.01 and absf(speed) >= config.detach_min_speed and crest_n < config.detach_normal_min
+		var crest_unload := _land_settle <= 0.0 and not (_on_f >= 0 and _on_r < 0) and _pump_absorb_v <= 0.01 and absf(speed) >= config.detach_min_speed and crest_n < config.detach_normal_min
 		# Земля уходит вниз быстрее падения: отрываемся с края сразу, при разгрузке на гребне или когда
 		# впереди рельеф уходит из-под колёс; иначе прижимаемся к земле.
 		if fly > g and (fly - g > config.drop_step or crest_unload or _lifts(heights)):
+			if _pump_absorb_v > 0.0 and vy > 0.0:
+				vy = maxf(0.0, vy - _pump_absorb_v * 0.45)
+				fly = maxf(g + 0.001, y + (vy - config.air_gravity * dt * 0.5) * dt)
 			airborne = true
 			air_time = dt
 			pitch_vel = clampf((vy - _gv_r) * 0.15, -1.0, 1.2)
@@ -1297,13 +1332,14 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		var velocity_before := horizontal_velocity()
 		var right := Vector2(cos(heading), -sin(heading)) * config.rock_probe
 		var push := 0.0
-		if touch_f and of > config.slick_bump:
+		if touch_f and of > config.rock_steer_min_bump:
 			var rock_f := (heights.obstacles.bump_at(x + fx + right.x, z + fz + right.y) - heights.obstacles.bump_at(x + fx - right.x, z + fz - right.y)) / (2.0 * config.rock_probe)
 			var up_f := clampf(vf - _gv_f, 0.0, config.kick_max)
-			push += rock_f * up_f
-			var kick := clampf(rock_f * up_f * config.rock_steer / maxf(absf(speed), 3.0) * signf(speed), -config.rock_steer_max, config.rock_steer_max)
-			heading += kick
-			_yaw_rate += kick / maxf(dt, 0.005) * 0.15
+			var bump_scale := smoothstep(config.rock_steer_min_bump, config.rock_steer_min_bump + 0.05, of)
+			push += rock_f * up_f * bump_scale
+			var yaw_kick := clampf(rock_f * up_f * config.rock_steer * bump_scale / maxf(absf(speed), 3.0) * signf(speed) * 4.0, -config.rock_yaw_kick_max, config.rock_yaw_kick_max)
+			_yaw_rate += yaw_kick
+			fork_side_impulse += clampf(-yaw_kick * 0.45, -1.2, 1.2)
 		if touch_r and orr > config.slick_bump:
 			var rock_r := (heights.obstacles.bump_at(x - fx + right.x, z - fz + right.y) - heights.obstacles.bump_at(x - fx - right.x, z - fz - right.y)) / (2.0 * config.rock_probe)
 			push += rock_r * clampf(vr - _gv_r, 0.0, config.kick_max)
@@ -1558,6 +1594,7 @@ func _takeoff_hop() -> void:
 	_auto_hop = -1.0
 	_hop_buf = 0.0
 	_hop_wait = config.hop_buffer
+	_land_settle = 0.0
 	airborne = true
 	air_time = 0.0
 	pitch_vel = 0.5
@@ -1641,20 +1678,21 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	var request := 0.0
 	if throttle > 0.0:
 		var power := surge if surge >= 0.0 else (1.0 if boost else 0.0)
+		var hill := slope if is_nan(ground_slope) else ground_slope
+		var surge_hill := 1.0 - smoothstep(0.10, 0.35, maxf(hill, 0.0)) * config.surge_climb_taper
 		var cruise := top * throttle
-		top *= lerpf(1.0, config.boost_mult, power) * throttle
+		top *= lerpf(1.0, config.boost_mult, power * surge_hill) * throttle
 		var ratio := maxf(speed, 0.0) / maxf(top, 0.1)
 		# Уверенный старт и плавное ослабление тяги; скорость спуска не срезается до top.
 		var push := config.pedal_accel * config.pedal_push_mult
 		var taper := maxf(0.1, push / (rolling + drag * top * top) - 1.0)
 		drive = push / (1.0 + taper * ratio * ratio) * effort
 		# 15.0: в гору педали тянут сильнее — по истинному уклону земли, а не корням/камням.
-		var hill := slope if is_nan(ground_slope) else ground_slope
 		var uphill := config.ground_gravity * maxf(hill, 0.0) / (1.0 + hill * hill)
 		drive += config.climb_assist * uphill * effort * (1.0 - smoothstep(0.8, 1.0, maxf(speed, 0.0) / maxf(cruise, 0.1)))
 		if surge > 0.0:
-			# 15.0: прилив сил — заметный толчок, гаснет у поднятой крейсерской скорости.
-			drive += config.surge_push * surge * effort * (1.0 - smoothstep(0.85, 1.0, ratio))
+			# 15.0: прилив сил — заметный толчок, на крутом подъёме ослабевает, чтобы не выстреливать с вершины.
+			drive += config.surge_push * surge * effort * surge_hill * (1.0 - smoothstep(0.85, 1.0, ratio))
 		if power > 0.0:
 			# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
 			drive += config.boost_climb_push * power * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * effort * grip
@@ -1838,7 +1876,10 @@ func _land(g: float, heights: Heightfield) -> void:
 		lateral_speed *= keep
 	instability = maxf(instability, clampf((felt - config.soft_impact * 0.45) / maxf(config.crash_impact - config.soft_impact * 0.45, 1.0) + absf(tilt - atan(support_grade)) * 0.35, 0.0, 1.0))
 	pitch_vel = 0.0
+	_land_settle = config.landing_settle * smoothstep(1.2, 4.5, impact)
 	vy = gradient.dot(horizontal_velocity())
+	if vy > 0.0 and impact > 1.2:
+		vy *= lerpf(1.0, 0.35, smoothstep(1.2, 4.5, impact))
 	_coyote = config.hop_coyote
 	# Короткие подскоки и заранее нажатый прыжок не блокируют управление.
 	if air_time > config.hop_wait_air:
