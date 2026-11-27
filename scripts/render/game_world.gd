@@ -1795,6 +1795,9 @@ func _physics_process(dt: float) -> void:
 		if not _opening:
 			hud.ride_log.bike_events(bike.landing_info, crashed, Vector2(player.x, player.z), speed_before, time)
 		if crashed:
+			bike_view.watch_requested = false
+			bike_view.tick(bike, dt, fw, false)
+			bike_view.draw(1.0, false)
 			_crash()
 	else:
 		hud.ride_log.bike_events({}, false, Vector2(player.x, player.z), 0.0, time)
@@ -1887,7 +1890,8 @@ func _snap() -> void:
 		brake_effects.clear()
 	_tick_yaw = 0.0
 	_tick_pitch = 0.0
-	bike_view.snap(bike)
+	if not crash.active():
+		bike_view.snap(bike)
 
 
 ## Вечером окна разгораются, а ближайший костёр (до 80 м) освещает дома вокруг. Один источник света
@@ -2737,7 +2741,8 @@ func toggle_flashlight() -> void:
 func _update_camera(alpha: float, dt: float) -> void:
 	camera_controller.update(alpha, dt, player, bike, camera, time, _opening, _moving,
 		crash.active(), photo != null and photo.active,
-		photo.fov(services.settings.fov) if photo != null else services.settings.fov, bike_view.view_squash())
+		photo.fov(services.settings.fov) if photo != null else services.settings.fov, bike_view.view_squash(),
+		bike_view.position.y if bike.riding else NAN)
 
 
 ## Хруст покрытия под тормозом: уверенное торможение в пределах сцепления слышно мягко, насыщение шин (тормоз

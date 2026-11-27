@@ -104,7 +104,8 @@ const ABSORB_CROUCH := 0.06
 const ABSORB_STAND := 0.4 # доля снижения стойки на гребне
 
 # Скорости реакции и затухания в 1/с. Отклик конечностей опережает корпус, затем следует голова.
-const AXLE_LOAD_RESPONSE := 28.0
+const AXLE_LOAD_ATTACK := 55.0
+const AXLE_LOAD_RELEASE := 22.0
 const TORSO_RESPONSE := 15.0
 const HEAD_NOD_RESPONSE := 9.5
 const WHEEL_HIT_DECAY := 9.0
@@ -135,6 +136,10 @@ var _bar_kick := Vector2.ZERO # steering deflection and angular velocity
 var _landing_bias := 0.0 # positive for a nose-first touchdown
 var _stand := 0.0
 var _was_airborne := false
+var _air_pose := 0.0
+var _air_body_offset := 0.0
+var _prev_ground_mid := 0.0
+var _prev_lift_mid := 0.0
 var _takeoff := 0.0
 var _jump_prep := 0.0
 var _recovery := 0.0
@@ -147,8 +152,6 @@ var _side_vel := 0.0
 var _crouch_vel := 0.0
 var _sway_vel := 0.0
 var _head_nod_vel := 0.0
-var _impact_crouch := 0.0
-var _impact_crouch_vel := 0.0
 var _pack_bag: Node3D
 var _fork_lowers: Array[Node3D] = []
 var _fork_arch_rest := Vector3.ZERO
@@ -163,6 +166,7 @@ var _stop := 0.0
 var _stop_side := -1.0
 var _still_time := 0.0
 var _coast_time := 0.0
+var _coast_level := false
 var _calm_time := 0.0
 var _gaze_amp := 0.0
 var _gaze_phase := 0.0
@@ -379,14 +383,26 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 		var spare := _prev
 		_prev = _cur
 		_cur = spare
+	var continuous := _has_state and _riding and b.riding
 	_cur[S_PLACEMENT] = maxf(0.0, _prev[S_PLACEMENT] - dt / 0.15)
 	_cur[S_X] = b.x
 	_cur[S_SPEED] = absf(b.speed) if b.riding and not b.airborne else absf(b.speed) * 0.8
+	if b.airborne:
+		if _has_state and not _was_airborne:
+			_air_body_offset += _prev_ground_mid - (_prev_lift_mid if b.hop_used else 0.0)
+		_air_body_offset = lerpf(_air_body_offset, 0.0, Util.damp(12.0, dt)) if _has_state else 0.0
+	else:
+		_air_body_offset = lerpf(_air_body_offset, 0.0, Util.damp(16.0, dt)) if _has_state else 0.0
+		_prev_ground_mid = (b.ground_f + b.ground_r) * 0.5
+		_prev_lift_mid = (b.lift_f + b.lift_r) * 0.5
 	# рама — посередине между концами подвесок, каждый на своём ходе над точкой касания колеса
-	_cur[S_BODY_Y] = b.y + (b.ground_f + b.ground_r) * 0.5 - (b.squash_f + b.squash_r) * 0.5
+	_cur[S_BODY_Y] = b.y + (b.ground_f + b.ground_r) * 0.5 - (b.squash_f + b.squash_r) * 0.5 + _air_body_offset
 	_cur[S_Z] = b.z
 	_cur[S_TILT] = b.tilt
 	var cfg := b.config if b.config != null else BikePhysicsConfig.current()
+	var pull := b.unweight * cfg.pull_pitch if not b.airborne and b.tick_time > 0.0 else 0.0
+	if absf(pull) > 0.0001:
+		_cur[S_BODY_Y] += absf(sin(pull)) * BikeRide.HUB
 	var braking := clampf(b.brake_applied / cfg.brake_decel, 0.0, 1.0) if not b.airborne else 0.0
 	_cur[S_BRAKE] = maxf(b.brakes.pressure, braking) if not b.airborne else 0.0
 	# Pitch about the front contact point while the rear wheel unloads.
@@ -398,11 +414,19 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_HEADING] = b.heading
 	_cur[S_ROLL] = b.lean
 	_cur[S_SQUASH] = b.squash
-	_cur[S_SQUASH_F] = b.squash_f
-	_cur[S_SQUASH_R] = b.squash_r
+	var sq_f := b.squash_f
+	var sq_r := b.squash_r
+	if not b.airborne and b.tick_time > 0.0 and b.contact_f() and b.contact_r():
+		var terrain_tilt := atan2((b.ground_f - sq_f) - (b.ground_r - sq_r), 2.0 * BikeRide.HUB)
+		var tilt_err := clampf(clampf(terrain_tilt - (b.tilt - pull), -0.09, 0.09) * BikeRide.HUB, -0.05, 0.05)
+		sq_f += tilt_err
+		sq_r -= tilt_err
+	_cur[S_SQUASH_F] = sq_f
+	_cur[S_SQUASH_R] = sq_r
 	_update_wheel_spin(b, dt)
 	_last_wheel = b.wheel
 	_cur[S_STEER] = b.steer_shown() # 13.11: руль на модели — фактический поворот, а не команда (BikeRide.steer_shown)
+	_update_foot_support(b, dt, continuous, cfg.stop_settle_time)
 	_cur[S_CRANK] = wrapf(_pedal_angle(b, dt), -PI, PI) if _has_state else b.crank
 	_last_crank = b.crank
 	_bike_id = b.get_instance_id()
@@ -418,6 +442,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	# Отдача руля от удара переднего колеса — только вид: руль дёргается в сторону, курс не меняется.
 	_cur[S_STEER] += _bar_kick.x
 	_cur[S_STEER] += _cur[S_BALANCE] * 0.22
+	_cur[S_STEER] = clampf(_cur[S_STEER], -1.0, 1.0)
 	_cur[S_ROLL] -= _cur[S_BALANCE] * 0.05 * (1.0 - smoothstep(0.0, 1.0, absf(_cur[S_STOP])))
 	# Нагрев тормозных дисков от мощности трения колодок и охлаждение встречным потоком воздуха
 	var spd := absf(b.speed)
@@ -480,10 +505,16 @@ func _pedal_angle(b: BikeRide, dt: float) -> float:
 	var driving := not b.airborne and (absf(step) > 0.00001 or b.effort > 0.08)
 	_coast_time = _coast_time + dt if idle_life and not driving and not b.airborne else 0.0
 	if b._manual_reverse and not b.airborne:
+		_coast_level = sin(angle) < 0.0
 		return angle + minf(0.0, b.speed) * dt / (BikeRide.WHEEL_R * maxf(1.0, b.gear))
 	if driving:
+		_coast_level = sin(angle) < 0.0
 		return angle + step
-	var level := PI * 0.5 + roundf((angle - PI * 0.5) / PI) * PI
+	if _coast_level and sin(angle) > 0.18:
+		_coast_level = false
+	elif not _coast_level and sin(angle) < -0.18:
+		_coast_level = true
+	var level := -PI * 0.5 if _coast_level else PI * 0.5
 	var target := lerp_angle(angle, level, smoothstep(0.22, 0.40, _coast_time))
 	if b.airborne:
 		target = level
@@ -499,20 +530,19 @@ func _pedal_angle(b: BikeRide, dt: float) -> float:
 ## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
 func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, braking: float) -> void:
 	var continuous := _has_state and _riding and b.riding
+	_air_pose = lerpf(_air_pose, 1.0 if b.airborne else 0.0, Util.damp(14.0 if b.airborne else 18.0, dt)) if continuous else (1.0 if b.airborne else 0.0)
+	var air_keep := 1.0 - _air_pose
 	# продольное ускорение по мировой скорости за тот же такт, что и у камеры (BikeRide.feel_acceleration)
 	var acceleration := clampf(b.feel_acceleration, -9.0, 7.0) if continuous else 0.0
 	# Уклон земли, а не наклон рамы: подвеска и движение тела не выдают себя за подъём.
-	var slope := clampf(b.grade_now, -0.5, 0.5) if not b.airborne else 0.0
+	var slope := clampf(b.grade_now, -0.5, 0.5) * air_keep
 	# Усилие — то же состояние, что даёт тягу (BikeRide.effort), тяжесть — реализованная тяга и подъём.
-	var drive := b.effort if not b.airborne else 0.0
+	var drive := b.effort * air_keep
 	var work := clampf(b.drive_force / (cfg.pedal_accel * cfg.pedal_push_mult), 0.0, 1.0)
 	var load := smoothstep(0.04, 0.25, slope) * drive
 	var effort_target := maxf(drive * 0.6 + work * 0.4, load * LOAD_EFFORT) * (1.25 if boost else 1.0)
-	# Набирается вместе с тягой, без своего запаздывания; отпускание педалей не обрывает дыхание и плечи.
-	if effort_target > _effort:
-		_effort = effort_target if continuous else 0.0
-	else:
-		_effort = lerpf(_effort, effort_target, Util.damp(5.0, dt)) if continuous else 0.0
+	# Набирается быстро вместе с тягой без резкого скачка за один кадр; отпускание педалей не обрывает дыхание и плечи.
+	_effort = lerpf(_effort, effort_target, Util.damp(14.0 if effort_target > _effort else 5.0, dt)) if continuous else 0.0
 	var effort := _effort
 	# Рычаги следуют давлению, корпус — реализованному тормозному усилию в пятнах контакта.
 	var brake_response := BRAKE_POSE_ENGAGE if braking > _prev[S_BRAKE_POSE] else BRAKE_POSE_RELEASE
@@ -531,7 +561,8 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var manual_prep := smoothstep(0.04, 0.60, body) if b.body_back and not b.body_forward else 0.0
 	var prep_goal := maxf(manual_prep, 0.85 if b.hop_preparing else 0.0) if continuous and not b.airborne else 0.0
 	_jump_prep = lerpf(_jump_prep, prep_goal, Util.damp(22.0 if prep_goal > _jump_prep else 10.0, dt)) if continuous else 0.0
-	var stand_target := (maxf(climb, sprint) - descent if not b.airborne else -0.65) if continuous else 0.0
+	var ground_stand := maxf(climb, sprint) - descent
+	var stand_target := lerpf(ground_stand, -0.65, _air_pose) if continuous else 0.0
 	var brake_risk := b.brakes.risk if not b.airborne else 0.0
 	var track := float(b._stance_driven and b.stance == BikeRide.Stance.TRACKSTAND and not b.airborne)
 	_cur[S_TRACK] = lerpf(_prev[S_TRACK], track, Util.damp(8.0, dt)) if continuous else 0.0
@@ -545,10 +576,12 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var absorb_goal := b.crest_absorb if continuous and not b.airborne else 0.0
 	_absorb = lerpf(_absorb, absorb_goal, Util.damp(18.0 if absorb_goal > _absorb else 6.0, dt)) if continuous else 0.0
 	# Legs carry the rider between closely spaced bumps; isolated contacts still read at the limbs.
-	var fork_rate := b.squash_fv if b.contact_f() else 0.0
-	var rear_rate := b.squash_rv if b.contact_r() else 0.0
+	var fv := b.squash_fv_avg if b.tick_time > 0.0 else b.squash_fv
+	var rv := b.squash_rv_avg if b.tick_time > 0.0 else b.squash_rv
+	var fork_rate := fv if b.contact_f() else 0.0
+	var rear_rate := rv if b.contact_r() else 0.0
 	var stroke_rate := maxf(fork_rate, rear_rate)
-	var activity := maxf(smoothstep(0.65, 2.2, stroke_rate), maxf(_hit_f, _hit_r))
+	var activity := maxf(smoothstep(1.3, 3.0, stroke_rate), maxf(_hit_f, _hit_r))
 	activity *= smoothstep(0.6, 3.2, absf(b.speed)) if not b.airborne else 0.0
 	_rough_stance = lerpf(_rough_stance, activity, Util.damp(5.0 if activity > _rough_stance else 3.0, dt)) if continuous else 0.0
 	stand_target = lerpf(stand_target, -0.72, _rough_stance)
@@ -577,7 +610,8 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	# Фазы прыжка: 2) отрыв (_takeoff), 3) полёт (airborne), 4) приземление (_landing), 5) восстановление (_recovery).
 	_takeoff *= exp(-dt * 9.5)
 	if continuous and b.airborne and not _was_airborne:
-		_takeoff = 1.0 if b.hop_used else lerpf(0.18, 0.90, _jump_prep)
+		var air_pop := 1.0 if b.hop_used else smoothstep(0.3, 1.5, b.vy)
+		_takeoff = (1.0 if b.hop_used else lerpf(0.18, 0.90, _jump_prep)) * air_pop
 	_was_airborne = b.airborne
 	_landing *= exp(-dt * LANDING_DECAY)
 	if continuous and b.land_impact > 0.0:
@@ -600,14 +634,15 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var rear_stroke := maxf(smoothstep(0.55, 1.35, b.load_r) * 0.32, clampf(rear_rate * 0.14, 0.0, 0.42)) * moving
 	var front_goal := maxf(front_hit, maxf(front_stroke, _jump_prep * 0.25))
 	var rear_goal := maxf(rear_hit, maxf(rear_stroke, _jump_prep * 0.35))
-	var limb_blend := Util.damp(AXLE_LOAD_RESPONSE, dt)
-	var front_load := maxf(front_hit * 0.95, lerpf(_prev[S_FRONT_LOAD], front_goal, limb_blend)) if continuous else front_goal
-	var rear_load := maxf(rear_hit * 0.95, lerpf(_prev[S_REAR_LOAD], rear_goal, limb_blend)) if continuous else rear_goal
+	var front_blend := Util.damp(AXLE_LOAD_ATTACK if front_goal > _prev[S_FRONT_LOAD] else AXLE_LOAD_RELEASE, dt)
+	var rear_blend := Util.damp(AXLE_LOAD_ATTACK if rear_goal > _prev[S_REAR_LOAD] else AXLE_LOAD_RELEASE, dt)
+	var front_load := lerpf(_prev[S_FRONT_LOAD], front_goal, front_blend) if continuous else front_goal
+	var rear_load := lerpf(_prev[S_REAR_LOAD], rear_goal, rear_blend) if continuous else rear_goal
 	# Приоритеты смешивания: торможение и удар подавляют раскачку педалирования, чтобы реакции не складывались в случайную позу.
 	var impact_priority := clampf(front_load * 0.65 + rear_load * 0.75, 0.0, 1.0)
 	var pedal_priority := (1.0 - maxf(braking, _cur[S_BRAKE_POSE]) * 0.85) * (1.0 - impact_priority * 0.65) * (1.0 - 0.8 * b.instability)
-	var active_effort := effort * pedal_priority if not b.airborne else 0.0
-	var air_pitch_shift := clampf(b.pitch_vel * 0.055 - b.vy * 0.004, -0.07, 0.07) if b.airborne else 0.0
+	var active_effort := effort * pedal_priority * air_keep
+	var air_pitch_shift := clampf(b.pitch_vel * 0.055 - b.vy * 0.004, -0.07, 0.07) * _air_pose
 	var shift_goal := inertia_shift - slope * 0.16 - active_effort * 0.015 + _hit_f * 0.038 - _hit_r * 0.018
 	shift_goal += _jump_prep * 0.022 + _takeoff * 0.038 + air_pitch_shift + _landing * _landing_bias * 0.060 - rebound * 0.038
 	var backwards := smoothstep(0.04, 0.8, -b.speed)
@@ -630,7 +665,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var edge_crouch := maxf(_hit_f * FRONT_HIT_CROUCH, _hit_r * REAR_HIT_CROUCH)
 	var impact_goal := maxf(edge_crouch, _landing * LAND_CROUCH)
 	var support_goal := maxf(stroke_crouch, impact_goal)
-	var air_crouch := (AIR_CROUCH * (1.0 - _takeoff * 0.85) - _takeoff * 0.022) if b.airborne else 0.0
+	var air_crouch := (AIR_CROUCH * (1.0 - _takeoff * 0.85) - _takeoff * 0.022) * _air_pose
 	# Extend from the flight tuck as the measured gap closes. A rising lip can
 	# approach the wheels even when vertical world speed is still positive.
 	if b.airborne and b.clearance_closing_speed > 0.0:
@@ -639,15 +674,14 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 		air_crouch -= 0.050 * prepare * smoothstep(0.04, 0.14, b.air_time)
 	var jump_crouch := maxf(maxf(body, 0.0) * 0.07, _jump_prep * (1.0 - _takeoff) * 0.058)
 	# Пассивное поглощение и фаза ручного пампа работают в пределах одного хода тела на волне.
-	var pump_crouch := b.pump_motion * 0.065 - b.pump_body * 0.15 if not b.airborne else 0.0
+	var pump_crouch := (b.pump_motion * 0.065 - b.pump_body * 0.15) * air_keep
 	var terrain_crouch := maxf(jump_crouch, maxf(_absorb * ABSORB_CROUCH, pump_crouch)) + minf(0.0, pump_crouch)
 	var effort_crouch := pedal_bob + active_effort * smoothstep(0.0, 0.12, slope) * 0.02
 	var crouch := air_crouch + terrain_crouch + effort_crouch - rebound * 0.020
-	crouch += b.instability * 0.032 if not b.airborne else 0.0
+	crouch += b.instability * 0.032 * air_keep
 	# Плечи следуют фактической дуге. Взгляд получает ещё небольшое опережение от руля.
 	var turn_heading := (b.yaw_rate * GAZE_AHEAD_TIME - b.slip * 0.22) * smoothstep(0.2, 3.0, absf(b.speed))
 	var look := clampf(turn_heading - b.steer * GAZE_STEER_LEAD + reverse_look * 0.58, -0.60, 0.60)
-	_update_foot_support(b, dt, continuous, cfg.stop_settle_time)
 	# 11.11: взгляд. После нескольких секунд спокойной езды голова время от времени поворачивается к обочине и
 	# возвращается; на стоянке седок осматривается шире. Поворот, тормоз, удар и тяжёлая работа сразу возвращают взгляд.
 	var calm := distress < 0.15 and backwards < 0.05 and continuous and idle_life and not b.airborne and braking < 0.1 and impact_priority < 0.1 and absf(look) < 0.08 and absf(_cur[S_TURN_SUPPORT]) < 0.12 and effort < 0.6
@@ -676,9 +710,6 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 		var crouch_step := _spring_step(_prev[S_CROUCH], _crouch_vel, crouch + support_goal, TORSO_RESPONSE, dt)
 		_cur[S_CROUCH] = crouch_step.x
 		_crouch_vel = crouch_step.y
-		var impact_step := _spring_step(_impact_crouch, _impact_crouch_vel, impact_goal, TORSO_RESPONSE, dt)
-		_impact_crouch = impact_step.x
-		_impact_crouch_vel = impact_step.y
 		var sway_step := _spring_step(_prev[S_SWAY], _sway_vel, sway, 16.0, dt)
 		_cur[S_SWAY] = sway_step.x
 		_sway_vel = sway_step.y
@@ -686,13 +717,11 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 		_cur[S_SIDE] = side
 		_cur[S_CROUCH] = crouch
 		_cur[S_SWAY] = sway
-		_impact_crouch = 0.0
 		_reaction_shift = shift_goal
 		_reaction_shift_vel = 0.0
 		_side_vel = 0.0
 		_crouch_vel = 0.0
 		_sway_vel = 0.0
-		_impact_crouch_vel = 0.0
 	# Физика уже ограничивает ход и скорость Q/E. Пружина выше отвечает за внешнюю нагрузку.
 	_cur[S_SHIFT] = clampf(_reaction_shift + body * BODY_SHIFT_RANGE, -0.17, 0.2)
 	var look_blend := Util.damp(16.0, dt)
@@ -703,9 +732,9 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	# назад — таз ниже седла сзади («атака»), вперёд — привстал над рамой
 	_cur[S_STAND] = clampf(_stand - body * 0.55, -1.0, 1.0)
 	# Шея принимает уже прошедший через корпус удар. Обычный ход колёс остаётся в работе рук и ног.
-	var air_look_pitch := clampf(b.vy * 0.003, -0.02, 0.02) if b.airborne else 0.0
+	var air_look_pitch := clampf(b.vy * 0.003, -0.02, 0.02) * _air_pose
 	# 12.11: уставший седок опускает голову (после подъёма, рывка), отдышавшись — поднимает
-	var head_nod_goal := clampf(-_fatigue * 0.03 * (1.0 - _landing) - _impact_crouch * 0.65 - _jump_prep * 0.018 + _takeoff * 0.042 + air_look_pitch + rebound * 0.015, -0.08, 0.06)
+	var head_nod_goal := clampf(-_fatigue * 0.03 * (1.0 - _landing) - impact_goal * 0.65 - _jump_prep * 0.018 + _takeoff * 0.042 + air_look_pitch + rebound * 0.015, -0.08, 0.06)
 	if continuous:
 		var nod_step := _spring_step(_prev[S_HEAD_NOD], _head_nod_vel, head_nod_goal, HEAD_NOD_RESPONSE, dt)
 		_cur[S_HEAD_NOD] = nod_step.x
@@ -726,7 +755,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 		_pack_velocity = Vector2.ZERO
 	_cur[S_PACK_PITCH] = _pack_swing.x
 	_cur[S_PACK_ROLL] = _pack_swing.y
-	_cur[S_EFFORT] = active_effort
+	_cur[S_EFFORT] = lerpf(_prev[S_EFFORT], active_effort, Util.damp(12.0, dt)) if continuous else active_effort
 	_cur[S_FRONT_LOAD] = front_load
 	_cur[S_REAR_LOAD] = rear_load
 
@@ -738,15 +767,17 @@ func _update_foot_support(b: BikeRide, dt: float, continuous: bool, settle_time:
 		foot_down = continuous and idle_life and not b.airborne and b.stance == BikeRide.Stance.FOOT_DOWN
 		_still_time = _still_time + dt if foot_down else 0.0
 		if foot_down and _stop_side != b.foot_side:
-			if _stop < 0.02:
+			if _stop <= 0.001:
 				_stop_side = b.foot_side
+				_prev[S_STOP] = 0.0
 			else:
 				foot_down = false
 	else:
 		var still := continuous and idle_life and not b.airborne and absf(b.speed) < 0.35 and b.effort < 0.05 and absf(b.lean) < 0.1
 		_still_time = _still_time + dt if still else 0.0
-		if _stop < 0.01 and still:
+		if _stop <= 0.001 and still:
 			_stop_side = 1.0 if b.lean < -0.01 else -1.0
+			_prev[S_STOP] = 0.0
 		foot_down = _still_time > settle_time
 	var stop_goal := 1.0 if foot_down else 0.0
 	_stop = lerpf(_stop, stop_goal, Util.damp(5.0 if stop_goal > _stop else 9.0, dt)) if continuous else 0.0
@@ -823,11 +854,16 @@ func snap(b: BikeRide) -> void:
 	_stop = 0.0
 	_still_time = 0.0
 	_coast_time = 0.0
+	_coast_level = false
 	_calm_time = 0.0
 	_gaze_amp = 0.0
 	_gaze_phase = 0.0
 	_rest = 0.0
 	_was_airborne = b.airborne
+	_air_pose = 1.0 if b.airborne else 0.0
+	_air_body_offset = 0.0
+	_prev_ground_mid = 0.0
+	_prev_lift_mid = 0.0
 	_pack_swing = Vector2.ZERO
 	_pack_velocity = Vector2.ZERO
 	_reaction_shift = 0.0
@@ -836,8 +872,6 @@ func snap(b: BikeRide) -> void:
 	_crouch_vel = 0.0
 	_sway_vel = 0.0
 	_head_nod_vel = 0.0
-	_impact_crouch = 0.0
-	_impact_crouch_vel = 0.0
 	_heat_f = 0.0
 	_heat_r = 0.0
 	_absorb = 0.0
@@ -939,7 +973,7 @@ func draw(alpha: float, allow_watch := true) -> void:
 	# ткань формы треплется на скорости (шейдер, без костей): заметно с 3 м/с, в полную силу к 14 м/с
 	_set_wind(smoothstep(3.0, 14.0, _mix[S_SPEED]) if _riding else 0.0)
 	if _riding:
-		_draw_rider(allow_watch, stop_side)
+		_draw_rider(allow_watch, stop_side, pedal_rock)
 		if rider.procedural_pose:
 			pedal_l.rotation.x += rider.pedal_pitch.x
 			pedal_r.rotation.x += rider.pedal_pitch.y
@@ -948,7 +982,7 @@ func draw(alpha: float, allow_watch := true) -> void:
 			_pack_bag.rotation = Vector3(_mix[S_PACK_PITCH], 0, _mix[S_PACK_ROLL])
 
 
-func _draw_rider(allow_watch: bool, stop_side: float) -> void:
+func _draw_rider(allow_watch: bool, stop_side: float, pedal_rock := 0.0) -> void:
 	var pose := _rider_pose
 	var steering_to_rig := _rig_from_bike * _steering.transform
 	var crank_to_rig := _rig_from_bike * crank.transform
@@ -969,7 +1003,7 @@ func _draw_rider(allow_watch: bool, stop_side: float) -> void:
 	pose.tuck = _mix[S_TUCK]
 	pose.motion = Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
 	pose.pitch = _mix[S_TILT]
-	pose.roll = _mix[S_ROLL]
+	pose.roll = _mix[S_ROLL] + pedal_rock
 	pose.sway = _mix[S_SWAY]
 	pose.breath = _mix[S_BREATH]
 	pose.look = _mix[S_LOOK]

@@ -120,6 +120,8 @@ var squash_f := 0.0   # ход вилки, м
 var squash_r := 0.0   # ход заднего колеса, м
 var squash_fv := 0.0  # скорость сжатия вилки, м/с
 var squash_rv := 0.0
+var squash_fv_avg := 0.0 # среднее за внешний шаг, м/с (для анимации/звука)
+var squash_rv_avg := 0.0
 var ground_f := 0.0   # точка касания переднего колеса относительно y, м (в полёте — где колесо висит)
 var ground_r := 0.0   # то же для заднего
 var _g_f := 0.0       # высота земли под колёсами на прошлом такте и её вертикальная скорость
@@ -158,6 +160,7 @@ var _land_settle := 0.0    # окно усадки подвески после �
 var vertical_g := 0.0  # нагрузка профиля земли вдоль пути в g: впадина сжимает (+), гребень разгружает (−)
 var bank_slope := 0.0  # наклон полотна поперёк: рост высоты на метр вправо от курса, сглаженный
 var _crest_curve := 0.0 # кривизна профиля на базе осей (HUB), 1/м (для отрыва на гребне)
+var _crest_unload_time := 0.0 # длительность разгрузки на гребне, с
 var _ground_cross := 0.0 # несглаженный поперечный уклон полотна (для 2D-нормали и косогоров)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры); только приземления
 var fork_side_impulse := 0.0 # signed local-right change of front wheel speed on edges this tick
@@ -325,6 +328,7 @@ func reset_motion() -> void:
 	vertical_g = 0.0
 	bank_slope = 0.0
 	_crest_curve = 0.0
+	_crest_unload_time = 0.0
 	_ground_cross = 0.0
 	stance = Stance.RIDING
 	foot_side = -1.0
@@ -351,6 +355,8 @@ func reset_motion() -> void:
 	squash_r = 0.0
 	squash_fv = 0.0
 	squash_rv = 0.0
+	squash_fv_avg = 0.0
+	squash_rv_avg = 0.0
 	ground_f = 0.0
 	ground_r = 0.0
 	_fresh = true
@@ -485,6 +491,7 @@ func _read_surface(heights: Heightfield, dt: float) -> void:
 	if airborne:
 		vertical_g = lerpf(vertical_g, 0.0, Util.damp(config.g_relax_air, dt))
 		_crest_curve = 0.0
+		_crest_unload_time = 0.0
 		_ground_cross = 0.0
 		return
 	var ahead := Vector2(-sin(heading), -cos(heading)) * config.profile_span
@@ -494,7 +501,8 @@ func _read_surface(heights: Heightfield, dt: float) -> void:
 	var c_f := (_surface(heights, x + wheel_ahead.x * 2.0, z + wheel_ahead.y * 2.0, y) + g0) * 0.5
 	var c_r := (_surface(heights, x - wheel_ahead.x * 2.0, z - wheel_ahead.y * 2.0, y) + g0) * 0.5
 	var c_0 := (_surface(heights, x + wheel_ahead.x, z + wheel_ahead.y, y) + _surface(heights, x - wheel_ahead.x, z - wheel_ahead.y, y)) * 0.5
-	_crest_curve = (c_f + c_r - 2.0 * c_0) / (HUB * HUB)
+	var raw_crest := (c_f + c_r - 2.0 * c_0) / (HUB * HUB)
+	_crest_curve = lerpf(_crest_curve, raw_crest, Util.damp(18.0, dt))
 	var goal := clampf(speed * speed * curve / config.ground_gravity, config.g_min, config.g_max)
 	vertical_g = lerpf(vertical_g, goal, Util.damp(config.g_response, dt))
 	var right := Vector2(cos(heading), -sin(heading)) * config.bank_span
@@ -666,8 +674,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 
 ## Силы и сигналы за последний внешний шаг (средние по подшагам), м/с² на массу велосипеда с седоком.
 ## Дают седоку, камере и звуку одни и те же данные за тот же интервал, а не значение последнего подшага.
-enum { T_DRIVE_REQUEST, T_DRIVE, T_BRAKE_F, T_BRAKE_R, T_ROLL, T_AIR, T_ROUGH, T_SLOPE, T_PUMP, T_GRADE, TELEMETRY }
-var _sub := PackedFloat32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+enum { T_DRIVE_REQUEST, T_DRIVE, T_BRAKE_F, T_BRAKE_R, T_ROLL, T_AIR, T_ROUGH, T_SLOPE, T_PUMP, T_GRADE, T_SQUASH_FV, T_SQUASH_RV, TELEMETRY }
+var _sub := PackedFloat32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 var drive_request := 0.0   # запрос педалей до ограничения контактом и сцеплением
 var drive_force := 0.0     # реализованная тяга заднего колеса
 var brake_force := Vector2() # фактически приложенный тормоз переднего и заднего колеса
@@ -697,6 +705,8 @@ func _end_tick(sums: PackedFloat32Array, done: float, start: Vector2) -> void:
 	slope_force = sums[T_SLOPE] * inv
 	pump_force = sums[T_PUMP] * inv
 	grade_now = sums[T_GRADE] * inv
+	squash_fv_avg = sums[T_SQUASH_FV] * inv
+	squash_rv_avg = sums[T_SQUASH_RV] * inv
 	var forward := Vector2(-sin(heading), -cos(heading))
 	feel_acceleration = (horizontal_velocity() - start).dot(forward) * inv
 
@@ -1120,8 +1130,10 @@ func steer_shown() -> float:
 	var actual := clampf(-_yaw_rate * (1.0 if speed >= 0.0 else -1.0) / maxf(rate, 0.2), -1.0, 1.0)
 	var moving := smoothstep(0.5, 3.0, pace) * (0.0 if airborne else 1.0)
 	var shown := lerpf(steer, lerpf(actual, steer, config.steer_shown_input), moving)
-	shown = signf(shown) * pow(clampf(absf(shown), 0.0, 1.0), config.steer_shown_exp)
-	return shown * lerpf(1.0, config.steer_shown_fast, smoothstep(config.steer_shown_pace.x, config.steer_shown_pace.y, pace))
+	var a := clampf(absf(shown), 0.0, 1.0)
+	var boost := clampf(1.0 / maxf(config.steer_shown_exp, 0.25) - 1.0, 0.0, 1.0)
+	shown = signf(shown) * a * (1.0 + boost * (1.0 - a))
+	return clampf(shown * lerpf(1.0, config.steer_shown_fast, smoothstep(config.steer_shown_pace.x, config.steer_shown_pace.y, pace)), -1.0, 1.0)
 
 
 ## Опора держит мелкие неровности и изломы; отрыв — только с края или когда рельеф впереди
@@ -1195,6 +1207,7 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 		_takeoff_hop()
 	if airborne:
 		_land_settle = 0.0
+		_crest_unload_time = 0.0
 		air_time += dt
 		y += (vy - config.air_gravity * dt * 0.5) * dt
 		vy -= config.air_gravity * dt
@@ -1204,11 +1217,14 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 		_land_settle = maxf(0.0, _land_settle - dt)
 		var fly := y + (vy - config.air_gravity * dt * 0.5) * dt
 		var s0 := clampf(vy / maxf(absf(speed), 0.1), -config.cliff_grade, config.cliff_grade)
-		var crest_n := 1.0 / sqrt(1.0 + s0 * s0 + _ground_cross * _ground_cross) + speed * speed * _crest_curve / config.ground_gravity
-		var crest_unload := _land_settle <= 0.0 and not (_on_f >= 0 and _on_r < 0) and _pump_absorb_v <= 0.01 and absf(speed) >= config.detach_min_speed and crest_n < config.detach_normal_min
-		# Земля уходит вниз быстрее падения: отрываемся с края сразу, при разгрузке на гребне или когда
+		var crest_n := 1.0 / sqrt(1.0 + s0 * s0 + _ground_cross * _ground_cross) + speed * speed * _crest_curve / config.air_gravity
+		var crest_cond := _land_settle <= 0.0 and not (_on_f >= 0 and _on_r < 0) and _pump_absorb_v <= 0.01 and absf(speed) >= config.detach_min_speed and crest_n < config.detach_normal_min
+		_crest_unload_time = _crest_unload_time + dt if crest_cond else 0.0
+		var crest_unload := _crest_unload_time >= 0.025 and fly - g > 0.006
+		# Земля уходит вниз быстрее падения: отрываемся с края сразу, при устойчивой разгрузке на гребне или когда
 		# впереди рельеф уходит из-под колёс; иначе прижимаемся к земле.
 		if fly > g and (fly - g > config.drop_step or crest_unload or _lifts(heights)):
+			_crest_unload_time = 0.0
 			if _pump_absorb_v > 0.0 and vy > 0.0:
 				vy = maxf(0.0, vy - _pump_absorb_v * 0.45)
 				fly = maxf(g + 0.001, y + (vy - config.air_gravity * dt * 0.5) * dt)
@@ -1449,6 +1465,8 @@ func _step_suspension(dt: float, load := 0.0, contact_accel := 0.0) -> void:
 	squash_r = r.x
 	squash_rv = r.y
 	squash = (squash_f + squash_r) * 0.5
+	_sub[T_SQUASH_FV] = squash_fv
+	_sub[T_SQUASH_RV] = squash_rv
 
 
 ## Подшаг одной пружины: s — ход и скорость сжатия; упоры на sag_max и stretch_max
@@ -1602,6 +1620,7 @@ func _takeoff_hop() -> void:
 	_hop_buf = 0.0
 	_hop_wait = config.hop_buffer
 	_land_settle = 0.0
+	_crest_unload_time = 0.0
 	airborne = true
 	air_time = 0.0
 	pitch_vel = 0.5
@@ -1883,7 +1902,8 @@ func _land(g: float, heights: Heightfield) -> void:
 		lateral_speed *= keep
 	instability = maxf(instability, clampf((felt - config.soft_impact * 0.45) / maxf(config.crash_impact - config.soft_impact * 0.45, 1.0) + absf(tilt - atan(support_grade)) * 0.35, 0.0, 1.0))
 	pitch_vel = 0.0
-	_land_settle = config.landing_settle * smoothstep(1.2, 4.5, impact)
+	_crest_unload_time = 0.0
+	_land_settle = maxf(0.06, config.landing_settle * smoothstep(1.2, 4.5, impact))
 	vy = gradient.dot(horizontal_velocity())
 	if vy > 0.0 and impact > 1.2:
 		vy *= lerpf(1.0, 0.35, smoothstep(1.2, 4.5, impact))

@@ -28,6 +28,11 @@ class PreviewGround extends Heightfield:
 	func known(_x: float, _z: float) -> bool:
 		return true
 
+class PreviewProfileGround extends PreviewGround:
+	var profile: Callable
+	func ground_at(x: float, z: float, _raw := false) -> float:
+		return float(profile.call(-z)) if profile.is_valid() else super.ground_at(x, z, _raw)
+
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 180)
 	run.call_deferred()
@@ -637,6 +642,7 @@ func run(finish := true) -> void:
 	check_body_input()
 	check_secondary_motion()
 	check_balance_reactions()
+	check_real_ride_stability()
 	await check_ragdoll_skin()
 	var invalid: CyclistRig = load("res://scenes/cyclist.tscn").instantiate()
 	root.add_child(invalid)
@@ -684,7 +690,11 @@ func check_obstacle_transitions() -> void:
 	reset()
 	state.bottom_out = state.config.bottom_out_speed + 2.2
 	advance()
-	check(bike._cur[BikeView.S_FRONT_LOAD] > 0.7 and bike._cur[BikeView.S_REAR_LOAD] < 0.1, "Fork bottom-out reaches the arms even when the travel velocity is clipped to zero")
+	var peak_front := bike._cur[BikeView.S_FRONT_LOAD]
+	state.clear_tick_events()
+	advance()
+	peak_front = maxf(peak_front, bike._cur[BikeView.S_FRONT_LOAD])
+	check(peak_front > 0.65 and bike._cur[BikeView.S_REAR_LOAD] < 0.1, "Fork bottom-out reaches the arms quickly without one-frame snap")
 	reset()
 	state.airborne = true
 	state.air_time = 0.4
@@ -713,11 +723,13 @@ func check_obstacle_transitions() -> void:
 			state.bottom_out = state.config.bottom_out_speed + 2.2
 			state.squash_fv = 3.0
 		advance()
-		if bottoming_fork:
-			check(bike._cur[BikeView.S_FRONT_LOAD] > 0.8, "Landing bottom-out still reaches the arms immediately")
+		var tick1_front := bike._cur[BikeView.S_FRONT_LOAD]
 		state.clear_tick_events()
 		state.squash_fv = 0.0
-		for i in 10:
+		advance()
+		if bottoming_fork:
+			check(maxf(tick1_front, bike._cur[BikeView.S_FRONT_LOAD]) > 0.65, "Landing bottom-out still reaches the arms quickly")
+		for i in 9:
 			advance()
 		if bottoming_fork:
 			check(absf(bike._cur[BikeView.S_CROUCH] - landing_crouch) < 0.001, "Fork bottom-out does not crouch the rider twice for one landing")
@@ -905,6 +917,141 @@ func check_balance_reactions() -> void:
 		var foot := "FootR" if side > 0.0 else "FootL"
 		check(side * bone(foot).x > 0.24 and side * bone("Chest").x < -0.035, "Catch leg opens toward slip and trunk counterbalances")
 		check(absf(angle_difference(bike._prev[BikeView.S_WHEEL_R], bike._cur[BikeView.S_WHEEL_R])) < 0.01 and absf(angle_difference(bike._prev[BikeView.S_WHEEL_F], bike._cur[BikeView.S_WHEEL_F])) > 0.1, "Saturated rear wheel slows independently")
+
+
+func check_real_ride_stability() -> void:
+	var world := PreviewWorld.new()
+	var player := PlayerState.new()
+
+	# A. Real-physics steering weave across zero: finite, C1-smooth handlebar motion without spike.
+	var flat := PreviewProfileGround.new(world)
+	state = BikeRide.new()
+	state.riding = true
+	state.speed = 10.0
+	state.step(player, 1.0, 0.0, false, false, DT, world, flat)
+	bike.snap(state)
+	bike.draw(1.0)
+	var prev_steer := bike._cur[BikeView.S_STEER]
+	var max_steer_step := 0.0
+	var max_abs_steer := 0.0
+	for i in 120:
+		var turn := sin(i * 0.08)
+		state.step(player, 1.0, turn, false, false, DT, world, flat)
+		bike.tick(state, DT, 1.0, false)
+		bike.draw(1.0)
+		state.clear_tick_events()
+		max_steer_step = maxf(max_steer_step, absf(bike._cur[BikeView.S_STEER] - prev_steer))
+		max_abs_steer = maxf(max_abs_steer, absf(bike._cur[BikeView.S_STEER]))
+		prev_steer = bike._cur[BikeView.S_STEER]
+	check(max_steer_step < 0.14 and max_abs_steer <= 1.0001,
+		"Real ride steering weave across zero stays smooth and clamped (step=%.3f, max=%.3f)" % [max_steer_step, max_abs_steer])
+
+	# B. Real-physics faceted 2 m hills: no micro-detaches, continuous frame height, grounded tire alignment.
+	var hills := PreviewProfileGround.new(world)
+	hills.profile = func(d: float) -> float:
+		var k := floorf(d / 2.0)
+		var a := 0.8 * sin(k * 0.45) + 0.12 * sin(k * 1.7)
+		var b := 0.8 * sin((k + 1.0) * 0.45) + 0.12 * sin((k + 1.0) * 1.7)
+		return lerpf(a, b, d / 2.0 - k)
+	state = BikeRide.new()
+	state.riding = true
+	state.speed = 11.0
+	state.step(player, 1.0, 0.0, false, false, DT, world, hills)
+	bike.snap(state)
+	bike.draw(1.0)
+	var detaches := 0
+	var was_air := state.airborne
+	var prev_y := bike.position.y
+	var prev_dy := 0.0
+	var max_dy_jerk := 0.0
+	var max_wheel_err := 0.0
+	for i in 240:
+		state.step(player, 1.0, 0.0, false, false, DT, world, hills)
+		bike.tick(state, DT, 1.0, false)
+		bike.draw(1.0)
+		state.clear_tick_events()
+		if state.airborne and not was_air:
+			detaches += 1
+		var dy := bike.position.y - prev_y
+		if i > 1:
+			max_dy_jerk = maxf(max_dy_jerk, absf(dy - prev_dy))
+		prev_dy = dy
+		prev_y = bike.position.y
+		was_air = state.airborne
+		if not state.airborne and state.contact_f() and state.contact_r():
+			var err_f := absf(bike.front_wheel.global_position.y - BikeView.WHEEL_Y - (state.y + state.ground_f))
+			var err_r := absf(bike.rear_wheel.global_position.y - BikeView.WHEEL_Y - (state.y + state.ground_r))
+			max_wheel_err = maxf(max_wheel_err, maxf(err_f, err_r))
+	check(detaches <= 2 and max_dy_jerk < 0.10 and max_wheel_err < 0.06,
+		"Real ride faceted hills stay grounded and wheel-aligned (detaches=%d, dy_jerk=%.4f, wheel_err=%.4f)" % [detaches, max_dy_jerk, max_wheel_err])
+
+	# C. Real-physics bunny-hop takeoff and landing continuity + IK contact invariants.
+	state = BikeRide.new()
+	state.riding = true
+	state.speed = 8.0
+	state.step(player, 1.0, 0.0, false, false, DT, world, flat)
+	bike.snap(state)
+	bike.draw(1.0)
+	var took_off := false
+	var landed := false
+	var takeoff_jump := 0.0
+	var mid_flight_checked := false
+	prev_y = bike.position.y
+	for i in 90:
+		var hop := (i == 10)
+		state.step(player, 1.0, 0.0, false, hop, DT, world, flat)
+		bike.tick(state, DT, 1.0, false)
+		bike.draw(1.0)
+		if state.airborne and not took_off:
+			took_off = true
+			takeoff_jump = absf(bike.position.y - prev_y)
+		elif took_off and state.airborne and not mid_flight_checked and state.air_time > 0.12:
+			mid_flight_checked = true
+			contacts()
+		elif took_off and not state.airborne and not landed:
+			landed = true
+			contacts()
+		prev_y = bike.position.y
+		state.clear_tick_events()
+	check(took_off and landed and mid_flight_checked and takeoff_jump < 0.14,
+		"Bunny-hop takeoff and landing remain continuous with valid IK contacts (jump=%.4f)" % takeoff_jump)
+
+	# D. 240 Hz sub-frame foot-support side switch never crosses opposite S_STOP signs within one tick.
+	reset()
+	state.speed = 0.0
+	state._stance_driven = true
+	state.stance = BikeRide.Stance.FOOT_DOWN
+	state.foot_side = -1.0
+	state.foot_support = state.foot_probe(-1.0)
+	for i in 45:
+		advance()
+	var left_planted := bike._cur[BikeView.S_STOP] < -0.5
+	state.foot_side = 1.0
+	state.foot_support = state.foot_probe(1.0)
+	var sign_crossed := false
+	var finite_ok := true
+	var sk_foot := bike.rider.skeleton
+	for i in 90:
+		state.feel_acceleration = 0.0
+		state.grade_now = 0.0
+		bike.tick(state, DT, 0.0, false)
+		if bike._prev[BikeView.S_STOP] * bike._cur[BikeView.S_STOP] < -0.0001:
+			sign_crossed = true
+		for alpha: float in [0.25, 0.5, 0.75, 1.0]:
+			bike.draw(alpha)
+			check_skin_pose()
+			for side in ["L", "R"]:
+				var grip := bike._steering.position + bike._steering.basis * (BikeView.GRIP * Vector3(-1.0 if side == "L" else 1.0, 1, 1) - BikeView.STEERING_PIVOT)
+				if bone("Hand" + side).distance_to(grip) >= 0.002:
+					finite_ok = false
+				for pair in [["UpperArm", "Forearm", 0.31], ["Forearm", "Hand", 0.31], ["UpperLeg", "LowerLeg", 0.43], ["LowerLeg", "Foot", 0.43]]:
+					if absf(bone(pair[0] + side).distance_to(bone(pair[1] + side)) - pair[2]) >= 0.002:
+						finite_ok = false
+			if not bike.position.is_finite() or not sk_foot.get_bone_global_pose(sk_foot.find_bone("FootR")).origin.is_finite():
+				finite_ok = false
+	check(left_planted and not sign_crossed and finite_ok and bike._cur[BikeView.S_STOP] > 0.5,
+		"240 Hz foot-support side flip passes smoothly through neutral without sign crossing")
+	reset()
 
 
 ## Короткое физическое падение в той же сцене: новая оболочка должна следовать костям после отделения от рамы.

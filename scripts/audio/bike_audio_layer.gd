@@ -50,6 +50,9 @@ var _crank_speed := 0.0
 var _pedal_t := 0.0
 var _last_gear_step := -1
 var _was_airborne := false
+var _physics_driven := false
+var _physics_airborne := false
+var _debounced_air := false
 var _was_hop_prep := false
 var _was_stance := BikeRide.Stance.RIDING
 
@@ -128,6 +131,9 @@ func set_paused(paused: bool) -> void:
 
 
 func stop() -> void:
+	_physics_driven = false
+	_physics_airborne = false
+	_debounced_air = false
 	for p: Node in get_children():
 		if p is AudioStreamPlayer:
 			(p as AudioStreamPlayer).stop()
@@ -143,8 +149,11 @@ func tick_physics(bike: BikeRide, dt: float) -> void:
 	_grain_cd = maxf(0.0, _grain_cd - dt)
 	_land_susp_mute = maxf(0.0, _land_susp_mute - dt)
 
+	_physics_driven = true
 	if not bike.riding:
 		_was_airborne = false
+		_physics_airborne = false
+		_debounced_air = false
 		_was_hop_prep = false
 		_was_stance = BikeRide.Stance.RIDING
 		_last_gear_step = -1
@@ -157,15 +166,18 @@ func tick_physics(bike: BikeRide, dt: float) -> void:
 		_hop_prep_player.play()
 	_was_hop_prep = prep
 
-	# 2. Takeoff (bunny hop or crest launch)
-	if bike.airborne and not _was_airborne:
+	# 2. Takeoff (bunny hop or confirmed crest launch, debouncing brief micro-detaches)
+	var confirmed_air := bike.airborne and (bike.hop_used or (bike.air_time >= 0.06 and bike.air_clearance >= 0.04))
+	_physics_airborne = confirmed_air
+	_debounced_air = bike.airborne and not confirmed_air
+	if confirmed_air and not _was_airborne:
 		if bike.hop_used:
 			_takeoff_hop_player.volume_db = _cfg.db_takeoff
 			_takeoff_hop_player.play()
 		elif absf(bike.speed) > 2.5:
 			_takeoff_crest_player.volume_db = _cfg.db_takeoff - 3.0
 			_takeoff_crest_player.play()
-	_was_airborne = bike.airborne
+	_was_airborne = confirmed_air
 
 	# 3. Stance: planting foot at stop
 	if bike.stance == BikeRide.Stance.FOOT_DOWN and _was_stance != BikeRide.Stance.FOOT_DOWN:
@@ -184,10 +196,13 @@ func tick_physics(bike: BikeRide, dt: float) -> void:
 
 	# 5. Soft suspension breathing over terrain undulations/roots (outside landing window)
 	if not bike.airborne and _land_susp_mute <= 0.0 and _susp_cd <= 0.0:
-		var max_sv := maxf(absf(bike.squash_fv), absf(bike.squash_rv))
-		if max_sv >= _cfg.suspension_speed_threshold:
+		var fv := bike.squash_fv_avg if bike.tick_time > 0.0 else bike.squash_fv
+		var rv := bike.squash_rv_avg if bike.tick_time > 0.0 else bike.squash_rv
+		var max_sv := maxf(absf(fv), absf(rv))
+		var susp_thresh := maxf(_cfg.suspension_speed_threshold, 0.85)
+		if max_sv >= susp_thresh:
 			_susp_cd = _cfg.suspension_cooldown_s
-			var k := clampf((max_sv - _cfg.suspension_speed_threshold) / 2.2, 0.0, 1.0)
+			var k := clampf((max_sv - susp_thresh) / 2.2, 0.0, 1.0)
 			_susp_player.volume_db = _cfg.db_suspension - 6.0 + k * 6.0
 			_susp_player.play()
 
@@ -197,6 +212,9 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 		brake_pressure: float, skid: float, slip: float, effort: float) -> void:
 	if _cfg == null:
 		return
+	if _physics_driven and _debounced_air:
+		airborne = false
+		rolling = riding
 	var v := absf(speed)
 	var cruise := maxf(BikePhysicsConfig.current().cruise_speed, 1.0)
 	var pace := clampf(v / cruise, 0.0, 1.4)

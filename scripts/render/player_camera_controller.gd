@@ -82,7 +82,8 @@ func _obstruction_distance(target: Vector3, dir: Vector3, desired: float, feet: 
 
 func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		camera: Camera3D, time: float, _opening: bool, _moving: bool,
-		crash_active: bool, photo_active: bool, photo_fov: float, view_squash: float) -> void:
+		crash_active: bool, photo_active: bool, photo_fov: float, view_squash: float,
+		bike_frame_y := NAN) -> void:
 	var riding := bike != null and bike.riding
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	# поворот, который сделал сам такт, доворачивается плавно; мышь уже учтена в yaw и pitch
@@ -115,10 +116,11 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	var dip := lerpf(_prev_dip, _dip, alpha) if settings.head_bob else 0.0
 	if riding:
 		# от третьего лица: камера сзади на луче взгляда; если между ней и седоком склон — подходит ближе
-		var suspension := -view_squash * RIDE_SQUASH if settings.head_bob else 0.0
-		_cam_y = lerpf(_cam_y, pos.y + RIDE_HEIGHT + suspension, _smooth(RIDE_HEIGHT_RESPONSE, dt))
-		if absf(_cam_y - pos.y - RIDE_HEIGHT) > RIDE_HEIGHT_LAG:
-			_cam_y = pos.y + RIDE_HEIGHT + clampf(_cam_y - pos.y - RIDE_HEIGHT, -RIDE_HEIGHT_LAG, RIDE_HEIGHT_LAG)
+		var base_y := bike_frame_y if is_finite(bike_frame_y) else pos.y
+		var suspension := (view_squash * (1.0 - RIDE_SQUASH) if settings.head_bob else view_squash) if is_finite(bike_frame_y) else (-view_squash * RIDE_SQUASH if settings.head_bob else 0.0)
+		_cam_y = lerpf(_cam_y, base_y + RIDE_HEIGHT + suspension, _smooth(RIDE_HEIGHT_RESPONSE, dt))
+		if absf(_cam_y - base_y - RIDE_HEIGHT) > RIDE_HEIGHT_LAG:
+			_cam_y = base_y + RIDE_HEIGHT + clampf(_cam_y - base_y - RIDE_HEIGHT, -RIDE_HEIGHT_LAG, RIDE_HEIGHT_LAG)
 		var target := Vector3(pos.x, _cam_y + dip - BRAKE_DIP * _brake_feel, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
 		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * RUSH_DIST - BRAKE_DIST * _brake_feel

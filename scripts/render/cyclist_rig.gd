@@ -253,14 +253,15 @@ func pose(input: PoseInput) -> void:
 	var pelvis_yaw := -sway * (0.28 + 0.12 * heavy) + body_look * 0.12
 	var pelvis_roll := fd_side * 0.06 * fd + clampf(-drive_side * (0.016 * spin + 0.042 * heavy + 0.055 * pedal_up) - motion.y * 0.18 - roll * (0.26 + 0.14 * standing), -0.14, 0.14)
 	var pelvis_basis := Basis.from_euler(Vector3(pelvis_pitch, pelvis_yaw, pelvis_roll))
-	# Подъём таза ограничен анатомической длиной обеих ног до реального положения голеностопа.
+	# Подъём таза ограничен анатомической длиной обеих ног с мягким замедлением у предельного разгибания.
 	for i in 2:
 		var side := -1.0 if i == 0 else 1.0
 		var hip_offset := pelvis_basis * Vector3(side * 0.11, 0.0, 0.0)
 		var ankle := _feet[i].origin
 		var horizontal := Vector2(hip.x + hip_offset.x - ankle.x, hip.z + hip_offset.z - ankle.z).length_squared()
 		var leg_reach := LEG_LENGTH * 2.0 - 0.004 - (0.012 * fd if side == fd_side else 0.0)
-		hip.y = minf(hip.y, ankle.y - hip_offset.y + sqrt(maxf(0.0, leg_reach * leg_reach - horizontal)))
+		var max_hip_y := ankle.y - hip_offset.y + sqrt(maxf(0.0, leg_reach * leg_reach - horizontal))
+		hip.y = _soft_min(hip.y, max_hip_y, 0.004)
 	# 3. Положение корпуса и плеч: базовая поза + реакции, где передний удар (front_load) сначала сжимает руки и подаёт плечи,
 	# а в повороте корпус остаётся собранным над пятном контакта отдельно от наклона рамы.
 	var effort_brace := heavy * seated * 0.012 + up * 0.008
@@ -307,6 +308,13 @@ func pose(input: PoseInput) -> void:
 			break
 		if (chest - hip).length_squared() > 0.000001:
 			chest = hip + (chest - hip).normalized() * spine_len
+	for i in 2:
+		var side := -1.0 if i == 0 else 1.0
+		var hip_offset := pelvis_basis * Vector3(side * 0.11, 0.0, 0.0)
+		var ankle := _feet[i].origin
+		var horizontal := Vector2(hip.x + hip_offset.x - ankle.x, hip.z + hip_offset.z - ankle.z).length_squared()
+		var leg_reach := LEG_LENGTH * 2.0 - 0.004 - (0.012 * fd if side == fd_side else 0.0)
+		hip.y = minf(hip.y, ankle.y - hip_offset.y + sqrt(maxf(0.0, leg_reach * leg_reach - horizontal)))
 	# Взгляд компенсирует склон и крен в пределах движения шеи, опережая поворот корпуса.
 	var head_angles := Vector3(clampf(-input.pitch * 0.75 + input.head_nod + gaze.y, -0.36, 0.36),
 		clampf(look + gaze.x, -0.6, 0.6), -roll * 0.65 + sway * 0.12 - gaze.x * 0.16)
@@ -472,6 +480,13 @@ func _limb_basis(a: Vector3, b: Vector3, x_axis: Vector3) -> Basis:
 		x = fallback - y_axis * fallback.dot(y_axis)
 	x = x.normalized()
 	return Basis(x, y_axis, x.cross(y_axis).normalized())
+
+static func _soft_min(val: float, limit: float, margin: float) -> float:
+	if val <= limit - margin or margin <= 0.0:
+		return val
+	var excess := (val - (limit - margin)) / margin
+	return limit - margin + margin * (excess / (1.0 + excess))
+
 
 func _joint(a: Vector3, b: Vector3, length: float, pole: Vector3) -> Vector3:
 	var delta := b - a

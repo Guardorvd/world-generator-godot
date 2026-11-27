@@ -237,7 +237,7 @@ const PATH := "res://resources/bike_physics.tres"
 ## Suspension compression damping rate (1/s).
 @export var spring_damp_comp := 23.0
 ## Suspension rebound damping rate (1/s).
-@export var spring_damp_rebound := 34.0
+@export var spring_damp_rebound := 26.0
 ## Maximum upward wheel travel / compression sag (m).
 @export var sag_max := 0.16
 ## Maximum downward wheel extension droop (m).
@@ -253,7 +253,7 @@ const PATH := "res://resources/bike_physics.tres"
 ## Energy loss factor when wheel climbs onto obstacle bump (1/s).
 @export var bump_drag := 1.0
 ## Suspension compression fraction per 1g profile vertical load.
-@export var profile_sag := 0.6
+@export var profile_sag := 0.0
 ## Fork compression speed threshold for bottom-out impact audio/rumble (m/s).
 @export var bottom_out_speed := 0.8
 ## Fraction of felt landing impact velocity transferred into suspension compression.
@@ -287,7 +287,7 @@ const PATH := "res://resources/bike_physics.tres"
 
 @export_group("Flight, Hop & Landings")
 ## Height clearance required along lookahead to detach into flight (m).
-@export var lift_threshold := 0.04
+@export var lift_threshold := 0.09
 ## Lookahead probe times for takeoff lift prediction (s).
 @export var look_times := PackedFloat32Array([0.1, 0.2, 0.3])
 ## Instant downward ground step larger than this detaches immediately (m).
