@@ -9,6 +9,7 @@ extends Node
 ## быстрое сохранение, настройки, компактное управление; уход в меню и выход — с подтверждением.
 ## Настройки: вкладки в сцене, управление и звук применяются сразу, сброс — с подтверждением.
 
+const MusicVolumeRow := preload("res://scripts/ui/music_volume_row.gd")
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 # Сцены игры и Лаборатории не входят в загрузку меню (их скрипты компилируются ~2,6 с до первого кадра):
 # они грузятся при входе — игра под экраном загрузки мира. Фоновая загрузка (load_threaded_request) пробовалась
@@ -128,6 +129,7 @@ var _load_quit_requested := false
 var _favorites_notice_tween: Tween
 var _fov_dragging := false
 var _volume_dragging := false
+var _music_slider: HSlider   # 27.11.2026: «Музыка» под «Громкостью», строится кодом (MusicVolumeRow)
 var _volume_tick_ms := 0
 var _type_catalog: WorldTypeCatalog
 var _catalog_return: Control
@@ -360,6 +362,7 @@ func _ready() -> void:
 	%FovSlider.drag_ended.connect(func(_changed: bool) -> void:
 		_fov_dragging = false
 		_set_preview_peek(false))
+	_music_slider = MusicVolumeRow.attach(%VolumeSlider, func() -> void: _settings_changed(&"audio"))
 	%VolumeSlider.drag_started.connect(func() -> void: _volume_dragging = true)
 	%VolumeSlider.drag_ended.connect(func(_changed: bool) -> void:
 		_volume_dragging = false
@@ -999,6 +1002,7 @@ func _sync_settings_controls() -> void:
 	%HeadBob.set_pressed_no_signal(GameContext.scope.settings.head_bob)
 	%TrailClutter.set_pressed_no_signal(GameContext.scope.settings.trail_clutter)
 	%VolumeSlider.set_value_no_signal(GameContext.scope.settings.volume)
+	MusicVolumeRow.sync(_music_slider)
 	%DaySlider.set_value_no_signal(GameContext.scope.settings.day_minutes)
 	%StartHourSlider.set_value_no_signal(GameContext.scope.settings.start_hour)
 	%RandomHour.set_pressed_no_signal(not GameContext.scope.settings.start_hour_set)

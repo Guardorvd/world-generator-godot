@@ -83,6 +83,24 @@ const SURFACES := [
 @export var land_soft_max := 4.5
 @export var land_med_max := 8.5
 
+@export_group("Music")
+## Soundtrack (MusicDirector): the user's tracks from music_dir, played like game music, not a playlist.
+@export var music_bus := &"Music"
+@export var music_dir := "res://resources/sounds/soundtrack"
+## Level of a piece at 100 % music volume, under the file's own level (the "100 %" is already softer).
+@export var db_music := -7.0
+## Seconds of nature-only silence before the first piece after loading a world.
+@export var music_first_delay_range := Vector2(25.0, 55.0)
+## Seconds of silence between pieces.
+@export var music_gap_range := Vector2(90.0, 210.0)
+@export var music_fade_in_s := 7.0
+@export var music_fade_out_s := 9.0
+## Longer pieces fade out after this many seconds instead of playing to the end.
+@export var music_max_play_s := 300.0
+## How much the pause menu lowers music (dB) and how fast (s).
+@export var music_pause_duck_db := -8.0
+@export var music_duck_time_s := 0.6
+
 ## Per-surface profile.
 ## - texture_file: riding loop under resources/sounds/ (optional; only shallow water has one now).
 ##   A surface gets its loop back by adding the file and this key, no code change needed.

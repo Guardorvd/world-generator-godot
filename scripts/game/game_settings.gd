@@ -33,7 +33,9 @@ const FOG_QUALITY_LEVELS := ["Низкий", "Средний", "Высокий",
 ## 16.11: облака неба — купол (низкие), облегчённые по пикселям (средние), прежние (высокие); LightingQuality.apply_clouds
 const CLOUD_QUALITY_LEVELS := ["Низкие", "Средние", "Высокие"]
 const DEFAULT_CLOUD_QUALITY := 1
+const AudioBuses := preload("res://scripts/audio/game_audio_buses.gd")
 const DEFAULT_VOLUME := 0.8
+const DEFAULT_MUSIC_VOLUME := 0.5   # 27.11.2026: саундтрек; 100 % уже тише самих файлов (GameAudioConfig.db_music)
 const DEFAULT_DAY_MINUTES := 7.0   # с 12.9 сутки за 7 минут; 0 — время стоит
 const OLD_DAY_MINUTES := 24.0      # прежнее значение по умолчанию: в файлах до 10.1 заменяется новым
 const DEFAULT_START_HOUR := 9.0
@@ -137,6 +139,7 @@ var cloud_quality := DEFAULT_CLOUD_QUALITY
 var style_on: Dictionary = VisualStyle.DEFAULT_ON.duplicate()
 var style_amount: Dictionary = VisualStyle.DEFAULT_AMOUNT.duplicate()
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
+var music_volume := DEFAULT_MUSIC_VOLUME   # громкость музыки 0..1 (шина Music)
 var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
 var start_hour_set := false  # час начала выбран игроком; иначе каждый мир начинается в случайный час
@@ -196,6 +199,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 		style_on[id] = _flag(cfg, "style", id + "_on", style_on[id])
 		style_amount[id] = _number(cfg, "style", id + "_amount", style_amount[id], 0.0, 1.0)
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
+	music_volume = _number(cfg, "sound", "music_volume", music_volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
 	# в файлах до 10.1 флага нет: час, отличный от прежнего значения по умолчанию, игрок выбирал сам;
@@ -337,6 +341,7 @@ func reset_defaults() -> void:
 	style_on = VisualStyle.DEFAULT_ON.duplicate()
 	style_amount = VisualStyle.DEFAULT_AMOUNT.duplicate()
 	volume = DEFAULT_VOLUME
+	music_volume = DEFAULT_MUSIC_VOLUME
 	day_minutes = DEFAULT_DAY_MINUTES
 	start_hour = DEFAULT_START_HOUR
 	start_hour_set = false
@@ -373,6 +378,7 @@ func save_settings() -> Error:
 		cfg.set_value("style", id + "_on", style_on[id])
 		cfg.set_value("style", id + "_amount", style_amount[id])
 	cfg.set_value("sound", "volume", volume)
+	cfg.set_value("sound", "music_volume", music_volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
 	cfg.set_value("time", "start_hour_set", start_hour_set)
@@ -440,6 +446,9 @@ func pick_start_hour() -> float:
 func apply_volume() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(volume, 0.001)))
 	AudioServer.set_bus_mute(0, volume <= 0.0)
+	var music_idx := AudioBuses.ensure_music_bus()
+	AudioServer.set_bus_volume_db(music_idx, linear_to_db(maxf(music_volume, 0.001)))
+	AudioServer.set_bus_mute(music_idx, music_volume <= 0.0)
 
 
 ## Full in-memory reset; never touches the player profile.

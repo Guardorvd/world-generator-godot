@@ -3,6 +3,7 @@ extends RefCounted
 ## Creates and manages the structured audio bus hierarchy:
 ## Master -> World (LPF ducking + safety soft limiter) -> Ambience / Bike / Foley
 ## Master -> UI (unaffected by pause ducking)
+## Master -> Music (soundtrack; volume from the music setting)
 
 const LIM_THRESHOLD_DB := -1.5
 const LIM_CEILING_DB := -0.3
@@ -38,7 +39,14 @@ static func ensure_layout(cfg) -> int:
 		AudioServer.set_bus_effect_enabled(bike_idx, 0, true)
 	_ensure_bus(cfg.foley_bus, cfg.world_bus)
 	_ensure_bus(cfg.ui_bus, &"Master")
+	ensure_music_bus(cfg.music_bus)
 	return world_idx
+
+
+## Music goes straight to Master: pause ducking and tunnel filters of World do not touch it.
+## Its volume is the player's music setting (GameSettings.apply_volume).
+static func ensure_music_bus(bus_name: StringName = &"Music") -> int:
+	return _ensure_bus(bus_name, &"Master")
 
 
 static func _ensure_bus(bus_name: StringName, send_to: StringName) -> int:

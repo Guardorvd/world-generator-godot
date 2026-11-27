@@ -25,6 +25,7 @@ const SurfaceClassifier := preload("res://scripts/audio/surface_classifier.gd")
 const BikeLayer := preload("res://scripts/audio/bike_audio_layer.gd")
 const FoleyLayer := preload("res://scripts/audio/foley_audio_layer.gd")
 const AmbienceLayer := preload("res://scripts/audio/ambience_audio_layer.gd")
+const MusicDirector := preload("res://scripts/audio/music_director.gd")
 
 @export var config: Resource
 
@@ -36,6 +37,7 @@ var regional_fires: Array = []
 var bike_layer: BikeLayer
 var foley_layer: FoleyLayer
 var ambience_layer: AmbienceLayer
+var music: MusicDirector   # саундтрек (27.11.2026), появляется с миром в setup
 
 # Compatibility references for tools/sound_check.gd and tools/ui_choreography_test.gd
 var _water: AudioStreamPlayer
@@ -111,6 +113,11 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	_last_tunnel_lpf = -1.0
 	ambience_layer.start_loops()
 	bike_layer.start_loops()
+	if music == null:
+		music = MusicDirector.new()
+		music.name = "Music"
+		add_child(music)
+		music.setup(config)
 
 
 func set_paused(on: bool) -> void:
@@ -122,6 +129,8 @@ func set_paused(on: bool) -> void:
 func set_ducked(on: bool, duration := 0.18) -> void:
 	var idx := AudioBuses.ensure_layout(config)
 	_ducked = on
+	if music != null:
+		music.set_ducked(on)
 	if _duck_tween != null and _duck_tween.is_valid():
 		_duck_tween.kill()
 		_duck_tween = null
