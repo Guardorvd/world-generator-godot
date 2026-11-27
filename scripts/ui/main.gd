@@ -55,7 +55,6 @@ const LOAD_WARMUP_FRAMES := 30
 const STARTUP_COVER_COLOR := Color(0.043, 0.051, 0.059)
 const STARTUP_COVER_LIMIT := 6.0
 const STARTUP_REVEAL := 0.45
-const WIND := "res://resources/sounds/wind.wav"
 const BIRDS := ["res://resources/sounds/bird_1.wav", "res://resources/sounds/bird_2.wav", "res://resources/sounds/bird_3.wav"]
 
 var game: Node # GameWorld; без типа, чтобы меню не тянуло скрипты игры при запуске
@@ -105,7 +104,7 @@ var _backdrop_fade: Tween
 var _poster: Texture2D
 var _frozen_fallback: Texture2D
 var _startup_cover: ColorRect
-var _menu_wind: AudioStreamPlayer
+var _menu_audio_on := false   # 27.11.2026: ветер меню удалён по просьбе пользователя, остались птицы
 var _menu_bird: AudioStreamPlayer
 var _bird_wait := 0.0
 var _parallax := Vector2.ZERO
@@ -885,25 +884,17 @@ func _backdrop_size() -> Vector2i:
 
 func _set_menu_audio(enabled: bool) -> void:
 	if not enabled:
-		if _menu_wind != null:
-			_menu_wind.stop()
+		_menu_audio_on = false
+		if _menu_bird != null:
 			_menu_bird.stop()
 		return
 	if DisplayServer.get_name() == "headless" or AudioServer.get_driver_name() == "Dummy":
 		return
-	if _menu_wind == null:
-		_menu_wind = AudioStreamPlayer.new()
-		var source: AudioStreamWAV = load(WIND)
-		var loop: AudioStreamWAV = source.duplicate()
-		loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		loop.loop_end = roundi(loop.get_length() * loop.mix_rate)
-		_menu_wind.stream = loop
-		_menu_wind.volume_db = -30.0
-		add_child(_menu_wind)
+	if _menu_bird == null:
 		_menu_bird = AudioStreamPlayer.new()
 		_menu_bird.volume_db = -28.0
 		add_child(_menu_bird)
-	_menu_wind.play()
+	_menu_audio_on = true
 	_bird_wait = 7.0
 
 
@@ -917,7 +908,7 @@ func _animate_menu(delta: float) -> void:
 		texture.offset_right = _parallax.x + 4.0
 		texture.offset_top = _parallax.y - 4.0
 		texture.offset_bottom = _parallax.y + 4.0
-	if _menu_wind != null and _menu_wind.playing:
+	if _menu_audio_on:
 		_bird_wait -= delta
 		if _bird_wait <= 0.0:
 			_menu_bird.stream = load(BIRDS[_menu_rng.randi_range(0, BIRDS.size() - 1)])

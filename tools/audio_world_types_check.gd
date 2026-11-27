@@ -1,7 +1,8 @@
 extends SceneTree
 ## Verifies Organic Tactile Audio v1.1 across BOTH real world generation types:
-## - Type 1: mountain_valley (ocean surf, meadows, alpine elevation wind, forest, day/night)
-## - Type 2: river_expedition (valley river rapids via current_at, overcast mist air, conifer canopy, trail)
+## - Type 1: mountain_valley (calm water, surfaces, night crickets)
+## - Type 2: river_expedition (river water, overcast mist air, day birds)
+## 27.11.2026: surf, meadow breeze, alpine/forest wind and rapids were deleted at the user's request.
 ## Run: godot --headless --path . --script res://tools/audio_world_types_check.gd
 
 
@@ -28,9 +29,6 @@ func _verify_type1() -> bool:
 
 	var al := audio.ambience_layer
 	var surf_seen := {}
-	var max_meadow := -80.0
-	var max_alpine := -80.0
-	var max_surf := -80.0
 	var max_crickets := -80.0
 
 	var p := PlayerState.spawn(w, h)
@@ -46,9 +44,6 @@ func _verify_type1() -> bool:
 			audio._sample_t = 0.0
 			audio.update(pos, 7.0, true, 0.25, 0.0, 0.0, 0.0, true, false, 0.0, 0.0, 0.5, 1.0)
 			surf_seen[audio._surface_id] = true
-			max_meadow = maxf(max_meadow, al.meadow_player.volume_db)
-			max_alpine = maxf(max_alpine, al.wind_alpine_player.volume_db)
-			max_surf = maxf(max_surf, al.surf_player.volume_db)
 		await process_frame
 
 	# Check nocturnal crickets at spawn in Type 1
@@ -63,9 +58,9 @@ func _verify_type1() -> bool:
 	audio.free()
 	await process_frame
 
-	var pass_ok := surf_seen.size() >= 3 and (max_meadow > -65.0 or max_alpine > -65.0) and max_surf > -70.0
-	print("Type 1 (mountain_valley) [%d ms]: surfaces=%s meadow=%.1f alpine=%.1f surf=%.1f crickets=%.1f -> %s" % [
-		Time.get_ticks_msec() - t0, str(surf_seen.keys()), max_meadow, max_alpine, max_surf, max_crickets, "OK" if pass_ok else "FAIL"])
+	var pass_ok := surf_seen.size() >= 3 and max_crickets > -60.0
+	print("Type 1 (mountain_valley) [%d ms]: surfaces=%s crickets=%.1f -> %s" % [
+		Time.get_ticks_msec() - t0, str(surf_seen.keys()), max_crickets, "OK" if pass_ok else "FAIL"])
 	return pass_ok
 
 
@@ -83,10 +78,8 @@ func _verify_type2() -> bool:
 
 	var al := audio.ambience_layer
 	var surf_seen := {}
-	var max_rapids := -80.0
 	var max_water := -80.0
 	var max_mist := -80.0
-	var max_forest_wind := -80.0
 	var saw_birds_day := false
 
 	for step_y in range(4, w.H - 4, 8):
@@ -98,10 +91,8 @@ func _verify_type2() -> bool:
 			audio._sample_t = 0.0
 			audio.update(pos, 8.0, true, 0.25, 0.0, 0.0, 0.0, true, false, 0.0, 0.0, 0.5, 1.0)
 			surf_seen[audio._surface_id] = true
-			max_rapids = maxf(max_rapids, al.rapids_player.volume_db)
 			max_water = maxf(max_water, al.water_player.volume_db)
 			max_mist = maxf(max_mist, al.wind_mist_player.volume_db)
-			max_forest_wind = maxf(max_forest_wind, al.wind_forest_player.volume_db)
 			if al.bird_ok:
 				saw_birds_day = true
 		await process_frame
@@ -112,7 +103,7 @@ func _verify_type2() -> bool:
 	audio.free()
 	await process_frame
 
-	var pass_ok := max_rapids > -55.0 and max_mist > -50.0 and max_forest_wind > -55.0 and saw_birds_day and surf_seen.size() >= 2
-	print("Type 2 (river_expedition) [%d ms]: surfaces=%s rapids=%.1f water=%.1f mist=%.1f forest=%.1f birds=%s -> %s" % [
-		Time.get_ticks_msec() - t0, str(surf_seen.keys()), max_rapids, max_water, max_mist, max_forest_wind, str(saw_birds_day), "OK" if pass_ok else "FAIL"])
+	var pass_ok := max_water > -55.0 and max_mist > -50.0 and saw_birds_day and surf_seen.size() >= 2
+	print("Type 2 (river_expedition) [%d ms]: surfaces=%s water=%.1f mist=%.1f birds=%s -> %s" % [
+		Time.get_ticks_msec() - t0, str(surf_seen.keys()), max_water, max_mist, str(saw_birds_day), "OK" if pass_ok else "FAIL"])
 	return pass_ok

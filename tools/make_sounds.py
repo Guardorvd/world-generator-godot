@@ -281,6 +281,10 @@ SKIP_FILES = {
 def write_wav(rel_path, x, looped=False, peak=0.60, target_rms=None):
     if rel_path in SKIP_FILES:
         return
+    # 27.11.2026: the user deleted the sounds they did not like by hand. A missing file means "rejected":
+    # regenerate only files that are still in the project, never bring deleted ones back.
+    if not os.path.exists(os.path.join(ROOT, rel_path)):
+        return
     x = prepare_audio(x, peak=peak, target_rms=target_rms)
     pcm = np.round(x * 32767.0).astype("<i2").tobytes()
     fmt = struct.pack("<HHIIHH", 1, 1, RATE, RATE * 2, 2, 16)

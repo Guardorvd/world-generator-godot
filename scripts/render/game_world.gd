@@ -2734,7 +2734,7 @@ func toggle_flashlight() -> void:
 		hud.toast_now("Подойдите к велосипеду, чтобы переключить фару", &"warning")
 		return
 	bike_view.set_lamp(not bike_view.lamp_on())
-	hud.interaction_audio.play(&"lamp_switch")
+	# 27.11.2026: щелчок фары удалён вместе с lamp_switch.wav по просьбе пользователя
 
 
 ## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания

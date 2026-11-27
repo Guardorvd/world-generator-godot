@@ -39,7 +39,6 @@ var ambience_layer: AmbienceLayer
 
 # Compatibility references for tools/sound_check.gd and tools/ui_choreography_test.gd
 var _water: AudioStreamPlayer
-var _surf: AudioStreamPlayer
 var _roll: AudioStreamPlayer
 var _fire: AudioStreamPlayer3D
 var _bird: AudioStreamPlayer3D
@@ -87,11 +86,10 @@ func _ready() -> void:
 	foley_layer.setup(config)
 
 	_water = ambience_layer.water_player
-	_surf = ambience_layer.surf_player
 	_fire = ambience_layer.fire_player
 	_bird = ambience_layer.bird_player
-	# с 27.11.2026 отдельной петли качения нет: звук качения — петля покрытия (по умолчанию грунт)
-	_roll = bike_layer._tex_players[&"dirt"]
+	# с 27.11.2026 отдельной петли качения нет: звук движения для старых тестов — петля мелкой воды
+	_roll = bike_layer._tex_players.get(&"water")
 	_bottom = bike_layer._fork_bottom_player
 	_knock = bike_layer._rim_knock_player
 	_crash = bike_layer._crash_player
@@ -168,9 +166,9 @@ func tick_bike(bike: BikeRide, dt: float) -> void:
 	bike_layer.tick_physics(bike, dt)
 
 
-func mount_changed(riding: bool) -> void:
-	bike_layer.play_mount(riding)
-	foley_layer.play_cloth(-3.0)
+## 27.11.2026: звуки посадки, спешивания и ткани удалены по просьбе пользователя; вызов оставлен для игры.
+func mount_changed(_riding: bool) -> void:
+	pass
 
 
 func bottom_out(impact: float) -> void:
@@ -181,8 +179,9 @@ func crash(impact: float) -> void:
 	bike_layer.play_crash(impact)
 
 
-func pump_compression(accel: float) -> void:
-	bike_layer.play_pump(accel)
+## 27.11.2026: звук прокачки подвески удалён по просьбе пользователя; вызов оставлен для игры.
+func pump_compression(_accel: float) -> void:
+	pass
 
 
 func wheel_knock(impact: float, front: bool) -> void:

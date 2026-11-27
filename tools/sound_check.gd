@@ -4,7 +4,7 @@ extends SceneTree
 ##   godot --headless --script res://tools/sound_check.gd
 
 const DB_MAX := -3.0 # 20.11: удары не громче этого
-const LOOPS := ["wind", "water", "surf", "fire", "roll", "grit", "freewheel", "chain"]
+const LOOPS := ["water", "fire"]   # 27.11.2026: wind, surf, roll, grit, freewheel, chain удалены пользователем
 
 class AudioWorld extends WorldData:
 	func tile_info(_x: float, _z: float) -> Dictionary:
@@ -66,7 +66,7 @@ func _run() -> void:
 	if a._fire.playing != nearby_fire:
 		push_error("костёр")
 		ok = false
-	print("у точки появления: вода %.2f, море %.2f, птицы %s" % [a._goal[a._water], a._goal[a._surf], a._bird_ok], ", костёр ", a._fire.playing)
+	print("у точки появления: вода %.2f, птицы %s" % [a._goal[a._water], a._bird_ok], ", костёр ", a._fire.playing)
 	# без окна звук не выводится, и при выходе Godot пишет про 4 «неосвобождённых» петли: это
 	# воспроизведения, которые снимает только звуковой поток; в игре (lifecycle_test) ничего не копится
 	a.free()
@@ -90,19 +90,13 @@ func _isolated(ok: bool) -> void:
 	for speed: float in [0.0, 6.0, 11.0, 23.0]:
 		for frame in 120:
 			a.update(Vector3(16, 0, 16), speed, true, 1.0 / 60.0)
-		# _roll — петля покрытия «грунт»: потолок — её уровень в GameAudioConfig с запасом на торможение
-		var valid := a._roll.volume_db <= float(a.config.db_surface_texture) + 2.0
+		# с 27.11.2026 на суше нет петли качения (покрытия, кроме воды, удалены): в покое и при езде по грунту тихо
+		var valid := a._roll.volume_db <= -79.0
 		if speed == 0.0:
-			valid = valid and a._roll.volume_db <= -79.0 and a._water.volume_db <= -79.0 and a._surf.volume_db <= -79.0
-		print("speed %.0f: roll %.1f dB, water %.1f, surf %.1f" % [speed, a._roll.volume_db, a._water.volume_db, a._surf.volume_db])
+			valid = valid and a._water.volume_db <= -79.0
+		print("speed %.0f: roll %.1f dB, water %.1f" % [speed, a._roll.volume_db, a._water.volume_db])
 		ok = ok and valid
-	w.dist_ocean.fill(0.0)
 	w.dist_water.fill(0.0)
-	a._sample_t = 0.0
-	for frame in 240:
-		a.update(Vector3(16, 0, 16), 0.0, false, 1.0 / 60.0)
-	print("shore: surf %.1f dB" % a._surf.volume_db)
-	ok = ok and a._surf.volume_db <= -21.9 and a._surf.volume_db > -24.0
 	w.dist_ocean.fill(100.0)
 	a._sample_t = 0.0
 	for frame in 240:
@@ -110,7 +104,7 @@ func _isolated(ok: bool) -> void:
 	print("river: water %.1f dB" % a._water.volume_db)
 	ok = ok and a._water.volume_db <= -20.9 and a._water.volume_db > -23.0
 	# 20.11: свои короткие звуки ударов и откликов: есть, не петли, разумной длины; голоса ударов играют без ошибок
-	for n: String in ["fork_bottom", "rim_knock", "crash_impact", "lamp_switch", "discovery_chime", "quest_complete"]:
+	for n: String in ["fork_bottom", "rim_knock", "crash_impact", "discovery_chime", "quest_complete"]:
 		var s: AudioStreamWAV = load("res://resources/sounds/%s.wav" % n)
 		var good := s != null and s.loop_mode == AudioStreamWAV.LOOP_DISABLED and s.get_length() > 0.04 and s.get_length() < 2.0
 		print("%-15s %.2f с %s" % [n, s.get_length() if s != null else 0.0, "" if good else "ОШИБКА"])

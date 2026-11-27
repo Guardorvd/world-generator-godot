@@ -480,6 +480,10 @@ func _rms(x: PackedFloat32Array) -> float:
 # ---------- Запись и отчёт ----------
 
 func _write(rel: String, x: PackedFloat32Array, looped: bool, target_rms: float, peak: float) -> PackedFloat32Array:
+	# 27.11.2026: a file the user deleted by hand is rejected; regenerate only files that still exist.
+	if not FileAccess.file_exists(ProjectSettings.globalize_path(ROOT + rel)):
+		print("  %-28s пропущен: файл удалён пользователем" % rel)
+		return x
 	var n := x.size()
 	var mean := 0.0
 	for v in x:

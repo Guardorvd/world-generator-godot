@@ -381,7 +381,6 @@ func _build_ui() -> void:
 	sfx_grid.columns = 5
 	root_box.add_child(sfx_grid)
 	var triggers := [
-		["Bunny Hop Takeoff", func() -> void: audio.bike_layer._takeoff_hop_player.play()],
 		["Soft Land (3 m/s)", func() -> void: audio.land(16.0, 16.0, 0.0, 3.0, true)],
 		["Med Land (6.5 m/s)", func() -> void: audio.land(16.0, 16.0, 0.0, 6.5, true)],
 		["Hard Land (10.5 m/s)", func() -> void: audio.land(16.0, 16.0, 0.0, 10.5, true)],
@@ -389,10 +388,6 @@ func _build_ui() -> void:
 		["Rear Knock", func() -> void: audio.wheel_knock(1.5, false)],
 		["Heavy Rim Knock", func() -> void: audio.wheel_knock(3.2, true)],
 		["Fork Bottom-Out", func() -> void: audio.bottom_out(2.2)],
-		["Pump Compression", func() -> void: audio.pump_compression(1.4)],
-		["Gear Shift", func() -> void: audio.bike_layer._gear_player.play()],
-		["Mount Bike", func() -> void: audio.mount_changed(true)],
-		["Dismount Bike", func() -> void: audio.mount_changed(false)],
 		["Crash Impact", func() -> void: audio.crash(9.0)],
 		["Footstep (Current)", func() -> void: audio.foley_layer.play_step(current_surface, cfg.db_step, 0.0)],
 		["Water Entry", func() -> void: audio.foley_layer._water_entry_player.play()],
@@ -489,10 +484,9 @@ func _update_meters() -> void:
 		var p: AudioStreamPlayer = bl._tex_players[s]
 		if not p.stream_paused and p.volume_db > -75.0:
 			active_tex.append("%s(%.1fdB)" % [String(s), p.volume_db])
-	_meter_label.text = "Surface loops: %s\nAmbience: Water %.1f | Rapids %.1f | WindF %.1f | WindA %.1f | Mist %.1f | Meadow %.1f | Crickets %.1f | Tunnel %.1f" % [
+	_meter_label.text = "Surface loops: %s\nAmbience: Water %.1f | Mist %.1f | Crickets %.1f | Tunnel %.1f" % [
 		", ".join(active_tex),
-		al.water_player.volume_db, al.rapids_player.volume_db, al.wind_forest_player.volume_db,
-		al.wind_alpine_player.volume_db, al.wind_mist_player.volume_db, al.meadow_player.volume_db,
+		al.water_player.volume_db, al.wind_mist_player.volume_db,
 		al.crickets_player.volume_db, al.tunnel_player.volume_db]
 
 
@@ -509,69 +503,52 @@ func run_headless_suite() -> bool:
 	var bl := audio.bike_layer
 	var fl := audio.foley_layer
 
-	# 0. Start from standstill (27.11.2026: the hum on start). The first second rolls under 1.4 m/s:
-	#    the surface loop stays quiet and is never pitched down (a pitched-down low loop is what hummed).
-	set_surface(&"dirt")
-	var dirt: AudioStreamPlayer = bl._tex_players[&"dirt"]
-	var start_max := -80.0
-	var start_low_pitch := 9.0
+	# 27.11.2026: the user deleted the riding loops they did not like; only shallow water keeps a surface loop.
+	# 0. Riding on land: no riding loop plays at all (no hum, no wind), from the start up to speed.
+	var land_loud := -80.0
+	for surf: StringName in [&"dirt", &"forest", &"gravel", &"stone", &"snow"]:
+		set_surface(surf)
+		for i in 90:
+			_step_frame_headless(i / 90.0 * 14.0, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
+			for p: AudioStreamPlayer in bl._loop_players:
+				land_loud = maxf(land_loud, p.volume_db)
+	check.call(land_loud <= -75.0,
+		"Scenario 0 (Riding on land, 0..14 m/s): no riding loop audible (loudest %.1f dB)" % land_loud)
+
+	# 1. Shallow water: the only remaining surface loop, quiet when slow, never pitched down
+	set_surface(&"water")
+	var slow_max := -80.0
+	var low_pitch := 9.0
+	var water_loop: AudioStreamPlayer = bl._tex_players.get(&"water")
 	for i in 60:
 		_step_frame_headless(i / 60.0 * 1.4, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-		start_max = maxf(start_max, dirt.volume_db)
-		if not dirt.stream_paused:
-			start_low_pitch = minf(start_low_pitch, dirt.pitch_scale)
-	check.call(start_max < float(cfg.db_surface_texture) - 6.0 and start_low_pitch >= 0.95,
-		"Scenario 0 (Start from standstill): surface loop %.1f dB max under 1.4 m/s, lowest pitch %.2f" % [start_max, start_low_pitch])
-
-	# 1. Slow forest ride
-	set_surface(&"forest")
+		if water_loop != null:
+			slow_max = maxf(slow_max, water_loop.volume_db)
+			if not water_loop.stream_paused:
+				low_pitch = minf(low_pitch, water_loop.pitch_scale)
 	for i in 120:
-		_step_frame_headless(3.8, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	check.call(_tex_db(&"forest") > -45.0 and _tex_db(&"forest") < -12.0,
-		"Scenario 1 (Slow forest): forest texture audible and bounded (%.1f dB)" % _tex_db(&"forest"))
+		_step_frame_headless(8.0, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
+	var water_db: float = water_loop.volume_db if water_loop != null else -80.0
+	check.call(water_loop != null and slow_max < float(cfg.db_surface_texture) - 6.0 and low_pitch >= 0.95 and water_db > -30.0,
+		"Scenario 1 (Shallow water): slow %.1f dB, at 8 m/s %.1f dB, lowest pitch %.2f" % [slow_max, water_db, low_pitch])
 
-	# 2. Fast forest descent with bumps & knocks
-	for i in 120:
-		sim_bike.squash_fv = 1.3 if i % 25 == 0 else 0.1
-		if i % 40 == 10:
-			audio.wheel_knock(1.4, true)
-		_step_frame_headless(17.0, false, false, 0.0, 0.0, 0.18, 1.0 / 60.0)
-	sim_bike.squash_fv = 0.0
-	check.call(_tex_db(&"forest") > -30.0 and _tex_db(&"forest") < -10.0,
-		"Scenario 2 (Fast forest descent): forest texture %.1f dB" % _tex_db(&"forest"))
-
-	# 3. Gravel road
-	set_surface(&"gravel")
-	for i in 120:
-		_step_frame_headless(12.5, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	var gp: AudioStreamPlayer = bl._tex_players[&"gravel"]
-	check.call(gp.volume_db > -30.0 and gp.pitch_scale >= 0.95 and gp.pitch_scale <= 1.1,
-		"Scenario 3 (Gravel road): gravel texture %.1f dB, natural pitch %.2f" % [gp.volume_db, gp.pitch_scale])
-
-	# 4. Sequential surface transition continuity (all 11 surfaces): summed surface level has no jumps
-	var max_jump := 0.0
-	var max_unpaused := 0
-	var prev_sum := _tex_sum_db()
-	for s: StringName in AudioCfg.SURFACES:
-		set_surface(s)
-		for i in 60:
-			_step_frame_headless(9.5, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-			var cur_sum := _tex_sum_db()
-			max_jump = maxf(max_jump, absf(cur_sum - prev_sum))
-			prev_sum = cur_sum
-			var unpaused := 0
-			for sid: StringName in bl._tex_players:
-				if not (bl._tex_players[sid] as AudioStreamPlayer).stream_paused:
-					unpaused += 1
-			max_unpaused = maxi(max_unpaused, unpaused)
-	check.call(max_jump < 3.0 and max_unpaused <= 3,
-		"Scenario 4 (11-surface transitions): max step of summed surface level %.2f dB, active textures %d" % [max_jump, max_unpaused])
-
-	# 5. Series of hops (takeoff -> air -> landing)
+	# 2. Leaving the water fades the loop out without lingering voices
 	set_surface(&"dirt")
-	sim_bike.hop_preparing = true
-	_step_frame_headless(11.0, false, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	sim_bike.hop_preparing = false
+	for i in 120:
+		_step_frame_headless(8.0, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
+	check.call(water_loop == null or (water_loop.volume_db <= -75.0 and water_loop.stream_paused),
+		"Scenario 2 (Water -> land): water loop faded and paused (%.1f dB)" % (water_loop.volume_db if water_loop != null else -80.0))
+
+	# 3. Bumps over roots and stones: knocks play, bounded
+	for i in 120:
+		if i % 40 == 10:
+			audio.wheel_knock(0.9 if i % 80 == 10 else 2.4, i % 80 == 10)
+		_step_frame_headless(12.0, false, false, 0.0, 0.0, 0.1, 1.0 / 60.0)
+	check.call(bl._bump_hit_player.volume_db < 0.0 and bl._rim_knock_player.volume_db < 0.0,
+		"Scenario 3 (Bumps): knock voices bounded (bump %.1f, rim %.1f dB)" % [bl._bump_hit_player.volume_db, bl._rim_knock_player.volume_db])
+
+	# 5. Series of hops: no wind or ground loop in the air
+	set_surface(&"water")
 	sim_bike._hop_used = true
 	for i in 45:
 		_step_frame_headless(11.0, false, true, 0.0, 0.0, 0.0, 1.0 / 60.0)
@@ -581,6 +558,7 @@ func run_headless_suite() -> bool:
 	check.call(air_loud <= -60.0,
 		"Scenario 5 (Hop air phase): no wind or ground loop in the air (loudest %.1f dB)" % air_loud)
 	sim_bike._hop_used = false
+	set_surface(&"dirt")
 	_step_frame_headless(11.0, false, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
 
 	# 6. Soft, medium, and hard landings
@@ -592,18 +570,6 @@ func run_headless_suite() -> bool:
 	var db_hard := bl._land_hard_player.volume_db
 	check.call(db_soft < db_med and db_med < db_hard and db_hard <= -2.0,
 		"Scenario 6 (3-tier landings): soft %.1f < med %.1f < hard %.1f dB" % [db_soft, db_med, db_hard])
-
-	# 7. Prolonged braking & skid (loose vs firm)
-	set_surface(&"gravel")
-	for i in 60:
-		_step_frame_headless(10.0, false, false, 0.85, 0.70, 0.0, 1.0 / 60.0)
-	check.call(bl.brake_pad_player.volume_db > -45.0 and bl.skid_loose_player.volume_db > -35.0 and bl.skid_firm_player.volume_db <= -75.0,
-		"Scenario 7a (Gravel braking): pad %.1f, loose skid %.1f, firm %.1f dB" % [bl.brake_pad_player.volume_db, bl.skid_loose_player.volume_db, bl.skid_firm_player.volume_db])
-	set_surface(&"packed")
-	for i in 60:
-		_step_frame_headless(10.0, false, false, 0.85, 0.70, 0.0, 1.0 / 60.0)
-	check.call(bl.skid_firm_player.volume_db > -35.0 and bl.skid_loose_player.volume_db <= -75.0,
-		"Scenario 7b (Packed braking): firm skid %.1f, loose %.1f dB" % [bl.skid_firm_player.volume_db, bl.skid_loose_player.volume_db])
 
 	# 8. On-foot movement across all 11 surfaces
 	var steps_ok := true
@@ -623,7 +589,7 @@ func run_headless_suite() -> bool:
 			set_surface(AudioCfg.SURFACES[(frame / 300) % AudioCfg.SURFACES.size()])
 		var sp := 8.0 + 7.0 * sin(frame * 0.015)
 		_step_frame_headless(sp, sin(frame * 0.02) > 0.0, false, 0.4 if sp < 4.0 else 0.0, 0.1, 0.1 * sin(frame * 0.03), 1.0 / 60.0)
-		if is_nan(_tex_sum_db()) or is_nan(audio.ambience_layer.water_player.volume_db):
+		if is_nan(audio.ambience_layer.wind_mist_player.volume_db) or is_nan(audio.ambience_layer.water_player.volume_db):
 			nan_found = true
 			break
 		if frame % 60 == 59:
@@ -639,7 +605,7 @@ func run_headless_suite() -> bool:
 	check.call(AudioServer.get_bus_index(cfg.bike_bus) != -1 and AudioServer.get_bus_index(cfg.foley_bus) != -1 and AudioServer.get_bus_index(cfg.world_bus) != -1,
 		"Bus hierarchy verified: World, Bike, Foley present")
 
-	# 10. v1.1 Type 1 vs Type 2 Atmosphere & River Rapids
+	# 10. Type 1 vs Type 2 atmosphere: calm water near rivers, valley mist in the expedition world
 	var al := audio.ambience_layer
 	mock_world.template_id = "mountain_valley"
 	mock_world.test_river = false
@@ -651,8 +617,8 @@ func run_headless_suite() -> bool:
 	set_surface(&"grass")
 	for i in 120:
 		_step_frame_headless(7.5, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	check.call(al.meadow_player.volume_db > -45.0 and al.rapids_player.volume_db <= -75.0,
-		"Scenario 10a (Type 1 sunlit meadow): meadow breeze %.1f dB, rapids silent %.1f dB" % [al.meadow_player.volume_db, al.rapids_player.volume_db])
+	check.call(al.water_player.volume_db <= -75.0,
+		"Scenario 10a (Type 1 dry meadow): water silent (%.1f dB)" % al.water_player.volume_db)
 
 	mock_world.template_id = "river_expedition"
 	mock_world.test_river = true
@@ -662,8 +628,8 @@ func run_headless_suite() -> bool:
 	set_surface(&"forest")
 	for i in 120:
 		_step_frame_headless(7.5, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	check.call(al.rapids_player.volume_db > -35.0 and al.wind_mist_player.volume_db > -46.0 and al.wind_forest_player.volume_db > -52.0,
-		"Scenario 10b (Type 2 river_expedition): rapids %.1f dB, mist %.1f dB, forest wind %.1f dB" % [al.rapids_player.volume_db, al.wind_mist_player.volume_db, al.wind_forest_player.volume_db])
+	check.call(al.water_player.volume_db > -40.0 and al.wind_mist_player.volume_db > -46.0,
+		"Scenario 10b (Type 2 river_expedition): water %.1f dB, mist %.1f dB" % [al.water_player.volume_db, al.wind_mist_player.volume_db])
 
 	# 11. v1.1 Day vs Night ecology
 	check.call(al.bird_ok and al.crickets_player.volume_db <= -70.0,
@@ -675,7 +641,7 @@ func run_headless_suite() -> bool:
 	check.call(not al.bird_ok and al.crickets_player.volume_db > -46.0,
 		"Scenario 11b (Nighttime forest): birds silent (%s), night crickets %.1f dB" % [str(not al.bird_ok), al.crickets_player.volume_db])
 
-	# 12. v1.1 Alpine elevation & Tunnel acoustic dampening
+	# 12. Tunnel acoustic dampening
 	sim_sunlight = 1.0
 	mock_world.template_id = "mountain_valley"
 	mock_world.test_biome = Biomes.PEAK
@@ -684,19 +650,14 @@ func run_headless_suite() -> bool:
 	sim_water_dist = 100.0
 	sim_river_flow = 0.0
 	sim_elevation = 110.0
-	audio._sample_t = 0.0
-	for i in 150:
-		_step_frame_headless(6.0, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	var ridge_wind := al.wind_alpine_player.volume_db
 	sim_tunnel = true
 	audio._sample_t = 0.0
 	for i in 150:
 		_step_frame_headless(6.0, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
 	var world_idx := AudioServer.get_bus_index(cfg.world_bus)
 	var lpf := AudioServer.get_bus_effect(world_idx, 0) as AudioEffectLowPassFilter
-	check.call(ridge_wind > -42.0 and al.tunnel_player.volume_db > -48.0 and al.wind_alpine_player.volume_db < ridge_wind - 6.0 and lpf != null and lpf.cutoff_hz < 5000.0,
-		"Scenario 12 (Alpine ridge -> Tunnel): ridge %.1f dB -> tunnel hum %.1f dB (wind attenuated to %.1f dB, LPF %.0f Hz)" % [
-			ridge_wind, al.tunnel_player.volume_db, al.wind_alpine_player.volume_db, lpf.cutoff_hz if lpf != null else -1.0])
+	check.call(al.tunnel_player.volume_db > -48.0 and lpf != null and lpf.cutoff_hz < 5000.0,
+		"Scenario 12 (Tunnel): tunnel hum %.1f dB, LPF %.0f Hz" % [al.tunnel_player.volume_db, lpf.cutoff_hz if lpf != null else -1.0])
 
 	# Restore & verify tunnel exit acoustics
 	sim_tunnel = false
@@ -710,20 +671,6 @@ func run_headless_suite() -> bool:
 		"Scenario 12b (Tunnel exit): tunnel hum faded (%.1f dB), LPF restored (%.0f Hz)" % [
 			al.tunnel_player.volume_db, lpf.cutoff_hz if lpf != null else -1.0])
 	return result.ok
-
-
-func _tex_db(surf: StringName) -> float:
-	return (audio.bike_layer._tex_players[surf] as AudioStreamPlayer).volume_db
-
-
-## Суммарная громкость петель покрытий (по мощности), дБ.
-func _tex_sum_db() -> float:
-	var pw := 0.0
-	for sid: StringName in audio.bike_layer._tex_players:
-		var p: AudioStreamPlayer = audio.bike_layer._tex_players[sid]
-		if not p.stream_paused:
-			pw += pow(db_to_linear(p.volume_db), 2.0)
-	return 10.0 * log(maxf(pw, 1e-10)) / log(10.0)
 
 
 func _step_frame_headless(speed: float, pedaling: bool, airborne: bool, brake: float, skid: float, lean: float, dt: float) -> void:
