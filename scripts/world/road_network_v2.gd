@@ -589,7 +589,7 @@ static func _add_near_axes(w: WorldData, pts: Array, data: Dictionary) -> void:
 ## Форма оси после публикации развилок, до профилирования ширины и штампа полотна.
 static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByteArray, primary_end: int) -> void:
 	var routing := RoadTuning.for_world(w).routing
-	if not routing.arc_bends_enabled and not routing.axis_meander_enabled: return
+	if not routing.arc_bends_enabled and not routing.axis_meander_enabled and not StageTrails.local_reconstruction: return
 	var water: Object = surface.fast_water()
 	if water == null:
 		push_error("Сеть V2: форме оси нужна поверхность C#")
@@ -610,24 +610,42 @@ static func reshape_axes(w: WorldData, surface: Heightfield, on_axis: PackedByte
 		profile_base = StageTrails.RoadLine.PROFILE_BASE,
 		bench_cross = routing.line_limits(StageTrails.TRAIL_GRADE, StageTrails.BENCH_CROSS).cross,
 		reach = RoadRefinement.REACH}
-	if routing.arc_bends_enabled:
-		_align_sections(w, water, input.merged(arc_settings(routing)), anchors, legs, primary_end, false)
-	if routing.axis_meander_enabled:
-		_align_sections(w, water, input, anchors, legs, primary_end, true)
+	if StageTrails.network_v2 and routing.arc_bends_enabled:
+		_align_sections(w, water, input.merged(arc_settings(routing)), anchors, legs, primary_end, &"road_arc_bends")
+	if StageTrails.network_v2 and routing.axis_meander_enabled:
+		_align_sections(w, water, input, anchors, legs, primary_end, &"road_axis_meander")
+	if StageTrails.local_reconstruction:
+		var started := Time.get_ticks_usec()
+		var places := PackedFloat64Array()
+		for place: SettlementData in w.settlements:
+			places.append_array([place.x, place.y, StageVegetation.VILLAGE_R + 3.0])
+		var changed := _align_sections(w, water, input.merged({repair_dry = w.dist_water, repair_places = places,
+			repair_chord = routing.line_shape.turn_chord, min_radius_m = 0.0}, true),
+			anchors, legs, primary_end, &"road_corner_reconstruction")
+		changed.ms = (Time.get_ticks_usec() - started) / 1000.0
 
 
 static func _align_sections(w: WorldData, water: Object, input: Dictionary, anchors: Dictionary, legs: Dictionary,
-		primary_end: int, meander: bool) -> void:
+		primary_end: int, mode: StringName) -> Dictionary:
 	var routing := RoadTuning.for_world(w).routing
+	var meander := mode == &"road_axis_meander"
+	var repair := mode == &"road_corner_reconstruction"
 	var world_noise := w.noise_field("cost") if meander else PackedFloat64Array()
 	var dist_water := w.dist_water if meander else PackedFloat32Array()
 	var options := {road = meander_settings(routing, "road"), trail = meander_settings(routing, "trail")} if meander else {}
 	var stats := {accepted = 0, refused = {}, radii_m = {}}
-	w.generation_profile["road_axis_meander" if meander else "road_arc_bends"] = stats
+	w.generation_profile[mode] = stats
+	if repair:
+		stats.defects = 0
+		stats.qualified = 0
+		stats.profile_only = 0
+		stats.axis_m = 0.0
 	input.foreign = _published_axes(w)
 	for r in w.trails.size():
 		var t: Dictionary = w.trails[r]
-		if t.kind != "road" and (t.kind != "trail" or (not meander and r >= primary_end)): continue
+		if repair:
+			if not RoadBed.KINDS.has(t.kind): continue
+		elif t.kind != "road" and (t.kind != "trail" or (not meander and r >= primary_end)): continue
 		if t.has("trail_id") or t.pts.size() < 3: continue
 		if meander and Topology.length_m(t.pts) <= routing.axis_meander_min_m: continue
 		var packed := PackedFloat64Array()
@@ -649,10 +667,21 @@ static func _align_sections(w: WorldData, water: Object, input: Dictionary, anch
 				noise.append(lerpf(lerpf(world_noise[a], world_noise[b], fx), lerpf(world_noise[c], world_noise[d], fx), fy))
 				dry.append(GameConfig.TILE * lerpf(lerpf(dist_water[a], dist_water[b], fx), lerpf(dist_water[c], dist_water[d], fx), fy))
 		var grade := StageTrails.ROAD_LIMIT if r < primary_end or t.kind == "road" else StageTrails.TRAIL_GRADE
+		if repair and t.kind == "mountain": grade = StageTrails.MOUNTAIN_GRADE
 		grade = routing.line_limits(grade, StageTrails.BENCH_CROSS).grade
 		var data := input.merged({axis = packed, pins = pins, route_index = r, grade = grade})
 		if meander: data.merge(options[t.kind].merged({noise = noise, water_m_at_station = dry}))
+		if repair:
+			data.repair_kind = RoadBed.KINDS[t.kind]
+			data.repair_angle = deg_to_rad(float(routing.line_shape.kink_laplacian_angle) + (10.0 if t.kind == "mountain" else 0.0))
 		var result: Dictionary = _line_core.ShapeRoadAxis(data, water)
+		if repair:
+			stats.defects += int(result.defects)
+			stats.qualified += int(result.qualified)
+			stats.profile_only += int(result.get("profile_only", 0))
+			stats.axis_m += float(result.get("axis_m", 0.0))
+			if result.has("repair_ranges"):
+				t.reconstruction_ranges_m = result.repair_ranges
 		for reason: String in result.refused:
 			stats.refused[reason] = int(stats.refused.get(reason, 0)) + int(result.refused[reason])
 		if result.accepted == 0: continue
@@ -668,6 +697,7 @@ static func _align_sections(w: WorldData, water: Object, input: Dictionary, anch
 			leg.to_m = _aligned_station(leg.to_m, result.from_m, result.to_m)
 		t.pts = shaped
 		input.foreign = _published_axes(w)
+	return stats
 
 
 static func _aligned_station(station: float, before: PackedFloat64Array, after: PackedFloat64Array) -> float:

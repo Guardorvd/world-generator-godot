@@ -406,6 +406,7 @@ public partial class FastGrid
 		var routes = new int[count];
 		var routeStarts = starts.ToArray();
 		var scaleOf = new float[count];
+		var repair = settings.ContainsKey("repair_grades") ? new RoadProfileReconstruction(settings, total, count) : null;
 		for (int r = 0; r < count; r++)
 		{
 			int t = included[r];
@@ -460,7 +461,8 @@ public partial class FastGrid
 						- RoadGround(ground, width, height, tile, (double)p.X - normal.X, (double)p.Y - normal.Y)) / 3.0;
 					crossSlopes[j] = (float)crossGrade;
 					double grade = Math.Abs((double)groundAt[hi] - groundAt[lo]) / Math.Max((hi - lo) * step, step);
-					double ripple = Math.Abs((double)groundAt[Math.Max(0, j - 4)] - 2.0 * groundAt[j] + groundAt[Math.Min(n - 1, j + 4)]) / (8.0 * step);
+					double ripple = Roads.Network.GeometryValidator.GradeBreak(groundAt[Math.Max(0, j - 4)],
+						groundAt[j], groundAt[Math.Min(n - 1, j + 4)]) / (8.0 * step);
 					need[j] = (float)Math.Max(RoadSmooth(0.02, 0.10, crossGrade), Math.Max(RoadSmooth(0.08, 0.30, grade), RoadSmooth(0.004, 0.035, ripple)));
 					lo = Math.Max(0, j - 12);
 					hi = Math.Min(n - 1, j + 12);
@@ -541,15 +543,18 @@ public partial class FastGrid
 			if (scales[t] > 0.0f)
 				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, profile, strength, limits, raw, ground, width, height, tile, noise, origin, step,
 					cp, routeKinds, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
+			if (repair != null && authoredRoutes[routes[r]] == 0)
+				repair.Fit(r, from, to, kinds[t], routes[r], pts, half, profile, strength, ground, width, height, tile, step,
+					water, distWater, index, structStarts, structs, pinStart + pinFade, reach);
 		});
-		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor, cp.Kinds);
+		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor, cp.Kinds, repair);
 	}
 
 	private sealed record RoadFitData(int[] Routes, int[] Starts, float[] Scales, Vector2[] Points,
-		float[] Profile, float[] Strength, float[] Limit, double[] Corridor, Roads.CorridorKind[] Kinds)
+		float[] Profile, float[] Strength, float[] Limit, double[] Corridor, Roads.CorridorKind[] Kinds, RoadProfileReconstruction Repair)
 	{
 		public static readonly RoadFitData Empty = new(Array.Empty<int>(), new[] { 0 }, Array.Empty<float>(),
-			Array.Empty<Vector2>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<double>(), null);
+			Array.Empty<Vector2>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<double>(), null, null);
 	}
 
 	/// <summary>RoadRefinement._fit_safe on the column index: bit 0 — profile fit allowed, bit 1 — corridor forms too.</summary>
@@ -666,9 +671,11 @@ public partial class FastGrid
 		int ix = (int)Math.Floor(fx), iz = (int)Math.Floor(fz), i = iz * w + ix;
 		double tx = fx - ix, tz = fz - iz;
 		double a = hs[i], b = hs[i + 1], c = hs[i + w], d = hs[i + w + 1];
-		return tx + tz <= 1.0 ? a + (b - a) * tx + (c - a) * tz
-			: d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz);
+		return RoadTriangle(a, b, c, d, tx, tz);
 	}
+	private static double RoadTriangle(double a, double b, double c, double d, double tx, double tz)
+		=> tx + tz <= 1.0 ? a + (b - a) * tx + (c - a) * tz
+			: d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz);
 	private static double RoadWet(float[] water, int w, int h, int cell)
 	{
 		int x = cell % w, z = cell / w;

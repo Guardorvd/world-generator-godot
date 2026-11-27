@@ -61,6 +61,7 @@ static var routing_overrides := {}
 static var trace_expedition_route := false
 ## 21.11.2026: дорожная сеть V2 (docs/ROAD_NETWORK_V2_PLAN_2026_11_21.md) — петли и ответвления после остова V1.
 static var network_v2 := true
+static var local_reconstruction := true # Comparison tools can run the same seed with the final pass disabled.
 const RoadNetworkV2 := preload("res://scripts/world/road_network_v2.gd")
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
@@ -137,7 +138,7 @@ static func run(w: WorldData, step: Callable, should_cancel := Callable()) -> vo
 	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
 	step.call(0.76, "Природные велосипедные маршруты")
 	RideRoutes.run(w, finder, surface, on_axis)
-	if network_v2:
+	if network_v2 or local_reconstruction:
 		RoadNetworkV2.reshape_axes(w, surface, on_axis, primary_end)
 	_fit_sections(w, surface)
 	detail_us = Time.get_ticks_usec()
@@ -233,7 +234,7 @@ static func _run_expedition(w: WorldData, finder: Pathfinder, surface: Heightfie
 		if trace_expedition_route and not w.trails.is_empty():
 			w.generation_profile.expedition_line = w.trails[0].pts
 	step.call(0.76, "Сглаживание и профиль дороги")
-	if network_v2 and not w.trails.is_empty():
+	if (network_v2 or local_reconstruction) and not w.trails.is_empty():
 		RoadNetworkV2.reshape_axes(w, surface, on_axis, w.trails.size())
 	_fit_sections(w, surface)
 	var detail_us := Time.get_ticks_usec()

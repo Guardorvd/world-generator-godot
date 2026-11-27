@@ -355,15 +355,40 @@ public partial class FastGrid
 		var values = input["axis"].AsFloat64Array();
 		var source = new List<LineBuilder.P>(values.Length / 3);
 		for (int i = 0; i < values.Length; i += 3) source.Add(new LineBuilder.P(values[i], values[i + 1], values[i + 2]));
+		bool repair = input.ContainsKey("repair_angle");
+		double angle = repair ? input["repair_angle"].AsDouble() : 0.0;
+		double chord = repair ? input["repair_chord"].AsDouble() : 0.0;
+		double[] turns = repair ? AxisAlignment.CornerAngles(source, chord) : null;
+		int found = 0;
+		if (repair)
+			foreach (double turn in turns)
+				if (turn > angle) found++;
+		if (repair && found == 0)
+			return new Godot.Collections.Dictionary { ["accepted"] = 0, ["defects"] = 0, ["qualified"] = 0, ["refused"] = new Godot.Collections.Dictionary() };
 		var foreign = input["foreign"].AsGodotDictionary();
 		var graph = new RoadGraph(RoadGraph.OnAxis);
 		graph.IndexAxes(foreign["x"].AsFloat64Array(), foreign["y"].AsFloat64Array(), foreign["starts"].AsInt32Array(),
 			input["route_index"].AsInt32());
 		var validator = new GeometryValidator(water, 4.0, input["profile_base"].AsDouble(), graph, input["reach"].AsDouble());
 		var bounds = new LineBuilder(water, input["on_axis"].AsByteArray(), input["W"].AsInt32(), input["H"].AsInt32());
-		var fit = new AxisAlignment(source, input["pins"].AsByteArray(), validator, bounds.AxisBlocked,
+		int width = input["W"].AsInt32(), height = input["H"].AsInt32();
+		var dry = repair ? input["repair_dry"].AsFloat32Array() : null;
+		var places = repair ? input["repair_places"].AsFloat64Array() : null;
+		bool Blocked(LineBuilder.V p)
+		{
+			if (bounds.AxisBlocked(p)) return true;
+			if (!repair) return false;
+			if (p.X < 3.0 || p.Y < 3.0 || p.X >= width - 3.0 || p.Y >= height - 3.0 ||
+				dry[(int)p.Y * width + (int)p.X] < 3.0) return true;
+			for (int i = 0; i < places.Length; i += 3)
+				if (RoadGraph.Hypot(p.X - places[i], p.Y - places[i + 1]) < places[i + 2]) return true;
+			return false;
+		}
+		var fit = new AxisAlignment(source, input["pins"].AsByteArray(), validator, Blocked,
 			input["grade"].AsDouble(), input["bench_cross"].AsDouble(), input["protection_m"].AsDouble(), input["min_radius_m"].AsDouble());
-		if (input.ContainsKey("noise"))
+		if (repair)
+			fit.ReconstructCorners(turns, angle, chord, input["repair_kind"].AsInt32());
+		else if (input.ContainsKey("noise"))
 		{
 			LineBuilder.V Bounds(string key)
 			{
@@ -385,6 +410,15 @@ public partial class FastGrid
 		foreach (var (reason, count) in fit.Refused) refused[reason] = count;
 		var result = new Godot.Collections.Dictionary { ["accepted"] = fit.Accepted, ["refused"] = refused,
 			["radii_m"] = fit.AcceptedRadii.ToArray() };
+		if (repair)
+		{
+			result["defects"] = found;
+			result["qualified"] = fit.QualifiedCorners;
+			result["profile_only"] = fit.ProfileOnly;
+			result["axis_m"] = fit.RebuiltAxisMetres;
+			if (fit.ProfileOnly > 0 && fit.Accepted == 0)
+				result["repair_ranges"] = fit.RepairedRanges();
+		}
 		if (fit.Accepted == 0) return result;
 		var (points, from, to) = fit.Finish();
 		var packed = new double[points.Count * 3];
@@ -397,6 +431,8 @@ public partial class FastGrid
 		result["points"] = packed;
 		result["from_m"] = from;
 		result["to_m"] = to;
+		if (repair)
+			result["repair_ranges"] = fit.RepairedRanges(from, to);
 		return result;
 	}
 

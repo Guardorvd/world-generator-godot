@@ -70,6 +70,12 @@ func _bad_inputs(natural: Dictionary, loop: Dictionary, animal: Dictionary) -> v
 	_reject([broken], "trails[0].surf[1] has invalid material 255")
 	_reject([animal.merged({surf = PackedByteArray([0, RoadSurface.DIRT])}, true)], "trails[0].surf[1]")
 	_reject([natural, natural.duplicate(true)], "trails[1].road_id duplicates trails[0].road_id")
+	var repair := natural.merged({reconstruction_ranges_m = PackedFloat64Array([2.0, 10.0])})
+	_check(Records.validation_error(bytes_to_var(var_to_bytes([repair])), "fixture", Records.Phase.SURFACED).is_empty(),
+		"local repair stations survive serialization of a natural road")
+	_reject([natural.merged({reconstruction_ranges_m = PackedFloat64Array([2.0, 14.0])})], "trails[0].reconstruction_ranges_m")
+	_reject([natural.merged({reconstruction_ranges_m = PackedFloat64Array([1.0, 6.0, 4.0, 8.0])})], "trails[0].reconstruction_ranges_m")
+	_reject([animal.merged({reconstruction_ranges_m = PackedFloat64Array([2.0, 10.0])})], "trails[0].reconstruction_ranges_m")
 	_reject([loop, loop.duplicate(true)], "trails[1].trail_id duplicates trails[0].trail_id")
 	_reject([loop.merged({trail_id = ""}, true)], "trails[0].trail_id")
 	_reject([loop.merged({formation = Vector3(INF, 0, 0)}, true)], "trails[0].formation")

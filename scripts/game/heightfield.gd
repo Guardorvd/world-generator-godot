@@ -324,7 +324,7 @@ func finish_paths() -> PackedInt32Array:
 	changed.append_array(build_structures())
 	path_timings.structures_ms = (Time.get_ticks_usec() - t) / 1000.0
 	var with_gaps: bool = not QuickTrails.network() and world.trail_plan.get("state", "none") == "none" and WorldTemplate.allow_road_gaps(world.template_id)
-	road_refinement = RoadRefinement.build(self, true, {}, with_gaps)
+	road_refinement = RoadRefinement.build(self, true, {}, with_gaps, null, StageTrails.local_reconstruction)
 	path_timings.merge(road_refinement.build_timings)
 	t = Time.get_ticks_usec()
 	changed.append_array(ReliefErosion.run(self))
@@ -375,10 +375,8 @@ func ground_changed() -> void:
 	_ground_rev += 1
 
 
-## Входы общей маски рельефа (ReliefMask): что защищено от изменения высот — полотно дорог, вода, места,
-## сооружения, скалы. Одни для эрозии генерации и для поля 2 м. with_objects — ещё скальные выходы из объектов плана:
-## у эрозии их нет (при генерации объекты ставятся позже, вход должен быть одним на всех путях).
-func relief_mask_inputs(with_objects := true) -> Dictionary:
+## Общие охранные зоны поселений, мест и домов, в метрах.
+func relief_place_footprints() -> PackedFloat64Array:
 	var w := world
 	var footprints := PackedFloat64Array()
 	for place: SettlementData in w.settlements:
@@ -389,6 +387,14 @@ func relief_mask_inputs(with_objects := true) -> Dictionary:
 		footprints.append_array([place.x * TILE, place.y * TILE, place.clear * TILE])
 		for hut: HutData in place.huts:
 			footprints.append_array([hut.x * TILE, hut.y * TILE, PlayerState.hut_half(hut).length()])
+	return footprints
+
+## Входы общей маски рельефа (ReliefMask): что защищено от изменения высот — полотно дорог, вода, места,
+## сооружения, скалы. Одни для эрозии генерации и для поля 2 м. with_objects — ещё скальные выходы из объектов плана:
+## у эрозии их нет (при генерации объекты ставятся позже, вход должен быть одним на всех путях).
+func relief_mask_inputs(with_objects := true) -> Dictionary:
+	var w := world
+	var footprints := relief_place_footprints()
 	var kinds := w.obj_k if with_objects else PackedInt32Array()
 	var variants := w.obj_v
 	var xs := w.obj_x

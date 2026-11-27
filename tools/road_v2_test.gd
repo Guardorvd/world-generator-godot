@@ -38,9 +38,67 @@ func _initialize() -> void:
 	_short_ride_turnback()
 	_arc_bends()
 	_axis_meander()
+	_broken_slope_reconstruction()
 	_flag_check()
 	print("ROAD V2 TEST %d failures, %d мс" % [fails, Time.get_ticks_msec() - started])
 	quit(1 if fails else 0)
+
+
+func _broken_slope_reconstruction() -> void:
+	var w := _world("none")
+	var core := Grid.native_grid()
+	var start := Vector2(16.5, 35.5)
+	var turn := Vector2(36.5, 35.5)
+	var exit_bend := Vector2(38.5, 38.0)
+	var finish := Vector2(64.5, 38.0)
+	var bends := _reconstruction_axis([start, turn, exit_bend, finish])
+	var input := {axis = bends, W = w.W, H = w.H, on_axis = PackedByteArray(),
+		foreign = {x = PackedFloat64Array(), y = PackedFloat64Array(), starts = PackedInt32Array([0])},
+		route_index = 0, profile_base = StageTrails.RoadLine.PROFILE_BASE, grade = 0.55,
+		bench_cross = StageTrails.BENCH_CROSS, reach = RoadRefinement.REACH, protection_m = 8.0,
+		min_radius_m = 0.0, repair_kind = 0, repair_angle = deg_to_rad(34.0), repair_chord = 1.0,
+		repair_dry = w.dist_water, repair_places = PackedFloat64Array()}
+	var pins := PackedByteArray()
+	pins.resize(bends.size() / 3)
+	input.pins = pins
+	for slope: String in ["flat", "steady", "broken", "descending"]:
+		for x in w.W:
+			var y := 28.0
+			if slope != "flat": y += x * 4.0 * 0.23
+			if slope in ["broken", "descending"]: y += (float(x >= 36) + float(x >= 39)) * 1.05
+			if slope == "descending": y = 180.0 - y
+			for z in w.H:
+				w.h[z * w.W + x] = y / GameConfig.HS
+				w.filled[z * w.W + x] = y / GameConfig.HS
+		var field := Heightfield.new(w, false)
+		var result: Dictionary = core.ShapeRoadAxis(input, field.fast_water())
+		var expect := slope in ["broken", "descending"]
+		check((result.qualified == 1) == expect and (expect or result.accepted == 0),
+			"локальная реконструкция, профиль %s: отбор %s, принято %s" % [slope, result.qualified, result.accepted])
+		if not expect: continue
+		check(result.accepted == 1 and result.get("repair_ranges", PackedFloat64Array()).size() == 2,
+			"два связанных излома исправлены в одном локальном интервале")
+		var single := _reconstruction_axis([start, turn, turn + Vector2(24.0, 29.0)])
+		var single_pins := PackedByteArray()
+		single_pins.resize(single.size() / 3)
+		var ordinary: Dictionary = core.ShapeRoadAxis(input.merged({axis = single, pins = single_pins}, true), field.fast_water())
+		check(ordinary.qualified == 0 and ordinary.accepted == 0, "одиночный поворот на подъёме или спуске исключён")
+		var switchback := _reconstruction_axis([start, turn, Vector2(34.5, 38.0), Vector2(20.5, 38.0)])
+		var switchback_pins := PackedByteArray()
+		switchback_pins.resize(switchback.size() / 3)
+		var hairpin: Dictionary = core.ShapeRoadAxis(input.merged({axis = switchback, pins = switchback_pins}, true), field.fast_water())
+		check(hairpin.qualified == 1, "сломанный крутой разворот на склоне попадает в отбор")
+
+
+func _reconstruction_axis(knots: Array[Vector2]) -> PackedFloat64Array:
+	var axis := PackedFloat64Array()
+	for i in range(1, knots.size()):
+		var steps := ceili(knots[i - 1].distance_to(knots[i]) * 2.0)
+		for j in steps:
+			var p := knots[i - 1].lerp(knots[i], float(j) / steps)
+			axis.append_array([p.x, p.y, 0.9])
+	axis.append_array([knots[-1].x, knots[-1].y, 0.9])
+	return axis
 
 
 func _arc_bends() -> void:

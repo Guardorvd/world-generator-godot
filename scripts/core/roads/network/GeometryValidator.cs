@@ -68,6 +68,8 @@ public sealed class GeometryValidator
 	internal double Ground(double x, double y) => _water.GroundAt(x * _tile, y * _tile);
 	internal double ProfileWindowMetres => _profileBase * _tile;
 
+	internal static double GradeBreak(double before, double middle, double after) => Math.Abs(before - 2.0 * middle + after);
+
 	internal bool NearAxis(LineBuilder.P p, double distance) =>
 		_axes != null && _axes.Clearance(p.X, p.Y, distance, null) < distance;
 
@@ -132,9 +134,9 @@ public sealed class GeometryValidator
 
 	/// <summary>Check grade in the trailing window. A clipped range starts only after a full window or a deck.</summary>
 	internal static int FirstProfileFailure(ReadOnlySpan<double> along, ReadOnlySpan<double> heights, ReadOnlySpan<byte> skip,
-		double tile, double window, double grade, bool atStart = true, double downhillRatio = 1.0)
+		double tile, double window, double grade, bool atStart = true, double downhillRatio = 1.0, Span<bool> failures = default)
 	{
-		int first = 0;
+		int first = 0, failure = -1;
 		bool allowShortWindow = atStart;
 		for (int k = 1; k < along.Length; k++)
 		{
@@ -149,9 +151,12 @@ public sealed class GeometryValidator
 			if (!allowShortWindow && length < window) continue;
 			double rise = heights[k] - heights[first];
 			double limit = rise < 0.0 ? grade * downhillRatio : grade;
-			if (Math.Abs(rise) > limit * length * tile + 0.00001) return k;
+			if (Math.Abs(rise) <= limit * length * tile + 0.00001) continue;
+			if (failures.IsEmpty) return k;
+			failures[k] = true;
+			if (failure < 0) failure = k;
 		}
-		return -1;
+		return failure;
 	}
 
 	/// <summary>Брод по клеткам пути: подряд не больше FORD_LEN клеток реки вне осей сооружений, ни одной клетки

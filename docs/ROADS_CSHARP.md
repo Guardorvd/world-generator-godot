@@ -10,6 +10,7 @@
 |---|---|---|
 | Полотно в узлах и на путях | `FastGrid.RoadBedRefine` (`scripts/core/FastGrid.RoadBed.cs`) | `RoadBed.refine` (`scripts/game/road_bed.gd`) — собирает массивы и вызывает C# |
 | Индекс отрезков, патчи метровой сетки | `FastGrid.BuildRoadRefinement` (`FastGrid.RoadPatches.cs`) | `RoadRefinement.build` (`scripts/game/road_refinement.gd`), в том числе частичная сборка `only` (Trail Lab) |
+| Локальная реконструкция | `AxisAlignment.Reconstruction.cs`, `FastGrid.RoadReconstruction.cs` | `RoadNetworkV2.reshape_axes` и `Heightfield.finish_paths`, [описание и проверка](ROAD_RECONSTRUCTION.md) |
 | Подгонка профиля и формы коридора | `FastGrid.RoadFitNetwork` (`FastGrid.Road.cs`), параметры — `Roads.CorridorParams` (`scripts/core/roads/`) | `RoadRefinement.corridor_params` — собирает числа из `RoadTuning` |
 | Числа полотна и форм | — | `RoadTuning` (`resources/road_tuning.tres`), см. ниже |
 | Версия результата | `Roads.RoadCode.Version` (`scripts/core/roads/RoadCode.cs`) | входит в ключ кэша поверхности (`WorldCache.artifact_key`) |

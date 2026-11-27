@@ -128,10 +128,10 @@ internal sealed partial class AxisAlignment
 		return i >= 0 ? i : ~i - 1;
 	}
 
-	private static void AddTransition(List<P> points, V end, V incoming, V outgoing, double width)
+	private static void AddTransition(List<P> points, V end, V incoming, V outgoing, double width, float? handle = null)
 	{
 		V start = At(points[^1]);
-		float arm = start.DistanceTo(end) / 3.0f;
+		float arm = handle ?? start.DistanceTo(end) / 3.0f;
 		V p = start + incoming * arm, q = end - outgoing * arm;
 		double lengthBound = 3.0 * Math.Max(arm, p.DistanceTo(q));
 		int steps = Math.Max(2, (int)Math.Ceiling(lengthBound / Sample));

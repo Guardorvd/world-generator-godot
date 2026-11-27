@@ -55,7 +55,8 @@ var _bumps := PackedVector4Array(RoadBump.LIST)
 ## Индекс, подгонка, формы коридора и патчи собирает FastGrid.BuildRoadRefinement,
 ## в том числе при only. Без C# или при ошибке внутри него — сообщение и пустая сетка (патчей нет, дороги без метровой сетки).
 ## w.outer не учитывается (в игре сетка строится до подключения OuterLand, в Trail Lab его нет).
-static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false, tuning: RoadTuning = null) -> RoadRefinement:
+static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false, tuning: RoadTuning = null,
+		reconstruct := false) -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r._height = heights.world.H
 	if tuning == null:
@@ -74,7 +75,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps 
 		var t: Dictionary = heights.world.trails[route]
 		return t.has("trail_id") and (t.get("formation", Vector3.ZERO) as Vector3).x > 0.0):
 		r._reach = REACH
-	if not r._build_native(fast, heights, fit_road, only, with_gaps, tuning):
+	if not r._build_native(fast, heights, fit_road, only, with_gaps, tuning, reconstruct and only.is_empty()):
 		push_error("RoadRefinement: C# не построил метровую сетку (исключение внутри расчёта)")
 		return r
 	r._drop_mountain_fits(heights.world)
@@ -139,7 +140,8 @@ static func pin_coarse_edges(h: Heightfield, patches: Dictionary, keys: Array) -
 
 
 ## Путь передаётся столбцами один раз. Индекс, профили и коридор используются на стороне C# до публикации результата.
-func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dictionary, with_gaps: bool, tuning: RoadTuning) -> bool:
+func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dictionary, with_gaps: bool, tuning: RoadTuning,
+		reconstruct: bool) -> bool:
 	var w := heights.world
 	var started_us := Time.get_ticks_usec()
 	var ids := PackedInt32Array()
@@ -151,6 +153,7 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 	var ws := PackedFloat64Array()
 	var surf := PackedInt32Array()
 	var authored := PackedByteArray()
+	var repair_ranges := {}
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
 		var is_authored := t.has("trail_id")
@@ -158,6 +161,8 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 		var kind := CORRIDOR_KINDS.find(t.kind)
 		if kind < 0:
 			continue
+		if reconstruct and not is_authored and t.has("reconstruction_ranges_m"):
+			repair_ranges[route] = t.reconstruction_ranges_m
 		var scale := 1.0
 		if is_authored:
 			scale = tuning.prepared_scale if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
@@ -197,6 +202,16 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 	noise.fractal_octaves = 2
 	_section = tuning.section
 	var settings := corridor_params(w.template_id, tuning) if fit_road else {}
+	if fit_road and not repair_ranges.is_empty():
+		var routing := tuning.routing
+		settings.repair_ranges = repair_ranges
+		settings.repair_places = heights.relief_place_footprints()
+		settings.repair_profile_window = StageTrails.RoadLine.PROFILE_BASE * TILE
+		var grades := PackedFloat64Array([StageTrails.ROAD_LIMIT, StageTrails.TRAIL_GRADE, StageTrails.MOUNTAIN_GRADE])
+		if WorldTemplate.has_single_road(w.template_id) and routing.expedition_grades.x > 0.0:
+			grades[CORRIDOR_KINDS.find(WorldTemplate.expedition_route_kind(w.template_id))] = routing.expedition_grades.x
+		settings.repair_grades = grades
+		settings.repair_downhill = routing.downhill_ratio()
 	var input_ms := (Time.get_ticks_usec() - started_us) / 1000.0
 	var out: Variant = fast.BuildRoadRefinement(w.W, w.H, TILE, DIV, _reach, heights.hv, heights.hv_raw, heights.water_level,
 		w.dist_water, starts, xs, ys, ws, surf, kinds, scales, ids, authored, local_routes, noise, Vector2(w.world_origin) * TILE,
@@ -222,6 +237,8 @@ func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dic
 			corridor_routes[routes[r]] = Vector2i(from, to - from)
 	build_timings.index_ms = input_ms + out.index_ms
 	build_timings.fit_network_ms = out.fit_network_ms
+	if out.has("profile_reconstruction"):
+		build_timings.profile_reconstruction = out.profile_reconstruction
 	build_timings.native_points_ms = out.ms_points
 	build_timings.native_vertices_ms = out.ms_vertices
 	build_timings.native_assemble_ms = out.ms_assemble

@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 25 # 25: лесные пороги климата и высотная поясность; 24: выраженные предгорья, оживление низин и сглаживание сверхвысоких пиков
-const SCHEMA_TRAILS_VERSION := 48 # 48: mountain access for coverage villages; 47: uniform gap coverage, corridor exit check, and orphan road pruning; 46: 3x3 sector coverage pass and SPREAD 0.5 in StageLandmarks; 45: Roads V2 is the default; 44: spacing along road sections; 43: fishing huts on lake shores and benches below summits (StageSites); 42: 17.11: no loops in settlement exits, spurs share forks; 41: traverse ride style around mountains; 40: overlook spurs from road legs; 39: optional ways fork away from settlements (EXIT_R), shore trails from road legs; 38 16.11: site homes/barns by biome and slope (StageSites); 37: 21 settlement models & distinct layouts by settlement kind; 36: settlement sets & string model variants (SettlementSets); 35: road class by link flow (_upgrade_roles); 34: walk mask for places, remote reason, tunnel vs detour by length; 33: remote single access, towns among ordinary; 32: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
+const SCHEMA_TRAILS_VERSION := 50 # 50: reconstruction limited to broken turns on slopes; 49: local axis reconstruction; 48: mountain access for coverage villages; 47: uniform gap coverage, corridor exit check, and orphan road pruning; 46: 3x3 sector coverage pass and SPREAD 0.5 in StageLandmarks; 45: Roads V2 is the default; 44: spacing along road sections; 43: fishing huts on lake shores and benches below summits (StageSites); 42: 17.11: no loops in settlement exits, spurs share forks; 41: traverse ride style around mountains; 40: overlook spurs from road legs; 39: optional ways fork away from settlements (EXIT_R), shore trails from road legs; 38 16.11: site homes/barns by biome and slope (StageSites); 37: 21 settlement models & distinct layouts by settlement kind; 36: settlement sets & string model variants (SettlementSets); 35: road class by link flow (_upgrade_roles); 34: walk mask for places, remote reason, tunnel vs detour by length; 33: remote single access, towns among ordinary; 32: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
 const SCHEMA_NATURE_VERSION := 25 # 25: верхняя граница леса 73..130 м и сужение разброса world_cover; 24: небольшие выходы породы на низких открытых холмах; 23: луговые рощи следуют рельефу; 22: рощи в пятнах древостоя; 21: clearance for local trail gap bypasses; 16: hill outcrops; 17: species and stone density follow local terrain; 18: 17.11 лещина, горная сосна (Pinus mugo) и рябина (Sorbus aucuparia); 19: стланик дополняет древостой; 20: крона рябины шире
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
@@ -55,7 +55,7 @@ var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
 const RoadRecords := preload("res://scripts/world/road_records.gd")
 const RoadRides := preload("res://scripts/world/road_rides.gd")
-const SURFACE_VERSION := 23 # Local trail gaps and their bypasses in the metre grid.
+const SURFACE_VERSION := 25 # Longitudinal reconstruction uses only the accepted axis intervals.
 const BASE_VERSION := 1
 var io_timings := {}
 var _io_lock := Mutex.new()

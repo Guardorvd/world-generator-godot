@@ -37,11 +37,14 @@ public partial class FastGrid
 		result["strength"] = fit.Strength;
 		result["limit"] = fit.Limit;
 		result["corridor"] = fit.Corridor;
+		if (fit.Repair != null) result["profile_reconstruction"] = fit.Repair.Report();
 		if (withGaps)
 		{
 			double step = tile / div;
 			result["gap_clear"] = Callable.From<Rect2I, Vector2, int, int, double, bool>(
-				(cells, center, route, station, approach) => RoadGapClear(index, width, cells, center, route, station * step, approach));
+				(cells, center, route, station, approach) => (fit.Repair == null ||
+					fit.Repair.ClearsGap(fit, route, station, (int)Math.Ceiling(approach / step))) &&
+					RoadGapClear(index, width, cells, center, route, station * step, approach));
 		}
 		return result;
 	}
@@ -312,6 +315,7 @@ public partial class FastGrid
 		}
 		int stride = div + 1, fineW = width * div, fineH = height * div;
 		double step = tile / div;
+		var repair = fit.Repair?.HasWork == true ? fit.Repair : null;
 		RoadStructureIndex(width, height, tile, structureAxes, pinStart + pinFade, out int[] structStarts, out double[] structs);
 		// уникальные вершины: плотный индекс «точка мелкой сетки -> номер запроса» вместо словаря
 		var request = new int[fineW * fineH];
@@ -322,7 +326,7 @@ public partial class FastGrid
 		{
 			int cx = key % width, cz = key / width;
 			if (!RoadPatchMayChange(key, cx, cz, tile, step, index.CellStarts, index.Candidates, index.A, index.Delta, index.Len2,
-				index.Half, index.Along, index.Route, corStart, corCount, fit.Corridor)) continue;
+				index.Half, index.Along, index.Route, corStart, corCount, fit.Corridor, repair?.Weight, fitStart, fitCount)) continue;
 			patchKeys.Add(key);
 			for (int z = 0; z < stride; z++)
 			{
@@ -340,6 +344,8 @@ public partial class FastGrid
 		var hs = new float[count]; var colors = new Color[count]; var uv = new Vector2[count];
 		var surface = new byte[count]; var roadFlags = new byte[count];
 		var active = new bool[count];
+		var baseline = repair != null ? new float[count] : null;
+		var repairs = repair != null ? new int[count] : null;
 		var vertexRoute = new int[count]; // номер пути ближайшего отрезка вершины, -1 — нет (владелец при частичной сборке)
 		int chunks = (count + 4095) / 4096;
 		Parallel.For(0, chunks, c =>
@@ -355,10 +361,34 @@ public partial class FastGrid
 					index.Next, index.Ha, index.Hb, index.Along, index.Len2, index.Route, index.A, index.Delta,
 					fitStart, fitCount, fit, corStart, corCount, surfaces, ground, water, distWater, noise, origin,
 					structStarts, structs, steepLo, steepHi, waterGap, pinStart, pinStart + pinFade, hs, colors, uv, surface, roadFlags, active,
-					selected >= 0 && authoredRoutes[index.Route[selected]] != 0, tread);
+					selected >= 0 && authoredRoutes[index.Route[selected]] != 0, tread, reach, baseline, repairs);
 				vertexRoute[n] = selected >= 0 ? index.Route[selected] : -1;
 			}
 		});
+		if (repair != null)
+		{
+			double HeightAt(Vector2 p, int span)
+			{
+				double x = (p.X - tile * 0.5) / step, z = (p.Y - tile * 0.5) / step;
+				int i = (int)Math.Floor(x), j = (int)Math.Floor(z);
+				if (i < 0 || j < 0 || i + 1 >= fineW || j + 1 >= fineH)
+					return RoadGround(ground, width, height, tile, p.X, p.Y);
+				double Vertex(int gx, int gz)
+				{
+					int at = request[gz * fineW + gx];
+					if (at >= 0) return repairs[at] == 0 || repairs[at] == span ? hs[at] : baseline[at];
+					return RoadGround(ground, width, height, tile, gx * step + tile * 0.5, gz * step + tile * 0.5);
+				}
+				return RoadTriangle(Vertex(i, j), Vertex(i + 1, j), Vertex(i, j + 1), Vertex(i + 1, j + 1), x - i, z - j);
+			}
+			bool[] rejected = repair.CheckBaked(fit, step, HeightAt);
+			for (int n = 0; n < count; n++)
+			{
+				if (!rejected[repairs[n]]) continue;
+				hs[n] = baseline[n];
+				active[n] = colors[n].A > 0.0f || hs[n] != (float)RoadGround(ground, width, height, tile, points[n].X, points[n].Y);
+			}
+		}
 		double msVertices = clock.Elapsed.TotalMilliseconds;
 		using var patches = new Godot.Collections.Dictionary();
 		int cellsPer = stride * stride;
@@ -413,7 +443,7 @@ public partial class FastGrid
 
 	private static bool RoadPatchMayChange(int key, int cx, int cz, double tile, double step, int[] starts, int[] candidates,
 		Vector2[] anchors, Vector2[] deltas, double[] lengths, double[] halves, double[] along, int[] routes,
-		int[] corStart, int[] corCount, double[] corridor)
+		int[] corStart, int[] corCount, double[] corridor, float[] repair, int[] fitStart, int[] fitCount)
 	{
 		var center = new Vector2((float)((cx + 1) * tile), (float)((cz + 1) * tile));
 		double corner = tile * 0.71;
@@ -425,8 +455,15 @@ public partial class FastGrid
 			double distance = (offset - deltas[id] * (float)t).Length();
 			if (distance <= RoadMaxHalf(halves, id) + 3.0 + corner) return true;
 			int route = routes[id], count = corCount[route];
-			if (count == 0) continue;
 			double station = along[id] + t * Math.Sqrt(lengths[id]);
+			if (repair != null && fitCount[route] > 0)
+			{
+				int first = Math.Clamp((int)Math.Floor((station - corner) / step), 0, fitCount[route] - 1);
+				int last = Math.Clamp((int)Math.Ceiling((station + corner) / step), 0, fitCount[route] - 1);
+				for (int s = first; s <= last; s++)
+					if (repair[fitStart[route] + s] > 0.0f) return true;
+			}
+			if (count == 0) continue;
 			int lo = Math.Clamp((int)Math.Floor((station - corner) / step), 0, count - 1);
 			int hi = Math.Clamp((int)Math.Ceiling((station + corner) / step), 0, count - 1);
 			for (int s = lo; s <= hi; s++)
@@ -472,7 +509,8 @@ public partial class FastGrid
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, RoadFitData fit,
 		int[] corStart, int[] corCount, double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap, double pinStart, double pinEnd,
-		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut, bool[] active, bool authored, double[] tread)
+		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut, bool[] active, bool authored, double[] tread, double reach,
+		float[] baseline, int[] repairs)
 	{
 		double x = pt.X, z = pt.Y;
 		double baseHeight = RoadGround(ground, width, height, tile, x, z);
@@ -513,6 +551,8 @@ public partial class FastGrid
 		double limit = road ? 0.65 : 0.3;
 		double target = RoadLerp(segHa[selected], segHb[selected], u) + detail;
 		double power = 1.0, level = 0.0, relief = 0.0;
+		double repairWeight = 0.0, repairLevel = 0.0;
+		int repairAt = 0;
 		int route = segRoute[selected], fitLen = fitCount[route];
 		if (fitLen > 0)
 		{
@@ -523,6 +563,16 @@ public partial class FastGrid
 			power = RoadLerp(fit.Strength[offset], fit.Strength[offset + 1], f);
 			limit = RoadLerp(fit.Limit[offset], fit.Limit[offset + 1], f);
 			target = level + detail;
+			if (baseline != null)
+			{
+				double a = fit.Repair.Weight[offset] * (1.0 - f), b = fit.Repair.Weight[offset + 1] * f;
+				repairWeight = a + b;
+				if (repairWeight > 0.0)
+				{
+					repairLevel = (fit.Repair.Target[offset] * a + fit.Repair.Target[offset + 1] * b) / repairWeight;
+					repairAt = a > 0.0 ? fit.Repair.SpanAt[offset] : fit.Repair.SpanAt[offset + 1];
+				}
+			}
 		}
 		if (corCount[route] > 0)
 		{
@@ -568,6 +618,18 @@ public partial class FastGrid
 			}
 		}
 		value = RoadLerp(baseHeight, value, RoadReliefEdge(pt, width, height, tile)) + relief;
+		if (repairWeight > 0.0)
+		{
+			baseline[n] = (float)Math.Max(value, Math.Min(baseHeight, RoadWet(water, width, height, cell) + waterGap));
+			repairs[n] = repairAt;
+			double bench = 1.0 - RoadSmooth(half + step, half + reach, distance);
+			var direction = segDelta[selected].Normalized();
+			Vector2 normal = new(direction.Y, -direction.X);
+			double crossfall = Math.Clamp((gx * normal.X + gz * normal.Y) * 0.15, -0.12, 0.12);
+			double cut = RoadProfileReconstruction.Cut(segKind[selected]);
+			double shelf = baseHeight + Math.Clamp(repairLevel + side * crossfall + crown - baseHeight, -cut, cut);
+			value = RoadLerp(value, shelf, repairWeight * bench * dryPin * structurePin);
+		}
 		if (float.IsNegativeInfinity(water[cell]) && value < baseHeight)
 			value = Math.Max(value, Math.Min(baseHeight, RoadWet(water, width, height, cell) + waterGap));
 		hs[n] = (float)value;

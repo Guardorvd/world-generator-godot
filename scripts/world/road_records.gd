@@ -65,6 +65,21 @@ static func _record_error(record: Variant, phase: Phase) -> String:
 			return issue
 	elif phase == Phase.PUBLISHED and kind != "animal" and record.get("road_id", "") == "":
 		return ".road_id is missing on a newly published natural section"
+	if record.has("reconstruction_ranges_m"):
+		var ranges: Variant = record.reconstruction_ranges_m
+		if kind == "animal" or record.has("trail_id") or not ranges is PackedFloat64Array or ranges.is_empty() or ranges.size() % 2 != 0:
+			return ".reconstruction_ranges_m must be pairs of stations on a natural road"
+		var length := 0.0
+		for i in range(1, pts.size()):
+			length += Vector2(pts[i - 1].x, pts[i - 1].y).distance_to(Vector2(pts[i].x, pts[i].y)) * GameConfig.TILE
+		var last := 0.0
+		for i in range(0, ranges.size(), 2):
+			var start: float = ranges[i]
+			var finish: float = ranges[i + 1]
+			if (not is_finite(start) or not is_finite(finish) or start < last or finish <= start
+					or finish > length + 0.01 or finish - start > 96.01):
+				return ".reconstruction_ranges_m are outside the section or overlap"
+			last = finish
 	for field: String in ["ride", "ride_style", "ride_climb"]:
 		if record.has(field) and (not record[field] is String or record[field].is_empty()):
 			return ".%s must be a non-empty String" % field

@@ -566,6 +566,9 @@ internal sealed class LineShaper
 	/// <summary>Точка вдоль ломаной на расстоянии targetLen от вершины k в направлении dir (−1 / +1); у конца ≥ 0,3 кл
 	/// фиксируется на концевой точке (без скачка угла/радиуса при длине краевого отрезка 0,87..1,0 кл).</summary>
 	private bool ChordPoint(IReadOnlyList<P> pts, int k, int dir, double targetLen, out double px, out double py)
+		=> ChordPoint(pts, k, dir, targetLen, _settings.MinTurnChord, out px, out py);
+
+	private static bool ChordPoint(IReadOnlyList<P> pts, int k, int dir, double targetLen, double minChord, out double px, out double py)
 	{
 		double rem = targetLen, walked = 0.0;
 		int cur = k, n = pts.Count;
@@ -574,7 +577,7 @@ internal sealed class LineShaper
 			int next = cur + dir;
 			if (next < 0 || next >= n)
 			{
-				if (walked >= _settings.MinTurnChord) { px = pts[cur].X; py = pts[cur].Y; return true; }
+				if (walked >= minChord) { px = pts[cur].X; py = pts[cur].Y; return true; }
 				px = py = 0.0;
 				return false;
 			}
@@ -594,9 +597,12 @@ internal sealed class LineShaper
 	}
 
 	private double TurnAngle4m(IReadOnlyList<P> pts, int k)
+		=> TurnAngle(pts, k, _settings.TurnChord, _settings.MinTurnChord);
+
+	internal static double TurnAngle(IReadOnlyList<P> pts, int k, double chord, double minChord)
 	{
-		if (!ChordPoint(pts, k, -1, _settings.TurnChord, out double ax, out double ay)) return 0.0;
-		if (!ChordPoint(pts, k, 1, _settings.TurnChord, out double cx, out double cy)) return 0.0;
+		if (!ChordPoint(pts, k, -1, chord, minChord, out double ax, out double ay)) return 0.0;
+		if (!ChordPoint(pts, k, 1, chord, minChord, out double cx, out double cy)) return 0.0;
 		double vx0 = pts[k].X - ax, vy0 = pts[k].Y - ay;
 		double vx1 = cx - pts[k].X, vy1 = cy - pts[k].Y;
 		if (vx0 * vx0 + vy0 * vy0 < 1e-10 || vx1 * vx1 + vy1 * vy1 < 1e-10) return 0.0;
