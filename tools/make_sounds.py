@@ -265,7 +265,20 @@ def prepare_audio(x, peak=0.60, target_rms=None):
     return np.clip(x, -0.95, 0.95)
 
 
+# С 27.11.2026 петли езды (качение, цепь, свободный ход, покрытия, зёрна грунта и снега) делает
+# tools/make_ride_sounds.gd (Godot, без numpy): прежние петли гудели (низы 75–420 Гц, опущенные по высоте).
+# Ветер езды (bike/air_wind) и шипение шины (bike/tire_rush) убраны из игры.
+# Их генераторы здесь по-прежнему вызываются, чтобы общий rng шёл как раньше и остальные звуки
+# (приземления, шаги, окружение) при перезапуске получались байт в байт прежними; файлы не пишутся.
+SKIP_FILES = {
+    "roll.wav", "freewheel.wav", "chain.wav", "bike/tire_rush.wav", "bike/air_wind.wav",
+} | {f"surfaces/tex_{s}.wav" for s in (
+    "packed", "dirt", "forest", "gravel", "grass", "sand", "stone", "wet", "wood", "snow", "water")}
+
+
 def write_wav(rel_path, x, looped=False, peak=0.60, target_rms=None):
+    if rel_path in SKIP_FILES:
+        return
     x = prepare_audio(x, peak=peak, target_rms=target_rms)
     pcm = np.round(x * 32767.0).astype("<i2").tobytes()
     fmt = struct.pack("<HHIIHH", 1, 1, RATE, RATE * 2, 2, 16)

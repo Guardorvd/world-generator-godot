@@ -8,6 +8,9 @@ const AUDIO_VERSION := "1.1"
 const DEFAULT_PATH := "res://resources/audio/game_audio_config.tres"
 const SOUNDS_ROOT := "res://resources/sounds/"
 
+## Surfaces that have distance-driven grain one-shots (surfaces/grain_<kind>_1..4.wav).
+const GRAIN_KINDS := [&"dirt", &"forest", &"gravel", &"stone", &"wet", &"snow"]
+
 const SURFACES := [
 	&"packed",
 	&"dirt",
@@ -47,12 +50,10 @@ const SURFACES := [
 @export var db_bird := -7.5
 @export var db_owl := -17.0
 @export var db_canopy_gust := -19.5
-@export var db_wind := -28.0
-@export var db_roll := -19.0
+@export var db_roll := -23.0
 @export var db_surface_texture := -17.0
-@export var db_tire_rush := -25.0
-@export var db_freewheel := -23.0
-@export var db_chain := -24.0
+@export var db_freewheel := -28.0
+@export var db_chain := -27.0
 @export var db_brake_pad := -25.0
 @export var db_brake_skid := -17.0
 @export var db_suspension := -22.0
@@ -73,7 +74,7 @@ const SURFACES := [
 @export var environment_sample_s := 0.20
 @export var ambience_smooth_rate := 1.6
 @export var bike_smooth_rate := 10.0
-@export var surface_blend_rate := 7.5
+@export var surface_blend_rate := 3.5
 @export var air_fade_rate := 24.0
 @export var water_radius_m := 45.0
 @export var sea_radius_m := 140.0
@@ -92,10 +93,21 @@ const SURFACES := [
 @export var expedition_rapids_boost := 1.28
 @export var expedition_mist_wind_base := 0.45
 @export var expedition_bird_density := 0.72
-@export var freewheel_ref_speed := 7.0
+## Ход педалей и колёс (27.11.2026). Петли записаны при опорном темпе (tools/make_ride_sounds.gd), поэтому
+## pitch_scale = темп / опорный темп меняет частоту щелчков вместе с высотой, как у настоящей цепи и втулки.
+@export var freewheel_ref_speed := 6.0          # м/с, при которой щелчки свободного хода идут с частотой петли
+@export var freewheel_pitch_range := Vector2(0.6, 1.5)
+@export var chain_ref_crank := 7.854            # рад/с педалей (75 об/мин), опорный темп петли цепи
+@export var chain_pitch_range := Vector2(0.55, 1.35)
+@export var chain_crank_range := Vector2(0.8, 4.0)   # рад/с: цепь проявляется от первых оборотов до полной
+@export var chain_attack_rate := 5.0            # мягкое появление цепи на старте, 1/с
 @export var pedal_hold_s := 0.28
-@export var wind_start_speed := 6.5
-@export var wind_full_speed := 21.0
+## Качение и покрытия от скорости: громкость с нуля без «пола» (прежний пол 0,42 и давал гул на старте),
+## высота меняется в узких пределах, плотность зёрен растёт сама, так как они идут по пройденному пути.
+@export var roll_speed_range := Vector2(0.5, 9.0)
+@export var roll_pitch_range := Vector2(0.97, 1.08)
+@export var texture_speed_range := Vector2(0.4, 4.5)
+@export var texture_pitch_range := Vector2(0.97, 1.07)
 @export var wet_moisture_threshold := 0.62
 
 @export_group("Cooldowns & Thresholds")
@@ -111,25 +123,19 @@ const SURFACES := [
 @export var land_med_max := 8.5
 
 ## Per-surface tactile acoustic profile.
-## - roll_gain / roll_pitch: tire carcass rumble weight and subtle pitch warmth
-## - texture_file: seamless loop under surfaces/ (empty if purely subtle roll + impacts)
+## - roll_gain: weight of the shared rubber roll layer on this surface
+## - texture_file: seamless loop under surfaces/ (made by tools/make_ride_sounds.gd)
 ## - texture_db: relative texture level offset (dB)
-## - texture_pitch_base / texture_pitch_speed: gentle pitch scaling (kept narrow for natural tone)
-## - rush_gain: high-mid tire tread air hiss at speed
 ## - brake_scrub_gain / brake_skid_gain / brake_pitch: braking & slip character
 ## - skid_kind: "loose" (pebbles/earth/snow) or "firm" (rubber shear on packed/stone/wood)
-## - grain_step_m: average distance between subtle organic micro-grains (0 = none)
+## - grain_step_m: average distance between micro-grains (0 = none); kinds with files: GRAIN_KINDS
 ## - step_bank: directory/prefix under foley/steps/
 ## - step_db: footstep dB offset
 @export var surface_profiles: Dictionary = {
 	&"packed": {
 		"roll_gain": 0.85,
-		"roll_pitch": 0.96,
 		"texture_file": "surfaces/tex_packed.wav",
 		"texture_db": -3.5,
-		"texture_pitch_base": 0.94,
-		"texture_pitch_speed": 0.14,
-		"rush_gain": 0.85,
 		"brake_scrub_gain": 0.75,
 		"brake_skid_gain": 0.65,
 		"brake_pitch": 1.05,
@@ -140,28 +146,20 @@ const SURFACES := [
 	},
 	&"dirt": {
 		"roll_gain": 0.92,
-		"roll_pitch": 0.94,
 		"texture_file": "surfaces/tex_dirt.wav",
 		"texture_db": -1.0,
-		"texture_pitch_base": 0.92,
-		"texture_pitch_speed": 0.16,
-		"rush_gain": 0.65,
 		"brake_scrub_gain": 0.90,
 		"brake_skid_gain": 0.95,
 		"brake_pitch": 0.98,
 		"skid_kind": &"loose",
-		"grain_step_m": 2.4,
+		"grain_step_m": 1.7,
 		"step_bank": &"dirt",
 		"step_db": 0.0,
 	},
 	&"forest": {
 		"roll_gain": 0.82,
-		"roll_pitch": 0.86,
 		"texture_file": "surfaces/tex_forest.wav",
 		"texture_db": -0.5,
-		"texture_pitch_base": 0.92,
-		"texture_pitch_speed": 0.15,
-		"rush_gain": 0.35,
 		"brake_scrub_gain": 0.80,
 		"brake_skid_gain": 0.85,
 		"brake_pitch": 0.92,
@@ -172,12 +170,8 @@ const SURFACES := [
 	},
 	&"gravel": {
 		"roll_gain": 1.00,
-		"roll_pitch": 1.02,
 		"texture_file": "surfaces/tex_gravel.wav",
 		"texture_db": 1.5,
-		"texture_pitch_base": 0.92,
-		"texture_pitch_speed": 0.18,
-		"rush_gain": 0.60,
 		"brake_scrub_gain": 1.00,
 		"brake_skid_gain": 1.25,
 		"brake_pitch": 1.02,
@@ -188,12 +182,8 @@ const SURFACES := [
 	},
 	&"grass": {
 		"roll_gain": 0.68,
-		"roll_pitch": 0.84,
 		"texture_file": "surfaces/tex_grass.wav",
 		"texture_db": -0.5,
-		"texture_pitch_base": 0.94,
-		"texture_pitch_speed": 0.14,
-		"rush_gain": 0.25,
 		"brake_scrub_gain": 0.65,
 		"brake_skid_gain": 0.70,
 		"brake_pitch": 0.90,
@@ -204,12 +194,8 @@ const SURFACES := [
 	},
 	&"sand": {
 		"roll_gain": 0.75,
-		"roll_pitch": 0.82,
 		"texture_file": "surfaces/tex_sand.wav",
 		"texture_db": 0.5,
-		"texture_pitch_base": 0.94,
-		"texture_pitch_speed": 0.12,
-		"rush_gain": 0.30,
 		"brake_scrub_gain": 0.95,
 		"brake_skid_gain": 1.15,
 		"brake_pitch": 0.94,
@@ -220,12 +206,8 @@ const SURFACES := [
 	},
 	&"stone": {
 		"roll_gain": 1.05,
-		"roll_pitch": 1.08,
 		"texture_file": "surfaces/tex_stone.wav",
 		"texture_db": -0.5,
-		"texture_pitch_base": 0.95,
-		"texture_pitch_speed": 0.15,
-		"rush_gain": 0.95,
 		"brake_scrub_gain": 0.85,
 		"brake_skid_gain": 0.85,
 		"brake_pitch": 1.10,
@@ -236,12 +218,8 @@ const SURFACES := [
 	},
 	&"wet": {
 		"roll_gain": 0.78,
-		"roll_pitch": 0.86,
 		"texture_file": "surfaces/tex_wet.wav",
 		"texture_db": 0.0,
-		"texture_pitch_base": 0.92,
-		"texture_pitch_speed": 0.14,
-		"rush_gain": 0.45,
 		"brake_scrub_gain": 0.85,
 		"brake_skid_gain": 0.95,
 		"brake_pitch": 0.88,
@@ -252,12 +230,8 @@ const SURFACES := [
 	},
 	&"wood": {
 		"roll_gain": 0.72,
-		"roll_pitch": 0.90,
 		"texture_file": "surfaces/tex_wood.wav",
 		"texture_db": -2.5,
-		"texture_pitch_base": 0.95,
-		"texture_pitch_speed": 0.12,
-		"rush_gain": 0.55,
 		"brake_scrub_gain": 0.70,
 		"brake_skid_gain": 0.70,
 		"brake_pitch": 0.96,
@@ -268,28 +242,20 @@ const SURFACES := [
 	},
 	&"snow": {
 		"roll_gain": 0.62,
-		"roll_pitch": 0.80,
 		"texture_file": "surfaces/tex_snow.wav",
 		"texture_db": 1.0,
-		"texture_pitch_base": 0.94,
-		"texture_pitch_speed": 0.12,
-		"rush_gain": 0.20,
 		"brake_scrub_gain": 0.90,
 		"brake_skid_gain": 1.05,
 		"brake_pitch": 0.95,
 		"skid_kind": &"loose",
-		"grain_step_m": 0.0,
+		"grain_step_m": 1.5,
 		"step_bank": &"snow",
 		"step_db": -0.5,
 	},
 	&"water": {
 		"roll_gain": 0.50,
-		"roll_pitch": 0.82,
 		"texture_file": "surfaces/tex_water.wav",
 		"texture_db": 2.0,
-		"texture_pitch_base": 0.92,
-		"texture_pitch_speed": 0.18,
-		"rush_gain": 0.25,
 		"brake_scrub_gain": 0.75,
 		"brake_skid_gain": 1.00,
 		"brake_pitch": 0.95,

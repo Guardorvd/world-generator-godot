@@ -160,8 +160,8 @@ func _step_simulation(dt: float) -> void:
 	if mode == "scenario":
 		_step_scenario(dt)
 	var rolling := (mode == "ride" or mode == "scenario") and not sim_airborne
-	if sim_pedaling and rolling and sim_speed > 0.2:
-		sim_crank = fmod(sim_crank + (sim_speed / 0.34) * 0.4 * dt, TAU)
+	if sim_pedaling and rolling:
+		sim_crank = fmod(sim_crank + _crank_rate(sim_speed) * dt, TAU)
 	var pos := Vector3(16.0, sim_elevation, 16.0)
 	mock_heights.test_current = Vector2(sim_river_flow, 0.0)
 	mock_heights.test_ceiling = 3.5 if sim_tunnel else INF
@@ -176,6 +176,8 @@ func _step_simulation(dt: float) -> void:
 	else:
 		sim_bike.riding = true
 		sim_bike.speed = sim_speed
+		sim_bike.air_time = sim_bike.air_time + dt if sim_airborne else 0.0
+		sim_bike.air_clearance = 0.3 if sim_airborne else 0.0
 		sim_bike.airborne = sim_airborne
 		sim_bike.crank = sim_crank
 		sim_bike.braking = sim_brake
@@ -186,9 +188,24 @@ func _step_simulation(dt: float) -> void:
 			sim_lean, sim_crank, sim_brake, true, sim_airborne, sim_skid, sim_lean * 0.3, 0.8 if sim_pedaling else 0.0, sim_sunlight)
 
 
+## Темп педалей как в BikeRide: обороты колеса через передачу, на старте — медленный нажим (start_crank).
+static func _crank_rate(speed: float) -> float:
+	return maxf((speed / 0.34) * 0.4, 2.5)
+
+
 func _step_scenario(dt: float) -> void:
 	scenario_t += dt
 	match scenario_name:
+		"start_ride":
+			# трогание с места и разгон по грунту: тут раньше появлялся гул
+			if current_surface != &"dirt":
+				set_surface(&"dirt")
+			var ph := fmod(scenario_t, 7.0)
+			sim_speed = clampf((ph - 1.0) * 2.0, 0.0, 9.0)
+			sim_pedaling = ph > 0.8 and ph < 5.5
+			sim_brake = 0.0
+			sim_skid = 0.0
+			sim_airborne = false
 		"slow_forest":
 			set_surface(&"forest")
 			sim_speed = 3.8
@@ -231,13 +248,13 @@ func _step_scenario(dt: float) -> void:
 				sim_airborne = false
 			elif cyc < 0.75:
 				sim_bike.hop_preparing = false
-				sim_bike.hop_used = true
+				sim_bike._hop_used = true
 				sim_airborne = true
 			else:
 				if sim_airborne:
 					audio.land(16.0, 16.0, 0.0, 4.8, true)
 				sim_airborne = false
-				sim_bike.hop_used = false
+				sim_bike._hop_used = false
 		"long_brake":
 			set_surface(&"gravel")
 			var phase := fmod(scenario_t, 4.0)
@@ -393,6 +410,7 @@ func _build_ui() -> void:
 	scen_grid.columns = 3
 	root_box.add_child(scen_grid)
 	for pair in [
+		["0. Start From Standstill", "start_ride"],
 		["1. Slow Forest Ride", "slow_forest"],
 		["2. Fast Forest Descent", "fast_forest"],
 		["3. Gravel Road", "gravel_road"],
@@ -471,8 +489,8 @@ func _update_meters() -> void:
 		var p: AudioStreamPlayer = bl._tex_players[s]
 		if not p.stream_paused and p.volume_db > -75.0:
 			active_tex.append("%s(%.1fdB)" % [String(s), p.volume_db])
-	_meter_label.text = "Roll %.1f | Rush %.1f | Tex: %s\nAmbience: Water %.1f | Rapids %.1f | WindF %.1f | WindA %.1f | Mist %.1f | Meadow %.1f | Crickets %.1f | Tunnel %.1f" % [
-		bl.roll_player.volume_db, bl.rush_player.volume_db, ", ".join(active_tex),
+	_meter_label.text = "Roll %.1f | Chain %.1f (x%.2f) | Freewheel %.1f | Tex: %s\nAmbience: Water %.1f | Rapids %.1f | WindF %.1f | WindA %.1f | Mist %.1f | Meadow %.1f | Crickets %.1f | Tunnel %.1f" % [
+		bl.roll_player.volume_db, bl.chain_player.volume_db, bl.chain_player.pitch_scale, bl.freewheel_player.volume_db, ", ".join(active_tex),
 		al.water_player.volume_db, al.rapids_player.volume_db, al.wind_forest_player.volume_db,
 		al.wind_alpine_player.volume_db, al.wind_mist_player.volume_db, al.meadow_player.volume_db,
 		al.crickets_player.volume_db, al.tunnel_player.volume_db]
@@ -480,14 +498,35 @@ func _update_meters() -> void:
 
 ## Headless automated verification of all 9 scenarios from Section 11.
 func run_headless_suite() -> bool:
-	var ok := true
+	# Лямбда захватывает локальные переменные по значению: прежний «ok = false» внутри неё не доходил
+	# до итога, и сводка всегда печатала OK. Итог держим в словаре (он передаётся по ссылке).
+	var result := {ok = true}
 	var check := func(cond: bool, msg: String) -> void:
 		print(("OK   " if cond else "FAIL ") + msg)
 		if not cond:
-			ok = false
+			result.ok = false
 
 	var bl := audio.bike_layer
 	var fl := audio.foley_layer
+
+	# 0. Start from standstill (27.11.2026: the hum on start). The first second rolls under 1.4 m/s:
+	#    roll must stay near silent and roll/texture loops must not be pitched down (that is what hummed).
+	set_surface(&"dirt")
+	var start_roll_max := -80.0
+	var start_low_pitch := 9.0
+	for i in 60:
+		_step_frame_headless(i / 60.0 * 1.4, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
+		start_roll_max = maxf(start_roll_max, bl.roll_player.volume_db)
+		for p: AudioStreamPlayer in [bl.roll_player, bl._tex_players[&"dirt"]]:
+			if not p.stream_paused:
+				start_low_pitch = minf(start_low_pitch, p.pitch_scale)
+	check.call(start_roll_max < -42.0 and start_low_pitch >= 0.95,
+		"Scenario 0 (Start from standstill): roll %.1f dB max under 1.4 m/s, lowest roll/texture pitch %.2f" % [start_roll_max, start_low_pitch])
+	for i in 180:
+		_step_frame_headless(1.4 + i / 180.0 * 6.0, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
+	var cadence_pitch := clampf(_crank_rate(7.4) / cfg.chain_ref_crank, cfg.chain_pitch_range.x, cfg.chain_pitch_range.y)
+	check.call(bl.chain_player.volume_db > -40.0 and absf(bl.chain_player.pitch_scale - cadence_pitch) < 0.08,
+		"Scenario 0b (Pedaling at 7.4 m/s): chain %.1f dB, pitch %.2f follows cadence %.2f" % [bl.chain_player.volume_db, bl.chain_player.pitch_scale, cadence_pitch])
 
 	# 1. Slow forest ride
 	set_surface(&"forest")
@@ -505,15 +544,15 @@ func run_headless_suite() -> bool:
 			audio.wheel_knock(1.4, true)
 		_step_frame_headless(17.0, false, false, 0.0, 0.0, 0.18, 1.0 / 60.0)
 	sim_bike.squash_fv = 0.0
-	check.call(bl.rush_player.volume_db > -40.0 and bl.freewheel_player.volume_db > -40.0,
-		"Scenario 2 (Fast forest descent): tire rush (%.1f dB) and freewheel (%.1f dB) active" % [bl.rush_player.volume_db, bl.freewheel_player.volume_db])
+	check.call(bl.roll_player.volume_db > -30.0 and bl.freewheel_player.volume_db > -40.0 and bl.chain_player.volume_db <= -75.0,
+		"Scenario 2 (Fast forest descent): roll (%.1f dB) and freewheel (%.1f dB) active, chain silent (%.1f dB)" % [bl.roll_player.volume_db, bl.freewheel_player.volume_db, bl.chain_player.volume_db])
 
 	# 3. Gravel road
 	set_surface(&"gravel")
 	for i in 120:
 		_step_frame_headless(12.5, true, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
 	var gravel_db: float = (bl._tex_players[&"gravel"] as AudioStreamPlayer).volume_db
-	check.call(gravel_db > -30.0 and bl.roll_player.pitch_scale >= 0.78 and bl.roll_player.pitch_scale <= 1.22,
+	check.call(gravel_db > -30.0 and bl.roll_player.pitch_scale >= 0.95 and bl.roll_player.pitch_scale <= 1.1,
 		"Scenario 3 (Gravel road): gravel texture %.1f dB, natural pitch %.2f" % [gravel_db, bl.roll_player.pitch_scale])
 
 	# 4. Sequential surface transition continuity (all 11 surfaces)
@@ -540,12 +579,16 @@ func run_headless_suite() -> bool:
 	sim_bike.hop_preparing = true
 	_step_frame_headless(11.0, false, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
 	sim_bike.hop_preparing = false
-	sim_bike.hop_used = true
+	sim_bike._hop_used = true
 	for i in 45:
 		_step_frame_headless(11.0, false, true, 0.0, 0.0, 0.0, 1.0 / 60.0)
-	check.call(bl.roll_player.volume_db <= -65.0 and bl.air_wind_player.volume_db > -50.0,
-		"Scenario 5 (Hop air phase): roll silenced (%.1f dB), air wind audible (%.1f dB)" % [bl.roll_player.volume_db, bl.air_wind_player.volume_db])
-	sim_bike.hop_used = false
+	var air_loud := -80.0
+	for p: AudioStreamPlayer in bl._loop_players:
+		if p != bl.freewheel_player:
+			air_loud = maxf(air_loud, p.volume_db)
+	check.call(bl.roll_player.volume_db <= -65.0 and air_loud <= -60.0,
+		"Scenario 5 (Hop air phase): roll silenced (%.1f dB), no wind or ground loop in the air (loudest %.1f dB)" % [bl.roll_player.volume_db, air_loud])
+	sim_bike._hop_used = false
 	_step_frame_headless(11.0, false, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
 
 	# 6. Soft, medium, and hard landings
@@ -674,14 +717,16 @@ func run_headless_suite() -> bool:
 	check.call(al.tunnel_player.volume_db <= -60.0 and (lpf == null or lpf.cutoff_hz >= 14500.0),
 		"Scenario 12b (Tunnel exit): tunnel hum faded (%.1f dB), LPF restored (%.0f Hz)" % [
 			al.tunnel_player.volume_db, lpf.cutoff_hz if lpf != null else -1.0])
-	return ok
+	return result.ok
 
 
 func _step_frame_headless(speed: float, pedaling: bool, airborne: bool, brake: float, skid: float, lean: float, dt: float) -> void:
-	if pedaling and not airborne and speed > 0.2:
-		sim_crank = fmod(sim_crank + (speed / 0.34) * 0.4 * dt, TAU)
+	if pedaling and not airborne:
+		sim_crank = fmod(sim_crank + _crank_rate(speed) * dt, TAU)
 	sim_bike.riding = true
 	sim_bike.speed = speed
+	sim_bike.air_time = sim_bike.air_time + dt if airborne else 0.0
+	sim_bike.air_clearance = 0.3 if airborne else 0.0
 	sim_bike.airborne = airborne
 	sim_bike.crank = sim_crank
 	sim_bike.braking = brake

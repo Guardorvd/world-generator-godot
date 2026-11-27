@@ -1,11 +1,12 @@
 class_name BikeAudioLayer
 extends Node
 ## Handles all bicycle sound layers:
-## - Continuous tire casing roll + high-speed tread rush + 11-surface texture crossfader
-## - Distance-driven wood bridge plank seams and stochastic surface micro-grains
-## - Lubricated chain drivetrain, precision freehub ratchet, and virtual gear shifts
+## - Shared rubber roll (mid band, no low hum) + 11-surface texture crossfader
+## - Distance-driven wood plank seams and surface micro-grains (density follows speed by itself)
+## - Chain under load (pitch = cadence, pulses with pedal strokes), freehub ratchet, virtual gear shifts
 ## - Tactile braking (pad friction + loose/firm surface tire scrub/skid)
-## - Suspension breathing, pump compression, fork bottom-out, hops, air rush, tiered landings, wheel knocks, mount/dismount
+## - Suspension breathing, pump compression, fork bottom-out, hops, tiered landings, wheel knocks, mount/dismount
+## Riding wind and the tread "rush" hiss were removed on 27.11.2026 (they read as wind, the user asked to drop it).
 
 const AudioCfg := preload("res://scripts/audio/game_audio_config.gd")
 
@@ -13,13 +14,11 @@ var _cfg
 var _bus: StringName = &"Bike"
 
 var roll_player: AudioStreamPlayer
-var rush_player: AudioStreamPlayer
 var freewheel_player: AudioStreamPlayer
 var chain_player: AudioStreamPlayer
 var brake_pad_player: AudioStreamPlayer
 var skid_loose_player: AudioStreamPlayer
 var skid_firm_player: AudioStreamPlayer
-var air_wind_player: AudioStreamPlayer
 
 var _tex_players := {}        # StringName surface -> AudioStreamPlayer
 var _tex_levels := {}         # StringName surface -> float (0..1)
@@ -72,13 +71,11 @@ func setup(cfg) -> void:
 	var root := String(AudioCfg.SOUNDS_ROOT)
 
 	roll_player = _make_loop(root + "roll.wav")
-	rush_player = _make_loop(root + "bike/tire_rush.wav")
 	freewheel_player = _make_loop(root + "freewheel.wav")
 	chain_player = _make_loop(root + "chain.wav")
 	brake_pad_player = _make_loop(root + "bike/brake_pad.wav")
 	skid_loose_player = _make_loop(root + "bike/skid_loose.wav")
 	skid_firm_player = _make_loop(root + "bike/skid_firm.wav")
-	air_wind_player = _make_loop(root + "bike/air_wind.wav")
 
 	for surf: StringName in AudioCfg.SURFACES:
 		var prof: Dictionary = cfg.profile(surf)
@@ -88,7 +85,7 @@ func setup(cfg) -> void:
 			_tex_players[surf] = p
 			_tex_levels[surf] = 0.0
 
-	for gkind: StringName in [&"forest", &"gravel", &"stone", &"wet"]:
+	for gkind: StringName in AudioCfg.GRAIN_KINDS:
 		var files := _series(root + "surfaces/grain_%s_%%d.wav" % gkind, 4)
 		_grain_players[gkind] = _make_rand(files, 1.08, 2.0, 2)
 
@@ -202,7 +199,7 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 		return
 	var v := absf(speed)
 	var cruise := maxf(BikePhysicsConfig.current().cruise_speed, 1.0)
-	var rush := clampf(v / cruise, 0.0, 1.4)
+	var pace := clampf(v / cruise, 0.0, 1.4)
 	var corner := clampf(absf(lean) / 0.28, 0.0, 1.0)
 	var prof: Dictionary = _cfg.profile(surface_id)
 
@@ -211,33 +208,33 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 	var blend_k := Util.damp(_cfg.surface_blend_rate, dt)
 	var ground_rate := near if rolling else air_k
 
-	# 1. Core rubber casing roll + high-speed tread rush
+	# 1. Shared rubber roll: rises from silence with speed (no floor level, no pitch below ~1 — that was the hum)
 	var roll_gain := float(prof.get("roll_gain", 0.9))
-	var roll_pitch := float(prof.get("roll_pitch", 1.0))
-	var roll_goal := clampf(smoothstep(0.35, 3.2, v) * (0.42 + 0.58 * minf(rush, 1.25)) * roll_gain * (0.85 + 0.15 * rough + corner * 0.12), 0.0, 1.15) if rolling else 0.0
+	var roll_k := smoothstep(_cfg.roll_speed_range.x, _cfg.roll_speed_range.y, v)
+	var roll_goal := clampf(roll_k * (0.75 + 0.25 * minf(pace, 1.3)) * roll_gain * (0.9 + 0.2 * rough + corner * 0.1), 0.0, 1.15) if rolling else 0.0
 	_set_loop_level(roll_player, roll_goal, ground_rate, _cfg.db_roll)
-	_set_pitch(roll_player, clampf((0.86 + 0.24 * minf(rush, 1.2)) * roll_pitch, 0.78, 1.22), near)
+	_set_pitch(roll_player, lerpf(_cfg.roll_pitch_range.x, _cfg.roll_pitch_range.y, clampf(pace, 0.0, 1.2) / 1.2), near)
 
-	var rush_gain := float(prof.get("rush_gain", 0.6))
-	var rush_goal := clampf(smoothstep(5.5, 16.5, v) * rush_gain * (0.85 + corner * 0.2), 0.0, 1.0) if rolling else 0.0
-	_set_loop_level(rush_player, rush_goal, ground_rate, _cfg.db_tire_rush)
-	_set_pitch(rush_player, 0.92 + 0.16 * smoothstep(5.5, 18.0, v), near)
-
-	# 2. Multi-surface smooth texture crossfader (only active textures stay unpaused)
-	var tex_pitch := clampf(float(prof.get("texture_pitch_base", 0.95)) + float(prof.get("texture_pitch_speed", 0.14)) * minf(rush, 1.15), 0.82, 1.18)
+	# 2. Multi-surface texture crossfader (only active textures stay unpaused). Speed shapes level and,
+	#    through distance-driven grains below, density; pitch moves only a few percent.
+	var tex_pitch := lerpf(_cfg.texture_pitch_range.x, _cfg.texture_pitch_range.y, clampf(pace, 0.0, 1.15) / 1.15)
 	var brake_boost := clampf(brake_pressure * 0.35 + skid * 0.65, 0.0, 1.0)
+	var tex_k := smoothstep(_cfg.texture_speed_range.x, _cfg.texture_speed_range.y, v)
 	for s_id: StringName in _tex_players:
 		var tp: AudioStreamPlayer = _tex_players[s_id]
 		var target := 0.0
 		if rolling and s_id == surface_id:
-			target = clampf(smoothstep(0.4, 3.8, v) * (0.50 + 0.50 * minf(rush, 1.15)) + brake_boost * 0.35, 0.0, 1.25)
+			target = clampf(tex_k * (0.55 + 0.45 * minf(pace, 1.15)) + brake_boost * 0.3, 0.0, 1.2)
+		if float(_tex_levels.get(s_id, 0.0)) > 0.0005:
 			_set_pitch(tp, tex_pitch, near)
 		var rate := air_k if not rolling else blend_k
 		var cur := lerpf(float(_tex_levels.get(s_id, 0.0)), target, rate)
+		if target == 0.0 and cur < 0.01:
+			cur = 0.0   # хвост ниже −40 дБ от полной не тянем: при частой смене покрытий не копятся голоса
 		_tex_levels[s_id] = cur
 		_apply_db(tp, _cfg.db_surface_texture + float(_cfg.profile(s_id).get("texture_db", 0.0)), cur)
 
-	# 3. Distance-driven wood plank seams & sparse surface micro-grains
+	# 3. Distance-driven wood plank seams & surface micro-grains (more metres per second = denser grains)
 	if rolling and v > 0.9:
 		var ds := v * dt
 		if surface_id == &"wood":
@@ -245,7 +242,7 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 			if _plank_dist >= _plank_next:
 				_plank_dist = 0.0
 				_plank_next = randf_range(0.45, 0.82)
-				_plank_player.volume_db = _cfg.db_plank - 5.0 + minf(rush, 1.1) * 5.0
+				_plank_player.volume_db = _cfg.db_plank - 5.0 + minf(pace, 1.1) * 5.0
 				_plank_player.play()
 		else:
 			_plank_dist = 0.0
@@ -257,13 +254,14 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 				_grain_next = g_step * randf_range(0.55, 1.65)
 				_grain_cd = _cfg.grain_cooldown_s
 				var gp: AudioStreamPlayer = _grain_players[surface_id]
-				gp.volume_db = _cfg.db_surface_texture - 7.0 + minf(rush, 1.0) * 4.5
+				gp.volume_db = _cfg.db_surface_texture - 8.0 + minf(pace, 1.0) * 4.5 + 2.0 * rough
 				gp.play()
 	else:
 		_plank_dist = 0.0
 		_grain_dist = 0.0
 
-	# 4. Drivetrain: lubricated chain when pedaling, precision freehub ratchet when coasting
+	# 4. Drivetrain: chain under load while pedaling, freehub ratchet while coasting.
+	#    Both loops were recorded at a reference tempo, so pitch = tempo / reference keeps clicks in step.
 	var d_crank := wrapf(crank - _crank, -PI, PI)
 	if absf(d_crank) > 0.0005:
 		_crank = crank
@@ -277,17 +275,20 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 	var wheel_active := riding and speed > 0.55
 	var freewheel_goal := smoothstep(0.55, 2.6, v) * (1.0 if not pedaling else 0.0) if wheel_active else 0.0
 	_set_loop_level(freewheel_player, freewheel_goal, near, _cfg.db_freewheel)
-	_set_pitch(freewheel_player, clampf(v / _cfg.freewheel_ref_speed, 0.58, 1.55), near)
+	_set_pitch(freewheel_player, clampf(v / _cfg.freewheel_ref_speed, _cfg.freewheel_pitch_range.x, _cfg.freewheel_pitch_range.y), near)
 
-	var chain_goal := (0.42 + 0.48 * minf(rush, 1.0) + 0.25 * clampf(effort, 0.0, 1.0)) * smoothstep(0.25, 2.0, v + _crank_speed * 0.2) if pedaling else 0.0
-	_set_loop_level(chain_player, chain_goal, near, _cfg.db_chain)
-	_set_pitch(chain_player, clampf(0.84 + 0.032 * _crank_speed, 0.80, 1.24), near)
+	var chain_goal := 0.0
+	if pedaling:
+		chain_goal = smoothstep(_cfg.chain_crank_range.x, _cfg.chain_crank_range.y, _crank_speed) * (0.5 + 0.5 * clampf(effort, 0.0, 1.0))
+	var chain_rate := Util.damp(_cfg.chain_attack_rate, dt) if chain_goal > float(_loop_levels.get(chain_player, 0.0)) else near
+	_set_loop_level(chain_player, chain_goal, chain_rate, _cfg.db_chain)
+	_set_pitch(chain_player, clampf(_crank_speed / _cfg.chain_ref_crank, _cfg.chain_pitch_range.x, _cfg.chain_pitch_range.y), near)
 
 	# 5. Braking: velvety caliper pad whisper + loose/firm surface tire shear/skid
 	var brake_amt := clampf(brake_pressure, 0.0, 1.0) * smoothstep(0.45, 3.0, v) if rolling else 0.0
 	var pad_goal := brake_amt * 0.90
 	_set_loop_level(brake_pad_player, pad_goal, near, _cfg.db_brake_pad)
-	_set_pitch(brake_pad_player, 0.88 + 0.18 * minf(rush, 1.0), near)
+	_set_pitch(brake_pad_player, 0.88 + 0.18 * minf(pace, 1.0), near)
 
 	var corner_slip := smoothstep(0.04, 0.20, absf(slip)) * smoothstep(1.5, 6.0, v) if rolling else 0.0
 	var scrub := maxf(brake_amt * float(prof.get("brake_scrub_gain", 0.8)) * (0.35 + 0.75 * skid), corner_slip * 0.78)
@@ -295,20 +296,11 @@ func update_frame(dt: float, speed: float, rolling: bool, riding: bool, airborne
 	var skid_scale := float(prof.get("brake_skid_gain", 0.9))
 	var loose_goal := clampf(scrub * skid_scale, 0.0, 1.25) if is_loose else 0.0
 	var firm_goal := clampf(scrub * skid_scale, 0.0, 1.15) if not is_loose else 0.0
-	var brake_pitch := float(prof.get("brake_pitch", 1.0)) * (0.90 + 0.16 * minf(rush, 1.0))
+	var brake_pitch := float(prof.get("brake_pitch", 1.0)) * (0.90 + 0.16 * minf(pace, 1.0))
 	_set_loop_level(skid_loose_player, loose_goal, ground_rate, _cfg.db_brake_skid)
 	_set_pitch(skid_loose_player, clampf(brake_pitch, 0.80, 1.18), near)
 	_set_loop_level(skid_firm_player, firm_goal, ground_rate, _cfg.db_brake_skid - 1.5)
 	_set_pitch(skid_firm_player, clampf(brake_pitch, 0.80, 1.18), near)
-
-	# 6. High-speed & airborne aerodynamic rush (gentle, below 800 Hz)
-	var wind_goal := 0.0
-	if riding:
-		var speed_wind := smoothstep(_cfg.wind_start_speed, _cfg.wind_full_speed, v) * 0.85
-		var air_bonus := smoothstep(1.5, 9.0, v) * 0.45 if airborne else 0.0
-		wind_goal = clampf(maxf(speed_wind, air_bonus), 0.0, 1.0)
-	_set_loop_level(air_wind_player, wind_goal, near, _cfg.db_wind)
-	_set_pitch(air_wind_player, 0.88 + 0.26 * clampf(v / _cfg.wind_full_speed, 0.0, 1.2), near)
 
 
 func play_landing(impact: float, riding: bool) -> void:
