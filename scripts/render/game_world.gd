@@ -426,10 +426,13 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		shop_progress.grips_changed.connect(func(_id: String) -> void: _gear_changed = true)
 		shop_progress.pedals_changed.connect(bike_view.set_pedals)
 		shop_progress.pedals_changed.connect(func(_id: String) -> void: _gear_changed = true)
+		shop_progress.helmet_changed.connect(bike_view.set_helmet)
+		shop_progress.helmet_changed.connect(func(_id: String) -> void: _gear_changed = true)
 		bike_view.set_scheme(shop_progress.equipped)
 		bike_view.set_tires(shop_progress.equipped_tires)
 		bike_view.set_grips(shop_progress.equipped_grips)
 		bike_view.set_pedals(shop_progress.equipped_pedals)
+		bike_view.set_helmet(shop_progress.equipped_helmet)
 	brake_effects = BrakeEffects.new()
 	brake_effects.name = "BrakeEffects"
 	add_child(brake_effects)

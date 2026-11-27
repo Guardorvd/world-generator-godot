@@ -6,6 +6,7 @@ signal equipment_changed(scheme: String)
 signal tires_changed(id: String)
 signal grips_changed(id: String)
 signal pedals_changed(id: String)
+signal helmet_changed(id: String)
 
 const Palette := preload("res://scripts/render/bike_palette.gd")
 const Files := preload("res://scripts/core/cache_file.gd")
@@ -13,15 +14,19 @@ const DEFAULT_SCHEME := "ember"
 const DEFAULT_TIRES := Palette.STOCK_TIRES
 const DEFAULT_GRIPS := Palette.STOCK_GRIPS
 const DEFAULT_PEDALS := Palette.STOCK_PEDALS
-enum Category { SCHEME, TIRES, GRIPS, PEDALS }
-const DEFAULT_ITEMS := [DEFAULT_SCHEME, DEFAULT_TIRES, DEFAULT_GRIPS, DEFAULT_PEDALS]
-const EQUIPMENT_FIELDS := ["equipped", "tires", "grips", "pedals"]
+const Helmets := preload("res://scripts/render/helmet_models.gd")
+const DEFAULT_HELMET := Helmets.STOCK
+enum Category { SCHEME, TIRES, GRIPS, PEDALS, HELMET }
+const DEFAULT_ITEMS := [DEFAULT_SCHEME, DEFAULT_TIRES, DEFAULT_GRIPS, DEFAULT_PEDALS, DEFAULT_HELMET]
+## 27.11: шлем — новое поле; в профилях до него его нет, и _read ставит штатный
+const EQUIPMENT_FIELDS := ["equipped", "tires", "grips", "pedals", "helmet"]
 ## 20.11: второй ряд — дорогие расцветки, чтобы очки работали дольше первых заданий
 const PRICES := {"ember": 0, "glacier": 50, "moss": 50, "night": 50, "lingon": 120, "fog": 150, "copper": 200,
 	"obsidian": 220, "heritage": 180, "pulse": 250, "salt": 230, "tide": 240, "ivory": 210,
 	DEFAULT_TIRES: 0, "tires_rose": 70, "tires_sage": 70, "tires_blue": 70, "tires_sand": 70, "tires_ivory": 70,
 	DEFAULT_GRIPS: 0, "grips_rose": 35, "grips_sage": 35, "grips_blue": 35, "grips_sand": 35, "grips_ivory": 35,
-	DEFAULT_PEDALS: 0, "pedals_rose": 45, "pedals_sage": 45, "pedals_blue": 45, "pedals_sand": 45, "pedals_ivory": 45}
+	DEFAULT_PEDALS: 0, "pedals_rose": 45, "pedals_sage": 45, "pedals_blue": 45, "pedals_sand": 45, "pedals_ivory": 45,
+	DEFAULT_HELMET: 0, "helmet_dome": 80, "helmet_trail": 100, "helmet_aero": 120}
 ## Задания (вид до двоеточия) и, с 20.11, исследование: новая страница альбома (album), ночное явление в альбоме (sky),
 ## первый обзор с вышки или вершины (scan), ремонт по пути (fix; благодарность поселения платит как задание repair)
 const REWARDS := {
@@ -32,8 +37,9 @@ const REWARDS := {
 const FORMAT := 1
 const MAX_FILE_BYTES := 8 * 1024 * 1024
 const DEFAULT_STATE := {
-	format = FORMAT, balance = 0, owned = {DEFAULT_SCHEME: true, DEFAULT_TIRES: true, DEFAULT_GRIPS: true, DEFAULT_PEDALS: true},
-	equipped = DEFAULT_SCHEME, tires = DEFAULT_TIRES, grips = DEFAULT_GRIPS, pedals = DEFAULT_PEDALS, paid = {},
+	format = FORMAT, balance = 0,
+	owned = {DEFAULT_SCHEME: true, DEFAULT_TIRES: true, DEFAULT_GRIPS: true, DEFAULT_PEDALS: true, DEFAULT_HELMET: true},
+	equipped = DEFAULT_SCHEME, tires = DEFAULT_TIRES, grips = DEFAULT_GRIPS, pedals = DEFAULT_PEDALS, helmet = DEFAULT_HELMET, paid = {},
 	purchase_goal = "",
 }
 
@@ -47,6 +53,8 @@ var equipped_grips: String:
 	get: return _state.grips
 var equipped_pedals: String:
 	get: return _state.pedals
+var equipped_helmet: String:
+	get: return _state.helmet
 var purchase_goal: String:
 	get: return _state.purchase_goal
 var load_error := OK
@@ -84,10 +92,13 @@ static func item_name(id: String) -> String:
 		Category.TIRES: return Palette.TIRE_NAMES[id]
 		Category.GRIPS: return Palette.GRIP_NAMES[id]
 		Category.PEDALS: return Palette.PEDAL_NAMES[id]
+		Category.HELMET: return Helmets.NAMES[id]
 		_: return Palette.SCHEME_NAMES.get(id, id)
 
 
 static func category_for(id: String) -> Category:
+	if Helmets.NAMES.has(id):
+		return Category.HELMET
 	if Palette.PEDAL_NAMES.has(id):
 		return Category.PEDALS
 	if Palette.GRIP_NAMES.has(id):
@@ -183,6 +194,8 @@ func _emit_equipped(id: String) -> void:
 			grips_changed.emit(id)
 		Category.PEDALS:
 			pedals_changed.emit(id)
+		Category.HELMET:
+			helmet_changed.emit(id)
 		_:
 			equipment_changed.emit(id)
 

@@ -45,6 +45,8 @@ func _bake() -> void:
 		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
 		bike.tick(state, DT, 1.0, false)
 	bike.draw(1.0)
+	var skeleton := bike.rider.skeleton
+	var head := skeleton.global_transform * skeleton.get_bone_global_pose(skeleton.find_bone("Head")).origin
 	var args := OS.get_cmdline_user_args()
 	var only := args.find("--only")
 	for id: String in Progress.PRICES:
@@ -54,8 +56,9 @@ func _bake() -> void:
 		var tires := category == Progress.Category.TIRES
 		var grips := category == Progress.Category.GRIPS
 		var pedals := category == Progress.Category.PEDALS
+		var helmet := category == Progress.Category.HELMET
 		var accessory := category != Progress.Category.SCHEME
-		if ("--tires" in args and not tires) or ("--grips" in args and not grips):
+		if ("--tires" in args and not tires) or ("--grips" in args and not grips) or ("--helmets" in args and not helmet):
 			continue
 		# 20.11: готовые портреты не переснимаются (новая расцветка — только свои два файла); всё заново — -- --all
 		if FileAccess.file_exists("res://resources/shop/%s_side.png" % id) and not "--all" in args:
@@ -64,10 +67,14 @@ func _bake() -> void:
 		bike.set_tires(id if tires else Progress.DEFAULT_TIRES)
 		bike.set_grips(id if grips else Progress.DEFAULT_GRIPS)
 		bike.set_pedals(id if pedals else Progress.DEFAULT_PEDALS)
-		bike.rider.visible = not accessory
-		camera.size = [2.1, 1.45, 0.52, 0.48][category]
+		bike.set_helmet(id if helmet else Progress.DEFAULT_HELMET)
+		bike.rider.visible = not accessory or helmet
+		camera.size = [2.1, 1.45, 0.52, 0.48, 0.5][category]
 		var target := Vector3(0, 0.56 if tires else 0.9, 0)
-		if grips:
+		if helmet:
+			# 27.11: голова крупно; второй ракурс — сзади сбоку, как шлем виден из игровой камеры
+			target = head + Vector3(0, 0.05, 0)
+		elif grips:
 			target = Vector3(0, 0.97, -0.405)
 		elif pedals:
 			target = Vector3(0, 0.30, 0)
@@ -76,7 +83,9 @@ func _bake() -> void:
 			bike.pedal_l.rotation.x = -PI * 0.5
 			bike.pedal_r.rotation.x = -PI * 0.5
 		for view in 2:
-			if grips:
+			if helmet:
+				camera.position = target + (Vector3(3.0, 0.3, 0.0) if view == 0 else Vector3(-2.0, 1.1, 2.2))
+			elif grips:
 				camera.position = Vector3(0, 1.85, -2.1) if view == 0 else Vector3(1.2, 1.65, -1.8)
 			elif pedals:
 				camera.position = Vector3(1.6, 0.68, 0.15) if view == 0 else Vector3(1.4, 1.28, -0.50)

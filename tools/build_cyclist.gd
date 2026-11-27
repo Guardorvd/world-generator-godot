@@ -13,6 +13,8 @@ extends SceneTree
 ## трубки с торцами: иначе на сгибе колена и локтя торцы выпирают рваными кольцами.
 ## Волосы — полоса по поверхности затылка (как вставки на джерси), а не эллипсоиды.
 ## Один штатный skinned ArrayMesh, прежние 22 кости, без внешних моделей и текстур.
+## 27.11: шлем вынесен из тела — формы из scripts/render/helmet_models.gd, каждая своим жёстким мешем на кости
+## головы (узел HelmetMount); виден один, на седоке по-прежнему одна отрисовка тела и одна — шлема.
 const AO := preload("res://tools/vertex_ao.gd")
 const P := preload("res://scripts/render/bike_palette.gd")
 var rider: CyclistRig
@@ -31,11 +33,14 @@ var dark := Vector2i(P.DARK, P.HARD)
 var hair := Vector2i(P.DARK, P.MATTE)
 var lens := Vector2i(P.LENS, P.LENS_KIND)
 var alloy := Vector2i(P.ALLOY, P.ALLOY_KIND)
-# Шлем v5: низ оболочки (м над костью головы), её высота и полуоси низа.
+const Helmets := preload("res://scripts/render/helmet_models.gd")
+# Шлем v5: низ оболочки (м над костью головы) и середина по z — общие для всех форм (HelmetModels.FORMS):
+# под ними сидят ремешки, волосы и очки.
 const HELMET_Y := 0.052
-const HELMET_H := 0.112
-const HELMET_R := Vector2(0.118, 0.138)
 const HELMET_Z := -0.012
+const RIM_SCALE := Vector2(1.02, 1.024) # кант чуть шире скорлупы: низ и верх
+const VISOR_LIFT := 0.008 # козырёк над низом скорлупы
+const VISOR_TUCK := 0.008 # и насколько он заходит под её перёд
 
 
 func _init() -> void:
@@ -94,10 +99,15 @@ func _init() -> void:
 	for side in [-1.0, 1.0]:
 		_limbs(side)
 	_watch()
-	tool.index()
-	var mesh := tool.commit()
-	# затенение — в bind-позе по своим треугольникам (подмышки, пах, под шлемом, между пальцами)
-	mesh = AO.apply(mesh, AO.triangles(mesh), 0.07, 0.007, 0.9)
+	var mesh := _commit()
+	var helmets := {}
+	for id: String in Helmets.FORMS:
+		_helmet(Helmets.FORMS[id])
+		helmets[id] = _commit()
+	# затенение — в bind-позе по своим треугольникам (подмышки, пах, под шлемом, между пальцами);
+	# тело затеняет штатный шлем, каждый шлем — тело и он сам
+	var body_occluders := AO.triangles(mesh)
+	mesh = AO.apply(mesh, body_occluders + AO.triangles(helmets[Helmets.STOCK]), 0.07, 0.007, 0.9)
 	var body := MeshInstance3D.new()
 	body.name = "Body"
 	body.mesh = mesh
@@ -111,6 +121,7 @@ func _init() -> void:
 	body.extra_cull_margin = BikeCrash.GROUND_R + 2.0
 	skeleton.add_child(body)
 	body.owner = rider
+	_mount_helmets(helmets, body_occluders)
 	_animation_reset()
 	var packed := PackedScene.new()
 	var error := packed.pack(rider)
@@ -118,6 +129,48 @@ func _init() -> void:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
 	print("Cyclist v9: ", error_string(error), "; surfaces=", mesh.get_surface_count(), " triangles=", (mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3)
 	quit(error)
+
+
+func _commit() -> ArrayMesh:
+	tool.index()
+	var mesh := tool.commit()
+	tool = null
+	return mesh
+
+
+## 27.11: шлемы — жёсткие меши на кости головы (BoneAttachment3D): все их вершины и так весят только на Head,
+## поэтому без скиннинга. Виден один (BikeView.set_helmet), по умолчанию штатный.
+func _mount_helmets(helmets: Dictionary, body_occluders: PackedVector3Array) -> void:
+	var head := skeleton.find_bone("Head")
+	# как обратная привязка скина: вершина в осях кости в покое, дальше её ведёт поза головы
+	var to_head := skeleton.get_bone_global_rest(head).affine_inverse()
+	var normal_basis := to_head.basis.inverse().transposed()
+	var mount := BoneAttachment3D.new()
+	mount.name = Helmets.MOUNT
+	skeleton.add_child(mount)
+	mount.owner = rider
+	mount.bone_name = "Head"
+	for id: String in helmets:
+		var baked := AO.apply(helmets[id], body_occluders + AO.triangles(helmets[id]), 0.07, 0.007, 0.9)
+		var arrays := baked.surface_get_arrays(0)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		for i in vertices.size():
+			vertices[i] = to_head * vertices[i]
+			normals[i] = (normal_basis * normals[i]).normalized()
+		arrays[Mesh.ARRAY_VERTEX] = vertices
+		arrays[Mesh.ARRAY_NORMAL] = normals
+		arrays[Mesh.ARRAY_BONES] = null
+		arrays[Mesh.ARRAY_WEIGHTS] = null
+		var rigid := ArrayMesh.new()
+		rigid.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var item := MeshInstance3D.new()
+		item.name = id
+		item.mesh = rigid
+		item.material_override = P.material()
+		item.visible = id == Helmets.STOCK
+		mount.add_child(item)
+		item.owner = rider
 
 
 ## Часы на левом запястье (раньше — три отдельных меша BikeView): корпус, безель, стекло.
@@ -235,43 +288,94 @@ func _head() -> void:
 	# Нос скрыт маской: отдельная геометрия проступает сквозь её поверхность при повороте головы.
 	_mask()
 	_hair()
-	var centers: Array[Vector3] = []
-	var sizes: Array[Vector2] = []
-	for i in 11:
-		var theta := PI * 0.5 * i / 10.0
-		centers.append(Vector3(0, HELMET_Y + sin(theta) * HELMET_H, HELMET_Z))
-		sizes.append(HELMET_R * maxf(cos(theta), 0.01))
-	# 24 грани вместо 12: прорези лежат на настоящей сфере и на гранёной оболочке торчали бы по контуру
-	local_loft("Head", centers, sizes, helmet, 24)
-	# Тёмный обод по краю оболочки и короткий козырёк под наклоном
-	local_loft("Head", [Vector3(0, HELMET_Y - 0.008, HELMET_Z), Vector3(0, HELMET_Y + 0.006, HELMET_Z)], [HELMET_R * 1.02, HELMET_R * 1.024], navy, 24)
-	box("Head", Vector3(0.15, 0.006, 0.036), Vector3(0, HELMET_Y + 0.008, HELMET_Z - HELMET_R.y - 0.01), navy, Basis(Vector3.RIGHT, 0.28))
-	for x in [-0.075, -0.032, 0.032, 0.075]:
-		helmet_strip(x, 0.012, dark)
-	helmet_strip(0.0, 0.012, teal)
-	_helmet_back()
+	# 27.11: сам шлем — отдельный меш на кости головы (_helmet), чтобы в магазине менялась его форма
 	# 17.11: колесо регулировки на затылке под шлемом (видно с игровой камеры сзади) и его рамка
 	box("Head", Vector3(0.05, 0.012, 0.014), Vector3(0, -0.026, head_z(-0.026) + head_size(-0.026).y + 0.01), dark)
 	box("Head", Vector3(0.02, 0.018, 0.008), Vector3(0, -0.026, head_z(-0.026) + head_size(-0.026).y + 0.019), panel)
 
 
+## Шлем формы form (HelmetModels.FORMS): скорлупа, кант, козырёк, прорези и затылочная часть.
+## Скорлупа — эллипсоид; хвост (tail) вытягивает её низ назад, к макушке он сходит на нет (каплевидный профиль),
+## перёд остаётся на месте.
+func _helmet(form: Dictionary) -> void:
+	var radius: Vector2 = form.radius
+	var shell := shell_radius(form)
+	var center_z := shell_z(form)
+	var height: float = form.height
+	var centers: Array[Vector3] = []
+	var sizes: Array[Vector2] = []
+	for i in 11:
+		var theta := PI * 0.5 * i / 10.0
+		var section := shell_section(form, theta)
+		centers.append(Vector3(0, HELMET_Y + sin(theta) * height, section.x))
+		sizes.append(Vector2(section.y, section.z))
+	# 24 грани вместо 12: прорези лежат на настоящей сфере и на гранёной оболочке торчали бы по контуру
+	local_loft("Head", centers, sizes, helmet, 24)
+	# Тёмный обод по краю оболочки и козырёк под наклоном
+	var rim: Vector2 = form.rim
+	local_loft("Head", [Vector3(0, HELMET_Y - rim.x, center_z), Vector3(0, HELMET_Y + rim.y, center_z)], [shell * RIM_SCALE.x, shell * RIM_SCALE.y], navy, 24)
+	var visor: Vector4 = form.visor
+	if visor.x > 0.0:
+		box("Head", Vector3(visor.x, visor.y, visor.z), Vector3(0, HELMET_Y + VISOR_LIFT, HELMET_Z - radius.y - visor.z * 0.5 + VISOR_TUCK), navy, Basis(Vector3.RIGHT, visor.w))
+	for x: float in form.vents:
+		helmet_strip(form, x, form.vent_width, dark)
+	if form.stripe:
+		helmet_strip(form, 0.0, form.vent_width, teal)
+	_helmet_back(form)
+
+
+## Полуоси низа скорлупы с хвостом и середина эллипсоида по z (перёд скорлупы — там же, где без хвоста)
+static func shell_radius(form: Dictionary) -> Vector2:
+	return form.radius + Vector2(0.0, float(form.tail) * 0.5)
+
+
+static func shell_z(form: Dictionary) -> float:
+	return HELMET_Z + float(form.tail) * 0.5
+
+
+## Сечение скорлупы на угле theta от низа (0) к макушке (π/2): (середина по z, полуширина, полудлина)
+static func shell_section(form: Dictionary, theta: float) -> Vector3:
+	var lag := float(form.tail) * 0.5 * (1.0 - sin(theta))
+	var size := Vector2(form.radius.x, form.radius.y + lag) * maxf(cos(theta), 0.01)
+	return Vector3(HELMET_Z + lag, size.x, size.y)
+
+
+## Высота поверхности скорлупы над точкой (x, z) в осях головы: угол сечения, через которое она проходит,
+## ищется делением пополам (сечения к макушке только сжимаются). Без хвоста — то же, что формула эллипсоида.
+static func shell_height(form: Dictionary, x: float, z: float) -> float:
+	var low := 0.0
+	var high := PI * 0.5
+	for i in 24:
+		var mid := (low + high) * 0.5
+		var section := shell_section(form, mid)
+		var reach := pow(x / section.y, 2) + pow((z - section.x) / section.z, 2)
+		if reach < 1.0:
+			low = mid
+		else:
+			high = mid
+	return HELMET_Y + sin(low) * float(form.height)
+
+
 ## v8: задняя часть шлема. Оболочка от обода спускается по затылку (посередине ниже, к ушам выше) и
 ## сужается к голове; снизу — тёмная кромка до кожи головы, чтобы под шлем не было видно насквозь.
-func _helmet_back() -> void:
+func _helmet_back(form: Dictionary) -> void:
 	const COLS := 10
 	const ROWS := 3
+	var shell := shell_radius(form)
+	var center_z := shell_z(form)
 	var at := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
 	var r := ring(Vector3.ZERO, Basis.IDENTITY, 0, 0, "Head")
 	var grid: Array[Dictionary] = []
 	for row in ROWS + 2:
 		for col in COLS + 1:
 			var u := float(col) / COLS * 2.0 - 1.0
-			var angle := PI * 0.5 + u * 1.3
-			var bottom := lerpf(-0.012, HELMET_Y - 0.004, u * u)
+			var angle := PI * 0.5 + u * float(form.wrap)
+			var bottom := lerpf(float(form.nape), HELMET_Y - 0.004, u * u)
 			var t := float(maxi(row - 1, 0)) / ROWS
 			var y := lerpf(bottom, HELMET_Y - 0.004, t)
-			var size := (head_size(y) + Vector2(0.016, 0.026)).lerp(HELMET_R * 1.02, t)
-			var z := lerpf(head_z(y), HELMET_Z, t)
+			# верх затылочной части уходит под кант к самой скорлупе: на толстом канте она иначе проступала из-под него
+			var size := (head_size(y) + Vector2(0.016, 0.026)).lerp(shell, t)
+			var z := lerpf(head_z(y), center_z, t)
 			if row == 0:
 				size = head_size(y) * 1.01
 			var vertex := {position = at * Vector3(cos(angle) * size.x, y, z + sin(angle) * size.y), bones = r.bones, weights = r.weights}
@@ -408,17 +512,19 @@ func tri_out(a: Dictionary, b: Dictionary, c: Dictionary, hint: Vector3, mat: Ve
 		triangle(a, b, c, mat)
 
 
-func helmet_strip(x: float, width: float, mat: Vector2i) -> void:
+func helmet_strip(form: Dictionary, x: float, width: float, mat: Vector2i) -> void:
 	var at := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
 	var r := ring(Vector3.ZERO, Basis.IDENTITY, 0, 0, "Head")
+	var shell := shell_radius(form)
+	var center_z := shell_z(form)
 	for i in 6:
 		var vertices: Array[Dictionary] = []
 		for corner: Vector2 in [Vector2(-0.5, float(i) / 6), Vector2(0.5, float(i) / 6), Vector2(0.5, float(i + 1) / 6), Vector2(-0.5, float(i + 1) / 6)]:
 			var px := x + corner.x * width
 			# прорезь кончается раньше, чем оболочка уходит вниз к краю: иначе её конец ныряет и перекручивается
-			var span := HELMET_R.y * sqrt(maxf(0.05, 0.8 - pow(x / HELMET_R.x, 2)))
-			var z := HELMET_Z + lerpf(-0.72, 0.6, corner.y) * span
-			var y := HELMET_Y + 0.0015 + HELMET_H * sqrt(maxf(0.0, 1.0 - pow(px / HELMET_R.x, 2) - pow((z - HELMET_Z) / HELMET_R.y, 2)))
+			var span := shell.y * sqrt(maxf(0.05, 0.8 - pow(x / shell.x, 2)))
+			var z := center_z + lerpf(-0.72, 0.6, corner.y) * span
+			var y := shell_height(form, px, z) + 0.0015
 			vertices.append({position = at * Vector3(px, y, z), bones = r.bones, weights = r.weights})
 		triangle(vertices[0], vertices[2], vertices[1], mat)
 		triangle(vertices[0], vertices[3], vertices[2], mat)

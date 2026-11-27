@@ -116,8 +116,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(panel._heading_title.text == "Магазин" and panel._back.get_global_rect().end.x <= panel.get_global_rect().end.x and panel._compare_labels[1].text.contains("\n"), "компактная шапка и подписи сравнения не обрезаются")
-	_check(panel._category_buttons[3].get_global_rect().end.x <= panel.get_global_rect().end.x,
-		"четыре категории помещаются в компактной витрине")
+	_check(panel._category_buttons.all(func(b: Button) -> bool: return b.get_global_rect().end.x <= panel.get_global_rect().end.x),
+		"пять категорий помещаются в компактной витрине")
 	await _capture("compact")
 	panel._goal_action.grab_focus()
 	await process_frame
@@ -254,6 +254,30 @@ func _run() -> void:
 	tablet_shop._activate()
 	_check(tire_profile.equipped_pedals == Shop.Progress.DEFAULT_PEDALS and material.get_shader_parameter("pedal_body") == Color.TRANSPARENT,
 		"штатные педали снова доступны без покупки")
+	# 27.11: шлемы — форма на голове седока, цвет из расцветки
+	var helmets := bike.rider.skeleton.get_node(Shop.Progress.Helmets.MOUNT)
+	var shown := func() -> Array: return helmets.get_children().filter(func(item: Node3D) -> bool: return item.visible).map(func(item: Node) -> String: return item.name)
+	_check(helmets.get_child_count() == Shop.Progress.Helmets.FORMS.size() and shown.call() == [Shop.Progress.DEFAULT_HELMET],
+		"у седока все формы шлема, видна штатная")
+	tire_profile.award("test", ["obelisks:pass", "photo:pass"])
+	tire_profile.helmet_changed.connect(bike.set_helmet)
+	tablet_shop._category_buttons[4].pressed.emit()
+	await process_frame
+	_check(tablet_shop._selection == Shop.Progress.DEFAULT_HELMET and tablet_shop._status.text == "НАДЕТ"
+		and not tablet_shop._rows.pedals_stock.visible, "шлемы открываются в отдельной категории")
+	tablet_shop._rows.helmet_trail.grab_focus()
+	await _capture("helmets")
+	var before := tire_profile.balance
+	tablet_shop._activate()
+	tablet_shop._buy_reviewed()
+	_check(tire_profile.equipped_helmet == "helmet_trail" and tire_profile.balance == before - int(Shop.Progress.PRICES.helmet_trail)
+		and tire_profile.equipped == "heritage" and shown.call() == ["helmet_trail"] and tablet_shop._note.text.contains("куплен и надет"),
+		"шлем покупается, надевается на седока и не меняет расцветку")
+	reloaded.load_profile(path)
+	_check(reloaded.equipped_helmet == "helmet_trail" and reloaded.owns("helmet_trail"), "надетый шлем сохраняется")
+	tablet_shop._rows.helmet_stock.grab_focus()
+	tablet_shop._activate()
+	_check(tire_profile.equipped_helmet == Shop.Progress.DEFAULT_HELMET and shown.call() == [Shop.Progress.DEFAULT_HELMET], "штатный шлем снова надевается без покупки")
 	Shop.Progress.Files.remove(path)
 	bike.queue_free()
 	journal.queue_free()

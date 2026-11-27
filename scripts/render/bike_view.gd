@@ -18,6 +18,7 @@ const RIGHT_PEDAL_REST := Vector3(0.14, -0.17, 0.0)
 const STEER_VIEW := 0.6  # поворот переднего колеса в долях угла руля (30.10: было 0,35 — поворот читался как крен)
 const Lamp = preload("res://scripts/render/bike_lamp.gd")
 const BikePalette := preload("res://scripts/render/bike_palette.gd")
+const Helmets := preload("res://scripts/render/helmet_models.gd")
 const PACK_AT := Vector3(0.0, -0.08, 0.06) # сумка на кости Chest: у спины (+Z), низ — у поясницы
 const PACK_SCALE := 0.8
 
@@ -303,6 +304,18 @@ func set_pedals(id: String) -> void:
 	for mat in _skin_mats:
 		mat.set_shader_parameter("pedal_body", colors[0])
 		mat.set_shader_parameter("pedal_trim", colors[1])
+
+
+## 27.11: форма шлема (HelmetModels): виден один меш на кости головы, неизвестный id — штатный шлем
+func set_helmet(id: String) -> void:
+	if rider == null or rider.skeleton == null:
+		return
+	var mount := rider.skeleton.get_node_or_null(Helmets.MOUNT)
+	if mount == null:
+		return
+	var shown := id if mount.has_node(id) else Helmets.STOCK
+	for item: Node in mount.get_children():
+		(item as Node3D).visible = item.name == shown
 
 
 func _set_wind(value: float) -> void:

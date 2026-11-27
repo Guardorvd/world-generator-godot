@@ -17,9 +17,12 @@ const SCHEMES := {
 	"moss": ["52603b", "dfbd54", "ad903b", "4b512f", "313b28", "797d49", "a89152", "343d2b", "e1c768"],
 	"night": ["262b42", "ff663d", "2d3452", "87374c", "201f34", "d54635", "655b79", "713244", "f88d64"],
 	"lingon": ["8e233c", "ffdbcb", "f1c5c0", "a33953", "4e2536", "bb3855", "9b8594", "551d34", "ffe0cc"],
-	"fog": ["889b9c", "dce7de", "688d94", "3e5961", "354850", "bac8bf", "8eaaad", "566c71", "d9e4da"],
+	# 27.11: светлее джерси и серебристые вилка, шлем и манжеты — раньше рама, джерси и шорты сливались в один серый
+	"fog": ["7d9392", "e4ece8", "a3b8b4", "40555c", "2e3e45", "dde6e1", "c3cdcf", "56696f", "eef3ef"],
 	"copper": ["b77a63", "b8d6a1", "9eb28d", "3d715b", "24443a", "a46b50", "b17851", "4b846c", "c8d7a4"],
-	"obsidian": ["131619", "333a40", "1a1d21", "343a40", "13171a", "1e2226", "383f44", "252a2e", "282e33"],
+	# 27.11: ступени чёрного разведены (джерси угольное, шорты и вставки глубже, графика и вилка графитовые) —
+	# раньше форма, маска и рама сливались в одно пятно
+	"obsidian": ["16191c", "5b646c", "2a2f34", "15181b", "0f1214", "1b1f23", "4a5258", "2b3136", "3d454c"],
 	"heritage": ["6b4831", "e5c48c", "a98256", "5e3f2c", "503727", "e5cf9c", "b98e52", "3f2b24", "edd2a4"],
 	"pulse": ["573ab1", "dcf66e", "874ddb", "35236a", "292342", "d2ed57", "866cd4", "321d70", "daef77"],
 	"salt": ["e2bb76", "183c85", "e7c388", "264d97", "26355a", "3358a4", "8f9dac", "294b91", "f2d393"],
@@ -39,7 +42,7 @@ const SCHEME_DESCRIPTIONS := {
 	"lingon": "Ягодная рама, розовое джерси и бордовые шорты.",
 	"fog": "Дымчатые серо-зелёные тона с холодным серебристым акцентом.",
 	"copper": "Медный низ рамы, верх цвета патины и светлое шалфейное джерси.",
-	"obsidian": "Тональный чёрный комплект. Глянец рамы и шлема выделяется на матовой форме.",
+	"obsidian": "Тональный чёрный комплект: глянцевые рама и шлем, графитовая графика и угольное джерси на матовых шортах.",
 	"heritage": "Тёмный орех, кремовые манжеты и тёплые бронзовые детали.",
 	"pulse": "Фиолетовая рама и форма с неоново-лаймовой графикой.",
 	"salt": "Песочный низ рамы, синий верх и форма в цветах раллийной ливреи.",
@@ -49,8 +52,14 @@ const SCHEME_DESCRIPTIONS := {
 
 const SIDEWALLS := {
 	"glacier": "859aa5", "moss": "8b794b", "night": "444351", "lingon": "8b6767",
-	"fog": "727e7b", "copper": "8c7557", "heritage": "ab8c61",
-	"pulse": "57526e", "salt": "b39263", "tide": "526a6b",
+	"fog": "8e9a97", "copper": "8c7557", "heritage": "ab8c61",
+	"pulse": "57526e", "salt": "b39263", "tide": "526a6b", "obsidian": "2a2e31",
+}
+const STOCK_SIDEWALL := "8a6a4a"
+
+## Общие места палитры, которые расцветка заменяет целиком (тональный чёрный: резина, металл, обувь, линзы)
+const SLOT_OVERRIDES := {
+	"obsidian": {RUBBER: "141618", ALLOY: "4b5156", BLACK: "1b1e20", DARK: "101214", LENS: "1d2226"},
 }
 
 const STOCK_TIRES := "tires_stock"
@@ -91,16 +100,11 @@ static func colors(scheme := "ember") -> PackedColorArray:
 	c[DARK] = Color("17252e")
 	c[LENS] = Color("315363")
 	c[COATING] = Color(s[6])
-	c[SIDEWALL] = Color(SIDEWALLS.get(scheme, "8a6a4a"))
+	c[SIDEWALL] = Color(SIDEWALLS.get(scheme, STOCK_SIDEWALL))
 	c[FRAME_SECONDARY] = Color(s[7])
-	if scheme == "obsidian":
-		c[RUBBER] = Color("#141618")
-		c[ALLOY] = Color("#34383b")
-		c[BLACK] = Color("#1b1e20")
-		c[CREAM] = Color("#24272a")
-		c[DARK] = Color("#101214")
-		c[LENS] = Color("#1d2226")
-		c[SIDEWALL] = Color("#202326")
+	var overrides: Dictionary = SLOT_OVERRIDES.get(scheme, {})
+	for slot: int in overrides:
+		c[slot] = Color(overrides[slot])
 	return c
 
 

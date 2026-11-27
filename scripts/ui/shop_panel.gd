@@ -10,6 +10,22 @@ const CANVAS := Color("#101a19")
 const SURFACE := Color("#1b2b29")
 const LINE := Color("#405853")
 const ACCENT := Color("#e9c78c")
+## По категориям (Progress.Category): кнопка, подпись над названием
+const CATEGORY_TITLES := ["Расцветки", "Шины", "Грипсы", "Педали", "Шлемы"]
+const DETAIL_TITLES := ["РАСЦВЕТКА  /  ВЕЛОСИПЕД И РАЙДЕР", "ШИНЫ  /  ПАРА", "ГРИПСЫ  /  ПАРА", "ПЕДАЛИ  /  ПАРА", "ШЛЕМ  /  РАЙДЕР"]
+## 27.11: слова для комплекта, пары (шины, грипсы, педали) и шлема — в одном месте, а не тернарниками по коду
+const WORDS := {
+	scheme = {worn = "Надето", worn_caps = "НАДЕТО", wear = "Надеть", new = "НОВЫЙ КОМПЛЕКТ",
+		after = "После покупки комплект сразу наденется.", done = "Комплект надет на велосипед и райдера.",
+		bought = "«%s» куплен и надет.", confirm = "Купить и надеть · %s"},
+	pair = {worn = "Установлены", worn_caps = "УСТАНОВЛЕНЫ", wear = "Установить", new = "НОВАЯ ПАРА",
+		after = "Пара установится сразу после покупки.", done = "Пара установлена.",
+		bought = "Пара «%s» куплена и установлена.", confirm = "Купить и установить · %s"},
+	helmet = {worn = "Надет", worn_caps = "НАДЕТ", wear = "Надеть", new = "НОВЫЙ ШЛЕМ",
+		after = "Шлем наденется сразу после покупки.", done = "Шлем надет на райдера.",
+		bought = "Шлем «%s» куплен и надет.", confirm = "Купить и надеть · %s"},
+}
+const HELMET_NOTE := "Цвет шлема задаёт расцветка."
 
 var show_back := false
 var _profile: Progress
@@ -98,13 +114,15 @@ func _ready() -> void:
 			if not dismiss_purchase():
 				closed.emit())
 		_header.add_child(_back)
-	var categories := HBoxContainer.new()
-	categories.add_theme_constant_override("separation", 8)
+	# 27.11: пять категорий не помещаются в узкой витрине одной строкой — переносятся на вторую
+	var categories := HFlowContainer.new()
+	categories.add_theme_constant_override("h_separation", 8)
+	categories.add_theme_constant_override("v_separation", 8)
 	column.add_child(categories)
 	var category_group := ButtonGroup.new()
 	for index in Progress.DEFAULT_ITEMS.size():
 		var button := Button.new()
-		button.text = ["Расцветки", "Шины", "Грипсы", "Педали"][index]
+		button.text = CATEGORY_TITLES[index]
 		button.custom_minimum_size.y = 36
 		button.toggle_mode = true
 		button.button_group = category_group
@@ -278,12 +296,15 @@ func _ready() -> void:
 		title.size_flags_horizontal = SIZE_EXPAND_FILL
 		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		var colors: Array
-		if Progress.category_for(id) == Progress.Category.PEDALS:
-			colors = [Color("#2c363d")] if id == Progress.DEFAULT_PEDALS else Progress.Palette.pedal_colors(id)
+		var stock := Progress.Palette.colors()
+		if Progress.category_for(id) == Progress.Category.HELMET:
+			colors = [] # шлем — форма, цвет берётся из расцветки
+		elif Progress.category_for(id) == Progress.Category.PEDALS:
+			colors = [stock[Progress.Palette.BLACK]] if id == Progress.DEFAULT_PEDALS else Progress.Palette.pedal_colors(id)
 		elif Progress.category_for(id) == Progress.Category.GRIPS:
-			colors = [Color("#20272b")] if id == Progress.DEFAULT_GRIPS else Progress.Palette.grip_colors(id)
+			colors = [stock[Progress.Palette.RUBBER]] if id == Progress.DEFAULT_GRIPS else Progress.Palette.grip_colors(id)
 		elif Progress.category_for(id) == Progress.Category.TIRES:
-			colors = Progress.Palette.TIRE_COLORS.get(id, [Color("#20272b"), Color("#8a6a4a")])
+			colors = Progress.Palette.TIRE_COLORS.get(id, [stock[Progress.Palette.RUBBER], stock[Progress.Palette.SIDEWALL]])
 		else:
 			var scheme: Array = Progress.Palette.SCHEMES[id]
 			colors = [Color(scheme[0]), Color(scheme[2])]
@@ -647,7 +668,7 @@ func _refresh() -> void:
 		var status := "%d очк." % Progress.PRICES[id]
 		if _profile.owns(id):
 			owned_count += 1
-			status = ("Надето" if Progress.category_for(id) == Progress.Category.SCHEME else "Установлены") if id == _profile.equipped_for(id) else "Куплено"
+			status = _words(id).worn if id == _profile.equipped_for(id) else "Куплено"
 		elif id == _profile.purchase_goal:
 			status += " · Цель"
 		if _profile.load_error != OK:
@@ -676,12 +697,14 @@ func _show_selection() -> void:
 	for id: String in _rows:
 		_rows[id].set_pressed_no_signal(id == _selection)
 	var category := Progress.category_for(_selection)
-	var accessory := category != Progress.Category.SCHEME
+	var words := _words(_selection)
 	var equipped := _selection == _profile.equipped_for(_selection)
 	_view_buttons[0].text = "Спереди" if category == Progress.Category.GRIPS else "Сбоку"
 	_name.text = Progress.item_name(_selection)
-	_detail_category.text = ["РАСЦВЕТКА  /  ВЕЛОСИПЕД И РАЙДЕР", "ШИНЫ  /  ПАРА", "ГРИПСЫ  /  ПАРА", "ПЕДАЛИ  /  ПАРА"][category]
+	_detail_category.text = DETAIL_TITLES[category]
 	match category:
+		Progress.Category.HELMET:
+			_description.text = Progress.Helmets.DESCRIPTIONS[_selection] + " " + HELMET_NOTE
 		Progress.Category.TIRES:
 			_description.text = "Цвет передней и задней шин. На витрине показан базовый велосипед."
 		Progress.Category.GRIPS:
@@ -697,7 +720,7 @@ func _show_selection() -> void:
 	_update_preview()
 	_note.text = ""
 	var owned := _profile.owns(_selection)
-	_status.text = ("УСТАНОВЛЕНЫ" if accessory else "НАДЕТО") if equipped else ("В КОЛЛЕКЦИИ" if owned else ("НОВАЯ ПАРА" if accessory else "НОВЫЙ КОМПЛЕКТ"))
+	_status.text = words.worn_caps if equipped else ("В КОЛЛЕКЦИИ" if owned else words.new)
 	_status.add_theme_color_override("font_color", Style.MINT if owned else Style.AMBER)
 	_price_card.visible = not owned
 	if not owned:
@@ -722,12 +745,12 @@ func _show_selection() -> void:
 	elif goal != "":
 		_goal_action.text = "Сменить цель"
 	if equipped:
-		_action.text = "Установлены" if accessory else "Надето"
+		_action.text = words.worn
 		_action.disabled = true
 		if _profile.needs_first_purchase() and _profile.balance == 0:
 			_note.text = "Очки дают за задания поселений, новые страницы альбома, обзор с вышек и ремонт по пути."
 	elif _profile.owns(_selection):
-		_action.text = "Установить" if accessory else "Надеть"
+		_action.text = words.wear
 	else:
 		var price: int = Progress.PRICES[_selection]
 		_action.text = "Купить за %d" % price
@@ -736,18 +759,18 @@ func _show_selection() -> void:
 		if _action.disabled:
 			_note.text = "Очки дают за задания, новые страницы альбома, обзор с вышек и вершин и ремонт по пути."
 		else:
-			_note.text = "Пара установится сразу после покупки." if accessory else "После покупки комплект сразу наденется."
+			_note.text = words.after
 	if reviewing:
 		var price: int = Progress.PRICES[_purchase_id]
 		_confirm_buy.disabled = _action.disabled or _profile.owns(_purchase_id) or _profile.load_error != OK
 		_review_title.text = "«%s»  ·  %s" % [Progress.item_name(_purchase_id), _points(price)]
-		_confirm_buy.text = ("Купить и установить · %s" if accessory else "Купить и надеть · %s") % _points(price)
+		_confirm_buy.text = words.confirm % _points(price)
 		if _confirm_buy.disabled:
 			_review_balance.text = "Текущий баланс: %s" % _points(_profile.balance)
 			_note.text = "Покупка недоступна. Отмените и проверьте комплект."
 		else:
 			_review_balance.text = "Баланс: %s  →  %s" % [_points(_profile.balance), _points(_profile.balance - price)]
-			_note.text = "Пара установится сразу после покупки." if accessory else "После покупки комплект сразу наденется."
+			_note.text = words.after
 			var other_goal := _profile.purchase_goal
 			if other_goal != "" and other_goal != _purchase_id and _profile.balance - price < int(Progress.PRICES[other_goal]):
 				_note.text += " На «%s» потребуется ещё %s." % [Progress.item_name(other_goal), _points(int(Progress.PRICES[other_goal]) - (_profile.balance - price))]
@@ -790,8 +813,7 @@ func _update_preview() -> void:
 			var variants: Array = _portraits.get(ids[i], [])
 			var texture: Texture2D = variants[_view_index] if variants.size() > _view_index else _previews.get(ids[i])
 			_compare_images[i].texture = _portrait_crop(texture, accessory)
-			var current := "Установлены" if accessory else "Надето"
-			_compare_labels[i].text = (current if i == 0 else "Выбрано") + ("\n" if size.x < 520.0 else " · ") + Progress.item_name(ids[i])
+			_compare_labels[i].text = (_words(_selection).worn if i == 0 else "Выбрано") + ("\n" if size.x < 520.0 else " · ") + Progress.item_name(ids[i])
 	var portraits: Array = _portraits.get(_selection, [])
 	var preview: Texture2D = portraits[_view_index] if portraits.size() > _view_index else _previews.get(_selection)
 	if _preview.texture != preview:
@@ -802,6 +824,13 @@ func _update_preview() -> void:
 			_preview.modulate.a = 0.72
 			_preview_tween = create_tween()
 			_preview_tween.tween_property(_preview, "modulate:a", 1.0, 0.16)
+
+static func _words(id: String) -> Dictionary:
+	match Progress.category_for(id):
+		Progress.Category.SCHEME: return WORDS.scheme
+		Progress.Category.HELMET: return WORDS.helmet
+		_: return WORDS.pair
+
 
 func _points(value: int) -> String:
 	var last_two := value % 100
@@ -827,7 +856,7 @@ func _activate() -> void:
 	if _profile.owns(_selection):
 		if _profile.equip(_selection) == OK:
 			_rows[_selection].grab_focus()
-			_note.text = "Пара установлена." if Progress.category_for(_selection) != Progress.Category.SCHEME else "Комплект надет на велосипед и райдера."
+			_note.text = _words(_selection).done
 			Style.pulse(_status, Style.MINT)
 			return
 		_note.text = "Не удалось сохранить изменение. Попробуйте ещё раз."
@@ -858,7 +887,7 @@ func _buy_reviewed() -> void:
 	if _profile.buy(id, true) == OK:
 		# 20.11: купленный комплект сразу надевается — одно действие и одна запись профиля
 		_rows[id].grab_focus()
-		_note.text = ("Пара «%s» куплена и установлена." if Progress.category_for(id) != Progress.Category.SCHEME else "«%s» куплен и надет.") % _name.text
+		_note.text = _words(id).bought % _name.text
 		Style.pulse(_status, Style.MINT)
 		sound_requested.emit(&"confirm")
 	else:
