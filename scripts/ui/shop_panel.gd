@@ -6,9 +6,9 @@ signal sound_requested(kind: StringName)
 const Progress := preload("res://scripts/game/shop_progress.gd")
 const Style := preload("res://scripts/ui/hud_style.gd")
 const PREVIEW_DIR := "res://resources/shop/"
-const CANVAS := Color("#101a19")
-const SURFACE := Color("#1b2b29")
-const LINE := Color("#405853")
+const CANVAS := Color("#101820")
+const SURFACE := Color("#1c2932")
+const LINE := Color("#51616b")
 const ACCENT := Color("#e9c78c")
 ## По категориям (Progress.Category): кнопка, подпись над названием
 const CATEGORY_TITLES := ["Расцветки", "Шины", "Грипсы", "Педали", "Шлемы"]
@@ -41,6 +41,7 @@ var _stage_controls: BoxContainer
 var _stage_caption: Label
 var _collection: Label
 var _category_buttons: Array[Button] = []
+var _owned_filter: Button
 var _detail_category: Label
 var _description: Label
 var _goal_card: PanelContainer
@@ -58,6 +59,13 @@ var _price_bar: ProgressBar
 var _price_card: PanelContainer
 var _preview_tween: Tween
 var _preview: TextureRect
+var _preview_missing: Label
+var _stage_content: Control
+var _fitting: SubViewportContainer
+var _fitting_button: Button
+var _fitting_reset: Button
+var _fitting_zoom: Button
+var _fitting_items: Array = []
 var _stage: PanelContainer
 var _view_buttons: Array[Button] = []
 var _view_index := 0
@@ -80,12 +88,21 @@ var _row_grid: GridContainer
 var _rows := {}
 var _previews := {}
 var _card_images := {}
+var _card_missing := {}
 var _card_status := {}
+var _portrait_queue: Array[String] = []
+var _full_portraits := {}
+var _loaded_category := -1
+var _portrait_job_id := ""
+var _portrait_job_path := ""
+var _portrait_generation := 0
+var _portrait_job_generation := 0
 
 
 func _ready() -> void:
-	theme = Style.theme()
-	add_theme_stylebox_override("panel", _flat_box(CANVAS, Color.TRANSPARENT, 0, Vector2(24, 18)))
+	theme = preload("res://resources/ui_theme.tres")
+	var panel_background := Color(0.05, 0.08, 0.11, 0.90) if show_back else Color.TRANSPARENT
+	add_theme_stylebox_override("panel", _flat_box(panel_background, Color.TRANSPARENT, 0, Vector2(24, 18)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 14)
 	add_child(column)
@@ -128,7 +145,7 @@ func _ready() -> void:
 		button.toggle_mode = true
 		button.button_group = category_group
 		button.add_theme_stylebox_override("normal", _flat_box(SURFACE, LINE, 4, Vector2(12, 6)))
-		button.add_theme_stylebox_override("hover", _flat_box(Color("#30443f"), LINE, 4, Vector2(12, 6)))
+		button.add_theme_stylebox_override("hover", _flat_box(Color("#354651"), LINE, 8, Vector2(12, 6)))
 		button.add_theme_stylebox_override("pressed", _flat_box(ACCENT, ACCENT, 4, Vector2(12, 6)))
 		button.add_theme_stylebox_override("hover_pressed", _flat_box(Color("#f4dab0"), ACCENT, 4, Vector2(12, 6)))
 		button.add_theme_color_override("font_pressed_color", CANVAS)
@@ -136,6 +153,16 @@ func _ready() -> void:
 		button.pressed.connect(_select_category.bind(index))
 		categories.add_child(button)
 		_category_buttons.append(button)
+	_owned_filter = Button.new()
+	_owned_filter.text = "Только купленное"
+	_owned_filter.toggle_mode = true
+	_owned_filter.tooltip_text = "Показать вещи из вашей коллекции"
+	_owned_filter.toggled.connect(func(on: bool) -> void:
+		if on and _profile != null and not _profile.owns(_selection):
+			_select(_profile.equipped_for(_selection))
+		else:
+			_refresh())
+	categories.add_child(_owned_filter)
 	for index in _category_buttons.size() - 1:
 		var left := _category_buttons[index]
 		var right := _category_buttons[index + 1]
@@ -160,10 +187,33 @@ func _ready() -> void:
 	showcase.size_flags_stretch_ratio = 1.9
 	showcase.add_theme_constant_override("separation", 10)
 	_layout.add_child(showcase)
+	var fitting_controls := HFlowContainer.new()
+	fitting_controls.add_theme_constant_override("h_separation", 8)
+	fitting_controls.add_theme_constant_override("v_separation", 6)
+	showcase.add_child(fitting_controls)
+	_fitting_button = Button.new()
+	_fitting_button.text = "Примерочная"
+	_fitting_button.toggle_mode = true
+	_fitting_button.tooltip_text = "Примеряйте сочетания без покупки и изменения экипировки"
+	_fitting_button.toggled.connect(_toggle_fitting)
+	fitting_controls.add_child(_fitting_button)
+	_fitting_zoom = Button.new()
+	_fitting_zoom.text = "Приблизить деталь"
+	_fitting_zoom.toggle_mode = true
+	_fitting_zoom.hide()
+	_fitting_zoom.toggled.connect(func(_on: bool) -> void: _update_fitting())
+	fitting_controls.add_child(_fitting_zoom)
+	_fitting_reset = Button.new()
+	_fitting_reset.text = "Мой образ"
+	_fitting_reset.tooltip_text = "Вернуть в примерку надетые вещи"
+	_fitting_reset.hide()
+	_fitting_reset.pressed.connect(_reset_fitting)
+	fitting_controls.add_child(_fitting_reset)
 	_stage = PanelContainer.new()
-	_stage.add_theme_stylebox_override("panel", _flat_box(Color("#697e72"), Color.TRANSPARENT, 3, Vector2.ZERO))
+	_stage.add_theme_stylebox_override("panel", _flat_box(Color("#354653"), Color.TRANSPARENT, 10, Vector2.ZERO))
 	showcase.add_child(_stage)
 	var stage_content := Control.new()
+	_stage_content = stage_content
 	stage_content.mouse_filter = MOUSE_FILTER_PASS
 	_stage.add_child(stage_content)
 	var backdrop := preload("res://scripts/ui/shop_stage.gd").new()
@@ -175,6 +225,11 @@ func _ready() -> void:
 	_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_preview.mouse_filter = MOUSE_FILTER_IGNORE
 	stage_content.add_child(_preview)
+	_preview_missing = _label(stage_content, "Изображение недоступно", 16, Style.CREAM)
+	_preview_missing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_preview_missing.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_preview_missing.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_preview_missing.hide()
 	_compare_root = HBoxContainer.new()
 	_compare_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_compare_root.offset_left = 145
@@ -198,7 +253,7 @@ func _ready() -> void:
 		image.mouse_filter = MOUSE_FILTER_IGNORE
 		side.add_child(image)
 		_compare_images.append(image)
-		var caption := _label(side, "", 16, Color("#020905"))
+		var caption := _label(side, "", 16, Style.CREAM)
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		_compare_labels.append(caption)
@@ -207,7 +262,7 @@ func _ready() -> void:
 	_stage_controls.position = Vector2(16, 16)
 	_stage_controls.add_theme_constant_override("separation", 6)
 	stage_content.add_child(_stage_controls)
-	_stage_caption = _label(_stage_controls, "РАКУРС", 14, Color("#020905"))
+	_stage_caption = _label(_stage_controls, "РАКУРС", 14, Style.CREAM)
 	var views := ButtonGroup.new()
 	for index in 2:
 		var view := Button.new()
@@ -216,8 +271,8 @@ func _ready() -> void:
 		view.toggle_mode = true
 		view.button_group = views
 		view.add_theme_font_size_override("font_size", 14)
-		view.add_theme_stylebox_override("normal", _flat_box(Color("#536b5f"), Color.TRANSPARENT, 3, Vector2(10, 5)))
-		view.add_theme_stylebox_override("hover", _flat_box(Color("#415c4f"), Color.TRANSPARENT, 3, Vector2(10, 5)))
+		view.add_theme_stylebox_override("normal", _flat_box(Color("#293944"), Color.TRANSPARENT, 6, Vector2(10, 5)))
+		view.add_theme_stylebox_override("hover", _flat_box(Color("#415460"), Color.TRANSPARENT, 6, Vector2(10, 5)))
 		view.add_theme_stylebox_override("pressed", _flat_box(Color("#e9c78c"), Color.TRANSPARENT, 3, Vector2(10, 5)))
 		view.add_theme_stylebox_override("hover_pressed", _flat_box(Color("#f4dab0"), Color.TRANSPARENT, 3, Vector2(10, 5)))
 		view.add_theme_color_override("font_pressed_color", Color("#172b25"))
@@ -231,8 +286,8 @@ func _ready() -> void:
 	_compare_button.custom_minimum_size = Vector2(112, 36)
 	_compare_button.toggle_mode = true
 	_compare_button.add_theme_font_size_override("font_size", 14)
-	_compare_button.add_theme_stylebox_override("normal", _flat_box(Color("#405e50"), Color.TRANSPARENT, 3, Vector2(10, 5)))
-	_compare_button.add_theme_stylebox_override("hover", _flat_box(Color("#304d40"), Color.TRANSPARENT, 3, Vector2(10, 5)))
+	_compare_button.add_theme_stylebox_override("normal", _flat_box(Color("#293944"), Color.TRANSPARENT, 6, Vector2(10, 5)))
+	_compare_button.add_theme_stylebox_override("hover", _flat_box(Color("#415460"), Color.TRANSPARENT, 6, Vector2(10, 5)))
 	_compare_button.add_theme_stylebox_override("pressed", _flat_box(Color("#e9c78c"), Color.TRANSPARENT, 3, Vector2(10, 5)))
 	_compare_button.add_theme_stylebox_override("hover_pressed", _flat_box(Color("#f4dab0"), Color.TRANSPARENT, 3, Vector2(10, 5)))
 	_compare_button.add_theme_color_override("font_pressed_color", Color("#172b25"))
@@ -255,10 +310,10 @@ func _ready() -> void:
 		row.size_flags_horizontal = SIZE_EXPAND_FILL
 		row.toggle_mode = true
 		row.button_group = group
-		row.add_theme_stylebox_override("normal", _flat_box(Color("#1b2b29"), Color.TRANSPARENT, 3, Vector2(6, 6)))
-		row.add_theme_stylebox_override("hover", _flat_box(Color("#30443f"), LINE, 3, Vector2(6, 6)))
-		row.add_theme_stylebox_override("pressed", _flat_box(Color("#30443f"), ACCENT, 3, Vector2(6, 6)))
-		row.add_theme_stylebox_override("hover_pressed", _flat_box(Color("#394b43"), ACCENT, 3, Vector2(6, 6)))
+		row.add_theme_stylebox_override("normal", _flat_box(SURFACE, Color.TRANSPARENT, 10, Vector2(6, 6)))
+		row.add_theme_stylebox_override("hover", _flat_box(Color("#354651"), LINE, 10, Vector2(6, 6)))
+		row.add_theme_stylebox_override("pressed", _flat_box(Color("#354651"), ACCENT, 10, Vector2(6, 6)))
+		row.add_theme_stylebox_override("hover_pressed", _flat_box(Color("#42535e"), ACCENT, 10, Vector2(6, 6)))
 		row.pressed.connect(_select.bind(id))
 		row.focus_entered.connect(_select.bind(id))
 		_rows[id] = row
@@ -278,7 +333,7 @@ func _ready() -> void:
 		portrait_stage.mouse_filter = MOUSE_FILTER_IGNORE
 		content.add_child(portrait_stage)
 		var tile_bg := ColorRect.new()
-		tile_bg.color = Color("#687e71")
+		tile_bg.color = Color("#354653")
 		tile_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		tile_bg.mouse_filter = MOUSE_FILTER_IGNORE
 		portrait_stage.add_child(tile_bg)
@@ -289,6 +344,11 @@ func _ready() -> void:
 		thumb.mouse_filter = MOUSE_FILTER_IGNORE
 		portrait_stage.add_child(thumb)
 		_card_images[id] = thumb
+		var missing := _label(portrait_stage, "Нет изображения", 13, Style.CREAM)
+		missing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		missing.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		missing.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_card_missing[id] = missing
 		var title_row := HBoxContainer.new()
 		title_row.mouse_filter = MOUSE_FILTER_IGNORE
 		title_row.add_theme_constant_override("separation", 4)
@@ -323,7 +383,7 @@ func _ready() -> void:
 	display.size_flags_horizontal = SIZE_EXPAND_FILL
 	display.size_flags_stretch_ratio = 1.0
 	display.size_flags_vertical = SIZE_SHRINK_BEGIN
-	display.add_theme_stylebox_override("panel", _flat_box(SURFACE, Color.TRANSPARENT, 3, Vector2(22, 20)))
+	display.add_theme_stylebox_override("panel", _flat_box(SURFACE, LINE, 12, Vector2(22, 20)))
 	_layout.add_child(display)
 	var detail := VBoxContainer.new()
 	detail.add_theme_constant_override("separation", 10)
@@ -335,7 +395,7 @@ func _ready() -> void:
 	_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	detail.add_child(HSeparator.new())
 	_price_card = PanelContainer.new()
-	_price_card.add_theme_stylebox_override("panel", _flat_box(Color("#253a35"), Color.TRANSPARENT, 3, Vector2(12, 12)))
+	_price_card.add_theme_stylebox_override("panel", _flat_box(Color("#283944"), Color.TRANSPARENT, 10, Vector2(12, 12)))
 	detail.add_child(_price_card)
 	var price_content := VBoxContainer.new()
 	price_content.add_theme_constant_override("separation", 8)
@@ -358,7 +418,6 @@ func _ready() -> void:
 	_action.custom_minimum_size = Vector2(0, 48)
 	_action.size_flags_horizontal = SIZE_EXPAND_FILL
 	_action.add_theme_stylebox_override("focus", _focus_inside())
-	_action.theme_type_variation = &"CardButton"
 	_style_primary(_action)
 	_action.pressed.connect(_activate)
 	_actions.add_child(_action)
@@ -373,6 +432,7 @@ func _ready() -> void:
 	_build_goal_card(detail)
 	_sync_category()
 	set_process_input(false)
+	set_process(false)
 	resized.connect(_reflow)
 	visibility_changed.connect(_visibility_changed)
 	_reflow()
@@ -401,7 +461,7 @@ func _build_goal_card(parent: Control) -> void:
 
 func _build_purchase_review(parent: Control) -> void:
 	_review_card = PanelContainer.new()
-	_review_card.add_theme_stylebox_override("panel", _flat_box(Color("#253a35"), LINE, 3, Vector2(12, 12)))
+	_review_card.add_theme_stylebox_override("panel", _flat_box(Color("#283944"), LINE, 10, Vector2(12, 12)))
 	_review_card.hide()
 	parent.add_child(_review_card)
 	var contents := VBoxContainer.new()
@@ -426,7 +486,6 @@ func _build_purchase_review(parent: Control) -> void:
 	_confirm_buy.custom_minimum_size.y = 46
 	_confirm_buy.size_flags_horizontal = SIZE_EXPAND_FILL
 	_confirm_buy.add_theme_stylebox_override("focus", _focus_inside())
-	_confirm_buy.theme_type_variation = &"CardButton"
 	_style_primary(_confirm_buy)
 	_confirm_buy.set_meta(&"ui_sound_custom", true)
 	_confirm_buy.pressed.connect(_buy_reviewed)
@@ -446,26 +505,31 @@ func set_profile(profile: Progress) -> void:
 		_refresh()
 
 
-## 20.11: портреты витрины (по два на расцветку, 14 файлов) читаются в фоне заранее — дневник зовёт это при открытии;
-## первое открытие вкладки «Магазин» их только забирает, а не грузит с диска разом. Пока дневник не открывали —
-## портреты не занимают память
-func prefetch_portraits() -> void:
-	if not _previews.is_empty():
-		return
-	for id: String in Progress.PRICES:
-		for path: String in _portrait_paths(id):
-			if ResourceLoader.exists(path) and not ResourceLoader.has_cached(path) \
-					and ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
-				ResourceLoader.load_threaded_request(path)
-
-
 static func _portrait_paths(id: String) -> PackedStringArray:
 	return [PREVIEW_DIR + id + "_side.png", PREVIEW_DIR + id + "_angle.png", PREVIEW_DIR + id + ".jpg"]
 
 
-## Текстура витрины: из фоновой загрузки, если она была, иначе обычной; нет файла — пусто
+## При запуске из терминала новые PNG могут ещё не иметь локального .ctex.
+## В экспорте исходников нет: там всегда используется обычная загрузка ресурсов.
+static func _portrait_import_missing(path: String) -> bool:
+	if not OS.has_feature("editor") or not FileAccess.file_exists(path):
+		return false
+	var metadata := ConfigFile.new()
+	if not FileAccess.file_exists(path + ".import") or metadata.load(path + ".import") != OK:
+		return true
+	var imported: String = metadata.get_value("remap", "path", "")
+	return imported.is_empty() or not FileAccess.file_exists(imported)
+
+
+## Из фоновой загрузки, иначе обычной; до импорта — исходное изображение.
 static func _texture(path: String) -> Texture2D:
-	if ResourceLoader.load_threaded_get_status(path) != ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+	if _portrait_import_missing(path):
+		var image := Image.new()
+		var bytes := FileAccess.get_file_as_bytes(path)
+		var result := image.load_png_from_buffer(bytes) if path.ends_with(".png") else image.load_jpg_from_buffer(bytes)
+		return ImageTexture.create_from_image(image) if result == OK else null
+	var status := ResourceLoader.load_threaded_get_status(path)
+	if status in [ResourceLoader.THREAD_LOAD_IN_PROGRESS, ResourceLoader.THREAD_LOAD_LOADED]:
 		return ResourceLoader.load_threaded_get(path) as Texture2D
 	return load(path) as Texture2D if ResourceLoader.exists(path) else null
 
@@ -473,22 +537,124 @@ static func _texture(path: String) -> Texture2D:
 func open() -> void:
 	_purchase_id = ""
 	_compare_mode = false
+	_owned_filter.set_pressed_no_signal(false)
+	if _fitting_button.button_pressed:
+		_fitting_button.button_pressed = false
 	var reward_result := 0
 	if _profile != null:
 		_selection = _profile.purchase_goal if _profile.purchase_goal != "" else _profile.equipped
 		reward_result = _profile.retry_rewards()
-	if _previews.is_empty():
-		for id: String in _rows:
-			# 20.11: у расцветок второго ряда только портреты, без отдельной картинки; всё — из фоновой загрузки
-			var paths := _portrait_paths(id)
-			var preview := _texture(paths[2])
-			_previews[id] = preview
-			_portraits[id] = [_texture(paths[0]), _texture(paths[1])]
-			_card_images[id].texture = _portrait_crop(_portraits[id][0] if _portraits[id][0] != null else preview, Progress.category_for(id) != Progress.Category.SCHEME)
+	_activate_portrait_category(Progress.category_for(_selection))
 	_refresh()
 	if reward_result < 0 and _profile.load_error == OK:
 		_note.text = "Не удалось записать очки за задания. Откройте магазин ещё раз, чтобы повторить."
-	_rows[_selection].grab_focus()
+	_category_buttons[Progress.category_for(_selection)].grab_focus()
+	_scroll.set_deferred("scroll_vertical", 0)
+
+
+## Карточки готовятся постепенно; второй ракурс загружается только для выбранного товара.
+func _activate_portrait_category(category: int) -> void:
+	if _loaded_category == category:
+		_load_portrait(_selection, true)
+		_portrait_queue.erase(_selection)
+		set_process(not _portrait_queue.is_empty() or not _portrait_job_path.is_empty())
+		return
+	_clear_portraits()
+	_loaded_category = category
+	for id: String in Progress.PRICES:
+		if Progress.category_for(id) == category:
+			_portrait_queue.append(id)
+			_card_missing[id].text = "Подготавливаем…"
+			_card_missing[id].show()
+	_load_portrait(_selection, true)
+	_portrait_queue.erase(_selection)
+	if _profile != null:
+		var equipped: String = _profile.equipped_in(category)
+		_load_portrait(equipped, true)
+		_portrait_queue.erase(equipped)
+	set_process(not _portrait_queue.is_empty() or not _portrait_job_path.is_empty())
+
+
+func _load_portrait(id: String, full := false) -> void:
+	if not _rows.has(id):
+		return
+	if id == _portrait_job_id:
+		_portrait_job_generation = _portrait_generation
+		return
+	var paths := _portrait_paths(id)
+	if not _portraits.has(id):
+		var side := _texture(paths[0])
+		_store_portrait_side(id, side)
+	if full and not _full_portraits.has(id):
+		_portraits[id][1] = _texture(paths[1])
+		_full_portraits[id] = true
+
+
+func _store_portrait_side(id: String, side: Texture2D) -> void:
+	var fallback := _texture(_portrait_paths(id)[2]) if side == null else null
+	_previews[id] = fallback
+	_portraits[id] = [side, null]
+	_card_images[id].texture = _portrait_crop(side if side != null else fallback, Progress.category_for(id) != Progress.Category.SCHEME)
+	_card_missing[id].text = "Нет изображения"
+	_card_missing[id].visible = _card_images[id].texture == null
+
+
+func _clear_portraits() -> void:
+	_portrait_generation += 1
+	set_process(not _portrait_job_path.is_empty())
+	_portrait_queue.clear()
+	for id: String in _portraits:
+		_card_images[id].texture = null
+		_card_missing[id].text = "Нет изображения"
+		_card_missing[id].show()
+	_portraits.clear()
+	_previews.clear()
+	_full_portraits.clear()
+	_loaded_category = -1
+	_preview.texture = null
+	for image: TextureRect in _compare_images:
+		image.texture = null
+
+
+func _process(_delta: float) -> void:
+	if not _portrait_job_path.is_empty():
+		var status := ResourceLoader.load_threaded_get_status(_portrait_job_path)
+		if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			return
+		var texture := ResourceLoader.load_threaded_get(_portrait_job_path) as Texture2D if status == ResourceLoader.THREAD_LOAD_LOADED else _texture(_portrait_job_path)
+		var id := _portrait_job_id
+		var current := _portrait_job_generation == _portrait_generation and is_visible_in_tree()
+		_portrait_job_path = ""
+		_portrait_job_id = ""
+		if current and not _portraits.has(id):
+			_store_portrait_side(id, texture)
+			if id == _selection or (_profile != null and id == _profile.equipped_for(_selection)):
+				_load_portrait(id, true)
+				_update_preview()
+	if not is_visible_in_tree() or _portrait_queue.is_empty():
+		set_process(false)
+		return
+	var id: String = _portrait_queue.pop_front()
+	if _portraits.has(id):
+		return
+	var path: String = _portrait_paths(id)[0]
+	if _portrait_import_missing(path) or not ResourceLoader.exists(path):
+		_load_portrait(id)
+		return
+	if ResourceLoader.load_threaded_request(path) == OK:
+		_portrait_job_id = id
+		_portrait_job_path = path
+		_portrait_job_generation = _portrait_generation
+	else:
+		_load_portrait(id)
+
+
+func _exit_tree() -> void:
+	if not _portrait_job_path.is_empty():
+		var status := ResourceLoader.load_threaded_get_status(_portrait_job_path)
+		if status in [ResourceLoader.THREAD_LOAD_IN_PROGRESS, ResourceLoader.THREAD_LOAD_LOADED]:
+			ResourceLoader.load_threaded_get(_portrait_job_path)
+		_portrait_job_path = ""
 
 
 func _label(parent: Control, value: String, font_size: int, color: Color) -> Label:
@@ -540,6 +706,10 @@ func _reflow() -> void:
 		button.custom_minimum_size.x = 90 if compact else 112
 		button.add_theme_font_size_override("font_size", 13 if compact else 14)
 	_stage_controls.size = Vector2.ZERO
+	_preview.offset_top = 58 if compact else 0
+	_preview_missing.offset_top = _preview.offset_top
+	if is_instance_valid(_fitting):
+		_fitting.offset_top = _preview.offset_top
 	_compare_root.offset_left = 8 if compact else 145
 	_compare_root.offset_top = 58 if compact else 18
 	_row_grid.columns = 2 if _layout.vertical else 4
@@ -580,9 +750,17 @@ func _link_actions() -> void:
 		button.focus_neighbor_top = NodePath()
 		button.focus_neighbor_bottom = NodePath()
 	var category := _category_buttons[Progress.category_for(_selection)]
-	_view_buttons[0].focus_neighbor_top = _view_buttons[0].get_path_to(category)
+	_view_buttons[0].focus_neighbor_top = _view_buttons[0].get_path_to(_fitting_button)
+	_fitting_button.focus_neighbor_top = _fitting_button.get_path_to(category)
+	_fitting_button.focus_neighbor_bottom = _fitting_button.get_path_to(_view_buttons[0])
+	_fitting_button.focus_neighbor_right = _fitting_button.get_path_to(_fitting_zoom) if _fitting_zoom.visible else NodePath()
+	_fitting_zoom.focus_neighbor_left = _fitting_zoom.get_path_to(_fitting_button)
+	_fitting_zoom.focus_neighbor_right = _fitting_zoom.get_path_to(_fitting_reset)
+	_fitting_zoom.focus_neighbor_bottom = _fitting_zoom.get_path_to(_view_buttons[0])
+	_fitting_reset.focus_neighbor_left = _fitting_reset.get_path_to(_fitting_zoom)
+	_fitting_reset.focus_neighbor_bottom = _fitting_reset.get_path_to(_view_buttons[0])
 	for button: Button in _category_buttons:
-		button.focus_neighbor_bottom = button.get_path_to(_view_buttons[0])
+		button.focus_neighbor_bottom = button.get_path_to(_fitting_button)
 	if size.x < 520.0:
 		_view_buttons[0].focus_neighbor_right = _view_buttons[0].get_path_to(_view_buttons[1])
 		_view_buttons[1].focus_neighbor_left = _view_buttons[1].get_path_to(_view_buttons[0])
@@ -611,6 +789,11 @@ func _select(id: String) -> void:
 	if id == _selection:
 		return
 	_selection = id
+	_activate_portrait_category(Progress.category_for(id))
+	if _fitting_button.button_pressed and _fitting_items.size() == Progress.DEFAULT_ITEMS.size():
+		_fitting_items[Progress.category_for(id)] = id
+		_compare_mode = false
+		_compare_button.set_pressed_no_signal(false)
 	_purchase_id = ""
 	_refresh()
 
@@ -618,9 +801,15 @@ func _select(id: String) -> void:
 func _select_category(category: Progress.Category) -> void:
 	if _profile == null:
 		return
-	var id := _profile.equipped_in(category)
+	var id: String = _fitting_items[category] if _fitting_button.button_pressed and _fitting_items.size() == Progress.DEFAULT_ITEMS.size() else _profile.equipped_in(category)
+	if _owned_filter.button_pressed and not _profile.owns(id):
+		id = _profile.equipped_in(category)
 	_compare_mode = false
-	_select(id)
+	_compare_button.set_pressed_no_signal(false)
+	if id == _selection:
+		_refresh()
+	else:
+		_select(id)
 	_category_buttons[category].grab_focus()
 	_scroll.set_deferred("scroll_vertical", 0)
 
@@ -630,7 +819,7 @@ func _sync_category() -> void:
 	for i in _category_buttons.size():
 		_category_buttons[i].set_pressed_no_signal(i == category)
 	for id: String in _rows:
-		_rows[id].visible = Progress.category_for(id) == category
+		_rows[id].visible = Progress.category_for(id) == category and (not _owned_filter.button_pressed or _profile == null or _profile.owns(id))
 
 
 func _set_view(index: int) -> void:
@@ -647,6 +836,9 @@ func _visibility_changed() -> void:
 		_refresh()
 	else:
 		_purchase_id = ""
+		if _fitting_button.button_pressed:
+			_fitting_button.button_pressed = false
+		_clear_portraits()
 		set_process_input(false)
 
 
@@ -716,7 +908,7 @@ func _show_selection() -> void:
 			_description.text = "Цвет обеих педалей. Можно подобрать в тон шинам и грипсам."
 		_:
 			_description.text = Progress.Palette.SCHEME_DESCRIPTIONS[_selection]
-	_compare_button.visible = not equipped and _profile.load_error == OK
+	_compare_button.visible = (not equipped or _fitting_button.button_pressed) and _profile.load_error == OK
 	if not _compare_button.visible:
 		_compare_mode = false
 	_compare_button.set_pressed_no_signal(_compare_mode)
@@ -806,10 +998,14 @@ func _portrait_crop(texture: Texture2D, accessory := false) -> Texture2D:
 
 
 func _update_preview() -> void:
-	_preview.visible = not _compare_mode
-	_compare_root.visible = _compare_mode
-	_compare_button.text = "Закрыть" if _compare_mode else "Сравнить"
-	if _compare_mode:
+	var fitting := _fitting_button.button_pressed
+	_preview.visible = not _compare_mode and not fitting
+	_compare_root.visible = _compare_mode and not fitting
+	if fitting:
+		_view_buttons[0].text = "Сбоку"
+		_update_fitting()
+	_compare_button.text = ("Вернуть примерку" if fitting else "Закрыть") if _compare_mode else "Сравнить"
+	if _compare_mode and not fitting:
 		var accessory := Progress.category_for(_selection) != Progress.Category.SCHEME
 		var ids := [_profile.equipped_for(_selection), _selection]
 		for i in 2:
@@ -819,6 +1015,10 @@ func _update_preview() -> void:
 			_compare_labels[i].text = (_words(_selection).worn if i == 0 else "Выбрано") + ("\n" if size.x < 520.0 else " · ") + Progress.item_name(ids[i])
 	var portraits: Array = _portraits.get(_selection, [])
 	var preview: Texture2D = portraits[_view_index] if portraits.size() > _view_index else _previews.get(_selection)
+	if preview == null:
+		preview = _previews.get(_selection)
+	_preview_missing.text = "Подготавливаем изображение…" if not _portraits.has(_selection) else "Изображение недоступно"
+	_preview_missing.visible = preview == null and not fitting and not _compare_mode
 	if _preview.texture != preview:
 		_preview.texture = preview
 		if preview != null and DisplayServer.get_name() != "headless":
@@ -827,6 +1027,65 @@ func _update_preview() -> void:
 			_preview.modulate.a = 0.72
 			_preview_tween = create_tween()
 			_preview_tween.tween_property(_preview, "modulate:a", 1.0, 0.16)
+
+
+func _toggle_fitting(on: bool) -> void:
+	if on and _profile == null:
+		_fitting_button.set_pressed_no_signal(false)
+		return
+	_fitting_zoom.visible = on
+	_fitting_reset.visible = on
+	if on:
+		_compare_mode = false
+		_compare_button.set_pressed_no_signal(false)
+		_fitting_button.grab_focus()
+		_scroll.set_deferred("scroll_vertical", 0)
+		_fitting_items.clear()
+		for category in Progress.DEFAULT_ITEMS.size():
+			_fitting_items.append(_profile.equipped_in(category))
+		_fitting_items[Progress.category_for(_selection)] = _selection
+		_fitting = preload("res://scripts/ui/shop_fitting.gd").new()
+		_fitting.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_fitting.offset_top = _preview.offset_top
+		_stage_content.add_child(_fitting)
+		_stage_content.move_child(_fitting, _preview.get_index() + 1)
+		_update_fitting()
+	else:
+		_compare_mode = false
+		_compare_button.set_pressed_no_signal(false)
+		if is_instance_valid(_fitting):
+			_stage_content.remove_child(_fitting)
+			_fitting.queue_free()
+		_fitting = null
+		_fitting_items.clear()
+		_fitting_zoom.set_pressed_no_signal(false)
+	if _profile != null and is_visible_in_tree():
+		_show_selection()
+	else:
+		_update_preview()
+
+
+func _reset_fitting() -> void:
+	if _profile == null or _fitting_items.is_empty():
+		return
+	_compare_mode = false
+	_compare_button.set_pressed_no_signal(false)
+	for category in Progress.DEFAULT_ITEMS.size():
+		_fitting_items[category] = _profile.equipped_in(category)
+	_select(_fitting_items[Progress.category_for(_selection)])
+	_update_preview()
+
+
+func _update_fitting() -> void:
+	if not is_instance_valid(_fitting):
+		return
+	var items := _fitting_items
+	if _compare_mode:
+		items = []
+		for category in Progress.DEFAULT_ITEMS.size():
+			items.append(_profile.equipped_in(category))
+	_fitting.apply_items(items)
+	_fitting.set_view(_view_index, _fitting_zoom.button_pressed, Progress.category_for(_selection))
 
 static func _words(id: String) -> Dictionary:
 	match Progress.category_for(id):
@@ -874,6 +1133,10 @@ func dismiss_purchase() -> bool:
 		if _compare_mode:
 			_compare_button.button_pressed = false
 			_compare_button.grab_focus()
+			return true
+		if _fitting_button.button_pressed:
+			_fitting_button.button_pressed = false
+			_fitting_button.grab_focus()
 			return true
 		return false
 	_purchase_id = ""

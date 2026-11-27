@@ -946,7 +946,8 @@ tooltip_text = "Пересоздать мир по этому зерну и на
 
 [node name="DeleteWorld" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/WorldActions"]
 unique_name_in_owner = true
-theme_type_variation = &"DangerButton"
+theme_type_variation = &"MenuLink"
+theme_override_colors/font_color = Color(1, 0.68, 0.62, 1)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Удалить мир"
@@ -968,7 +969,8 @@ text = "Хранилище миров"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
-theme_type_variation = &"DangerButton"
+theme_type_variation = &"MenuLink"
+theme_override_colors/font_color = Color(1, 0.68, 0.62, 1)
 theme_override_font_sizes/font_size = 14
 text = "Очистить все сохранения"
 tooltip_text = "Перенести сохранения в архив и убрать все миры из меню"
@@ -1240,6 +1242,7 @@ grow_vertical = 2
 [node name="Panel" type="PanelContainer" parent="UI/Root/Settings"]
 custom_minimum_size = Vector2(640, 0)
 layout_mode = 2
+theme_type_variation = &"MenuGlass"
 
 [node name="Box" type="VBoxContainer" parent="UI/Root/Settings/Panel"]
 layout_mode = 2
@@ -1249,7 +1252,7 @@ theme_override_constants/separation = 16
 layout_mode = 2
 theme_type_variation = &"TitleLabel"
 text = "Настройки"
-horizontal_alignment = 1
+horizontal_alignment = 0
 
 [node name="SettingsTabs" type="TabContainer" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true

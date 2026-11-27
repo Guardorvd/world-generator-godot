@@ -23,8 +23,13 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	for id: String in Shop.Progress.PRICES:
-		panel._rows[id].grab_focus()
+		if Shop.Progress.category_for(id) != Shop.Progress.category_for(panel._selection):
+			panel._select_category(Shop.Progress.category_for(id))
+		panel._select(id)
+		while not panel._full_portraits.has(id) and panel.is_processing():
+			await process_frame
 		_check(panel._preview.texture != null and panel._portraits[id][0] != null and panel._portraits[id][1] != null, "оба ракурса и выбор: " + id)
+	panel._select_category(Shop.Progress.Category.SCHEME)
 	panel._rows.moss.grab_focus()
 	profile.set_purchase_goal("night")
 	panel._compare_button.button_pressed = true
@@ -59,6 +64,12 @@ func _run() -> void:
 	await process_frame
 	_check(panel._scroll.scroll_vertical > 0 and panel._goal_action.has_focus() and panel._goal_action.get_global_rect().end.y <= panel._scroll.get_global_rect().end.y, "прокрутка к действию и фокус")
 	await _shot("compact_action", Vector2i(400, 650))
+	panel._fitting_button.button_pressed = true
+	await process_frame
+	await process_frame
+	_check(panel._scroll.scroll_vertical == 0 and panel._scroll.get_global_rect().encloses(panel._stage.get_global_rect()), "примерочная на узком экране открывает модель целиком")
+	_check(panel._fitting.get_global_rect().position.y >= panel._stage_controls.get_global_rect().end.y, "кнопки ракурса не перекрывают модель")
+	await _shot("compact_fitting", Vector2i(400, 650))
 	panel.queue_free()
 	await process_frame
 	var journal := Journal.new()

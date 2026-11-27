@@ -10,6 +10,9 @@ const RideLog = preload("res://scripts/game/ride_log.gd")
 const HudStyle = preload("res://scripts/ui/hud_style.gd")
 const Config = preload("res://resources/ride_journal.tres")
 const Presentation = preload("res://scripts/ui/ride_presentation.gd")
+const MENU_THEME = preload("res://resources/ui_theme.tres")
+const DETAIL_SURFACE := Color(0.07, 0.11, 0.15, 0.98)
+const DETAIL_BORDER := Color(0.52, 0.61, 0.64, 0.6)
 
 var feed = Feed.new()
 var settings
@@ -50,14 +53,14 @@ var _focus_after_delete_id := ""
 var _slot_height := 0.0
 
 
-func setup(game_settings, seed := "", template_id := "") -> void:
-	if not seed.is_empty():
+func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
+	if not seed.is_empty() and not wide:
 		theme = HudStyle.theme()
 	settings = game_settings
 	world_seed = seed
 	world_template = template_id
 	_only_world = not seed.is_empty()
-	_wide_cards = world_seed.is_empty()
+	_wide_cards = world_seed.is_empty() or wide
 	add_theme_constant_override("separation", Config.feed_spacing)
 	var title := Label.new()
 	title.text = "Журнал поездок" if world_seed.is_empty() else "ПОЕЗДКИ"
@@ -432,8 +435,8 @@ func _show_detail(entry: Dictionary) -> void:
 		_dialog.queue_free()
 	_dialog = AcceptDialog.new()
 	_dialog.title = "Пешая прогулка" if bool(entry.get("walk", false)) else "Поездка"
-	_dialog.theme = HudStyle.theme()
-	_dialog.add_theme_stylebox_override("panel", HudStyle.sheet(Vector2(20, 16)))
+	_dialog.theme = MENU_THEME
+	_dialog.add_theme_stylebox_override("panel", HudStyle.panel(DETAIL_SURFACE, DETAIL_BORDER, 12, Vector2(20, 16)))
 	_dialog.add_theme_stylebox_override("embedded_border", _window_border())
 	_dialog.add_theme_color_override("title_color", HudStyle.CREAM)
 	_dialog.window_input.connect(func(event: InputEvent) -> void: _handle_detail_cancel(event, _dialog))
@@ -687,8 +690,8 @@ func _open_photo(path: String) -> void:
 		return
 	var dialog := AcceptDialog.new()
 	dialog.title = "Снимок поездки"
-	dialog.theme = HudStyle.theme()
-	dialog.add_theme_stylebox_override("panel", HudStyle.sheet())
+	dialog.theme = MENU_THEME
+	dialog.add_theme_stylebox_override("panel", HudStyle.panel(DETAIL_SURFACE, DETAIL_BORDER, 12, Vector2(22, 18)))
 	dialog.add_theme_stylebox_override("embedded_border", _window_border())
 	dialog.add_theme_color_override("title_color", HudStyle.CREAM)
 	_dialog.add_child(dialog)
@@ -707,7 +710,7 @@ func _open_photo(path: String) -> void:
 
 
 static func _window_border() -> StyleBoxFlat:
-	var border := HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 8, Vector2.ZERO, false)
+	var border := HudStyle.panel(DETAIL_SURFACE, DETAIL_BORDER, 12, Vector2.ZERO, false)
 	border.expand_margin_left = 16.0
 	border.expand_margin_right = 16.0
 	border.expand_margin_top = 40.0

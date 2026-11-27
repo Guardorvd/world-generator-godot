@@ -19,6 +19,25 @@ func _check(ok: bool, message: String) -> void:
 
 func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.godot/shop_ui_test"))
+	# Превью должны работать и до импорта нового PNG, и с .import от другого ПК без локального .ctex.
+	var source_path := "res://.godot/shop_ui_test/unimported.png"
+	var source := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	source.fill(Color.CORAL)
+	_check(source.save_png(source_path) == OK, "исходник для проверки превью сохранён")
+	var metadata_path := source_path + ".import"
+	if FileAccess.file_exists(metadata_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(metadata_path))
+	var unimported := Shop._texture(source_path)
+	_check(unimported is ImageTexture and unimported.get_image().get_pixel(0, 0).is_equal_approx(Color.CORAL),
+		"новое превью доступно до первого импорта")
+	var metadata := ConfigFile.new()
+	metadata.set_value("remap", "path", "res://.godot/shop_ui_test/missing.ctex")
+	_check(metadata.save(metadata_path) == OK, "метаданные отсутствующего импорта сохранены")
+	var missing_import := Shop._texture(source_path)
+	_check(missing_import is ImageTexture and missing_import.get_size() == Vector2(4, 4),
+		"превью доступно без локального кэша импорта")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(metadata_path))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(source_path))
 	root.size = Vector2i(1280, 720)
 	var profile := Shop.Progress.new()
 	var panel := Shop.new()
@@ -29,9 +48,20 @@ func _run() -> void:
 	panel.open()
 	await process_frame
 	await process_frame
-	_check(panel._rows.ember.has_focus() and panel._preview.texture != null, "начальный комплект и фокус")
-	for id: String in Shop.Progress.PRICES:
-		_check(panel._portraits.has(id) and panel._portraits[id][0] != null and panel._portraits[id][1] != null and panel._card_images[id].texture != null, "оба ракурса и карточка доступны: " + id)
+	_check(panel._category_buttons[0].has_focus() and panel._preview.texture != null, "начальный комплект и фокус на категории")
+	for category in Shop.Progress.DEFAULT_ITEMS.size():
+		panel._select_category(category)
+		while panel.is_processing():
+			await process_frame
+		for id: String in Shop.Progress.PRICES:
+			if Shop.Progress.category_for(id) != category:
+				continue
+			panel._select(id)
+			_check(panel._portraits.has(id) and panel._portraits[id][0] != null and panel._portraits[id][1] != null and panel._card_images[id].texture != null, "оба ракурса и карточка доступны: " + id)
+	panel._select_category(Shop.Progress.Category.SCHEME)
+	while panel.is_processing():
+		await process_frame
+	panel._rows.ember.grab_focus()
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.position = panel._card_images.moss.get_global_rect().get_center()
@@ -131,7 +161,7 @@ func _run() -> void:
 	journal.open_tab(Journal.Tab.SHOP, "Тест")
 	await process_frame
 	var tablet_shop: Shop = journal.shop_panel
-	_check(tablet_shop.is_visible_in_tree() and tablet_shop._rows.moss.has_focus() and tablet_shop._status.text == "НАДЕТО", "планшет открывает общую коллекцию и экипировку")
+	_check(tablet_shop.is_visible_in_tree() and tablet_shop._category_buttons[0].has_focus() and tablet_shop._status.text == "НАДЕТО", "планшет открывает общую коллекцию и экипировку")
 	profile.award("test", ["repair:home>farm", "fragile:home>farm"])
 	tablet_shop._rows.glacier.grab_focus()
 	await process_frame

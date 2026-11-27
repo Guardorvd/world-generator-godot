@@ -382,7 +382,7 @@ func _navigation_test() -> void:
 		await RenderingServer.frame_post_draw
 		_check(preload("res://tools/shot_util.gd").save_png(root, shots, "navigation_wrongway"), "снимок движения против маршрута")
 	hud.set_goal({})
-	_check(line.path.is_empty() and line.mesh.get_surface_count() == 0, "снятие цели сразу убирает линию")
+	_check(line.path.is_empty() and (line.mesh == null or line.mesh.get_surface_count() == 0), "снятие цели сразу убирает линию")
 	hud.set_goal({key = "marker", kind = "marker", name = "Метка", x = 10.5, y = 5.5})
 	_check(not hud.check_goal(42, 22).is_empty() and hud.goal.is_empty() and line.path.is_empty(), "прибытие снимает свободную метку и навигацию")
 	await _place_names_test(hud, w)
@@ -445,6 +445,9 @@ class NavigationGround extends Heightfield:
 	func _init(w: WorldData) -> void:
 		super()
 		world = w
+		hv.resize(w.N)
+		hv.fill(100.0)
+		hv_raw = hv.duplicate()
 	func surface_at(_x: float, _z: float, _feet: float) -> float:
 		return 100.0
 	func known(_x: float, _z: float) -> bool:

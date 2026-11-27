@@ -76,6 +76,7 @@ var _hub_preview_queue: Array[String] = []
 var _hub_preview_task := -1
 var _hub_preview_result := {}
 var _hub_preview_epoch := 0
+var _hub_fitted_size := Vector2.ZERO
 var _previews := {}            # зерно -> превью карты из кэша (ImageTexture) или null
 var _world_cards := {}         # зерно -> состояние, проверенное при обновлении списка
 var _saved_seeds: Array = []
@@ -369,7 +370,8 @@ func _ready() -> void:
 	for subtree: Node in [%Menu, %AllWorlds, %Loading, %Pause, %Settings, _shop, ride_screen, _type_catalog, hud.journal_panel]:
 		_ui_audio.bind_tree(subtree)
 	get_viewport().size_changed.connect(_fit_menu)
-	(%AllWorlds.get_node("Panel") as Control).resized.connect(_fit_hub)
+	# Пересчитываем масштаб после того, как контейнеры закончат перестраиваться.
+	(%AllWorlds.get_node("Panel") as Control).resized.connect(func() -> void: _fit_hub.call_deferred())
 	(%SeedList.get_parent() as ScrollContainer).get_v_scroll_bar().value_changed.connect(func(_value: float) -> void:
 		_hub_preview_scan = true)
 	if _progress_enabled and DisplayServer.get_name() != "headless" and "--static-menu" not in OS.get_cmdline_user_args():
@@ -1391,6 +1393,9 @@ func _update_hub_row(seed_text: String) -> void:
 	var badges: Array[String] = []
 	if seed_text in _saved_seeds:
 		badges.append("Ошибка сохранения" if _world_cards[seed_text].get("corrupt", false) else "Сохранение")
+		var saved_at := int(_world_cards[seed_text].get("saved_at", -1))
+		if saved_at > 0 and not _world_cards[seed_text].get("corrupt", false):
+			badges.append(_local_time_text(saved_at).get_slice(" ", 0))
 	if fav: badges.append("Избранное")
 	if seed_text in settings.recent_seeds: badges.append("Недавний")
 	if WorldTemplate.is_default(_active_template_id()) and not settings.hide_recommended_worlds:
@@ -1579,7 +1584,7 @@ func _link_seed_rows(tab: String) -> void:
 func _seed_row(seed_text: String) -> PanelContainer:
 	var row := PanelContainer.new()
 	row.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
-	row.custom_minimum_size = Vector2(0, 60)
+	row.custom_minimum_size = Vector2(0, 76)
 	row.set_meta("seed", seed_text)
 	var outer := HBoxContainer.new()
 	outer.add_theme_constant_override("separation", 6)
@@ -1587,7 +1592,7 @@ func _seed_row(seed_text: String) -> PanelContainer:
 	var select_btn := Button.new()
 	select_btn.toggle_mode = true
 	select_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	select_btn.custom_minimum_size = Vector2(0, 60)
+	select_btn.custom_minimum_size = Vector2(0, 76)
 	select_btn.set_meta("seed", seed_text)
 	select_btn.theme_type_variation = &"ListRow"   # выбранный мир — золотая рамка
 	select_btn.tooltip_text = seed_text
@@ -1608,7 +1613,7 @@ func _seed_row(seed_text: String) -> PanelContainer:
 	if tex == null:
 		tex = (%Carousel as Carousel).generated_preview(seed_text)
 	var thumb := TextureRect.new()
-	thumb.custom_minimum_size = Vector2(48, 48)
+	thumb.custom_minimum_size = Vector2(64, 64)
 	thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	thumb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1620,13 +1625,11 @@ func _seed_row(seed_text: String) -> PanelContainer:
 	empty.set_anchors_preset(Control.PRESET_FULL_RECT)
 	empty.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	empty.visible = tex == null
-	var q := Label.new()
-	q.text = "?"
-	q.set_anchors_preset(Control.PRESET_FULL_RECT)
-	q.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	q.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	q.theme_type_variation = &"CaptionLabel"
-	empty.add_child(q)
+	var placeholder := CenterContainer.new()
+	placeholder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	placeholder.add_child(UiIcons.rect(UiIcons.PEAK, 24, Color(0.8, 0.84, 0.86, 0.7)))
+	empty.add_child(placeholder)
 	thumb.add_child(empty)
 	box.add_child(thumb)
 	var texts := VBoxContainer.new()
@@ -1637,7 +1640,7 @@ func _seed_row(seed_text: String) -> PanelContainer:
 	var name_label := Label.new()
 	name_label.text = seed_text
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	name_label.add_theme_font_size_override("font_size", 15)
+	name_label.add_theme_font_size_override("font_size", 17)
 	texts.add_child(name_label)
 	var sub_label := Label.new()
 	sub_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -1788,6 +1791,8 @@ func _update_selection() -> void:
 		%WorldStatus.text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
 	_load_manual.visible = state.get("manual", false)
 	_load_manual.disabled = not state.get("manual", false)
+	if _is_screen("world_hub"):
+		_fit_hub.call_deferred()
 	%RestartWorld.modulate = Color(1.0, 0.48, 0.42) if corrupt else Color.WHITE
 	%RestartWorld.disabled = seed_text.is_empty()
 	%DeleteWorld.disabled = seed_text.is_empty()
@@ -2049,6 +2054,7 @@ func _fit_hub() -> void:
 	var panel := %AllWorlds.get_node("Panel") as Control
 	if panel.size.x <= 0.0 or panel.size.y <= 0.0:
 		return
+	_hub_fitted_size = panel.size
 	var available := get_viewport().get_visible_rect().size - Vector2(24, 24)
 	var fit := minf(1.0, minf(maxf(0.01, available.x / panel.size.x), maxf(0.01, available.y / panel.size.y)))
 	UiStack.set_panel_base_scale(panel, fit)
@@ -2057,6 +2063,10 @@ func _fit_hub() -> void:
 
 func _process(delta: float) -> void:
 	if _is_screen("world_hub"):
+		var hub_panel := %AllWorlds.get_node("Panel") as Control
+		var expected_scale := float(hub_panel.get_meta(&"_ui_base_scale", 1.0)) * float(hub_panel.get_meta(&"_ui_scale_factor", 1.0))
+		if hub_panel.size != _hub_fitted_size or not is_equal_approx(hub_panel.scale.x, expected_scale):
+			_fit_hub()
 		_build_hub_rows()
 	_tick_hub_previews()
 	if _session_performance != null:

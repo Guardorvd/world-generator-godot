@@ -94,13 +94,15 @@ func _test_shop(main: Node) -> void:
 	await process_frame
 	await process_frame
 	var shop: Control = main._shop
-	_check(main._ui_stack.is_open("shop") and shop._rows.ember.has_focus() and shop._preview.texture != null,
-		"магазин в меню показывает стартовую расцветку и ставит фокус на неё")
+	_check(main._ui_stack.is_open("shop") and shop._category_buttons[0].has_focus() and shop._preview.texture != null,
+		"магазин показывает стартовую расцветку и ставит фокус на категорию")
 	_check(backdrop.process_mode == Node.PROCESS_MODE_DISABLED and backdrop.ticks == frozen_ticks,
 		"при открытом магазине фон не получает обновления кадра")
 	var preview: Texture2D = shop._preview.texture
-	await process_frame
+	while shop.is_processing():
+		await process_frame
 	_check(shop._preview.texture == preview and not shop.is_processing(), "витрина не обновляет превью в простое")
+	shop._rows.ember.grab_focus()
 	root.push_input(_pad_button(JOY_BUTTON_DPAD_DOWN))
 	_check(shop._rows.lingon.has_focus() and shop._selection == "lingon",
 		"крестовина выбирает на превью расцветку следующего ряда")
@@ -162,8 +164,12 @@ func _test_shop(main: Node) -> void:
 	_check(shop._confirm_buy.has_focus(), "подтверждение доступно с крестовины")
 	shop._confirm_buy.pressed.emit()
 	shop._confirm_buy.pressed.emit()
+	var scheme_count := 0
+	for id: String in shop.Progress.PRICES:
+		if shop.Progress.category_for(id) == shop.Progress.Category.SCHEME:
+			scheme_count += 1
 	_check(shop._action.text == "Надето" and main._shop_progress.balance == 0 and not shop._goal_card.visible
-		and shop._collection.text == "2 / 7 открыто" and main._shop_progress.equipped == "moss"
+		and shop._collection.text == "2 / %d открыто" % scheme_count and main._shop_progress.equipped == "moss"
 		and main._ui_audio.last_sound == &"confirm", "покупка пополняет коллекцию один раз и подтверждается звуком")
 	shop._action.pressed.emit()
 	_check(main._shop_progress.equipped == "moss", "купленную расцветку можно надеть")
@@ -272,9 +278,9 @@ func _test_loading_and_cancellation(main: Node) -> void:
 	_check(loading.visible and is_zero_approx(loading.modulate.a) and cancel.has_focus(),
 		"5.2 Loading проявляется из прозрачного состояния и получает фокус")
 	await create_timer(0.22).timeout
-	var showcase: Control = main.get_node("%Carousel")
-	_check(is_equal_approx(panel.offset_left, showcase.offset_left) and is_equal_approx(panel.offset_top, showcase.offset_top),
-		"5.2 карточка Loading совпадает по положению с витриной карты")
+	var menu_column: Control = main._menu_scroll
+	_check(is_equal_approx(panel.offset_left, menu_column.offset_left) and is_equal_approx(panel.offset_top, menu_column.offset_top),
+		"5.2 карточка Loading совпадает по положению с колонкой меню")
 
 	main._set_progress(0.8, "Фаза 2")
 	_check(is_zero_approx(main.bar.value) and previous_step.visible and previous_step.text == "Фаза 1",
@@ -411,7 +417,7 @@ func _test_pause_settings_and_live_preview(main: Node) -> void:
 	root.push_input(_pad_button(JOY_BUTTON_RIGHT_SHOULDER))
 	var shop: Control = main.hud.journal_panel.shop_panel
 	_check(main.hud.journal_panel.active_tab == Hud.Tablet.Tab.SHOP and not atlas.is_visible_in_tree()
-		and shop._rows.moss.has_focus() and shop._action.text == "Надето",
+		and shop._category_buttons[0].has_focus() and shop._action.text == "Надето",
 		"RB открывает магазин в планшете с экипировкой из стартового меню (виден=%s, кнопка=%s)" % [
 			shop.is_visible_in_tree(), shop._action.text])
 	root.push_input(_action_event(&"journal"))
