@@ -81,9 +81,19 @@ varying float v_ao;
 varying float v_cloud;   // 7.9: тень облака на растении (одна на экземпляр)
 varying float v_fade;    // 9.9+: 1 — видно целиком, 0 — растворилось
 varying vec2 v_lod;      // 9.9+: порог пикселя должен быть в [x, y), иначе этот уровень его не рисует
+#if defined(ROCK_DETAIL) || defined(BARK)
+uniform sampler2D terrain_base_tex : source_color, hint_default_black, filter_linear_mipmap, repeat_disable;
+uniform vec2 terrain_map_size = vec2(1.0);
+uniform bool terrain_blend_enabled = false;
+#endif
 #ifdef ROCK_DETAIL
+uniform sampler2DArray mat_albedo_h : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray mat_norm_r_ao : hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool rock_pbr_enabled = false;
 varying vec3 rock_local;
+varying vec3 rock_local_nrm;
 varying vec3 rock_world_normal;
+varying vec3 rock_wpos;
 varying float rock_contact_v;
 #endif
 #ifdef BARK
@@ -94,7 +104,9 @@ varying float rock_contact_v;
 uniform float bark_detail = 0.0;
 varying vec3 bark_local;
 varying vec3 bark_local_nrm;
+varying vec3 bark_wpos;
 varying float bark_north;
+varying float bark_contact_v;
 #endif
 
 void vertex() {
@@ -117,7 +129,9 @@ void vertex() {
 #ifdef BARK
 	bark_local = VERTEX;
 	bark_local_nrm = NORMAL;
+	bark_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	bark_north = dot(normalize(mat3(MODEL_MATRIX) * NORMAL), vec3(-0.45, 0.0, -0.89));
+	bark_contact_v = bark_detail > 2.5 ? (bark_detail >= 3.5 ? 1.0 - smoothstep(-0.08, 0.36, VERTEX.y) : 0.0) : (bark_detail > 0.0 ? 1.0 - smoothstep(-0.15, 0.55, VERTEX.y) : 0.0);
 #endif
 	float h = clamp(VERTEX.y / (coarse_form ? form_group_lod.z : height), 0.0, 1.0);
 	float custom_z = form_twin ? INSTANCE_CUSTOM.z - 2.0 : INSTANCE_CUSTOM.z;
@@ -135,6 +149,8 @@ void vertex() {
 	}
 #ifdef ROCK_DETAIL
 	rock_local = VERTEX;
+	rock_local_nrm = NORMAL;
+	rock_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	float rock_scale = length(MODEL_MATRIX[0].xyz);
 	float rock_far = min(fade_far, mix(55.0, fade_far, smoothstep(0.18, 0.85, rock_scale)));
 	// 09.11.2026: крупные скалы и массивы — силуэт дальнего склона: целиком до самого края дальности,
@@ -208,6 +224,9 @@ void vertex() {
 		v_cloud = cloud_light(origin.xz);
 		float shelter = shelter_ao;
 		v_ao = max(0.30, mix(ao_low, 1.0, h) * mix(1.0, shelter, sheltered));
+#ifdef BARK
+		v_ao *= 1.0 - bark_contact_v * 0.38;
+#endif
 		// v_cloud читает только light() и только для солнца: туда же — затенение низа куртины (без лишней переменной)
 		v_cloud *= mix(base_shade, 1.0, smoothstep(0.0, 0.55, h));
 #ifdef ROCK_DETAIL
@@ -282,6 +301,7 @@ void fragment() {
 	}
 	ALBEDO = col;
 	ROUGHNESS = 1.0;
+	float frag_ao = v_ao;
 #ifdef ROCK_DETAIL
 	// Мелкое зерно и крап гранита затухают по производным: не мерцают на дальнем LOD.
 	float footprint = max(length(dFdx(rock_local)), length(dFdy(rock_local)));
@@ -293,6 +313,26 @@ void fragment() {
 	float strata = sin(dot(rock_local, vec3(2.4, 8.0, 3.7)) + sin(rock_local.x * 5.0) * 0.8 + sin(rock_local.z * 7.0) * 0.5);
 	float vein = (1.0 - smoothstep(0.02, 0.07, abs(strata))) * (1.0 - smoothstep(0.015, 0.06, footprint)) * (1.0 - moss_rock * 0.8);
 	float micro_f = 1.0 - smoothstep(0.0025, 0.014, footprint);
+	float rock_vis = 1.0 - smoothstep(0.012, 0.065, footprint);
+	float pbr_h = 0.5;
+	float pbr_r = 0.82;
+	float pbr_ao = 1.0;
+	if (rock_pbr_enabled && rock_vis > 0.001) {
+		vec3 rp_p = rock_local * 0.45;
+		vec3 rp_w = pow(max(abs(normalize(rock_local_nrm)), vec3(0.001)), vec3(4.0));
+		rp_w /= max(rp_w.x + rp_w.y + rp_w.z, 1e-4);
+		vec4 rp_ah = texture(mat_albedo_h, vec3(rp_p.zy, 0.0)) * rp_w.x
+			+ texture(mat_albedo_h, vec3(rp_p.xz, 0.0)) * rp_w.y
+			+ texture(mat_albedo_h, vec3(rp_p.xy, 0.0)) * rp_w.z;
+		vec4 rp_nr = texture(mat_norm_r_ao, vec3(rp_p.zy, 0.0)) * rp_w.x
+			+ texture(mat_norm_r_ao, vec3(rp_p.xz, 0.0)) * rp_w.y
+			+ texture(mat_norm_r_ao, vec3(rp_p.xy, 0.0)) * rp_w.z;
+		ALBEDO *= mix(vec3(1.0), rp_ah.rgb * 2.0, 0.72 * rock_vis * (1.0 - moss_rock * 0.55));
+		pbr_h = rp_ah.a;
+		pbr_r = rp_nr.b;
+		pbr_ao = mix(1.0, rp_nr.a, 0.75 * rock_vis);
+		frag_ao *= pbr_ao;
+	}
 	ALBEDO *= 0.94 + (grain * 0.055 + speck * 0.04 * (1.0 - moss_rock * 0.6)) * micro_f;
 	ALBEDO = mix(ALBEDO, ALBEDO * 1.2, vein * 0.13);
 	float up_face = smoothstep(0.62, 0.88, normalize(rock_world_normal).y);
@@ -300,10 +340,9 @@ void fragment() {
 	float top_moss = up_face * moss_blotch * (1.0 - smoothstep(0.02, 0.08, footprint)) * 0.36;
 	ALBEDO = mix(ALBEDO, ALBEDO * vec3(0.58, 0.78, 0.44), top_moss);
 	ALBEDO = mix(ALBEDO, vec3(0.16, 0.14, 0.10), clamp(rock_contact_v * 0.42, 0.0, 0.5));
-	float rock_vis = 1.0 - smoothstep(0.012, 0.065, footprint);
 	float facet_n = sin(dot(rock_local, vec3(7.3, 4.1, 6.2)) + sin(rock_local.y * 11.0) * 0.6) * 0.35;
 	float strata_h = (smoothstep(-0.25, 0.25, strata) - 0.5) * (1.0 - moss_rock * 0.7);
-	float hh = (grain * 0.22 * micro_f + speck * 0.28 * micro_f + strata_h * 0.45 + facet_n * 0.35) * rock_vis * 0.018;
+	float hh = (grain * 0.22 * micro_f + speck * 0.28 * micro_f + strata_h * 0.45 + facet_n * 0.35 + (pbr_h - 0.5) * 0.75) * rock_vis * 0.018;
 	vec3 dpx = dFdx(VERTEX);
 	vec3 dpy = dFdy(VERTEX);
 	vec3 r1 = cross(dpy, NORMAL);
@@ -314,7 +353,16 @@ void fragment() {
 	if (abs(det) > 1e-10) {
 		NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dhx * r1 + dhy * r2));
 	}
-	ROUGHNESS = mix(0.80, 0.96, max(max(moss_rock, top_moss), rock_contact_v * 0.7));
+	if (terrain_blend_enabled && rock_contact_v > 0.001) {
+		vec2 tuv = clamp(rock_wpos.xz / max(terrain_map_size, vec2(1.0)), vec2(0.0), vec2(1.0));
+		vec3 tcol = texture(terrain_base_tex, tuv).rgb;
+		float blend_w = clamp(rock_contact_v * 0.62, 0.0, 0.75);
+		ALBEDO = mix(ALBEDO, tcol, blend_w);
+		vec3 up_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+		NORMAL = normalize(mix(NORMAL, up_view, clamp(rock_contact_v * 0.45, 0.0, 0.55)));
+	}
+	float base_rough = rock_pbr_enabled ? clamp(pbr_r, 0.70, 0.96) : 0.80;
+	ROUGHNESS = mix(base_rough, 0.96, max(max(moss_rock, top_moss), rock_contact_v * 0.7));
 #endif
 #ifdef BARK
 	if (bark_detail > 2.5) {
@@ -419,10 +467,15 @@ void fragment() {
 		}
 		ALBEDO = bark;
 	}
+	if (terrain_blend_enabled && bark_contact_v > 0.001) {
+		vec2 tuv = clamp(bark_wpos.xz / max(terrain_map_size, vec2(1.0)), vec2(0.0), vec2(1.0));
+		vec3 tcol = texture(terrain_base_tex, tuv).rgb * vec3(0.84, 0.88, 0.78);
+		ALBEDO = mix(ALBEDO, tcol, clamp(bark_contact_v * 0.48, 0.0, 0.52));
+	}
 #endif
 	// Визуальный стиль: тот же тон по расстоянию, что у рельефа и дальнего леса (resources/depth_tone.gdshaderinc).
 	ALBEDO = depth_tone(ALBEDO, length(VERTEX));
-	AO = v_ao;
+	AO = frag_ao;
 	AO_LIGHT_AFFECT = 0.0;
 	BACKLIGHT = col * translucency * mix(1.0, 0.28, vegetation_night);
 #ifdef CUTOUT

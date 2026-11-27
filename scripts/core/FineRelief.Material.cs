@@ -86,6 +86,53 @@ public static class ReliefMaterial
 		return bytes;
 	}
 
+	private static readonly int[] HorizonSteps = {
+		1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22, 24,
+		28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 88, 96, 108, 120
+	};
+
+	/// <summary>Карта горизонтного затенения по 4 сторонам света (RGBA8: +X, -X, +Z, -Z как sin угла горизонта).</summary>
+	internal static byte[] BuildHorizonMap(float[] hv, int width, int height, double tile)
+	{
+		int n = width * height;
+		if (width < 2 || height < 2 || hv.Length != n || tile <= 0.0)
+			return Array.Empty<byte>();
+		var bytes = new byte[n * 4];
+		int[] dxDir = { 1, -1, 0, 0 };
+		int[] dzDir = { 0, 0, 1, -1 };
+		Parallel.For(0, height, z =>
+		{
+			for (int x = 0; x < width; x++)
+			{
+				double h0 = hv[z * width + x];
+				int k = (z * width + x) * 4;
+				for (int d = 0; d < 4; d++)
+				{
+					int ox = dxDir[d], oz = dzDir[d];
+					double maxSlope = 0.0;
+					for (int si = 0; si < HorizonSteps.Length; si++)
+					{
+						int step = HorizonSteps[si];
+						int nx = x + ox * step;
+						int nz = z + oz * step;
+						if (nx < 0 || nx >= width || nz < 0 || nz >= height)
+							break;
+						double dh = hv[nz * width + nx] - h0;
+						if (dh > 0.0)
+						{
+							double slope = dh / (step * tile);
+							if (slope > maxSlope)
+								maxSlope = slope;
+						}
+					}
+					double sinH = maxSlope / Math.Sqrt(1.0 + maxSlope * maxSlope);
+					bytes[k + d] = Unit(sinH);
+				}
+			}
+		});
+		return bytes;
+	}
+
 	/// <summary>Карта нормалей макро-рельефа (RG8: nx, nz в 0..1) по сетке высот для плавного перехода на дальних LOD.</summary>
 	internal static byte[] BuildNormals(float[] hv, int width, int height, double tile)
 	{
@@ -120,6 +167,10 @@ public partial class FastGrid
 	/// <summary>Карта макро-нормалей рельефа (RG8) для дальних LOD.</summary>
 	public byte[] ReliefNormalMap(float[] hv, int width, int height, double tile)
 		=> ReliefMaterial.BuildNormals(hv, width, height, tile);
+
+	/// <summary>Карта горизонтного затенения по 4 сторонам света (RGBA8) для самозатенения дальних хребтов.</summary>
+	public byte[] ReliefHorizonMap(float[] hv, int width, int height, double tile)
+		=> ReliefMaterial.BuildHorizonMap(hv, width, height, tile);
 	/// <summary>Карты поверхности (TerrainBuilder.surface_maps): R8 затенения впадин или RGBA8 с каналами стока.
 	/// near/far — высоты, усреднённые в окрестности (TerrainBuilder._blurred); area/deposit пустые — без стока.</summary>
 	public byte[] ReliefSurfaceMaps(float[] hv, float[] near, float[] far, int width, int height, byte[] area, byte[] deposit, double[] parameters)

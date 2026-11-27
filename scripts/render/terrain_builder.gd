@@ -351,6 +351,42 @@ static func _blurred(src: Image, levels: int) -> Image:
 	return img
 
 
+const PBR_ALBEDO_PATH := "res://resources/ground/mat_albedo_h.res"
+const PBR_NORM_PATH := "res://resources/ground/mat_norm_r_ao.res"
+static var _pbr_arrays: Array[Texture2DArray] = []
+
+
+## Собирает 2 Texture2DArray (по 4 слоя 512x512 с мипами) из запечённых листов 1024x1024; кешируется на процесс.
+static func pbr_material_arrays() -> Array[Texture2DArray]:
+	if not _pbr_arrays.is_empty():
+		return _pbr_arrays
+	var tex_ah := load(PBR_ALBEDO_PATH) as Texture2D
+	var tex_nr := load(PBR_NORM_PATH) as Texture2D
+	if tex_ah == null or tex_nr == null:
+		return []
+	var img_ah := tex_ah.get_image()
+	var img_nr := tex_nr.get_image()
+	if img_ah == null or img_nr == null or img_ah.get_width() < 1024 or img_nr.get_width() < 1024:
+		return []
+	var half := img_ah.get_width() / 2
+	var quads := [Vector2i(0, 0), Vector2i(half, 0), Vector2i(0, half), Vector2i(half, half)]
+	var layers_ah: Array[Image] = []
+	var layers_nr: Array[Image] = []
+	for q: Vector2i in quads:
+		var la := img_ah.get_region(Rect2i(q, Vector2i(half, half)))
+		la.generate_mipmaps()
+		layers_ah.append(la)
+		var ln := img_nr.get_region(Rect2i(q, Vector2i(half, half)))
+		ln.generate_mipmaps()
+		layers_nr.append(ln)
+	var arr_ah := Texture2DArray.new()
+	var arr_nr := Texture2DArray.new()
+	if arr_ah.create_from_images(layers_ah) != OK or arr_nr.create_from_images(layers_nr) != OK:
+		return []
+	_pbr_arrays = [arr_ah, arr_nr]
+	return _pbr_arrays
+
+
 static func set_cavity(mat: ShaderMaterial, heights: Heightfield) -> void:
 	var cfg := detail_config(heights.world.template_id)
 	cfg.apply_flow_material(mat)
@@ -369,6 +405,21 @@ static func set_cavity(mat: ShaderMaterial, heights: Heightfield) -> void:
 			mat.set_shader_parameter("relief_normal_enabled", false)
 	else:
 		mat.set_shader_parameter("relief_normal_enabled", false)
+	if cfg.far_shadow_strength > 0.001:
+		var fast_h := Grid.fast_grid()
+		if fast_h != null:
+			var hbytes: PackedByteArray = fast_h.ReliefHorizonMap(heights.hv, heights.world.W, heights.world.H, TILE)
+			if hbytes.size() == heights.world.W * heights.world.H * 4:
+				var himg := Image.create_from_data(heights.world.W, heights.world.H, false, Image.FORMAT_RGBA8, hbytes)
+				himg.generate_mipmaps()
+				mat.set_shader_parameter("horizon_tex", ImageTexture.create_from_image(himg))
+				mat.set_shader_parameter("horizon_enabled", true)
+			else:
+				mat.set_shader_parameter("horizon_enabled", false)
+		else:
+			mat.set_shader_parameter("horizon_enabled", false)
+	else:
+		mat.set_shader_parameter("horizon_enabled", false)
 	var img := surface_maps(heights)
 	if img == null:
 		return
@@ -493,6 +544,10 @@ func _detail_material(template_id := "") -> ShaderMaterial:
 		mat.set_shader_parameter("micro_tex", _micro[0])
 		mat.set_shader_parameter("micro_n", _micro[1])
 		mat.set_shader_parameter("micro_enabled", true)
+	var pbr := pbr_material_arrays()
+	if pbr.size() == 2:
+		mat.set_shader_parameter("mat_albedo_h", pbr[0])
+		mat.set_shader_parameter("mat_norm_r_ao", pbr[1])
 	var surfaces := PackedVector3Array([Vector3.ZERO])
 	for s: Dictionary in RoadSurface.LIST.slice(1):
 		surfaces.append(Vector3(s.grain, s.organic, s.rough))

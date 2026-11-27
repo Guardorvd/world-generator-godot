@@ -124,8 +124,8 @@ float cumulus_density_at(vec2 p, float h, float cov, float morph, bool shadow_pa
 	float eff_cov = clamp(cov * mix(0.90, 1.08, deck_day) - taper * (1.0 - 0.55 * deck_day), 0.06, mix(0.74, 0.96, deck_day));
 	float edge = 1.0 - eff_cov;
 
-	// Небольшой ветровой наклон вершин башен
-	vec2 aniso = mix(vec2(1.0), vec2(0.76, 1.32), syn_street * 0.55);
+	// Небольшой ветровой наклон вершин башен; при сплошной пелене — вытянутые слоистые гряды без "пузырей"
+	vec2 aniso = mix(mix(vec2(1.0), vec2(0.76, 1.32), syn_street * 0.55), vec2(0.58, 1.65), deck_day * 0.60);
 	vec2 q = (p * aniso + warp * 0.45 + vec2(h * 0.08, h * 0.03)) * 1.55;
 
 	// Макро-острова облаков с нормализованным диапазоном 0..1 (чистое синее небо между грядами)
@@ -156,10 +156,12 @@ float cumulus_density_at(vec2 p, float h, float cov, float morph, bool shadow_pa
 	float puff_mid = worley_puff(OCT_ROT * q * 2.85 + vec2(-2.7, 4.1 - h * 0.2), -morph * 1.3);
 	float puff_fine = smoothstep(0.26, 0.74, fbm_flow(q * 5.2 + vec2(3.4, -5.1), morph * 1.7));
 	float cauli = puff_main * 0.48 + puff_mid * 0.32 + puff_fine * 0.20;
+	cauli = mix(cauli, puff_fine * 0.65 + base_island * 0.35, deck_day * 0.72);
 	out_cauli = cauli;
 
+	float puff_eff = mix(puff_main, base_island, deck_day * 0.72);
 	// Каждый клуб поднимает свою шапку выше соседних: пышные округлые купола вместо плоских пятен
-	float dome_h = out_tower * (0.62 + 0.62 * puff_main * (0.6 + 0.4 * puff_mid));
+	float dome_h = out_tower * (0.62 + 0.62 * puff_eff * (0.6 + 0.4 * mix(puff_mid, base_island, deck_day * 0.72)));
 	float top_round = (1.0 - smoothstep(dome_h * 0.20, dome_h, h));
 	float vert_profile = bottom_flat * top_round;
 
@@ -255,16 +257,23 @@ vec4 sky_clouds(vec3 d) {
 	}
 
 	float deck_day = overcast_deck;
+	float break_gap = 0.0;
 	if (deck_day > 0.001) {
-		vec2 uv_deck = sky_uv(d, 0.14) * 1.15 + wind * 0.75 + seed_ofs * 0.5;
+		vec2 uv_deck = sky_uv(d, 0.14) * vec2(0.85, 1.35) + wind * 0.75 + seed_ofs * 0.5;
 		float stratus_var = fbm_flow(uv_deck, morph * 0.45);
 		float stratus_base = fbm(uv_deck * 0.45 - vec2(seed_ofs.y, seed_ofs.x));
 		float deck_m = smoothstep(0.18, 0.82, stratus_var * 0.68 + stratus_base * 0.32);
-		float stratus_a = clamp((0.72 + 0.28 * deck_m) * deck_day, 0.0, 0.97) * fade;
+		if (cloud_break_strength > 0.001) {
+			float br_field = fbm(uv_deck * 0.36 + vec2(3.7, -5.2) + wind * 0.35);
+			break_gap = smoothstep(0.60 - 0.18 * cloud_break_strength, 0.80 - 0.10 * cloud_break_strength, br_field) * cloud_break_strength;
+		}
+		float stratus_a = clamp((0.72 + 0.28 * deck_m) * deck_day * (1.0 - break_gap * 0.68), 0.0, 0.97) * fade;
 		vec3 deck_dark = mix(cloud_color * vec3(0.70, 0.74, 0.79), zenith_color * 0.95, 0.35);
 		vec3 deck_light = mix(cloud_color * 1.02, horizon_color * 1.05, 0.45);
 		vec3 deck_col = mix(deck_dark, deck_light, deck_m);
-		deck_col += active_light_col * pow(max(active_dot, 0.0), 3.0) * 0.14 * above * (1.0 - night);
+		float rim_glow = smoothstep(0.12, 0.72, break_gap) * (0.35 + 0.65 * pow(max(active_dot, 0.0), 3.0));
+		deck_col = mix(deck_col, mix(sun_color, horizon_color, 0.25) * 1.16, rim_glow * 0.50);
+		deck_col += active_light_col * pow(max(active_dot, 0.0), 3.0) * (0.14 + break_gap * 0.22) * above * (1.0 - night);
 		deck_col = mix(deck_col, horizon_color, horizon_haze * 0.72);
 		cc = mix(cc, deck_col, stratus_a);
 		ct *= 1.0 - stratus_a;
@@ -370,18 +379,22 @@ vec4 sky_clouds(vec3 d) {
 		cc = mix(cc, c_final, a);
 		ct *= 1.0 - a;
 	}
-	// Лучи света сквозь просветы в облаках (crepuscular rays): веера из-за краёв облаков у солнца или луны
-	if (active_dot > 0.55 && cloud_cover > 0.12) {
+	// Лучи света сквозь просветы в облаках (crepuscular rays): веера из-за краёв облаков и мягкие лучи сквозь разрывы пелены
+	if (active_dot > 0.42 && cloud_cover > 0.12) {
 		vec3 ru = normalize(cross(active_dir, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
 		vec3 rv = cross(ru, active_dir);
 		float ang = atan(dot(d, rv), dot(d, ru));
-		float streaks = noise(vec2(ang * 11.0, cloud_time * 0.015 + cloud_seed)) * 0.6
-			+ noise(vec2(ang * 27.0 + 5.0, -cloud_time * 0.011)) * 0.4;
-		// 12.11: лучи мягче; при высоком солнце едва заметны, в полную силу — на заре
-		float shaft = smoothstep(0.36, 0.95, streaks) * pow(active_dot, 5.0) * trans;
+		float streaks = noise(vec2(ang * 11.0, cloud_time * 0.015 + cloud_seed)) * 0.55
+			+ noise(vec2(ang * 27.0 + 5.0, -cloud_time * 0.011)) * 0.30
+			+ noise(vec2(ang * 43.0 - 9.0, cloud_time * 0.023 + cloud_seed * 1.3)) * 0.15;
+		float shimmer = 0.84 + 0.16 * sin(cloud_time * 0.22 + ang * 7.0 + cloud_seed);
+		float gap_trans = max(trans, break_gap * cloud_break_shafts * 0.85);
+		float shaft = smoothstep(0.32, 0.94, streaks) * pow(active_dot, mix(5.0, 3.2, cloud_break_shafts)) * gap_trans * shimmer;
 		float low_boost = 0.35 + low_sun * 1.6;
 		float lit_time = max(above, night * 0.3);
-		cc += active_light_col * shaft * smoothstep(0.12, 0.5, cloud_cover) * low_boost * lit_time * 0.22 * fade * (1.0 - deck_day * 0.78);
+		float overcast_gate = mix(1.0 - deck_day * 0.78, 0.85 + break_gap * 0.55, cloud_break_shafts);
+		vec3 ray_col = mix(active_light_col, mix(active_light_col, vec3(1.0, 0.92, 0.76), 0.35), cloud_break_shafts);
+		cc += ray_col * shaft * smoothstep(0.12, 0.5, cloud_cover) * low_boost * lit_time * mix(0.22, 0.38, cloud_break_shafts) * fade * overcast_gate;
 	}
 	return vec4(cc, ct);
 }

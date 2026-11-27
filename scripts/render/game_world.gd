@@ -279,7 +279,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	$Water.add_child(water_effects)
 	t = _mark("start_water_ms", t)
 	vegetation.settings = services.settings
-	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
+	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface, $Terrain.material_override.get_shader_parameter("base_tex"))
 	t = _mark("start_vegetation_setup_ms", t)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	repairs = Repairables.new(world.seed_num)

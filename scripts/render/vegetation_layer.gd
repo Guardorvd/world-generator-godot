@@ -343,7 +343,7 @@ var _autumn_strength := 0.0
 var _eco_base := 0.0
 
 
-func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
+func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null, terrain_base: Texture2D = null) -> void:
 	world = w
 	_expedition = w.template_id == WorldTemplate.EXPEDITION_ID
 	_veg_cfg = WorldTemplate.vegetation_config(w.template_id)
@@ -358,6 +358,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	# Выпуклость поверхности после эрозии — из карт поверхности (TerrainBuilder.surface_maps, канал A), та же, что
 	# у материала рельефа. Карты собирает материал (GameWorld до раскладки); без них — выпуклость полей мира.
 	_relief_convexity = h.surface_maps if h != null and h.surface_maps.size() == w.N * 4 else PackedByteArray()
+	var pbr_arr := TerrainBuilder.pbr_material_arrays()
+	var map_size := Vector2(float(w.W) * TILE, float(w.H) * TILE)
 	RenderingServer.global_shader_parameter_set("veg_seeds", community_seeds(w.seed_num))
 	for kind: int in defs:
 		if not _expedition and kind % ForestModels.MODEL_STRIDE in Biomes.EXPEDITION_TREES:
@@ -380,12 +382,24 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			var mat := _wind_mat(shader, wind, part == "crown")
 			if kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK:
 				mat.set_shader_parameter("rock_contact", ROCK_CONTACT if contact_shade else 0.0)
+				if pbr_arr.size() >= 2:
+					mat.set_shader_parameter("mat_albedo_h", pbr_arr[0])
+					mat.set_shader_parameter("mat_norm_r_ao", pbr_arr[1])
+					mat.set_shader_parameter("rock_pbr_enabled", true)
+				if terrain_base != null:
+					mat.set_shader_parameter("terrain_base_tex", terrain_base)
+					mat.set_shader_parameter("terrain_map_size", map_size)
+					mat.set_shader_parameter("terrain_blend_enabled", true)
 			if def.has(part + "_texture"):
 				mat.set_shader_parameter("albedo_tex", def[part + "_texture"])
 			if part == "trunk":
 				mat.set_shader_parameter("use_vertex_color", def.get("colored_bark", false))
 				mat.set_shader_parameter("albedo_color", def.bark)
 				mat.set_shader_parameter("bark_detail", bark_detail(kind % ForestModels.MODEL_STRIDE))
+				if terrain_base != null:
+					mat.set_shader_parameter("terrain_base_tex", terrain_base)
+					mat.set_shader_parameter("terrain_map_size", map_size)
+					mat.set_shader_parameter("terrain_blend_enabled", true)
 			if kind % ForestModels.MODEL_STRIDE == Biomes.T_REED:
 				mat.set_shader_parameter("detail_full", 18.0)
 				mat.set_shader_parameter("detail_far", 65.0)
@@ -471,10 +485,22 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		mat.set_shader_parameter("height", maxf(wind_mesh.get_aabb().end.y, 0.2))
 		if floor_rock:
 			mat.set_shader_parameter("rock_contact", (0.20 if kind == Floor.STONES else ROCK_CONTACT) if contact_shade else 0.0)
+			if pbr_arr.size() >= 2:
+				mat.set_shader_parameter("mat_albedo_h", pbr_arr[0])
+				mat.set_shader_parameter("mat_norm_r_ao", pbr_arr[1])
+				mat.set_shader_parameter("rock_pbr_enabled", true)
+			if terrain_base != null:
+				mat.set_shader_parameter("terrain_base_tex", terrain_base)
+				mat.set_shader_parameter("terrain_map_size", map_size)
+				mat.set_shader_parameter("terrain_blend_enabled", true)
 		elif floor_bark > 0.0:
 			mat.set_shader_parameter("use_vertex_color", true)
 			mat.set_shader_parameter("albedo_color", Color.WHITE)
 			mat.set_shader_parameter("bark_detail", floor_bark)
+			if terrain_base != null:
+				mat.set_shader_parameter("terrain_base_tex", terrain_base)
+				mat.set_shader_parameter("terrain_map_size", map_size)
+				mat.set_shader_parameter("terrain_blend_enabled", true)
 		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE, Understory.STIPA]
 		mat.set_shader_parameter("grass_variation", blades)
 		var priority := Placement.priority(base)
@@ -1336,7 +1362,7 @@ func _build_chunk(chunk: Vector2i) -> Dictionary:
 
 func _plan_items(ids: PackedInt32Array) -> Dictionary:
 	var items := {x = PackedFloat64Array(), y = PackedFloat64Array(), k = PackedInt32Array(), v = PackedInt32Array(),
-		s = PackedFloat64Array(), ground = PackedFloat32Array()}
+		s = PackedFloat64Array(), ground = PackedFloat32Array(), sink = PackedFloat32Array()}
 	for o in ids:
 		var kind := world.obj_k[o]
 		if not _defs.has(kind):
@@ -1351,6 +1377,7 @@ func _plan_items(ids: PackedInt32Array) -> Dictionary:
 			continue
 		var ground := 0.0
 		var normal := Vector3.UP
+		var sink := 0.0
 		if kind == Biomes.T_ROCK:
 			if RockModels.is_outcrop(world.obj_v[o]) and not _defs.has(OUTCROP_MODEL):
 				continue
@@ -1364,12 +1391,18 @@ func _plan_items(ids: PackedInt32Array) -> Dictionary:
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
+			if placement != null:
+				var is_tree := StageVegetation.TRUNK.has(kind)
+				var probe_r := clampf(StageVegetation.TRUNK[kind] * world.obj_s[o] * 2.5, 0.45, 1.35) if is_tree else 0.45
+				var drop := _slope_drop(x, z, probe_r, ground)
+				sink = clampf(drop * 0.65, 0.0, 0.55) if is_tree else clampf(drop * 0.50, 0.0, 0.28)
 		items.x.append(ox)
 		items.y.append(oy)
 		items.k.append(kind)
 		items.v.append(world.obj_v[o])
 		items.s.append(world.obj_s[o])
 		items.ground.append(ground)
+		items.sink.append(sink)
 		if not items.has("normals"):
 			items.normals = PackedVector3Array()
 		items.normals.append(normal)
@@ -1404,6 +1437,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 		var ox := xs[o]
 		var oy := ys[o]
 		var ground: float = items.ground[o]
+		var sink: float = items.sink[o] if items.has("sink") else 0.0
 		# Выбор силуэта по координатам независим от оттенка и возраста дерева.
 		var model := kind
 		if outcrop:
@@ -1434,9 +1468,10 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			model += variant * ForestModels.MODEL_STRIDE
 		var group_key := Vector2i(model, int(kind == Biomes.T_ROCK and not outcrop and items.s[o] < 0.42))
 		if not groups.has(group_key):
-			groups[group_key] = {ids = [], ground = [], max_scale = 0.0}
+			groups[group_key] = {ids = [], ground = [], sink = [], max_scale = 0.0}
 		groups[group_key].ids.append(o)
 		groups[group_key].ground.append(ground)
+		groups[group_key].sink.append(sink)
 		if kind == Biomes.T_ROCK:
 			groups[group_key].max_scale = maxf(groups[group_key].max_scale, items.s[o])
 	var entries: Array = []
@@ -1467,7 +1502,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 				s /= ref
 				sy = s * lerpf(0.92, 1.12, WGRandom.hash2(floori(ox * 71), floori(oy * 67), 23))
 			var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * TAU
-			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
+			var pos := Vector3(ox * TILE, group.ground[n] - (0.1 + group.sink[n]), oy * TILE)
 			# Точный повёрнутый AABB вместо большой сферы вокруг всего вида.
 			var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3(s, sy, s)), pos)
 			var custom_xf := rock
@@ -3671,6 +3706,17 @@ func _map_trees_near(rect: Rect2i) -> Dictionary:
 	return out
 
 
+func _slope_drop(x: float, z: float, radius: float, center_y: float) -> float:
+	if radius <= 0.05:
+		return 0.0
+	var min_y := center_y
+	min_y = minf(min_y, placement.ground_at(x + radius, z))
+	min_y = minf(min_y, placement.ground_at(x - radius, z))
+	min_y = minf(min_y, placement.ground_at(x, z + radius))
+	min_y = minf(min_y, placement.ground_at(x, z - radius))
+	return maxf(0.0, center_y - min_y)
+
+
 func _fill_tree_roots(px: float, pz: float) -> void:
 	var reach := GameConfig.GRASS_R + _ahead(grass_r) # корни гаснут к GRASS_R от игрока, а не от раскладки
 	var r := reach / TILE
@@ -3690,8 +3736,11 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 				var k := floori(z / TILE) * world.W + floori(x / TILE)
 				if world.slope[k] > 0.9:
 					continue
+				var r_scale := _root_scale(trunk)
+				var cy_ground := placement.ground_at(x, z)
+				var root_sink := clampf(0.04 + _slope_drop(x, z, 0.75 * r_scale, cy_ground) * 0.55, 0.04, 0.38)
 				var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
-				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, _root_scale(trunk), 1.0, o)
+				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, r_scale, 1.0, o, 0.0, false, 1.0, root_sink)
 
 
 func _fill_outer_roots(batches: Array, px: float, pz: float) -> void:
@@ -3707,8 +3756,11 @@ func _fill_outer_roots(batches: Array, px: float, pz: float) -> void:
 			if StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead) > reach: continue
 			var cell := _region_cell(placement.regions, floori(x / TILE), floori(z / TILE))
 			if cell.is_empty() or cell.slope > 0.9: continue
+			var r_scale := _root_scale(trunk)
+			var cy_ground := placement.ground_at(x, z)
+			var root_sink := clampf(0.04 + _slope_drop(x, z, 0.75 * r_scale, cy_ground) * 0.55, 0.04, 0.38)
 			var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
-			_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, _root_scale(trunk), 1.0, -2 - (b << 20) - o)
+			_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, r_scale, 1.0, -2 - (b << 20) - o, 0.0, false, 1.0, root_sink)
 
 
 ## Корневые лапы у ствола радиуса trunk, м: прежний меш рассчитан на сосну масштаба 0.85–1.85 (ствол 0,2–0,43 м).

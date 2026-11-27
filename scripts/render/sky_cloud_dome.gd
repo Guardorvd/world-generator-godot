@@ -13,7 +13,8 @@ const SHADER := preload("res://resources/sky_cloud_dome.gdshader")
 const SIZE := Vector2i(2048, 512)
 const BANDS := 8
 const PARAMS := ["zenith_color", "horizon_color", "sun_dir", "sun_color", "halo", "moon_dir", "night",
-	"cloud_color", "cloud_cover", "overcast_deck", "cumulus_steps", "cloud_time", "cloud_seed", "moon_phase"]
+	"cloud_color", "cloud_cover", "overcast_deck", "cloud_break_strength", "cloud_break_shafts",
+	"cumulus_steps", "cloud_time", "cloud_seed", "moon_phase"]
 
 var sky_mat: ShaderMaterial
 var _vp: SubViewport

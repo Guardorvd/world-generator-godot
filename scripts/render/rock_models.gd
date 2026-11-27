@@ -290,10 +290,35 @@ static func _emit_creased(st: SurfaceTool, positions: PackedVector3Array, colors
 		vert_faces[ic].append(kidx)
 	var vert_group_norm: Array = []
 	vert_group_norm.resize(kept.size() * 3)
+	var vert_wear: PackedColorArray = colors.duplicate()
 	for vi in positions.size():
 		var flist: Array = vert_faces[vi]
 		if flist.is_empty():
 			continue
+		var avg_n := Vector3.ZERO
+		var nb_sum := Vector3.ZERO
+		var nb_cnt := 0
+		for fi: int in flist:
+			avg_n += face_n[fi] * face_w[fi]
+			var ftri := kept[fi]
+			for c in 3:
+				if ftri[c] != vi:
+					nb_sum += positions[ftri[c]]
+					nb_cnt += 1
+		if nb_cnt > 0 and avg_n.length_squared() > 1e-10:
+			var n_avg := avg_n.normalized()
+			var nb_center := nb_sum / float(nb_cnt)
+			var edge_len := maxf(positions[vi].distance_to(nb_center), 1e-4)
+			var conv := n_avg.dot(positions[vi] - nb_center) / edge_len
+			var edge_hi := clampf((conv - 0.04) * 0.35, 0.0, 0.14)
+			var crease_lo := clampf((-conv - 0.03) * 0.55, 0.0, 0.18)
+			var base_c := vert_wear[vi]
+			vert_wear[vi] = Color(
+				clampf(base_c.r * (1.0 + edge_hi * 1.05 - crease_lo), 0.0, 1.0),
+				clampf(base_c.g * (1.0 + edge_hi * 0.98 - crease_lo), 0.0, 1.0),
+				clampf(base_c.b * (1.0 + edge_hi * 0.86 - crease_lo * 0.95), 0.0, 1.0),
+				base_c.a
+			)
 		var comp_of := {}
 		var comp_norms: Array[Vector3] = []
 		for fi: int in flist:
@@ -337,7 +362,7 @@ static func _emit_creased(st: SurfaceTool, positions: PackedVector3Array, colors
 		var tri := kept[ki]
 		for corner in 3:
 			var idx: int = tri[corner]
-			st.set_color(colors[idx])
+			st.set_color(vert_wear[idx])
 			st.set_normal(vert_group_norm[ki * 3 + corner])
 			st.add_vertex(positions[idx])
 

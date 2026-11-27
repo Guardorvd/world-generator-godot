@@ -280,7 +280,9 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	var haze: Color = horizon_use
 	_publish_global(&"style_haze", Vector3(haze.r, haze.g, haze.b))
 	_publish_global(&"sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
-	env.fog_sun_scatter = 0.06 + float(s[8]) * 0.22 * (lerpf(1.0, atm.sun_halo_mul, day_mask) if atm != null else 1.0)
+	var break_pulse := 0.78 if cloud_cover_override >= 0.0 else (0.5 + 0.5 * sin(time / 41.0 + seed_phase * 2.1))
+	env.fog_sun_scatter = 0.06 + float(s[8]) * 0.22 * (lerpf(1.0, atm.sun_halo_mul, day_mask) if atm != null else 1.0) \
+		+ (atm.volumetric_shaft_energy * day_mask * (0.14 + 0.14 * break_pulse) if atm != null else 0.0)
 	var mist: float = s[15]
 	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
 	# свет через облака: чем гуще облачность, тем мягче и слабее прямое солнце, тем больше рассеянного света неба
@@ -318,7 +320,8 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 		mist_tint = Color(0.86, 0.90, 0.95).lerp(mist_tint, 0.12 if atm == null else atm.volumetric_horizon_tint)
 		env.volumetric_fog_density = _air_density
 		env.volumetric_fog_albedo = mist_tint
-		light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
+		light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast) \
+			+ (atm.volumetric_shaft_energy * day_mask * (0.45 + 0.55 * break_pulse) if atm != null else 0.0)
 	if env.fog_enabled:
 		var mist_wind := CLOUD_WIND * time * 0.08
 		_publish_global(&"mist_weather", Vector4(mist_wind.x, mist_wind.y, local_mist, 0.0))
@@ -353,6 +356,8 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	sky_mat.set_shader_parameter("cloud_time", time)
 	sky_mat.set_shader_parameter("cloud_cover", cover)
 	sky_mat.set_shader_parameter("overcast_deck", atm.overcast_deck * day_mask if atm != null else 0.0)
+	sky_mat.set_shader_parameter("cloud_break_strength", atm.cloud_break_strength * day_mask * (0.45 + 0.55 * break_pulse) if atm != null else 0.0)
+	sky_mat.set_shader_parameter("cloud_break_shafts", atm.cloud_break_shafts * day_mask * (0.40 + 0.60 * break_pulse) if atm != null else 0.0)
 	sky_mat.set_shader_parameter("cubemap_ground_darken", atm.cubemap_ground_darken * day_mask if atm != null else 0.0)
 	sky_mat.set_shader_parameter("cubemap_overcast_cie", atm.cubemap_overcast_cie * day_mask if atm != null else 0.0)
 	sky_mat.set_shader_parameter("cloud_seed", seed_phase)

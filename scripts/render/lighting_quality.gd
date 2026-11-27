@@ -19,10 +19,10 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 	env.ssao_enabled = forward_plus and level == 2
 	# 15.1: SSAO стоит около 1,5 мс кадра в лесу (стресс-тест), но качество выборок почти ни при чём:
 	# «очень низкое» снимает лишь 0,2–0,3 мс — основная цена в обязательных проходах. Качество не трогаем.
-	env.ssao_radius = 0.75
-	env.ssao_intensity = 0.65
-	env.ssao_detail = 0.2
-	env.ssao_light_affect = 0.0
+	env.ssao_radius = 1.65
+	env.ssao_intensity = 0.85
+	env.ssao_detail = 0.35
+	env.ssao_light_affect = 0.08
 	env.ssil_enabled = forward_plus and level == 2
 	env.ssil_radius = 3.0
 	env.ssil_intensity = 0.3

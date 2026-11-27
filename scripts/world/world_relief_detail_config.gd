@@ -218,6 +218,15 @@ enum {
 @export var mid_normal_range := Vector2(45.0, 420.0)
 ## Сила средне-дальних нормалей рельефа (0 — выкл, Тип 1).
 @export_range(0.0, 1.0, 0.01) var mid_normal_strength := 0.0
+## Дальнее самозатенение хребтов по карте горизонта (0 — выкл, Тип 1).
+@export_range(0.0, 1.0, 0.01) var far_shadow_strength := 0.0
+## Диапазон проявления дальнего самозатенения (м), там, где каскады теней сходят на нет.
+@export var far_shadow_fade_m := Vector2(75.0, 165.0)
+## Стилизованные 4 PBR-слоя земли и скал (Texture2DArray); false — прежний процедурный шум.
+@export var pbr_materials_enabled := false
+@export_range(0.0, 1.5, 0.05) var pbr_normal_strength := 0.85
+## Макро-тональность рельефа (гребни/ложбины/теневые склоны) и смягчение «леопардовой» ряби.
+@export_range(0.0, 1.0, 0.01) var macro_relief_tone := 0.0
 
 @export_group("Бюджет")
 ## Лимит Миб для плиток, карт стока и маски высот.
@@ -285,6 +294,11 @@ func apply_flow_material(mat: ShaderMaterial) -> void:
 	mat.set_shader_parameter("mid_normal_scales", mid_normal_scales)
 	mat.set_shader_parameter("mid_normal_range", mid_normal_range)
 	mat.set_shader_parameter("mid_normal_strength", mid_normal_strength)
+	mat.set_shader_parameter("far_shadow_strength", far_shadow_strength)
+	mat.set_shader_parameter("far_shadow_fade_m", far_shadow_fade_m)
+	mat.set_shader_parameter("pbr_materials_enabled", pbr_materials_enabled)
+	mat.set_shader_parameter("pbr_normal_strength", pbr_normal_strength)
+	mat.set_shader_parameter("macro_relief_tone", macro_relief_tone)
 
 
 func activation_distance_m() -> float:

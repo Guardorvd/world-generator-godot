@@ -78,6 +78,15 @@ uniform vec2 far_normal_range = vec2(0.0);
 uniform vec2 mid_normal_scales = vec2(17.0, 47.0);
 uniform vec2 mid_normal_range = vec2(45.0, 420.0);
 uniform float mid_normal_strength = 0.0;
+uniform sampler2D horizon_tex : hint_default_white, filter_linear_mipmap, repeat_disable;
+uniform bool horizon_enabled = false;
+uniform float far_shadow_strength = 0.0;
+uniform vec2 far_shadow_fade_m = vec2(75.0, 165.0);
+uniform sampler2DArray mat_albedo_h : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray mat_norm_r_ao : hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool pbr_materials_enabled = false;
+uniform float pbr_normal_strength = 0.85;
+uniform float macro_relief_tone = 0.0;
 uniform sampler2D community_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool community_tex_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
@@ -319,6 +328,17 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float hb_d = height_blend_depth * near;
 	float bare_v = 0.0;
 	float swash_v = 0.0;
+	float pbr_h_ground = mh.r * 0.6 + n_fine * 0.4;
+	float pbr_h_soil = mh.g * 0.7 + n_fine * 0.3;
+	float pbr_rough_val = -1.0;
+	float pbr_ao_val = 1.0;
+	vec2 pbr_xz_tilt = vec2(0.0);
+	vec2 p_pbr = vec2(dot(p, vec2(0.9230769, 0.3846154)), dot(p, vec2(-0.3846154, 0.9230769))) * (1.0 / 2.4);
+	vec2 dpx_pbr = vec2(dot(gdx, vec2(0.9230769, 0.3846154)), dot(gdx, vec2(-0.3846154, 0.9230769))) * (1.0 / 2.4);
+	vec2 dpy_pbr = vec2(dot(gdy, vec2(0.9230769, 0.3846154)), dot(gdy, vec2(-0.3846154, 0.9230769))) * (1.0 / 2.4);
+	vec2 p_sh = vec2(dot(p, vec2(0.80, -0.60)), dot(p, vec2(0.60, 0.80))) * (1.0 / 1.85);
+	vec2 dpx_sh = vec2(dot(gdx, vec2(0.80, -0.60)), dot(gdx, vec2(0.60, 0.80))) * (1.0 / 1.85);
+	vec2 dpy_sh = vec2(dot(gdy, vec2(0.80, -0.60)), dot(gdy, vec2(0.60, 0.80))) * (1.0 / 1.85);
 	if (micro_enabled && near > 0.0 && (rock_slope < 0.99 || road_bump_weight > 0.0)) {
 		vec2 q1 = vec2(dot(p, vec2(0.9230769, 0.3846154)), dot(p, vec2(-0.3846154, 0.9230769))) * (1.0 / 1.6);
 		vec2 q2 = vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 0.73) + vec2(0.37, 0.19);
@@ -415,29 +435,55 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		exposure = forest.a;
 		float cover = smoothstep(0.03, expedition_floor ? 0.57 : 0.8, forest.r) * (1.0 - snow);
 		canopy = cover;
-		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
+		float mid_soft = mix(n_mid, 0.5 + (n_big - 0.5) * 0.55, macro_relief_tone * 0.50);
+		float patch = smoothstep(0.32, 0.72, mid_soft + (n_big - 0.5) * 0.4);
 		float moss = smoothstep(0.48, 0.85, wet) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
 		float has_autumn = step(0.001, autumn_ground.x);
+		vec4 duff_ah = vec4(0.5, 0.5, 0.5, pbr_h_soil);
+		vec4 duff_nr = vec4(0.5, 0.5, rough_soil, 1.0);
+		if (pbr_materials_enabled && near > 0.0 && cover > 0.01 && rock_slope < 0.99) {
+			duff_ah = textureGrad(mat_albedo_h, vec3(p_pbr, 1.0), dpx_pbr, dpy_pbr);
+			duff_nr = textureGrad(mat_norm_r_ao, vec3(p_pbr, 1.0), dpx_pbr, dpy_pbr);
+			pbr_h_soil = duff_ah.a;
+		}
 		vec3 soil;
 		if (expedition_floor) {
 			vec3 damp_duff = mix(vec3(0.25, 0.151, 0.088), vec3(0.185, 0.137, 0.086), forest.g);
-			damp_duff *= mix(1.20, 0.68, wet) * mix(0.76, 1.25, n_mid);
-			vec3 olive = mix(vec3(0.19, 0.23, 0.082), vec3(0.29, 0.34, 0.13), n_mid);
+			damp_duff *= mix(1.20, 0.68, wet) * mix(0.76, 1.25, mid_soft);
+			vec3 olive = mix(vec3(0.19, 0.23, 0.082), vec3(0.29, 0.34, 0.13), mid_soft);
 			olive = mix(olive, olive * vec3(0.82, 0.78, 0.62), autumn_ground.z * has_autumn);
-			float moss_w = height_blend_w(mh.g * 0.7 + n_fine * 0.3, mh.r * 0.6 + n_mid * 0.4, moss * (0.66 + 0.48 * patch), hb_d);
+			float moss_w = height_blend_w(pbr_h_soil, mh.r * 0.6 + n_mid * 0.4, moss * (0.66 + 0.48 * patch), hb_d);
 			soil = mix(damp_duff, olive, moss_w);
 		} else {
 			soil = mix(leaf_soil, needle_soil, forest.g);
 			soil *= mix(1.12, 0.72, wet);
 			vec3 moss_c = mix(floor_moss, floor_moss * vec3(0.76, 0.73, 0.56), autumn_ground.z * has_autumn);
-			float moss_w = height_blend_w(mh.g * 0.7 + n_fine * 0.3, mh.r * 0.6 + n_mid * 0.4, moss, hb_d) * 0.7;
+			float moss_w = height_blend_w(pbr_h_soil, mh.r * 0.6 + n_mid * 0.4, moss, hb_d) * 0.7;
 			soil = mix(soil, moss_c, moss_w);
 		}
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
 		// Промытое дно лощины — галька и щебень сквозь подстилку.
-		float stones = max(forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6), flow_bed);
-		float stones_w = height_blend_w(mh.r * 0.4 + n_fine * 0.3, mh.g * 0.8 + mh.b * 0.2, stones, hb_d) * 0.75;
-		soil = mix(soil, rock_color * 0.72, stones_w);
+		float stones = max(forest.a * smoothstep(0.38, 0.70, n_big + (mid_soft - 0.5) * 0.6), flow_bed);
+		vec4 sh_ah = vec4(0.5, 0.5, 0.5, mh.g * 0.8 + mh.b * 0.2);
+		vec4 sh_nr = vec4(0.5, 0.5, rough_soil, 1.0);
+		if (pbr_materials_enabled && near > 0.0 && stones > 0.01 && cover > 0.01 && rock_slope < 0.99) {
+			sh_ah = textureGrad(mat_albedo_h, vec3(p_sh, 3.0), dpx_sh, dpy_sh);
+			sh_nr = textureGrad(mat_norm_r_ao, vec3(p_sh, 3.0), dpx_sh, dpy_sh);
+		}
+		float stones_w = height_blend_w(pbr_h_soil, sh_ah.a, stones, hb_d) * 0.75;
+		vec3 stone_col = rock_color * 0.72;
+		if (pbr_materials_enabled && near > 0.0 && cover > 0.01 && rock_slope < 0.99) {
+			soil *= mix(vec3(1.0), duff_ah.rgb * 2.0, 0.72 * near);
+			stone_col *= mix(vec3(1.0), sh_ah.rgb * 2.0, near);
+			vec2 dt_l = micro_normal_tilt(duff_nr.xy);
+			vec2 dt_w = vec2(0.9230769 * dt_l.x - 0.3846154 * dt_l.y, 0.3846154 * dt_l.x + 0.9230769 * dt_l.y);
+			vec2 st_l = micro_normal_tilt(sh_nr.xy);
+			vec2 st_w = vec2(0.80 * st_l.x + 0.60 * st_l.y, -0.60 * st_l.x + 0.80 * st_l.y);
+			pbr_xz_tilt = mix(pbr_xz_tilt, mix(dt_w, st_w, stones_w) * pbr_normal_strength, cover * near);
+			pbr_rough_val = mix(duff_nr.b, sh_nr.b, stones_w);
+			pbr_ao_val = mix(1.0, mix(duff_nr.a, sh_nr.a, stones_w), cover * near);
+		}
+		soil = mix(soil, stone_col, stones_w);
 		if (near > 0.0) {
 			// Листья/иголки читаются вблизи, с производными для гашения мерцания.
 			vec2 cells = p * 5.7;
@@ -540,7 +586,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			if (autumn_ground.x > 0.0) {
 				turf = mix(turf, turf_l * vec3(0.95, 0.87, 0.60), autumn_ground.y * 0.65);
 			}
-			float clump = smoothstep(0.34, 0.70, n_mid * 0.6 + n_fine * 0.4);
+			float clump_n = mix(n_mid, 0.5 + (n_big - 0.5) * 0.60, macro_relief_tone * 0.45);
+			float clump = smoothstep(0.34, 0.70, clump_n * 0.6 + n_fine * 0.4);
 			turf *= mix(0.88, 1.09, clump);
 			// участки видны и вдали: каменистый — реже и землистее, сырой — гуще и темнее
 			vec3 soil_far = mix(vec3(0.20, 0.15, 0.095), vec3(0.34, 0.27, 0.17), dryness);
@@ -552,6 +599,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				float blades = texture(detail_tex, vec2(dot(gp, vec2(0.92, 0.39)) * 2.9, dot(gp, vec2(-0.39, 0.92)) * 0.55)).r;
 				float blades2 = texture(detail_tex, vec2(dot(gp, vec2(0.31, 0.95)) * 2.3, dot(gp, vec2(-0.95, 0.31)) * 0.47) + vec2(0.41, 0.13)).r;
 				turf *= 1.0 + (blades + blades2 - 1.0) * (micro_enabled ? 0.24 : 0.42) * near;
+				vec4 tf_ah = vec4(0.5, 0.5, 0.5, mh.r * 0.75 + n_fine * 0.25);
+				vec4 tf_nr = vec4(0.5, 0.5, rough_turf, 1.0);
+				if (pbr_materials_enabled) {
+					tf_ah = textureGrad(mat_albedo_h, vec3(p_pbr, 2.0), dpx_pbr, dpy_pbr);
+					tf_nr = textureGrad(mat_norm_r_ao, vec3(p_pbr, 2.0), dpx_pbr, dpy_pbr);
+					pbr_h_ground = tf_ah.a;
+					turf *= mix(vec3(1.0), tf_ah.rgb * 2.0, 0.65 * near);
+				}
 				if (micro_enabled) {
 					// пряди и пучки: макушки светлее и суше, щели между пучками темнее и зеленее
 					float tuft = smoothstep(0.08, 0.72, mh.r);
@@ -586,10 +641,29 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 					ground_tilt += mn_stone_tilt * 0.55 * bare * near;
 					ground_relief = max(ground_relief, bare * near * 0.85);
 				}
+				vec4 sh_g_ah = vec4(0.5, 0.5, 0.5, mh.g * 0.65 + mh.b * 0.35);
+				vec4 sh_g_nr = vec4(0.5, 0.5, rough_soil, 1.0);
+				if (pbr_materials_enabled && (bare > 0.01 || stony > 0.20)) {
+					sh_g_ah = textureGrad(mat_albedo_h, vec3(p_sh, 3.0), dpx_sh, dpy_sh);
+					sh_g_nr = textureGrad(mat_norm_r_ao, vec3(p_sh, 3.0), dpx_sh, dpy_sh);
+					earth *= mix(vec3(1.0), sh_g_ah.rgb * 2.0, 0.72 * near);
+					pbr_h_ground = mix(tf_ah.a, sh_g_ah.a, bare * 0.72);
+				}
 				earth = mix(earth, rock_color * mix(0.6, 0.95, ph.x), pebble * 0.8);
-				float bare_blend = height_blend_w(mh.r * 0.75 + n_fine * 0.25, mh.g * 0.65 + mh.b * 0.35, bare, hb_d);
+				float bare_blend = height_blend_w(tf_ah.a, sh_g_ah.a, bare, hb_d);
 				turf = mix(turf, earth, bare_blend * 0.72 * near);
 				bare_v = bare_blend * near;
+				if (pbr_materials_enabled) {
+					vec2 tf_l = micro_normal_tilt(tf_nr.xy);
+					vec2 tf_w = vec2(0.9230769 * tf_l.x - 0.3846154 * tf_l.y, 0.3846154 * tf_l.x + 0.9230769 * tf_l.y);
+					vec2 shg_l = micro_normal_tilt(sh_g_nr.xy);
+					vec2 shg_w = vec2(0.80 * shg_l.x + 0.60 * shg_l.y, -0.60 * shg_l.x + 0.80 * shg_l.y);
+					vec2 pbr_tw = mix(tf_w, shg_w, bare_v * 0.75) * pbr_normal_strength;
+					pbr_xz_tilt = mix(pbr_xz_tilt, pbr_tw, veg * ground_w * near);
+					float tr_r = mix(tf_nr.b, sh_g_nr.b, bare_v * 0.75);
+					pbr_rough_val = pbr_rough_val < 0.0 ? tr_r : mix(pbr_rough_val, tr_r, veg * ground_w);
+					pbr_ao_val = mix(pbr_ao_val, mix(tf_nr.a, sh_g_nr.a, bare_v * 0.75), veg * ground_w * near);
+				}
 				carpet_bare = bare;
 				// на каменистом участке камни лежат и в траве
 				float loose = pebble * max(bare, stony * 0.7);
@@ -863,19 +937,38 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// 27.11: выборочный Biplanar по мировым осям (без dot(p, tang), ломавшегося на 8-12 км).
 		vec4 mr = vec4(0.5, 0.5, 0.5, 0.0);
 		vec3 rock_micro_tilt = vec3(0.0);
-		if (micro_enabled && near > 0.0) {
+		vec4 r_pbr_ah = vec4(0.5, 0.5, 0.5, 0.5);
+		vec4 r_pbr_nr = vec4(0.5, 0.5, rough_rock, 1.0);
+		vec3 r_pbr_tilt = vec3(0.0);
+		if ((micro_enabled || pbr_materials_enabled) && near > 0.0) {
 			float inv_s = 1.0 / 1.3;
+			float inv_r = 1.0 / 3.2;
 			float side_w = smoothstep(0.18, 0.34, slope);
 			vec4 mr_top = vec4(0.5, 0.5, 0.5, 0.0);
 			vec3 t_top = vec3(0.0);
+			vec4 rp_ah_top = vec4(0.5, 0.5, 0.5, 0.5);
+			vec4 rp_nr_top = vec4(0.5, 0.5, rough_rock, 1.0);
+			vec3 rpt_top = vec3(0.0);
 			if (side_w < 0.999) {
-				vec2 q_top = p * inv_s + vec2(0.23, 0.61);
-				mr_top = textureGrad(micro_tex, q_top, gdx * inv_s, gdy * inv_s);
-				vec2 nt_top = micro_normal_tilt(textureGrad(micro_n, q_top, gdx * inv_s, gdy * inv_s).zw);
-				t_top = vec3(nt_top.x, 0.0, nt_top.y);
+				if (micro_enabled) {
+					vec2 q_top = p * inv_s + vec2(0.23, 0.61);
+					mr_top = textureGrad(micro_tex, q_top, gdx * inv_s, gdy * inv_s);
+					vec2 nt_top = micro_normal_tilt(textureGrad(micro_n, q_top, gdx * inv_s, gdy * inv_s).zw);
+					t_top = vec3(nt_top.x, 0.0, nt_top.y);
+				}
+				if (pbr_materials_enabled) {
+					vec2 qr_top = p * inv_r + vec2(0.11, 0.37);
+					rp_ah_top = textureGrad(mat_albedo_h, vec3(qr_top, 0.0), gdx * inv_r, gdy * inv_r);
+					rp_nr_top = textureGrad(mat_norm_r_ao, vec3(qr_top, 0.0), gdx * inv_r, gdy * inv_r);
+					vec2 nrt_top = micro_normal_tilt(rp_nr_top.xy);
+					rpt_top = vec3(nrt_top.x, 0.0, nrt_top.y);
+				}
 			}
 			vec4 mr_side = vec4(0.5, 0.5, 0.5, 0.0);
 			vec3 t_side = vec3(0.0);
+			vec4 rp_ah_side = vec4(0.5, 0.5, 0.5, 0.5);
+			vec4 rp_nr_side = vec4(0.5, 0.5, rough_rock, 1.0);
+			vec3 rpt_side = vec3(0.0);
 			if (side_w > 0.001) {
 				vec3 wn_r = wn_base;
 				float ax_r = abs(wn_r.x);
@@ -883,45 +976,91 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				float bx = smoothstep(0.45, 0.55, ax_r / max(ax_r + az_r, 1e-4));
 				vec4 mr_xy = vec4(0.5, 0.5, 0.5, 0.0);
 				vec3 t_xy = vec3(0.0);
+				vec4 rp_ah_xy = vec4(0.5, 0.5, 0.5, 0.5);
+				vec4 rp_nr_xy = vec4(0.5, 0.5, rough_rock, 1.0);
+				vec3 rpt_xy = vec3(0.0);
 				if (bx < 0.999) {
-					vec2 q_xy = vec2(p.x, wpos.y) * inv_s + vec2(0.17, 0.43);
-					vec2 dx_xy = vec2(gdx.x, ydxy.x) * inv_s;
-					vec2 dy_xy = vec2(gdy.x, ydxy.y) * inv_s;
-					mr_xy = textureGrad(micro_tex, q_xy, dx_xy, dy_xy);
-					vec2 nt_xy = micro_normal_tilt(textureGrad(micro_n, q_xy, dx_xy, dy_xy).zw);
-					t_xy = vec3(nt_xy.x, nt_xy.y, 0.0);
+					if (micro_enabled) {
+						vec2 q_xy = vec2(p.x, wpos.y) * inv_s + vec2(0.17, 0.43);
+						vec2 dx_xy = vec2(gdx.x, ydxy.x) * inv_s;
+						vec2 dy_xy = vec2(gdy.x, ydxy.y) * inv_s;
+						mr_xy = textureGrad(micro_tex, q_xy, dx_xy, dy_xy);
+						vec2 nt_xy = micro_normal_tilt(textureGrad(micro_n, q_xy, dx_xy, dy_xy).zw);
+						t_xy = vec3(nt_xy.x, nt_xy.y, 0.0);
+					}
+					if (pbr_materials_enabled) {
+						vec2 qr_xy = vec2(p.x, wpos.y) * inv_r + vec2(0.27, 0.51);
+						vec2 dxr_xy = vec2(gdx.x, ydxy.x) * inv_r;
+						vec2 dyr_xy = vec2(gdy.x, ydxy.y) * inv_r;
+						rp_ah_xy = textureGrad(mat_albedo_h, vec3(qr_xy, 0.0), dxr_xy, dyr_xy);
+						rp_nr_xy = textureGrad(mat_norm_r_ao, vec3(qr_xy, 0.0), dxr_xy, dyr_xy);
+						vec2 nrt_xy = micro_normal_tilt(rp_nr_xy.xy);
+						rpt_xy = vec3(nrt_xy.x, nrt_xy.y, 0.0);
+					}
 				}
 				vec4 mr_zy = vec4(0.5, 0.5, 0.5, 0.0);
 				vec3 t_zy = vec3(0.0);
+				vec4 rp_ah_zy = vec4(0.5, 0.5, 0.5, 0.5);
+				vec4 rp_nr_zy = vec4(0.5, 0.5, rough_rock, 1.0);
+				vec3 rpt_zy = vec3(0.0);
 				if (bx > 0.001) {
-					vec2 q_zy = vec2(p.y, wpos.y) * inv_s + vec2(0.31, 0.19);
-					vec2 dx_zy = vec2(gdx.y, ydxy.x) * inv_s;
-					vec2 dy_zy = vec2(gdy.y, ydxy.y) * inv_s;
-					mr_zy = textureGrad(micro_tex, q_zy, dx_zy, dy_zy);
-					vec2 nt_zy = micro_normal_tilt(textureGrad(micro_n, q_zy, dx_zy, dy_zy).zw);
-					t_zy = vec3(0.0, nt_zy.y, nt_zy.x);
+					if (micro_enabled) {
+						vec2 q_zy = vec2(p.y, wpos.y) * inv_s + vec2(0.31, 0.19);
+						vec2 dx_zy = vec2(gdx.y, ydxy.x) * inv_s;
+						vec2 dy_zy = vec2(gdy.y, ydxy.y) * inv_s;
+						mr_zy = textureGrad(micro_tex, q_zy, dx_zy, dy_zy);
+						vec2 nt_zy = micro_normal_tilt(textureGrad(micro_n, q_zy, dx_zy, dy_zy).zw);
+						t_zy = vec3(0.0, nt_zy.y, nt_zy.x);
+					}
+					if (pbr_materials_enabled) {
+						vec2 qr_zy = vec2(p.y, wpos.y) * inv_r + vec2(0.41, 0.19);
+						vec2 dxr_zy = vec2(gdx.y, ydxy.x) * inv_r;
+						vec2 dyr_zy = vec2(gdy.y, ydxy.y) * inv_r;
+						rp_ah_zy = textureGrad(mat_albedo_h, vec3(qr_zy, 0.0), dxr_zy, dyr_zy);
+						rp_nr_zy = textureGrad(mat_norm_r_ao, vec3(qr_zy, 0.0), dxr_zy, dyr_zy);
+						vec2 nrt_zy = micro_normal_tilt(rp_nr_zy.xy);
+						rpt_zy = vec3(0.0, nrt_zy.y, nrt_zy.x);
+					}
 				}
 				mr_side = mix(mr_xy, mr_zy, bx);
 				t_side = mix(t_xy, t_zy, bx);
+				rp_ah_side = mix(rp_ah_xy, rp_ah_zy, bx);
+				rp_nr_side = mix(rp_nr_xy, rp_nr_zy, bx);
+				rpt_side = mix(rpt_xy, rpt_zy, bx);
 			}
 			mr = mix(mr_top, mr_side, side_w);
 			rock_micro_tilt = mix(t_top, t_side, side_w);
-			float tone = mix(0.68, 1.22, mr.b * 0.5 + mr.g * 0.5);
-			bed *= mix(1.0, tone, near);
-			bed *= 1.0 - mr.a * 0.5 * near * (0.4 + 0.6 * cliff);
-			talus *= mix(1.0, mix(0.72, 1.18, mr.g), near);
+			r_pbr_ah = mix(rp_ah_top, rp_ah_side, side_w);
+			r_pbr_nr = mix(rp_nr_top, rp_nr_side, side_w);
+			r_pbr_tilt = mix(rpt_top, rpt_side, side_w);
+			if (micro_enabled) {
+				float tone = mix(0.68, 1.22, mr.b * 0.5 + mr.g * 0.5);
+				bed *= mix(1.0, tone, near);
+				bed *= 1.0 - mr.a * 0.5 * near * (0.4 + 0.6 * cliff);
+				talus *= mix(1.0, mix(0.72, 1.18, mr.g), near);
+			}
+			if (pbr_materials_enabled) {
+				bed *= mix(vec3(1.0), r_pbr_ah.rgb * 2.0, 0.85 * near);
+				talus *= mix(vec3(1.0), mix(vec3(0.92), vec3(1.12), r_pbr_ah.a), 0.55 * near);
+			}
 		}
 		vec3 turf = mix(vec3(0.115, 0.095, 0.065), vec3(0.13, 0.16, 0.065), smoothstep(0.5, 0.8, wet + (n_mid - 0.5) * 0.4));
 		turf = mix(turf, talus * 0.8, smoothstep(0.55, 0.75, n_fine) * 0.35 * near);
 		vec3 geo = mix(mix(bed, talus, scree), turf, soil);
-		float rock_blend = height_blend_w(mh.r * 0.5 + n_fine * 0.5, mr.g * 0.65 + (1.0 - mr.a) * 0.35, rock, hb_d);
+		float h_rock_m = pbr_materials_enabled ? r_pbr_ah.a : (mr.g * 0.65 + (1.0 - mr.a) * 0.35);
+		float rock_blend = height_blend_w(pbr_h_ground, h_rock_m, rock, hb_d);
 		col = mix(col, geo, rock_blend * (0.92 - 0.7 * snow));
 		// Уступы и швы видны и светом: нормаль верха пласта к небу, подрез вниз (мировые координаты).
 		float relief_w = rock * (1.0 - scree) * (1.0 - soil) * (1.0 - snow * 0.6);
 		vec3 dn = vec3(0.0, 1.0, 0.0) * (smoothstep(0.62, 0.95, fy) * 0.30 - (1.0 - smoothstep(0.0, 0.14, fy)) * 0.25) * ledge_vis * cliff;
 		dn += vec3(blk.x - 0.5, 0.0, blk.y - 0.5) * 0.12 * block_vis * cliff;
 		float rock_w = rock * (1.0 - soil) * (1.0 - snow * 0.6) * mix(0.9, 1.7, scree);
-		rock_tilt_w = dn * relief_w + rock_micro_tilt * (0.85 * near * rock_w);
+		rock_tilt_w = dn * relief_w + rock_micro_tilt * (0.85 * near * rock_w) + r_pbr_tilt * (pbr_normal_strength * 0.90 * near * rock_w);
+		if (pbr_materials_enabled && near > 0.0) {
+			float rk_m = rock * (1.0 - soil) * (1.0 - snow) * near;
+			pbr_rough_val = pbr_rough_val < 0.0 ? mix(rough_rock, r_pbr_nr.b, rk_m) : mix(pbr_rough_val, r_pbr_nr.b, rk_m);
+			pbr_ao_val = mix(pbr_ao_val, r_pbr_nr.a, rk_m);
+		}
 	}
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;
@@ -1315,6 +1454,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		surf_tilt = mix(surf_tilt, road_tilt, road_relief);
 	}
 	col *= 1.0 + flow_ridge * flow_ridge_brighten * (1.0 - snow);
+	if (macro_relief_tone > 0.001) {
+		float tone_mask = macro_relief_tone * (1.0 - road * 0.65) * (1.0 - snow * 0.75);
+		float hollow_m = clamp(1.0 - relief_maps.r, 0.0, 1.0) * 0.55 + clamp(relief_maps.b, 0.0, 1.0) * 0.45;
+		float north_m = clamp(slope * (-wn_base.z * 0.5 + 0.5), 0.0, 1.0);
+		col *= mix(vec3(1.0), vec3(1.045, 1.025, 0.965), clamp(flow_ridge * 0.85, 0.0, 1.0) * tone_mask);
+		col *= mix(vec3(1.0), vec3(0.89, 0.935, 1.015), clamp(hollow_m, 0.0, 1.0) * tone_mask);
+		col *= mix(vec3(1.0), vec3(0.935, 0.965, 1.025), north_m * tone_mask * 0.85);
+	}
 	ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));
 	// влажная земля, мокрый песок и наст чуть блестят: отражение неба и блик солнца (light)
 	gloss_v = mix(gloss_v, road_gloss, road);
@@ -1322,6 +1469,9 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float soil_w = max(canopy * (1.0 - rock), bare_v * ground_w);
 		float surf_r = mix(rough_turf, rough_soil, soil_w);
 		surf_r = mix(surf_r, rough_rock, rock * (1.0 - snow));
+		if (pbr_materials_enabled && pbr_rough_val >= 0.0) {
+			surf_r = mix(surf_r, pbr_rough_val, clamp(near * (1.0 - snow), 0.0, 1.0));
+		}
 		surf_r = mix(surf_r, 0.84, snow);
 		surf_r = mix(surf_r, mix(0.84, 0.96, road_rough) - road_gloss * 0.24, road);
 		float wet_gloss = clamp(max(gloss_v * 1.15, smoothstep(0.55, 0.95, wet) * (1.0 - rock * 0.4) * 0.65), 0.0, 1.0);
@@ -1333,10 +1483,22 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		ROUGHNESS = 1.0 - gloss_v * 0.12 - road_gloss * 0.15;
 		SPECULAR = 0.3 + gloss_v * 0.08;
 	}
+	if (horizon_enabled && !use_vertex_color && sun_dir.y > 0.01 && far_shadow_strength > 0.001) {
+		vec4 hor = texture(horizon_tex, UV);
+		vec2 sd_xz = sun_dir.xz;
+		float sd_l1 = max(abs(sd_xz.x) + abs(sd_xz.y), 1e-4);
+		vec4 sd_w = vec4(max(sd_xz.x, 0.0), max(-sd_xz.x, 0.0), max(sd_xz.y, 0.0), max(-sd_xz.y, 0.0)) / sd_l1;
+		float hor_sin = dot(hor, sd_w);
+		float h_fade = smoothstep(far_shadow_fade_m.x, far_shadow_fade_m.y, cam_dist);
+		float far_lit = mix(1.0, smoothstep(hor_sin - 0.07, hor_sin + 0.10, sun_dir.y), far_shadow_strength * h_fade);
+		micro_shadow *= far_lit;
+		road_shade *= far_lit;
+	}
 	BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);
 	AO = sky * relief_maps.r;
+	AO *= pbr_ao_val;
 	AO_LIGHT_AFFECT = cavity_light_affect;
-	vec3 total_tilt = vec3(surf_tilt.x, 0.0, surf_tilt.y) * surf_depth + rock_tilt_w + mid_tilt * ((1.0 - road) * (1.0 - snow * 0.65));
+	vec3 total_tilt = vec3(surf_tilt.x, 0.0, surf_tilt.y) * surf_depth + vec3(pbr_xz_tilt.x, 0.0, pbr_xz_tilt.y) * (flat_mask * (1.0 - road) * (1.0 - rock)) + rock_tilt_w + mid_tilt * ((1.0 - road) * (1.0 - snow * 0.65));
 	NORMAL = normalize((VIEW_MATRIX * vec4(apply_surface_gradient(wn_base, total_tilt), 0.0)).xyz);
 }
 

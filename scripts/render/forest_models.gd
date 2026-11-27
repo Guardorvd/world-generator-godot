@@ -947,13 +947,14 @@ static func _roots(branches: Array, rng: RandomNumberGenerator, count: int, reac
 	for i in count:
 		var a := i * TAU / count + rng.randf_range(-0.25, 0.25)
 		var foot := Vector3(cos(a), 0, sin(a)) * rng.randf_range(reach.x, reach.y)
+		var dive := 0.28 + foot.length() * 0.34
 		if curved:
 			var shoulder := foot * 0.18 + Vector3.UP * top
-			var path := [foot - Vector3.UP * (0.12 + foot.length() * 0.12),
-				foot * 0.51 + Vector3.UP * top * 0.16, foot * 0.32 + Vector3.UP * top * 0.48, shoulder]
+			var path := [foot - Vector3.UP * dive,
+				foot * 0.52 + Vector3.UP * top * 0.08, foot * 0.32 + Vector3.UP * top * 0.44, shoulder]
 			branches.append([path, r0, r1, bark, false, true])
 		else:
-			branches.append([[foot + Vector3(0, -0.08, 0), Vector3(foot.x * 0.18, top, foot.z * 0.18)], r0, r1, bark, false, true])
+			branches.append([[foot - Vector3(0, dive, 0), Vector3(foot.x * 0.18, top, foot.z * 0.18)], r0, r1, bark, false, true])
 
 
 ## Рамка плоского побега: X вдоль оси, Z — поперёк по горизонтали, Y — лицевая сторона.
@@ -1442,6 +1443,11 @@ static func _vertex(st: SurfaceTool, p: Vector3, normal: Vector3, color: Color) 
 
 static func _tube(st: SurfaceTool, data: Array, segments: int, level: int, first: int) -> int:
 	var path: Array = data[0]
+	var ground_trunk := path.size() > 3 and absf((path[0] as Vector3).y) < 0.06
+	if ground_trunk:
+		var skirt_depth := maxf(0.45, float(data[1]) * 1.65)
+		path = path.duplicate()
+		path.push_front((path[0] as Vector3) + Vector3(0.0, -skirt_depth, 0.0))
 	if level > 0 and data.size() > 5 and data[5]:
 		path = [path[0], path[-1]]
 	elif level == 1 and path.size() > 4:
@@ -1462,7 +1468,9 @@ static func _tube(st: SurfaceTool, data: Array, segments: int, level: int, first
 		var front := side.cross(direction).normalized()
 		var t := ring / float(path.size() - 1)
 		var radius: float = lerpf(data[1], data[2], t)
-		if ring == 0 and path.size() > 3:
+		if ground_trunk and ring == 0:
+			radius = float(data[1]) * 1.48
+		elif ring == (1 if ground_trunk and path.size() > 4 else 0) and path.size() > 3:
 			radius *= 1.34
 		for j in segments + 1:
 			var a := j * TAU / segments

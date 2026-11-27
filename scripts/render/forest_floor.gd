@@ -803,17 +803,17 @@ static func _roots_mesh(far: bool) -> Mesh:
 		var side := Vector3(-f.z, 0, f.x)
 		var s0 := side * (0.07 if n % 2 == 0 else -0.07)
 		var p0 := f * 0.08 + Vector3.UP * 0.24
-		var p1 := f * 0.42 + s0 * 0.7 + Vector3.UP * 0.11
-		var p2 := f * 0.76 - s0 * 0.4 + Vector3.UP * 0.065
-		var p3 := f * 1.18 + s0 * 0.3 + Vector3(0, -0.015, 0)
+		var p1 := f * 0.42 + s0 * 0.7 + Vector3.UP * 0.09
+		var p2 := f * 0.76 - s0 * 0.4 + Vector3.UP * 0.02
+		var p3 := f * 1.18 + s0 * 0.3 + Vector3(0, -0.18, 0)
 		_add_wood_tube(st, [p0, p1, p2, p3], [0.115, 0.078, 0.048, 0.020], 4 if far else 5, BARK.darkened(0.05), {
 			seed = 947 + n * 13, flare0 = 1.24, flutes = 3, flute_amp = 0.09,
-			moss = 0.25, cap0 = CAP_NONE, cap1 = CAP_NONE, min_y = -0.02, far = far,
+			moss = 0.25, cap0 = CAP_NONE, cap1 = CAP_NONE, min_y = -0.22, far = far,
 		})
 		if not far and n % 2 == 0:
-			var sub := [p1, p1 + f * 0.28 + side * 0.22 + Vector3(0, -0.03, 0), p1 + f * 0.48 + side * 0.34 + Vector3(0, -0.10, 0)]
-			sub[2].y = maxf(sub[2].y, -0.018)
-			_add_wood_tube(st, sub, [0.048, 0.030, 0.014], 4, BARK.darkened(0.12), {seed = 967 + n, cap0 = CAP_NONE, cap1 = CAP_NONE, min_y = -0.02, far = far})
+			var sub := [p1, p1 + f * 0.28 + side * 0.22 + Vector3(0, -0.05, 0), p1 + f * 0.48 + side * 0.34 + Vector3(0, -0.20, 0)]
+			sub[2].y = maxf(sub[2].y, -0.20)
+			_add_wood_tube(st, sub, [0.048, 0.030, 0.014], 4, BARK.darkened(0.12), {seed = 967 + n, cap0 = CAP_NONE, cap1 = CAP_NONE, min_y = -0.22, far = far})
 	st.index()
 	return st.commit()
 

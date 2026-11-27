@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 24 # Улучшенные камни, группы камней, брёвна, ветки, корни и пни с LOD и эффектами
+const VERSION := 25 # Юбки оснований стволов и углублённые корни против провисания на склонах
 const PATH := "res://resources/catalog/standard.res"
 @export var version := 0 # Запекание записывает версию явно; ResourceSaver пропускает значение по умолчанию.
 @export var trees: Dictionary = {}
