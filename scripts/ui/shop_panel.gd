@@ -23,6 +23,9 @@ var _back: Button
 var _stage_controls: BoxContainer
 var _stage_caption: Label
 var _collection: Label
+var _category_buttons: Array[Button] = []
+var _detail_category: Label
+var _description: Label
 var _goal_card: PanelContainer
 var _goal_title: Label
 var _goal_status: Label
@@ -95,6 +98,30 @@ func _ready() -> void:
 			if not dismiss_purchase():
 				closed.emit())
 		_header.add_child(_back)
+	var categories := HBoxContainer.new()
+	categories.add_theme_constant_override("separation", 8)
+	column.add_child(categories)
+	var category_group := ButtonGroup.new()
+	for index in Progress.DEFAULT_ITEMS.size():
+		var button := Button.new()
+		button.text = ["Расцветки", "Шины", "Грипсы", "Педали"][index]
+		button.custom_minimum_size.y = 36
+		button.toggle_mode = true
+		button.button_group = category_group
+		button.add_theme_stylebox_override("normal", _flat_box(SURFACE, LINE, 4, Vector2(12, 6)))
+		button.add_theme_stylebox_override("hover", _flat_box(Color("#30443f"), LINE, 4, Vector2(12, 6)))
+		button.add_theme_stylebox_override("pressed", _flat_box(ACCENT, ACCENT, 4, Vector2(12, 6)))
+		button.add_theme_stylebox_override("hover_pressed", _flat_box(Color("#f4dab0"), ACCENT, 4, Vector2(12, 6)))
+		button.add_theme_color_override("font_pressed_color", CANVAS)
+		button.add_theme_color_override("font_hover_pressed_color", CANVAS)
+		button.pressed.connect(_select_category.bind(index))
+		categories.add_child(button)
+		_category_buttons.append(button)
+	for index in _category_buttons.size() - 1:
+		var left := _category_buttons[index]
+		var right := _category_buttons[index + 1]
+		left.focus_neighbor_right = left.get_path_to(right)
+		right.focus_neighbor_left = right.get_path_to(left)
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -195,7 +222,7 @@ func _ready() -> void:
 	_stage_controls.add_child(_compare_button)
 	var collection_header := HBoxContainer.new()
 	showcase.add_child(collection_header)
-	_label(collection_header, "КОЛЛЕКЦИЯ РАСЦВЕТОК", 14, ACCENT).size_flags_horizontal = SIZE_EXPAND_FILL
+	_label(collection_header, "КОЛЛЕКЦИЯ", 14, ACCENT).size_flags_horizontal = SIZE_EXPAND_FILL
 	_collection = _label(collection_header, "", 14, Style.MUTED)
 	_row_grid = GridContainer.new()
 	_row_grid.columns = 4
@@ -247,13 +274,22 @@ func _ready() -> void:
 		title_row.mouse_filter = MOUSE_FILTER_IGNORE
 		title_row.add_theme_constant_override("separation", 4)
 		content.add_child(title_row)
-		var title := _label(title_row, Progress.Palette.SCHEME_NAMES[id], 16, Style.CREAM)
+		var title := _label(title_row, Progress.item_name(id), 16, Style.CREAM)
 		title.size_flags_horizontal = SIZE_EXPAND_FILL
 		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		var colors: Array = Progress.Palette.SCHEMES[id]
-		for color_index in [0, 2]:
+		var colors: Array
+		if Progress.category_for(id) == Progress.Category.PEDALS:
+			colors = [Color("#2c363d")] if id == Progress.DEFAULT_PEDALS else Progress.Palette.pedal_colors(id)
+		elif Progress.category_for(id) == Progress.Category.GRIPS:
+			colors = [Color("#20272b")] if id == Progress.DEFAULT_GRIPS else Progress.Palette.grip_colors(id)
+		elif Progress.category_for(id) == Progress.Category.TIRES:
+			colors = Progress.Palette.TIRE_COLORS.get(id, [Color("#20272b"), Color("#8a6a4a")])
+		else:
+			var scheme: Array = Progress.Palette.SCHEMES[id]
+			colors = [Color(scheme[0]), Color(scheme[2])]
+		for color: Color in colors:
 			var swatch := ColorRect.new()
-			swatch.color = Color(colors[color_index])
+			swatch.color = color
 			swatch.custom_minimum_size = Vector2(10, 10)
 			swatch.size_flags_vertical = SIZE_SHRINK_CENTER
 			swatch.mouse_filter = MOUSE_FILTER_IGNORE
@@ -268,10 +304,11 @@ func _ready() -> void:
 	var detail := VBoxContainer.new()
 	detail.add_theme_constant_override("separation", 10)
 	display.add_child(detail)
-	_label(detail, "РАСЦВЕТКА  /  ВЕЛОСИПЕД И РАЙДЕР", 12, ACCENT)
+	_detail_category = _label(detail, "", 12, ACCENT)
 	_name = _label(detail, "", 34, Style.CREAM)
 	_status = _label(detail, "", 14, Style.MINT)
-	_label(detail, "Один комплект меняет облик велосипеда и райдера.", 16, Style.MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_description = _label(detail, "", 16, Style.MUTED)
+	_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	detail.add_child(HSeparator.new())
 	_price_card = PanelContainer.new()
 	_price_card.add_theme_stylebox_override("panel", _flat_box(Color("#253a35"), Color.TRANSPARENT, 3, Vector2(12, 12)))
@@ -310,6 +347,7 @@ func _ready() -> void:
 	_note = _label(detail, "", 15, Style.MUTED)
 	_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_build_goal_card(detail)
+	_sync_category()
 	set_process_input(false)
 	resized.connect(_reflow)
 	visibility_changed.connect(_visibility_changed)
@@ -422,7 +460,7 @@ func open() -> void:
 			var preview := _texture(paths[2])
 			_previews[id] = preview
 			_portraits[id] = [_texture(paths[0]), _texture(paths[1])]
-			_card_images[id].texture = _portrait_crop(_portraits[id][0] if _portraits[id][0] != null else preview)
+			_card_images[id].texture = _portrait_crop(_portraits[id][0] if _portraits[id][0] != null else preview, Progress.category_for(id) != Progress.Category.SCHEME)
 	_refresh()
 	if reward_result < 0 and _profile.load_error == OK:
 		_note.text = "Не удалось записать очки за задания. Откройте магазин ещё раз, чтобы повторить."
@@ -464,6 +502,8 @@ func _reflow() -> void:
 	_layout.vertical = size.x < 760.0
 	var compact := size.x < 520.0
 	_header.add_theme_constant_override("separation", 8 if compact else 16)
+	for button in _category_buttons:
+		button.add_theme_font_size_override("font_size", 13 if compact else 16)
 	_heading_eyebrow.text = "ЭКИПИРОВКА" if compact else "ЭКИПИРОВКА  /  МАГАЗИН"
 	_heading_title.text = "Магазин" if compact else "Выберите свой стиль"
 	_heading_title.add_theme_font_size_override("font_size", 22 if compact else 27)
@@ -494,7 +534,7 @@ func _link_actions() -> void:
 		first = _cancel_buy
 	elif first.disabled:
 		first = _view_buttons[1]
-	var cards: Array = _rows.values()
+	var cards: Array = _rows.values().filter(func(row: Button) -> bool: return row.visible)
 	var columns := _row_grid.columns
 	for i in cards.size():
 		var row: Button = cards[i]
@@ -515,6 +555,10 @@ func _link_actions() -> void:
 		button.focus_neighbor_right = NodePath()
 		button.focus_neighbor_top = NodePath()
 		button.focus_neighbor_bottom = NodePath()
+	var category := _category_buttons[Progress.category_for(_selection)]
+	_view_buttons[0].focus_neighbor_top = _view_buttons[0].get_path_to(category)
+	for button: Button in _category_buttons:
+		button.focus_neighbor_bottom = button.get_path_to(_view_buttons[0])
 	if size.x < 520.0:
 		_view_buttons[0].focus_neighbor_right = _view_buttons[0].get_path_to(_view_buttons[1])
 		_view_buttons[1].focus_neighbor_left = _view_buttons[1].get_path_to(_view_buttons[0])
@@ -544,8 +588,25 @@ func _select(id: String) -> void:
 		return
 	_selection = id
 	_purchase_id = ""
-	_refresh_goal()
-	_show_selection()
+	_refresh()
+
+
+func _select_category(category: Progress.Category) -> void:
+	if _profile == null:
+		return
+	var id := _profile.equipped_in(category)
+	_compare_mode = false
+	_select(id)
+	_category_buttons[category].grab_focus()
+	_scroll.set_deferred("scroll_vertical", 0)
+
+
+func _sync_category() -> void:
+	var category := Progress.category_for(_selection)
+	for i in _category_buttons.size():
+		_category_buttons[i].set_pressed_no_signal(i == category)
+	for id: String in _rows:
+		_rows[id].visible = Progress.category_for(id) == category
 
 
 func _set_view(index: int) -> void:
@@ -575,20 +636,25 @@ func _input(event: InputEvent) -> void:
 func _refresh() -> void:
 	if _profile == null or not is_visible_in_tree():
 		return
+	_sync_category()
 	_balance.text = _points(_profile.balance) if _profile.load_error == OK else "—"
 	var owned_count := 0
+	var category_count := 0
 	for id: String in _rows:
+		if not _rows[id].visible:
+			continue
+		category_count += 1
 		var status := "%d очк." % Progress.PRICES[id]
 		if _profile.owns(id):
 			owned_count += 1
-			status = "Надето" if id == _profile.equipped else "Куплено"
+			status = ("Надето" if Progress.category_for(id) == Progress.Category.SCHEME else "Установлены") if id == _profile.equipped_for(id) else "Куплено"
 		elif id == _profile.purchase_goal:
 			status += " · Цель"
 		if _profile.load_error != OK:
 			status = "Нет данных"
 		_card_status[id].text = status
-		_rows[id].tooltip_text = "%s · %s" % [Progress.Palette.SCHEME_NAMES[id], status]
-	_collection.text = "%d / %d открыто" % [owned_count, _rows.size()] if _profile.load_error == OK else "Нет данных"
+		_rows[id].tooltip_text = "%s · %s" % [Progress.item_name(id), status]
+	_collection.text = "%d / %d открыто" % [owned_count, category_count] if _profile.load_error == OK else "Нет данных"
 	_refresh_goal()
 	_show_selection()
 
@@ -600,7 +666,7 @@ func _refresh_goal() -> void:
 		return
 	var price: int = Progress.PRICES[id]
 	var remaining := _profile.remaining(id)
-	_goal_title.text = "Цель · " + Progress.Palette.SCHEME_NAMES[id]
+	_goal_title.text = "Цель · " + Progress.item_name(id)
 	_goal_bar.max_value = price
 	_goal_bar.value = price - remaining
 	_goal_status.text = "%d из %d очк. · Осталось %d" % [price - remaining, price, remaining] if remaining > 0 else "Можно купить · %d очк." % price
@@ -609,15 +675,29 @@ func _refresh_goal() -> void:
 func _show_selection() -> void:
 	for id: String in _rows:
 		_rows[id].set_pressed_no_signal(id == _selection)
-	_name.text = Progress.Palette.SCHEME_NAMES[_selection]
-	_compare_button.visible = _selection != _profile.equipped and _profile.load_error == OK
+	var category := Progress.category_for(_selection)
+	var accessory := category != Progress.Category.SCHEME
+	var equipped := _selection == _profile.equipped_for(_selection)
+	_view_buttons[0].text = "Спереди" if category == Progress.Category.GRIPS else "Сбоку"
+	_name.text = Progress.item_name(_selection)
+	_detail_category.text = ["РАСЦВЕТКА  /  ВЕЛОСИПЕД И РАЙДЕР", "ШИНЫ  /  ПАРА", "ГРИПСЫ  /  ПАРА", "ПЕДАЛИ  /  ПАРА"][category]
+	match category:
+		Progress.Category.TIRES:
+			_description.text = "Цвет передней и задней шин. На витрине показан базовый велосипед."
+		Progress.Category.GRIPS:
+			_description.text = "Цвет обеих рукояток руля. Грипсы можно подобрать в тон шинам."
+		Progress.Category.PEDALS:
+			_description.text = "Цвет обеих педалей. Можно подобрать в тон шинам и грипсам."
+		_:
+			_description.text = Progress.Palette.SCHEME_DESCRIPTIONS[_selection]
+	_compare_button.visible = not equipped and _profile.load_error == OK
 	if not _compare_button.visible:
 		_compare_mode = false
 	_compare_button.set_pressed_no_signal(_compare_mode)
 	_update_preview()
 	_note.text = ""
 	var owned := _profile.owns(_selection)
-	_status.text = "НАДЕТО" if _selection == _profile.equipped else ("В КОЛЛЕКЦИИ" if owned else "НОВЫЙ КОМПЛЕКТ")
+	_status.text = ("УСТАНОВЛЕНЫ" if accessory else "НАДЕТО") if equipped else ("В КОЛЛЕКЦИИ" if owned else ("НОВАЯ ПАРА" if accessory else "НОВЫЙ КОМПЛЕКТ"))
 	_status.add_theme_color_override("font_color", Style.MINT if owned else Style.AMBER)
 	_price_card.visible = not owned
 	if not owned:
@@ -641,13 +721,13 @@ func _show_selection() -> void:
 		_goal_action.text = "Убрать цель"
 	elif goal != "":
 		_goal_action.text = "Сменить цель"
-	if _selection == _profile.equipped:
-		_action.text = "Надето"
+	if equipped:
+		_action.text = "Установлены" if accessory else "Надето"
 		_action.disabled = true
 		if _profile.needs_first_purchase() and _profile.balance == 0:
-			_note.text = "Очки за расцветки дают задания поселений, новые страницы альбома, обзор с вышек и ремонт по пути."
+			_note.text = "Очки дают за задания поселений, новые страницы альбома, обзор с вышек и ремонт по пути."
 	elif _profile.owns(_selection):
-		_action.text = "Надеть"
+		_action.text = "Установить" if accessory else "Надеть"
 	else:
 		var price: int = Progress.PRICES[_selection]
 		_action.text = "Купить за %d" % price
@@ -656,21 +736,21 @@ func _show_selection() -> void:
 		if _action.disabled:
 			_note.text = "Очки дают за задания, новые страницы альбома, обзор с вышек и вершин и ремонт по пути."
 		else:
-			_note.text = "После покупки комплект сразу наденется."
+			_note.text = "Пара установится сразу после покупки." if accessory else "После покупки комплект сразу наденется."
 	if reviewing:
 		var price: int = Progress.PRICES[_purchase_id]
 		_confirm_buy.disabled = _action.disabled or _profile.owns(_purchase_id) or _profile.load_error != OK
-		_review_title.text = "«%s»  ·  %s" % [Progress.Palette.SCHEME_NAMES[_purchase_id], _points(price)]
-		_confirm_buy.text = "Купить и надеть · %s" % _points(price)
+		_review_title.text = "«%s»  ·  %s" % [Progress.item_name(_purchase_id), _points(price)]
+		_confirm_buy.text = ("Купить и установить · %s" if accessory else "Купить и надеть · %s") % _points(price)
 		if _confirm_buy.disabled:
 			_review_balance.text = "Текущий баланс: %s" % _points(_profile.balance)
 			_note.text = "Покупка недоступна. Отмените и проверьте комплект."
 		else:
 			_review_balance.text = "Баланс: %s  →  %s" % [_points(_profile.balance), _points(_profile.balance - price)]
-			_note.text = "После покупки комплект сразу наденется."
+			_note.text = "Пара установится сразу после покупки." if accessory else "После покупки комплект сразу наденется."
 			var other_goal := _profile.purchase_goal
 			if other_goal != "" and other_goal != _purchase_id and _profile.balance - price < int(Progress.PRICES[other_goal]):
-				_note.text += " На «%s» потребуется ещё %s." % [Progress.Palette.SCHEME_NAMES[other_goal], _points(int(Progress.PRICES[other_goal]) - (_profile.balance - price))]
+				_note.text += " На «%s» потребуется ещё %s." % [Progress.item_name(other_goal), _points(int(Progress.PRICES[other_goal]) - (_profile.balance - price))]
 	if _profile.load_error != OK:
 		_action.disabled = true
 		_action.text = "Недоступно"
@@ -684,15 +764,18 @@ func _show_selection() -> void:
 func _set_compare(on: bool) -> void:
 	_compare_mode = on
 	_update_preview()
+	if on:
+		_scroll.scroll_vertical = 0
 
 
-func _portrait_crop(texture: Texture2D) -> Texture2D:
+func _portrait_crop(texture: Texture2D, accessory := false) -> Texture2D:
 	if texture == null:
 		return null
 	var crop := AtlasTexture.new()
 	crop.atlas = texture
 	var extent := texture.get_size()
-	crop.region = Rect2(extent * Vector2(0.2, 0.09), extent * Vector2(0.6, 0.86))
+	var inset := 0.09 if accessory else 0.2
+	crop.region = Rect2(extent * Vector2(inset, 0.09), extent * Vector2(1.0 - inset * 2.0, 0.86))
 	return crop
 
 
@@ -701,12 +784,14 @@ func _update_preview() -> void:
 	_compare_root.visible = _compare_mode
 	_compare_button.text = "Закрыть" if _compare_mode else "Сравнить"
 	if _compare_mode:
-		var ids := [_profile.equipped, _selection]
+		var accessory := Progress.category_for(_selection) != Progress.Category.SCHEME
+		var ids := [_profile.equipped_for(_selection), _selection]
 		for i in 2:
 			var variants: Array = _portraits.get(ids[i], [])
 			var texture: Texture2D = variants[_view_index] if variants.size() > _view_index else _previews.get(ids[i])
-			_compare_images[i].texture = _portrait_crop(texture)
-			_compare_labels[i].text = ("Надето" if i == 0 else "Выбрано") + ("\n" if size.x < 520.0 else " · ") + Progress.Palette.SCHEME_NAMES[ids[i]]
+			_compare_images[i].texture = _portrait_crop(texture, accessory)
+			var current := "Установлены" if accessory else "Надето"
+			_compare_labels[i].text = (current if i == 0 else "Выбрано") + ("\n" if size.x < 520.0 else " · ") + Progress.item_name(ids[i])
 	var portraits: Array = _portraits.get(_selection, [])
 	var preview: Texture2D = portraits[_view_index] if portraits.size() > _view_index else _previews.get(_selection)
 	if _preview.texture != preview:
@@ -742,7 +827,7 @@ func _activate() -> void:
 	if _profile.owns(_selection):
 		if _profile.equip(_selection) == OK:
 			_rows[_selection].grab_focus()
-			_note.text = "Комплект надет на велосипед и райдера."
+			_note.text = "Пара установлена." if Progress.category_for(_selection) != Progress.Category.SCHEME else "Комплект надет на велосипед и райдера."
 			Style.pulse(_status, Style.MINT)
 			return
 		_note.text = "Не удалось сохранить изменение. Попробуйте ещё раз."
@@ -773,7 +858,7 @@ func _buy_reviewed() -> void:
 	if _profile.buy(id, true) == OK:
 		# 20.11: купленный комплект сразу надевается — одно действие и одна запись профиля
 		_rows[id].grab_focus()
-		_note.text = "«%s» куплен и надет." % _name.text
+		_note.text = ("Пара «%s» куплена и установлена." if Progress.category_for(id) != Progress.Category.SCHEME else "«%s» куплен и надет.") % _name.text
 		Style.pulse(_status, Style.MINT)
 		sound_requested.emit(&"confirm")
 	else:

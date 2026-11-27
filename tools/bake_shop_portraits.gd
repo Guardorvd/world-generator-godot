@@ -1,11 +1,12 @@
 extends SceneTree
 ## Запекает честные изображения игровой модели для витрины без постоянного 3D-рендера.
 const DT := 1.0 / 60.0
+const Progress := preload("res://scripts/game/shop_progress.gd")
 var bike: BikeView
 var camera: Camera3D
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 30)
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	root.size = Vector2i(960, 560)
 	root.transparent_bg = true
 	var world := WorldEnvironment.new()
@@ -44,14 +45,44 @@ func _bake() -> void:
 		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
 		bike.tick(state, DT, 1.0, false)
 	bike.draw(1.0)
-	for id: String in preload("res://scripts/render/bike_palette.gd").SCHEMES:
-		# 20.11: готовые портреты не переснимаются (новая расцветка — только свои два файла); всё заново — -- --all
-		if FileAccess.file_exists("res://resources/shop/%s_side.png" % id) and not "--all" in OS.get_cmdline_user_args():
+	var args := OS.get_cmdline_user_args()
+	var only := args.find("--only")
+	for id: String in Progress.PRICES:
+		if only >= 0 and (only + 1 >= args.size() or args[only + 1] != id):
 			continue
-		bike.set_scheme(id)
+		var category := Progress.category_for(id)
+		var tires := category == Progress.Category.TIRES
+		var grips := category == Progress.Category.GRIPS
+		var pedals := category == Progress.Category.PEDALS
+		var accessory := category != Progress.Category.SCHEME
+		if ("--tires" in args and not tires) or ("--grips" in args and not grips):
+			continue
+		# 20.11: готовые портреты не переснимаются (новая расцветка — только свои два файла); всё заново — -- --all
+		if FileAccess.file_exists("res://resources/shop/%s_side.png" % id) and not "--all" in args:
+			continue
+		bike.set_scheme(Progress.DEFAULT_SCHEME if accessory else id)
+		bike.set_tires(id if tires else Progress.DEFAULT_TIRES)
+		bike.set_grips(id if grips else Progress.DEFAULT_GRIPS)
+		bike.set_pedals(id if pedals else Progress.DEFAULT_PEDALS)
+		bike.rider.visible = not accessory
+		camera.size = [2.1, 1.45, 0.52, 0.48][category]
+		var target := Vector3(0, 0.56 if tires else 0.9, 0)
+		if grips:
+			target = Vector3(0, 0.97, -0.405)
+		elif pedals:
+			target = Vector3(0, 0.30, 0)
+			# Обе платформы на одной высоте и разнесены вдоль рамы.
+			bike.crank.rotation.x = PI * 0.5
+			bike.pedal_l.rotation.x = -PI * 0.5
+			bike.pedal_r.rotation.x = -PI * 0.5
 		for view in 2:
-			camera.position = Vector3(3.2, 1.35, 0.0) if view == 0 else Vector3(-2.8, 1.8, -2.7)
-			camera.look_at(Vector3(0, 0.9, 0))
+			if grips:
+				camera.position = Vector3(0, 1.85, -2.1) if view == 0 else Vector3(1.2, 1.65, -1.8)
+			elif pedals:
+				camera.position = Vector3(1.6, 0.68, 0.15) if view == 0 else Vector3(1.4, 1.28, -0.50)
+			else:
+				camera.position = Vector3(3.2, 1.35, 0.0) if view == 0 else Vector3(-2.8, 1.8, -2.7)
+			camera.look_at(target)
 			await process_frame
 			await process_frame
 			await RenderingServer.frame_post_draw

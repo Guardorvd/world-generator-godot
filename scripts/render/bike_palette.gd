@@ -1,35 +1,81 @@
 extends RefCounted
-## Палитра общего материала велосипеда и седока (resources/bike_rider.gdshader): 16 мест.
+## Палитра общего материала велосипеда и седока (resources/bike_rider.gdshader).
 ## Вершины хранят место (UV.x), а не цвет, поэтому расцветка меняется одним массивом без пересборки.
 
-enum { FRAME, FRAME_ACCENT, RUBBER, ALLOY, BLACK, TAIL, JERSEY, JERSEY_PANEL, NAVY, SKIN, CREAM, HELMET, DARK, LENS, COATING, SIDEWALL }
+enum { FRAME, FRAME_ACCENT, RUBBER, ALLOY, BLACK, TAIL, JERSEY, JERSEY_PANEL, NAVY, SKIN, CREAM, HELMET, DARK, LENS, COATING, SIDEWALL, FRAME_SECONDARY }
 
 ## Вид поверхности (UV.y) — как KIND_* в шейдере
-enum { PAINT, RUBBER_KIND, ALLOY_KIND, HARD, FABRIC, SKIN_KIND, SHELL, LENS_KIND, GLOW, MATTE, COATING_KIND }
+enum { PAINT, RUBBER_KIND, ALLOY_KIND, HARD, FABRIC, SKIN_KIND, SHELL, LENS_KIND, GLOW, MATTE, COATING_KIND, GRIP_KIND, PEDAL_KIND }
 
 const SHADER := preload("res://resources/bike_rider.gdshader")
 const MATERIAL_PATH := "res://resources/bike_rider_material.tres"
 
-## Расцветки: рама, акцент рамы, джерси, вставки джерси, тёмная ткань (шорты), шлем, ноги вилки.
-## Остальные места (резина, металл, кожа, стекло) общие.
+## Рама, графика, джерси, вставки, шорты, шлем, ноги вилки, верх рамы, манжеты и носки.
 const SCHEMES := {
-	"ember": ["c95c32", "e9d6a5", "299a9a", "206c73", "243747", "f2e8d0", "c2a25a"],
-	"glacier": ["e8ecef", "2f7fb8", "2f7fb8", "1d4f78", "23303a", "e8ecef", "23272b"],
-	"moss": ["55704a", "d9c27a", "c98a3a", "8a5a2a", "2f3a2c", "d9d2bf", "c2a25a"],
-	"night": ["2b3036", "e0562c", "e0562c", "2b3036", "1c2126", "2b3036", "c9ced2"],
-	# 20.11: второй ряд магазина
-	"lingon": ["9e2a3a", "efe2c4", "efe2c4", "9e2a3a", "26262c", "efe2c4", "2a2d31"],
-	"fog": ["8f9c92", "e6e1d1", "5d7884", "3c535d", "2a3236", "dde2dc", "b39d74"],
-	"copper": ["b2643a", "1f3d36", "1f3d36", "b2643a", "1a2422", "d6cbb5", "c49650"],
+	"ember": ["ca542c", "ffc177", "287b79", "184a51", "233747", "ffd18e", "c8935c", "943927", "ffc88b"],
+	"glacier": ["d5e9ef", "2675c8", "285caa", "122e68", "20314c", "e7fafb", "8ba6c1", "89c2e8", "b9e9f7"],
+	"moss": ["52603b", "dfbd54", "ad903b", "4b512f", "313b28", "797d49", "a89152", "343d2b", "e1c768"],
+	"night": ["262b42", "ff663d", "2d3452", "87374c", "201f34", "d54635", "655b79", "713244", "f88d64"],
+	"lingon": ["8e233c", "ffdbcb", "f1c5c0", "a33953", "4e2536", "bb3855", "9b8594", "551d34", "ffe0cc"],
+	"fog": ["889b9c", "dce7de", "688d94", "3e5961", "354850", "bac8bf", "8eaaad", "566c71", "d9e4da"],
+	"copper": ["b77a63", "b8d6a1", "9eb28d", "3d715b", "24443a", "a46b50", "b17851", "4b846c", "c8d7a4"],
+	"obsidian": ["131619", "333a40", "1a1d21", "343a40", "13171a", "1e2226", "383f44", "252a2e", "282e33"],
+	"heritage": ["6b4831", "e5c48c", "a98256", "5e3f2c", "503727", "e5cf9c", "b98e52", "3f2b24", "edd2a4"],
+	"pulse": ["573ab1", "dcf66e", "874ddb", "35236a", "292342", "d2ed57", "866cd4", "321d70", "daef77"],
+	"salt": ["e2bb76", "183c85", "e7c388", "264d97", "26355a", "3358a4", "8f9dac", "294b91", "f2d393"],
+	"tide": ["126c72", "ff966f", "e18870", "9b4b48", "153f4b", "317e80", "739995", "143e57", "ffb599"],
+	"ivory": ["f0e6d3", "9a7450", "f1e3cb", "b39a7e", "544337", "fff0d8", "c1a578", "d7c4a6", "f8e9cf"],
 }
 const SCHEME_NAMES := {"ember": "Закат", "glacier": "Ледник", "moss": "Мох", "night": "Ночь",
-	"lingon": "Брусника", "fog": "Туман", "copper": "Медь"}
+	"lingon": "Брусника", "fog": "Туман", "copper": "Медь",
+	"obsidian": "Обсидиан", "heritage": "Орех", "pulse": "Импульс", "salt": "Солончак", "tide": "Прилив",
+	"ivory": "Молочная кость"}
+
+const SCHEME_DESCRIPTIONS := {
+	"ember": "Терракотовая рама, тёмно-бирюзовое джерси и янтарные детали.",
+	"glacier": "Ледяная рама с синим верхом и кобальтовая форма.",
+	"moss": "Оливковая рама, горчичное джерси и детали цвета сухой травы.",
+	"night": "Чернильный синий, бордовые вставки и яркие сигнальные акценты.",
+	"lingon": "Ягодная рама, розовое джерси и бордовые шорты.",
+	"fog": "Дымчатые серо-зелёные тона с холодным серебристым акцентом.",
+	"copper": "Медный низ рамы, верх цвета патины и светлое шалфейное джерси.",
+	"obsidian": "Тональный чёрный комплект. Глянец рамы и шлема выделяется на матовой форме.",
+	"heritage": "Тёмный орех, кремовые манжеты и тёплые бронзовые детали.",
+	"pulse": "Фиолетовая рама и форма с неоново-лаймовой графикой.",
+	"salt": "Песочный низ рамы, синий верх и форма в цветах раллийной ливреи.",
+	"tide": "Глубокий цвет морской волны, коралловое джерси и графика в тон.",
+	"ivory": "Молочно-кремовые рама, джерси и шлем с бронзовой графикой и кофейными вставками.",
+}
+
+const SIDEWALLS := {
+	"glacier": "859aa5", "moss": "8b794b", "night": "444351", "lingon": "8b6767",
+	"fog": "727e7b", "copper": "8c7557", "heritage": "ab8c61",
+	"pulse": "57526e", "salt": "b39263", "tide": "526a6b",
+}
+
+const STOCK_TIRES := "tires_stock"
+const TIRE_NAMES := {STOCK_TIRES: "Штатные", "tires_rose": "Розовые", "tires_sage": "Шалфей",
+	"tires_blue": "Лазурь", "tires_sand": "Песочные", "tires_ivory": "Молочная кость"}
+const STOCK_GRIPS := "grips_stock"
+const GRIP_NAMES := {STOCK_GRIPS: "Штатные", "grips_rose": "Розовые", "grips_sage": "Шалфей",
+	"grips_blue": "Лазурь", "grips_sand": "Песочные", "grips_ivory": "Молочная кость"}
+const STOCK_PEDALS := "pedals_stock"
+const PEDAL_NAMES := {STOCK_PEDALS: "Штатные", "pedals_rose": "Розовые", "pedals_sage": "Шалфей",
+	"pedals_blue": "Лазурь", "pedals_sand": "Песочные", "pedals_ivory": "Молочная кость"}
+# Протектор и боковина. Протектор темнее, чтобы сохранить читаемость шашек.
+const TIRE_COLORS := {
+	"tires_rose": [Color("#a94b69"), Color("#ec95b2")],
+	"tires_sage": [Color("#4e6c53"), Color("#9bbf8e")],
+	"tires_blue": [Color("#3b608a"), Color("#84b7e1")],
+	"tires_sand": [Color("#8d6e49"), Color("#dac097")],
+	"tires_ivory": [Color("#c5b499"), Color("#f4e6cb")],
+}
 
 
 static func colors(scheme := "ember") -> PackedColorArray:
 	var s: Array = SCHEMES.get(scheme, SCHEMES.ember)
 	var c := PackedColorArray()
-	c.resize(16)
+	c.resize(FRAME_SECONDARY + 1)
 	c[FRAME] = Color(s[0])
 	c[FRAME_ACCENT] = Color(s[1])
 	c[RUBBER] = Color("20272b")
@@ -40,13 +86,30 @@ static func colors(scheme := "ember") -> PackedColorArray:
 	c[JERSEY_PANEL] = Color(s[3])
 	c[NAVY] = Color(s[4])
 	c[SKIN] = Color("dba47d")
-	c[CREAM] = Color("f0e5cc")
+	c[CREAM] = Color(s[8])
 	c[HELMET] = Color(s[5])
 	c[DARK] = Color("17252e")
 	c[LENS] = Color("315363")
 	c[COATING] = Color(s[6])
-	c[SIDEWALL] = Color("8a6a4a")
+	c[SIDEWALL] = Color(SIDEWALLS.get(scheme, "8a6a4a"))
+	c[FRAME_SECONDARY] = Color(s[7])
+	if scheme == "obsidian":
+		c[RUBBER] = Color("#141618")
+		c[ALLOY] = Color("#34383b")
+		c[BLACK] = Color("#1b1e20")
+		c[CREAM] = Color("#24272a")
+		c[DARK] = Color("#101214")
+		c[LENS] = Color("#1d2226")
+		c[SIDEWALL] = Color("#202326")
 	return c
+
+
+static func grip_colors(id: String) -> Array:
+	return TIRE_COLORS.get("tires_" + id.trim_prefix("grips_"), [Color.TRANSPARENT, Color.TRANSPARENT])
+
+
+static func pedal_colors(id: String) -> Array:
+	return TIRE_COLORS.get("tires_" + id.trim_prefix("pedals_"), [Color.TRANSPARENT, Color.TRANSPARENT])
 
 
 ## Материал из файла (общий для сборщиков) или новый, с палитрой по умолчанию.

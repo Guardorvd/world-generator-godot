@@ -17,6 +17,7 @@ var bike := BikeView.new()
 var shared: ShaderMaterial
 # Краски: место палитры и вид поверхности
 var paint := Vector2i(P.FRAME, P.PAINT)
+var secondary_paint := Vector2i(P.FRAME_SECONDARY, P.PAINT)
 var accent := Vector2i(P.FRAME_ACCENT, P.PAINT)
 var rubber := Vector2i(P.RUBBER, P.RUBBER_KIND)
 var sidewall := Vector2i(P.SIDEWALL, P.RUBBER_KIND)
@@ -431,11 +432,11 @@ func frame() -> void:
 	# подседельная: круглая, у каретки шире
 	add_tube2(bb, seat_top, 0.029, 0.024, paint, Vector2(1.0, 1.05), Vector2.ONE, 12, 2)
 	# верхняя: сплющена по высоте, к рулевой шире
-	add_tube2(top_start, top_end, 0.021, 0.026, paint, Vector2(1.0, 0.82), Vector2(0.92, 0.95), 12, 2)
+	add_tube2(top_start, top_end, 0.021, 0.026, secondary_paint, Vector2(1.0, 0.82), Vector2(0.92, 0.95), 12, 2)
 	# нижняя: у рулевой овал по высоте, у каретки широкая и плоская
 	add_tube2(bb, down_top, 0.034, 0.033, paint, Vector2(1.18, 0.82), Vector2(0.86, 1.08), 12, 3)
 	# рулевая: конус, шире книзу
-	add_tube2(head_low - head_dir * 0.002, head_top, 0.037, 0.032, paint, Vector2.ONE, Vector2.ONE, 14, 1)
+	add_tube2(head_low - head_dir * 0.002, head_top, 0.037, 0.032, secondary_paint, Vector2.ONE, Vector2.ONE, 14, 1)
 	add_tube2(head_low - head_dir * 0.013, head_low - head_dir * 0.002, 0.039, 0.038, black, Vector2.ONE, Vector2.ONE, 14, 1)
 	add_tube2(head_top, head_top + head_dir * 0.009, 0.034, 0.034, black, Vector2.ONE, Vector2.ONE, 14, 1)
 	add_tube2(head_top + head_dir * 0.009, head_top + head_dir * 0.015, 0.034, 0.027, black, Vector2.ONE, Vector2.ONE, 14, 1)
@@ -531,7 +532,8 @@ func grip(side: float) -> void:
 	profile.append(Vector2(length, 0.006))
 	var colors := []
 	for i in profile.size() - 1:
-		colors.append(trim if i >= profile.size() - 3 else rubber)
+		var grip_band := Vector2i(P.RUBBER if i % 2 == 0 else P.FRAME_ACCENT, P.GRIP_KIND)
+		colors.append(trim if i >= profile.size() - 3 else grip_band)
 	var keep := pre
 	# тело вращения строится вдоль X: поворачиваем X к оси грипсы (для левой — в обратную сторону)
 	var basis := Basis(Quaternion(Vector3.RIGHT, axis))
@@ -726,13 +728,15 @@ func drivetrain() -> void:
 	commit(crank, "Body")
 	for side: float in [-1.0, 1.0]:
 		# верх платформы — на уровне подошвы (центр узла), рамка с двумя окнами и шипами по краям
+		var platform := Vector2i(P.BLACK, P.PEDAL_KIND)
+		var edge := Vector2i(P.FRAME_ACCENT, P.PEDAL_KIND)
 		for z: float in [-0.036, 0.036]:
-			add_box(Vector3(0.1, 0.016, 0.012), Vector3(0, -0.008, z), black)
-			add_box(Vector3(0.06, 0.012, 0.004), Vector3(0, -0.008, z * 1.19), accent)
+			add_box(Vector3(0.1, 0.016, 0.012), Vector3(0, -0.008, z), platform)
+			add_box(Vector3(0.06, 0.012, 0.004), Vector3(0, -0.008, z * 1.19), edge)
 			for x: float in [-0.035, 0.0, 0.035]:
 				add_box(Vector3(0.004, 0.006, 0.004), Vector3(x, 0.002, z), alloy)
 		for x: float in [-0.045, 0.0, 0.045]:
-			add_box(Vector3(0.012 if x != 0.0 else 0.02, 0.014, 0.064), Vector3(x, -0.008, 0), black)
+			add_box(Vector3(0.012 if x != 0.0 else 0.02, 0.014, 0.064), Vector3(x, -0.008, 0), platform)
 		var pedal := commit(crank, "Pedal" + ("L" if side < 0 else "R"), false)
 		pedal.position = BikeView.RIGHT_PEDAL_REST * side
 

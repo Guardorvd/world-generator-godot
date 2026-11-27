@@ -509,7 +509,7 @@ func _refresh_goal_badge() -> void:
 		return
 	var price: int = ShopPanel.Progress.PRICES[id]
 	var have := mini(_shop_profile.balance, price)
-	_goal_badge.text = "Цель: %s · %d / %d" % [ShopPanel.Progress.Palette.SCHEME_NAMES[id], have, price]
+	_goal_badge.text = "Цель: %s · %d / %d" % [ShopPanel.Progress.item_name(id), have, price]
 	_goal_badge.add_theme_color_override("font_color", HudStyle.MINT if have >= price else HudStyle.AMBER)
 	_goal_badge.tooltip_text = "Можно купить в магазине" if have >= price else "Не хватает %d очк." % (price - have)
 

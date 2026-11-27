@@ -341,14 +341,26 @@ func _shop_save() -> void:
 	var equipment_events: Array[String] = []
 	shop.equipment_changed.connect(func(id: String) -> void: equipment_events.append(id))
 	var path := out.path_join("shop-%d.bin" % OS.get_process_id())
-	var legacy := shop._state.duplicate()
+	var legacy := shop._state.duplicate(true)
 	legacy.erase("purchase_goal")
+	legacy.erase("tires")
+	legacy.erase("grips")
+	legacy.erase("pedals")
+	legacy.owned.erase(ShopProgress.DEFAULT_TIRES)
+	legacy.owned.erase(ShopProgress.DEFAULT_GRIPS)
+	legacy.owned.erase(ShopProgress.DEFAULT_PEDALS)
 	var raw := var_to_bytes(legacy)
 	var legacy_bytes := raw.hex_encode().sha256_text().to_ascii_buffer()
 	legacy_bytes.append_array(raw)
 	_check(ShopProgress.Files.replace(path, legacy_bytes) == OK, "записан профиль магазина 1.0")
 	shop.load_profile(path)
 	_check(shop.load_error == OK and shop.purchase_goal == "", "профиль 1.0 открывается без цели")
+	_check(shop.equipped_tires == ShopProgress.DEFAULT_TIRES and shop.owns(ShopProgress.DEFAULT_TIRES),
+		"из прежнего профиля доступна штатная пара шин")
+	_check(shop.equipped_grips == ShopProgress.DEFAULT_GRIPS and shop.owns(ShopProgress.DEFAULT_GRIPS),
+		"из прежнего профиля доступна штатная пара грипсов")
+	_check(shop.equipped_pedals == ShopProgress.DEFAULT_PEDALS and shop.owns(ShopProgress.DEFAULT_PEDALS),
+		"из прежнего профиля доступна штатная пара педалей")
 	_check(shop.set_purchase_goal("ember") != OK and shop.set_purchase_goal("moss") == OK and shop.remaining("moss") == 50,
 		"цель можно выбрать только среди покупных расцветок, которых ещё нет")
 	var goal_on_disk := ShopProgress.new()

@@ -284,6 +284,27 @@ func set_scheme(scheme: String) -> void:
 		mat.set_shader_parameter("palette", colors)
 
 
+func set_tires(id: String) -> void:
+	var colors: Array = BikePalette.TIRE_COLORS.get(id, [Color.TRANSPARENT, Color.TRANSPARENT])
+	for mat in _skin_mats:
+		mat.set_shader_parameter("tire_tread", colors[0])
+		mat.set_shader_parameter("tire_sidewall", colors[1])
+
+
+func set_grips(id: String) -> void:
+	var colors := BikePalette.grip_colors(id)
+	for mat in _skin_mats:
+		mat.set_shader_parameter("grip_body", colors[0])
+		mat.set_shader_parameter("grip_rib", colors[1])
+
+
+func set_pedals(id: String) -> void:
+	var colors := BikePalette.pedal_colors(id)
+	for mat in _skin_mats:
+		mat.set_shader_parameter("pedal_body", colors[0])
+		mat.set_shader_parameter("pedal_trim", colors[1])
+
+
 func _set_wind(value: float) -> void:
 	if value == _wind:
 		return

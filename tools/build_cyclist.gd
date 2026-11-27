@@ -25,7 +25,7 @@ var teal := Vector2i(P.JERSEY, P.FABRIC)
 var panel := Vector2i(P.JERSEY_PANEL, P.FABRIC)
 var skin := Vector2i(P.SKIN, P.SKIN_KIND)
 var cream := Vector2i(P.CREAM, P.FABRIC)
-var shoe := Vector2i(P.CREAM, P.MATTE)
+var shoe := Vector2i(P.BLACK, P.MATTE)
 var helmet := Vector2i(P.HELMET, P.SHELL)
 var dark := Vector2i(P.DARK, P.HARD)
 var hair := Vector2i(P.DARK, P.MATTE)
@@ -458,52 +458,167 @@ func _shoe(side: float) -> void:
 	var foot := skeleton.find_bone("Foot" + suffix)
 	var toe := skeleton.find_bone("Toe" + suffix)
 	var at := skeleton.get_bone_global_pose(foot)
-	# Heel to toe: longitudinal position, half-width, upper height above sole, sole bottom.
-	var last := [Vector4(0.088, 0.027, 0.064, -0.042), Vector4(0.070, 0.040, 0.088, -0.047),
-		Vector4(0.032, 0.043, 0.091, -0.048), Vector4(-0.012, 0.040, 0.081, -0.048),
-		Vector4(-0.050, 0.046, 0.063, -0.048), Vector4(-0.085, 0.052, 0.051, -0.048),
-		Vector4(-0.119, 0.050, 0.043, -0.047), Vector4(-0.147, 0.039, 0.035, -0.043),
-		Vector4(-0.162, 0.019, 0.022, -0.037)]
-	# Closed perimeter viewed from the toes. Flat tread, bevel, welt, vamp.
-	var outline := [Vector2(0.82, 0), Vector2(1, 0.05), Vector2(1, 0.14), Vector2(0.90, 0.52),
-		Vector2(0.55, 0.86), Vector2(0, 1), Vector2(-0.55, 0.86), Vector2(-0.90, 0.52),
-		Vector2(-1, 0.14), Vector2(-1, 0.05), Vector2(-0.82, 0)]
+	var sole_y := CyclistRig.PEDAL_CONTACT_LOCAL.y
+	# Колодка от пятки к носку: длина, полуширина, высота верха, подъём подошвы.
+	var last := [
+		Vector4(0.068, 0.010, -0.020, 0.010), Vector4(0.064, 0.025, 0.007, 0.008),
+		Vector4(0.055, 0.034, 0.030, 0.005), Vector4(0.046, 0.039, 0.036, 0.003),
+		Vector4(0.029, 0.043, 0.044, 0.001), Vector4(0.007, 0.043, 0.041, 0),
+		Vector4(-0.020, 0.042, 0.034, 0), Vector4(-0.042, 0.043, 0.034, 0),
+		Vector4(-0.052, 0.044, 0.031, 0), Vector4(-0.063, 0.046, 0.025, 0),
+		Vector4(-0.074, 0.048, 0.019, 0), Vector4(-0.085, 0.050, 0.015, 0),
+		Vector4(-0.099, 0.051, 0.010, 0), Vector4(-0.116, 0.049, 0.003, 0),
+		Vector4(-0.132, 0.043, -0.004, 0.002), Vector4(-0.146, 0.031, -0.013, 0.006),
+		Vector4(-0.154, 0.017, -0.022, 0.010), Vector4(-0.157, 0.007, -0.023, 0.013),
+	]
+	# От правого края протектора через верх к левому: фаска подошвы, рант, боковина, свод верха.
+	var outline := [
+		Vector2(0.84, 0), Vector2(1, 0.005), Vector2(1, 0.011), Vector2(0.94, 0.019),
+		Vector2(0.91, 0.47), Vector2(0.80, 0.78), Vector2(0.50, 0.96), Vector2(0, 1),
+		Vector2(-0.50, 0.96), Vector2(-0.80, 0.78), Vector2(-0.91, 0.47),
+		Vector2(-0.94, 0.019), Vector2(-1, 0.011), Vector2(-1, 0.005), Vector2(-0.84, 0),
+	]
+	const HEEL_OPENING := 3
+	const TONGUE := 7
+	const COLLAR_RIGHT := 5
+	const COLLAR_LEFT := 9
 	var rows: Array[Array] = []
-	for station: Vector4 in last:
+	var binds := PackedInt32Array([foot, toe, 0, 0])
+	for i in last.size():
+		var station: Vector4 = last[i]
 		var row := []
-		var blend := smoothstep(0.086, 0.145, -station.x)
-		var shift := -side * 0.009 * smoothstep(0.085, 0.162, -station.x)
+		var shift := -side * 0.009 * smoothstep(0.067, 0.151, -station.x)
+		var waist := 0.006 * (1.0 - smoothstep(0.0, 0.054, absf(station.x + 0.033)))
 		for uv: Vector2 in outline:
-			row.append({position = at * Vector3(shift + uv.x * station.y, station.w + uv.y * station.z, station.x),
-				bones = PackedInt32Array([foot, toe, 0, 0]), weights = PackedFloat32Array([1.0 - blend, blend, 0, 0])})
+			var inner := maxf(-side * uv.x, 0.0)
+			var x := shift + uv.x * (station.y - waist * inner)
+			var bottom := sole_y + station.w
+			var y := bottom + uv.y
+			if uv.y > 0.03:
+				y = lerpf(bottom + 0.020, station.z, uv.y)
+			elif uv.y < 0.01 and i in [2, 4, 12, 14, 16]:
+				# Поперечные выемки протектора вокруг плоской опорной зоны.
+				y += 0.003
+			var z := station.x
+			if i == HEEL_OPENING:
+				z -= 0.009 * smoothstep(0.78, 1.0, uv.y)
+			var toe_weight := smoothstep(0.086, 0.145, -station.x)
+			row.append({position = at * Vector3(x, y, z), bones = binds,
+				weights = PackedFloat32Array([1.0 - toe_weight, toe_weight, 0, 0])})
 		rows.append(row)
-	# Smooth the leather across stations. Keep hard normals on tread and end caps.
+
+	# Плетёный верх и накладки сглаживаются по колодке; у ранта своя кромка.
 	for i in rows.size():
-		var prev := rows[maxi(0, i - 1)]
-		var next := rows[mini(rows.size() - 1, i + 1)]
-		for j in range(2, 9):
-			var along: Vector3 = next[j].position - prev[j].position
+		var previous := rows[maxi(i - 1, 0)]
+		var next := rows[mini(i + 1, rows.size() - 1)]
+		for j in range(3, outline.size() - 3):
+			var along: Vector3 = next[j].position - previous[j].position
 			var around: Vector3 = rows[i][j + 1].position - rows[i][j - 1].position
 			rows[i][j].normal = along.cross(around).normalized()
+
+	var rubber := Vector2i(P.RUBBER, P.RUBBER_KIND)
+	var overlay := Vector2i(P.NAVY, P.MATTE)
+	var mesh_upper := Vector2i(P.NAVY, P.FABRIC)
+	var side_trim := Vector2i(P.JERSEY_PANEL, P.MATTE)
 	for i in rows.size() - 1:
 		for j in outline.size():
+			if i >= HEEL_OPENING and i < TONGUE and j >= COLLAR_RIGHT and j < COLLAR_LEFT:
+				continue
 			var k := (j + 1) % outline.size()
-			var mat := shoe
-			if j < 2 or j >= 8 or i == 7 or (i == 6 and j in [2, 7]):
-				mat = dark
-			elif i == 0 or (i == 3 and j in [3, 4, 5, 6]) or (i in [4, 5] and j in [2, 7]):
-				mat = panel
-			triangle(rows[i][j], rows[i + 1][j], rows[i][k], mat)
-			triangle(rows[i][k], rows[i + 1][j], rows[i + 1][k], mat)
+			var mat := mesh_upper
+			if j < 2 or j >= 12:
+				mat = rubber
+			elif j in [2, 11] or (i >= TONGUE and i < 12 and j in [6, 7]):
+				mat = shoe
+			elif i < HEEL_OPENING or i >= 14 or j in [3, 10]:
+				mat = overlay
+			var leading := mat
+			var trailing := mat
+			if j in [4, 9]:
+				# Вставка по диагонали от задника к держателям ремешков.
+				if i in [5, 6] or (i == 4 and j == 4) or (i == 7 and j == 9):
+					leading = side_trim
+				if i in [5, 6] or (i == 4 and j == 9) or (i == 7 and j == 4):
+					trailing = side_trim
+			triangle(rows[i][j], rows[i + 1][j], rows[i][k], leading)
+			triangle(rows[i][k], rows[i + 1][j], rows[i + 1][k], trailing)
+
 	for end in [0, rows.size() - 1]:
 		var row := rows[end]
-		for vertex: Dictionary in row:
-			vertex.erase("normal")
-		for j in range(1, row.size() - 1):
+		var center: Dictionary = row[7].duplicate()
+		center.position = (row[7].position + (row[0].position + row[14].position) * 0.5) * 0.5
+		center.erase("normal")
+		for j in row.size():
+			var a: Dictionary = row[j].duplicate()
+			var b: Dictionary = row[(j + 1) % row.size()].duplicate()
+			a.erase("normal")
+			b.erase("normal")
 			if end == 0:
-				triangle(row[0], row[j], row[j + 1], panel)
+				triangle(center, a, b, overlay)
 			else:
-				triangle(row[0], row[j + 1], row[j], dark)
+				triangle(center, b, a, overlay)
+
+	# Кромка и подкладка проходят по настоящему вырезу, в который входит носок.
+	var opening: Array[Dictionary] = []
+	for j in range(COLLAR_LEFT, COLLAR_RIGHT - 1, -1):
+		opening.append(rows[HEEL_OPENING][j])
+	for i in range(HEEL_OPENING + 1, TONGUE + 1):
+		opening.append(rows[i][COLLAR_RIGHT])
+	for j in range(COLLAR_RIGHT + 1, COLLAR_LEFT + 1):
+		opening.append(rows[TONGUE][j])
+	for i in range(TONGUE - 1, HEEL_OPENING, -1):
+		opening.append(rows[i][COLLAR_LEFT])
+	_shoe_binding(opening, at, overlay)
+
+	# Два ремешка с раздельными боковыми держателями. Повторяют форму и веса подъёма.
+	for i in [8, 10]:
+		_shoe_strap(rows[i], rows[i + 1], side)
+
+
+func _shoe_binding(opening: Array[Dictionary], at: Transform3D, mat: Vector2i) -> void:
+	var rim: Array[Dictionary] = []
+	var lining: Array[Dictionary] = []
+	var inverse := at.affine_inverse()
+	for vertex in opening:
+		var local := inverse * (vertex.position as Vector3)
+		var top := vertex.duplicate()
+		top.position = at * Vector3(local.x * 0.93, local.y + 0.001, local.z * 0.94)
+		top.erase("normal")
+		rim.append(top)
+		var inside := top.duplicate()
+		inside.position = top.position - at.basis.y * 0.014
+		lining.append(inside)
+	for j in opening.size():
+		var k := (j + 1) % opening.size()
+		triangle(opening[j], opening[k], rim[j], mat)
+		triangle(opening[k], rim[k], rim[j], mat)
+		triangle(rim[j], rim[k], lining[j], dark)
+		triangle(rim[k], lining[k], lining[j], dark)
+
+
+func _shoe_strap(back: Array, front: Array, side: float) -> void:
+	var raised_back: Array[Dictionary] = []
+	var raised_front: Array[Dictionary] = []
+	for j in range(4, 11):
+		var aft: Dictionary = back[j].duplicate()
+		var fore: Dictionary = front[j].duplicate()
+		aft.position += aft.normal * 0.002
+		fore.position += fore.normal * 0.002
+		raised_back.append(aft)
+		raised_front.append(fore)
+	for j in range(6):
+		var keeper := j == (0 if side > 0.0 else 5)
+		var mat := alloy if keeper else Vector2i(P.HELMET, P.MATTE)
+		triangle(raised_back[j], raised_front[j], raised_back[j + 1], mat)
+		triangle(raised_back[j + 1], raised_front[j], raised_front[j + 1], mat)
+		triangle(back[j + 4], raised_back[j], back[j + 5], dark)
+		triangle(back[j + 5], raised_back[j], raised_back[j + 1], dark)
+		triangle(raised_front[j], front[j + 4], raised_front[j + 1], dark)
+		triangle(raised_front[j + 1], front[j + 4], front[j + 5], dark)
+	triangle(back[4], front[4], raised_back[0], dark)
+	triangle(raised_back[0], front[4], raised_front[0], dark)
+	triangle(back[10], raised_back[6], front[10], dark)
+	triangle(raised_back[6], raised_front[6], front[10], dark)
 
 
 
@@ -590,8 +705,8 @@ func _leg(side: float) -> void:
 		ring(calf.origin.lerp(foot.origin, 0.76), calf.basis, 0.036, 0.040, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
 		ring(calf.origin.lerp(foot.origin, 0.764), calf.basis, 0.040, 0.044, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
 		ring(calf.origin.lerp(foot.origin, 0.79), calf.basis, 0.040, 0.044, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
-		ring(calf.origin.lerp(foot.origin, 0.89), calf.basis, 0.031, 0.036, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
-		ring(foot.origin, calf.basis.slerp(foot.basis * DOWN_BASIS, 0.35), 0.036, 0.040, "LowerLeg" + s, "Foot" + s, 0.35, Vector2(0.0, -0.002)),
+		ring(calf.origin.lerp(foot.origin, 0.88), calf.basis.slerp(foot.basis * DOWN_BASIS, 0.45), 0.030, 0.032, "LowerLeg" + s, "Foot" + s, 0.50),
+		ring(foot * Vector3(0, 0.007, 0.002), foot.basis * DOWN_BASIS, 0.029, 0.033, "Foot" + s),
 	])
 	# Сегменты: шорты до кромки (7), кожа через колено и икру, носок от своей кромки до щиколотки (4).
 	var mats := [navy, navy, navy, navy, panel, navy, navy]

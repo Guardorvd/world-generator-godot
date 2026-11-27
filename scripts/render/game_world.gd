@@ -420,7 +420,16 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	if shop_progress != null:
 		shop_progress.equipment_changed.connect(bike_view.set_scheme)
 		shop_progress.equipment_changed.connect(func(_id: String) -> void: _gear_changed = true)
+		shop_progress.tires_changed.connect(bike_view.set_tires)
+		shop_progress.tires_changed.connect(func(_id: String) -> void: _gear_changed = true)
+		shop_progress.grips_changed.connect(bike_view.set_grips)
+		shop_progress.grips_changed.connect(func(_id: String) -> void: _gear_changed = true)
+		shop_progress.pedals_changed.connect(bike_view.set_pedals)
+		shop_progress.pedals_changed.connect(func(_id: String) -> void: _gear_changed = true)
 		bike_view.set_scheme(shop_progress.equipped)
+		bike_view.set_tires(shop_progress.equipped_tires)
+		bike_view.set_grips(shop_progress.equipped_grips)
+		bike_view.set_pedals(shop_progress.equipped_pedals)
 	brake_effects = BrakeEffects.new()
 	brake_effects.name = "BrakeEffects"
 	add_child(brake_effects)
@@ -2314,14 +2323,14 @@ func _quest_reward_note(ids: Array) -> String:
 	var note := " · +%d очк." % points
 	var target := shop_progress.purchase_goal
 	if target != "":
-		var scheme_name: String = ShopProgress.Palette.SCHEME_NAMES[target]
+		var item_name := ShopProgress.item_name(target)
 		var remaining := shop_progress.remaining(target)
 		if remaining > 0:
-			note += "\nДо покупки комплекта «%s» — %d очк." % [scheme_name, remaining]
+			note += "\nДо покупки «%s» — %d очк." % [item_name, remaining]
 		elif shop_progress.balance - points < int(ShopProgress.PRICES[target]):
-			note += "\n«%s» теперь можно купить в магазине." % scheme_name
+			note += "\n«%s» теперь можно купить в магазине." % item_name
 	elif shop_progress.first_purchase_unlocked(points):
-		note += "\nХватает на первую расцветку. Откройте «Магазин» в дневнике."
+		note += "\nХватает на первую покупку. Откройте «Магазин» в дневнике."
 	return note
 
 ## 20.11: удар по хрупкому грузу: звон стекла, значок груза в трекере вздрагивает; разбит — задание к доске
@@ -2339,7 +2348,7 @@ func _hit_cargo(loss: int) -> void:
 		hud.toast_now(("Груз разбит\n" if hit.broken else "") + str(hit.text), &"warning")
 
 ## 20.11: награда магазина за исследование (страницы альбома, первый обзор, ремонт по пути) — заметка к тосту или пусто.
-## Короче заметки задания: только очки и, когда цель или первая расцветка стали доступны, одна строка об этом
+## Короче заметки задания: только очки и одна строка, когда появилась возможность покупки.
 func _explore_reward(ids: Array) -> String:
 	if shop_progress == null or ids.is_empty():
 		return ""
@@ -2350,9 +2359,9 @@ func _explore_reward(ids: Array) -> String:
 	var target := shop_progress.purchase_goal
 	if target != "":
 		if shop_progress.remaining(target) == 0 and shop_progress.balance - points < int(ShopProgress.PRICES[target]):
-			note += "\n«%s» теперь можно купить в магазине." % ShopProgress.Palette.SCHEME_NAMES[target]
+			note += "\n«%s» теперь можно купить в магазине." % ShopProgress.item_name(target)
 	elif shop_progress.first_purchase_unlocked(points):
-		note += "\nХватает на первую расцветку. Откройте «Магазин» в дневнике."
+		note += "\nХватает на первую покупку. Откройте «Магазин» в дневнике."
 	return note
 
 ## Лавка: сесть (камера ниже, взгляд вперёд по лавке, ходьба заперта до шага или прыжка). Только пешком, цела

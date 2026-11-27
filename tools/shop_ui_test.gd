@@ -116,6 +116,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(panel._heading_title.text == "Магазин" and panel._back.get_global_rect().end.x <= panel.get_global_rect().end.x and panel._compare_labels[1].text.contains("\n"), "компактная шапка и подписи сравнения не обрезаются")
+	_check(panel._category_buttons[3].get_global_rect().end.x <= panel.get_global_rect().end.x,
+		"четыре категории помещаются в компактной витрине")
 	await _capture("compact")
 	panel._goal_action.grab_focus()
 	await process_frame
@@ -166,6 +168,94 @@ func _run() -> void:
 	tablet_shop._refresh()
 	_check(tablet_shop._action.disabled and not tablet_shop._price_card.visible and tablet_shop._status.text == "НЕТ ДАННЫХ" and tablet_shop._balance.text == "—" and tablet_shop._card_status.ember.text == "Нет данных", "ошибка загрузки блокирует покупку и скрывает недостоверный прогресс")
 	_check(tablet_shop._points(1) == "1 очко" and tablet_shop._points(2) == "2 очка" and tablet_shop._points(11) == "11 очков" and tablet_shop._points(21) == "21 очко", "название валюты согласовано с числом")
+	var path := "res://.godot/shop_ui_test/profile-%d.bin" % OS.get_process_id()
+	var tire_profile := Shop.Progress.new()
+	tire_profile.load_profile(path)
+	tire_profile.award("test", ["start:home", "supplies:farm", "repair:farm", "photo:lake", "obelisks:ridge", "obelisks:valley"])
+	_check(tire_profile.buy("heritage", true) == OK, "классическая расцветка покупается")
+	tablet_shop.set_profile(tire_profile)
+	tablet_shop.open()
+	tablet_shop._category_buttons[1].pressed.emit()
+	await process_frame
+	_check(tablet_shop._selection == Shop.Progress.DEFAULT_TIRES and tablet_shop._category_buttons[1].has_focus() \
+		and tablet_shop._category_buttons[1].button_pressed and not tablet_shop._category_buttons[0].button_pressed \
+		and not tablet_shop._rows.heritage.visible, "шины открываются в отдельной категории")
+	tablet_shop._rows.tires_rose.grab_focus()
+	tablet_shop._compare_button.button_pressed = true
+	await _capture("tires_compare")
+	_check(tablet_shop._compare_labels[0].text.contains("Штатные"), "сравнение шин показывает установленную пару")
+	var bike := (load("res://scenes/bike.tscn") as PackedScene).instantiate() as BikeView
+	root.add_child(bike)
+	bike.set_scheme(tire_profile.equipped)
+	tire_profile.tires_changed.connect(bike.set_tires)
+	var balance := tire_profile.balance
+	tablet_shop._activate()
+	tablet_shop._buy_reviewed()
+	var material := bike._skin_mats[0]
+	_check(tire_profile.equipped_tires == "tires_rose" and tire_profile.equipped == "heritage" \
+		and tire_profile.balance == balance - int(Shop.Progress.PRICES.tires_rose), "покупка пары сохраняет расцветку и списывает цену один раз")
+	_check(material.get_shader_parameter("tire_tread") == Shop.Progress.Palette.TIRE_COLORS.tires_rose[0],
+		"цвет пары применяется к материалу велосипеда")
+	var reloaded := Shop.Progress.new()
+	reloaded.load_profile(path)
+	_check(reloaded.equipped == "heritage" and reloaded.equipped_tires == "tires_rose" and reloaded.owns("tires_rose"),
+		"расцветка и купленные шины сохраняются в профиле независимо")
+	tablet_shop._rows.tires_stock.grab_focus()
+	tablet_shop._activate()
+	_check(tire_profile.equipped_tires == Shop.Progress.DEFAULT_TIRES and material.get_shader_parameter("tire_tread") == Color.TRANSPARENT,
+		"штатная пара снова доступна без покупки")
+	tire_profile.award("test", ["repair:pass"])
+	tire_profile.equip("tires_rose")
+	bike.set_grips(tire_profile.equipped_grips)
+	tire_profile.grips_changed.connect(bike.set_grips)
+	tablet_shop._category_buttons[2].pressed.emit()
+	await process_frame
+	_check(tablet_shop._selection == Shop.Progress.DEFAULT_GRIPS and tablet_shop._category_buttons[2].button_pressed
+		and not tablet_shop._rows.tires_rose.visible, "грипсы открываются в отдельной категории")
+	tablet_shop._rows.grips_blue.grab_focus()
+	tablet_shop._compare_button.button_pressed = true
+	await _capture("grips_compare")
+	tablet_shop._activate()
+	tablet_shop._buy_reviewed()
+	var palette := Shop.Progress.Palette
+	_check(tire_profile.equipped == "heritage" and tire_profile.equipped_tires == "tires_rose"
+		and tire_profile.equipped_grips == "grips_blue" and tire_profile.balance == 15, "грипсы покупаются отдельно от шин и расцветки")
+	_check(material.get_shader_parameter("grip_body") == palette.TIRE_COLORS.tires_blue[0]
+		and material.get_shader_parameter("tire_tread") == palette.TIRE_COLORS.tires_rose[0],
+		"синие грипсы сочетаются с розовыми шинами")
+	reloaded.load_profile(path)
+	_check(reloaded.equipped_grips == "grips_blue" and reloaded.owns("grips_blue"), "установленные грипсы сохраняются")
+	tablet_shop._rows.grips_stock.grab_focus()
+	tablet_shop._activate()
+	_check(tire_profile.equipped_grips == Shop.Progress.DEFAULT_GRIPS and material.get_shader_parameter("grip_body") == Color.TRANSPARENT,
+		"штатные грипсы устанавливаются бесплатно")
+	tire_profile.equip("grips_blue")
+	tire_profile.award("test", ["beacons:summit"])
+	bike.set_pedals(tire_profile.equipped_pedals)
+	tire_profile.pedals_changed.connect(bike.set_pedals)
+	tablet_shop._category_buttons[3].pressed.emit()
+	await process_frame
+	_check(tablet_shop._selection == Shop.Progress.DEFAULT_PEDALS and tablet_shop._category_buttons[3].button_pressed
+		and not tablet_shop._rows.grips_blue.visible, "педали открываются в отдельной категории")
+	tablet_shop._rows.pedals_ivory.grab_focus()
+	tablet_shop._compare_button.button_pressed = true
+	await _capture("pedals_compare")
+	tablet_shop._activate()
+	tablet_shop._buy_reviewed()
+	_check(tire_profile.equipped_pedals == "pedals_ivory" and tire_profile.balance == 20
+		and tire_profile.equipped == "heritage" and tire_profile.equipped_tires == "tires_rose"
+		and tire_profile.equipped_grips == "grips_blue", "педали покупаются и устанавливаются отдельно")
+	_check(material.get_shader_parameter("pedal_body") == palette.TIRE_COLORS.tires_ivory[0]
+		and material.get_shader_parameter("pedal_trim") == palette.TIRE_COLORS.tires_ivory[1],
+		"материал получает оба оттенка педалей")
+	reloaded.load_profile(path)
+	_check(reloaded.equipped_pedals == "pedals_ivory" and reloaded.owns("pedals_ivory"), "установленные педали сохраняются")
+	tablet_shop._rows.pedals_stock.grab_focus()
+	tablet_shop._activate()
+	_check(tire_profile.equipped_pedals == Shop.Progress.DEFAULT_PEDALS and material.get_shader_parameter("pedal_body") == Color.TRANSPARENT,
+		"штатные педали снова доступны без покупки")
+	Shop.Progress.Files.remove(path)
+	bike.queue_free()
 	journal.queue_free()
 	await process_frame
 	print("shop_ui_test failures: ", failures)

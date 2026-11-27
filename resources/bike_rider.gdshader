@@ -1,14 +1,20 @@
 shader_type spatial;
 // Общий материал велосипеда и седока (tools/build_bike.gd, tools/build_cyclist.gd): одна отрисовка на меш.
 // Данные в вершинах:
-//   UV.x — место в палитре (0..15, BikePalette), UV.y — вид поверхности (KIND_* ниже);
+//   UV.x — место в палитре (BikePalette), UV.y — вид поверхности (KIND_* ниже);
 //   COLOR.r — запечённое затенение (1 — открыто, 0 — закрыто соседними деталями, tools/vertex_ao.gd),
 //   COLOR.g — подвижность ткани на ветру (0 — прилегает), COLOR.b — 1 у покрышки (сплющивается у земли).
 // Перья и цепь (CylinderMesh) своих данных не несут: их место и вид задают fixed_slot / fixed_kind.
 // Работает одинаково в Forward+ и Compatibility: свет движка, без своих light().
 render_mode cull_back, depth_draw_opaque;
 
-uniform vec4 palette[16] : source_color;
+uniform vec4 palette[17] : source_color;
+uniform vec4 tire_tread : source_color = vec4(0.0);
+uniform vec4 tire_sidewall : source_color = vec4(0.0);
+uniform vec4 grip_body : source_color = vec4(0.0);
+uniform vec4 grip_rib : source_color = vec4(0.0);
+uniform vec4 pedal_body : source_color = vec4(0.0);
+uniform vec4 pedal_trim : source_color = vec4(0.0);
 uniform float fixed_slot = -1.0;
 uniform float fixed_kind = -1.0;
 uniform float wind = 0.0;           // 0..1: скорость езды для трепета ткани (BikeView)
@@ -26,16 +32,21 @@ const int KIND_LENS = 7;
 const int KIND_GLOW = 8;     // задний фонарь
 const int KIND_MATTE = 9;    // наклейки, кожа седла, подошва
 const int KIND_COATING = 10; // ноги вилки
+const int KIND_GRIP = 11;
+const int KIND_PEDAL = 12;
 
 varying float v_ao;
 varying float v_kind;
 varying float v_slot;
+varying float v_tire;
 varying vec3 v_up; // мировое «вверх» в осях вида: для отражения неба в стекле
 
 void vertex() {
 	v_ao = COLOR.r;
 	v_slot = fixed_slot >= 0.0 ? fixed_slot : UV.x;
 	v_kind = fixed_kind >= 0.0 ? fixed_kind : UV.y;
+	// Mesh primitives may have white default vertex color. Only baked rubber belongs to the tire.
+	v_tire = fixed_slot < 0.0 && abs(v_kind - float(KIND_RUBBER)) < 0.5 ? COLOR.b : 0.0;
 	if (fixed_slot >= 0.0) {
 		v_ao = 1.0;
 	}
@@ -46,7 +57,7 @@ void vertex() {
 		VERTEX += NORMAL * wave * COLOR.g * wind * 0.0045;
 	}
 	// Покрышка у земли: всё, что дальше contact_flat от оси вниз, ложится на плоскость пятна и чуть раздаётся вбок
-	if (COLOR.b > 0.5) {
+	if (v_tire > 0.5) {
 		vec3 axle = normalize(MODEL_MATRIX[0].xyz);
 		vec3 down = vec3(0.0, -1.0, 0.0) - axle * -axle.y;
 		float dl = length(down);
@@ -66,9 +77,17 @@ void vertex() {
 }
 
 void fragment() {
-	int slot = clamp(int(v_slot + 0.5), 0, 15);
+	int slot = clamp(int(v_slot + 0.5), 0, 16);
 	int kind = int(v_kind + 0.5);
 	vec3 base = palette[slot].rgb;
+	if (v_tire > 0.5 && tire_tread.a > 0.0) {
+		base = slot == 15 ? tire_sidewall.rgb : tire_tread.rgb;
+	}
+	if (kind == KIND_GRIP) {
+		base = grip_body.a > 0.0 ? (slot == 2 ? grip_body.rgb : grip_rib.rgb) : palette[2].rgb;
+	} else if (kind == KIND_PEDAL && pedal_body.a > 0.0) {
+		base = slot == 1 ? pedal_trim.rgb : pedal_body.rgb;
+	}
 	float ao = clamp(v_ao, 0.0, 1.0);
 	float rough = 0.8;
 	float metal = 0.0;
@@ -78,13 +97,13 @@ void fragment() {
 	float coat = 0.0;
 	float coat_rough = 0.2;
 	vec3 emit = vec3(0.0);
-	if (kind == KIND_PAINT) {
+	if (kind == KIND_PAINT || (kind == KIND_PEDAL && slot == 1)) {
 		rough = 0.38; metal = 0.12; spec = 0.5; coat = 0.7; coat_rough = 0.12;
-	} else if (kind == KIND_RUBBER) {
+	} else if (kind == KIND_RUBBER || kind == KIND_GRIP) {
 		rough = 0.9; spec = 0.25; rim = 0.08;
 	} else if (kind == KIND_ALLOY) {
 		rough = 0.3; metal = 0.78; spec = 0.6;
-	} else if (kind == KIND_HARD) {
+	} else if (kind == KIND_HARD || kind == KIND_PEDAL) {
 		rough = 0.48; metal = 0.25; spec = 0.5;
 	} else if (kind == KIND_FABRIC) {
 		// трикотаж: матовый, со светлым ворсом по контуру
