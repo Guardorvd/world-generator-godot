@@ -90,6 +90,11 @@ func _initialize() -> void:
 			var c: Array = Biomes.LIST[BIOMES[clampi(int(at / STRIP), 0, BIOMES.size() - 1)]].color
 			base.set_pixel(x, y, Color8(c[0], c[1], c[2]))
 	var mat: ShaderMaterial = GameContext.scope.terrain.material(base)
+	var offset_arg := _arg("offset", "")
+	if offset_arg != "":
+		var parts := offset_arg.split(",", false)
+		if parts.size() >= 2:
+			mat.set_shader_parameter("world_offset", Vector2(float(parts[0]), float(parts[1])))
 	var shader_path := _arg("shader", "")
 	if shader_path != "":
 		var sh := Shader.new()

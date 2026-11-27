@@ -56,16 +56,22 @@ func _initialize() -> void:
 		if err != OK:
 			push_error("ground micro: " + error_string(err))
 			failed = true
+	var strand_sum := 0.0
+	for v in strand_h:
+		strand_sum += v
+	print("micro_strand_mean=%.6f" % (strand_sum / maxf(1.0, float(strand_h.size()))))
 	print("ground micro baked: ", OUT, " ", SIZE, "x", SIZE)
 	quit(1 if failed else 0)
 
 
-## Пряди: вытянутые вдоль y полосы двух масштабов, поверх крупные пучки. Узкий шум растягивается по вертикали.
+## Пряди: умеренно вытянутые полосы с перекрёстным слоем и пучками, чтобы избежать «вельветовых рельсов».
 func _strands() -> PackedFloat32Array:
-	var thin := _noise_image(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.16, 2, 5, SIZE, SIZE / 8)
-	var wide := _noise_image(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.06, 2, 17, SIZE, SIZE / 6)
+	var thin := _noise_image(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.16, 2, 5, SIZE, SIZE / 4)
+	var wide := _noise_image(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.06, 2, 17, SIZE, SIZE / 3)
+	var cross := _noise_image(FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.11, 2, 29, SIZE / 3, SIZE)
 	thin.resize(SIZE, SIZE, Image.INTERPOLATE_BILINEAR)
 	wide.resize(SIZE, SIZE, Image.INTERPOLATE_BILINEAR)
+	cross.resize(SIZE, SIZE, Image.INTERPOLATE_BILINEAR)
 	var clump := _cells(FastNoiseLite.TYPE_CELLULAR, 0.018, FastNoiseLite.CellularReturnType.RETURN_DISTANCE, 41, false)
 	var out := PackedFloat32Array()
 	out.resize(SIZE * SIZE)
@@ -73,9 +79,11 @@ func _strands() -> PackedFloat32Array:
 		for x in SIZE:
 			var a := thin.get_pixel(x, y).r
 			var b := wide.get_pixel(x, y).r
+			var cr := cross.get_pixel(x, y).r
 			var c := clump[y * SIZE + x]
 			var tuft := 0.35 + 0.65 * smoothstep(0.0, 0.55, c)   # у центра пучка выше, между пучками щель
-			out[y * SIZE + x] = clampf((a * 0.62 + b * 0.38 - 0.5) * 1.5 + 0.5, 0.0, 1.0) * tuft
+			var blend := (a * 0.62 + b * 0.38) * 0.72 + cr * 0.28
+			out[y * SIZE + x] = clampf((blend - 0.5) * 1.5 + 0.5, 0.0, 1.0) * tuft
 	return out
 
 

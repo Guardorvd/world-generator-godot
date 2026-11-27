@@ -352,7 +352,23 @@ static func _blurred(src: Image, levels: int) -> Image:
 
 
 static func set_cavity(mat: ShaderMaterial, heights: Heightfield) -> void:
-	detail_config(heights.world.template_id).apply_flow_material(mat)
+	var cfg := detail_config(heights.world.template_id)
+	cfg.apply_flow_material(mat)
+	if cfg.far_normal_range.y > cfg.far_normal_range.x:
+		var fast := Grid.fast_grid()
+		if fast != null:
+			var nbytes: PackedByteArray = fast.ReliefNormalMap(heights.hv, heights.world.W, heights.world.H, TILE)
+			if nbytes.size() == heights.world.W * heights.world.H * 2:
+				var nimg := Image.create_from_data(heights.world.W, heights.world.H, false, Image.FORMAT_RG8, nbytes)
+				nimg.generate_mipmaps()
+				mat.set_shader_parameter("relief_normal_tex", ImageTexture.create_from_image(nimg))
+				mat.set_shader_parameter("relief_normal_enabled", true)
+			else:
+				mat.set_shader_parameter("relief_normal_enabled", false)
+		else:
+			mat.set_shader_parameter("relief_normal_enabled", false)
+	else:
+		mat.set_shader_parameter("relief_normal_enabled", false)
 	var img := surface_maps(heights)
 	if img == null:
 		return

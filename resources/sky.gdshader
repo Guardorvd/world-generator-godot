@@ -28,6 +28,8 @@ uniform float night = 0.0;                       // 0 днём, 1 ночью: з
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;                 // доля неба под кучевыми облаками, примерно
 uniform float overcast_deck = 0.0;               // сплошная пасмурная пелена днём (0 в прежнем Типе 1)
+uniform float cubemap_ground_darken = 0.0;       // затемнение нижней полусферы в AT_CUBEMAP_PASS (0 — как раньше)
+uniform float cubemap_overcast_cie = 0.0;        // градиент зенит/горизонт в AT_CUBEMAP_PASS (0 — как раньше)
 uniform int cumulus_steps : hint_range(2, 5) = 5;
 uniform bool cloud_lite = false;                // 16.11: среднее качество облаков — синоптика кучевых раз на пиксель
 uniform float cloud_time = 0.0;                 // секунды анимации неба, общие для облаков и ночных эффектов
@@ -214,6 +216,17 @@ void sky() {
 		vec3 refl_cloud = mix(cloud_color * 0.92, mix(sun_color, vec3(1.0, 0.52, 0.34), low_sun * 0.5) * 0.95, low_sun * 0.55 * (1.0 - deck_r * 0.70));
 		refl_cloud = mix(refl_cloud, mix(zenith_color, horizon_color, 0.5) * 1.15, night * 0.65);
 		col = mix(col, refl_cloud, cn * smoothstep(0.02, 0.35, d.y) * mix(0.45, 0.85, deck_r));
+	}
+	if (AT_CUBEMAP_PASS) {
+		if (cubemap_overcast_cie > 0.001 && d.y > 0.0) {
+			float cie = mix(1.0, 0.68 + 0.48 * pow(clamp(d.y, 0.0, 1.0), 0.7), cubemap_overcast_cie * overcast_deck);
+			col *= cie;
+		}
+		if (cubemap_ground_darken > 0.001 && d.y < 0.0) {
+			float g_fade = smoothstep(0.0, -0.25, d.y);
+			vec3 ground_refl = horizon_color * vec3(0.85, 0.90, 0.82) * (1.0 - cubemap_ground_darken);
+			col = mix(col, ground_refl, g_fade);
+		}
 	}
 	// 12.11: лёгкий неподвижный шум ниже шага 8 бит разбивает полосы на плавных градиентах (ночь, сумерки)
 	if (!AT_CUBEMAP_PASS) {

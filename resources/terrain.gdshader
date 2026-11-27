@@ -62,6 +62,22 @@ uniform float flow_bed_tone = 0.0;     // насколько дно лощины
 uniform vec3 flow_bed_color : source_color = vec3(0.0);
 uniform float flow_deposit_wet = 0.0;  // прибавка влажности грунта на полном наносе: темнее, сочнее, мох
 uniform float flow_ridge_dry = 0.0;    // убавка влажности грунта на ребре: светлее и суше
+uniform float flow_ridge_brighten = 0.0; // лёгкое высветление выпуклого ребра по relief_maps.a
+uniform float cavity_light_affect = 0.0; // доля влияния затенения впадин на прямой свет солнца
+uniform bool material_roughness_enabled = false;
+uniform float rough_turf = 0.94;
+uniform float rough_soil = 0.86;
+uniform float rough_rock = 0.78;
+uniform float rough_wet = 0.58;
+uniform float spec_dry = 0.28;
+uniform float spec_wet = 0.48;
+uniform float height_blend_depth = 0.0;
+uniform sampler2D relief_normal_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
+uniform bool relief_normal_enabled = false;
+uniform vec2 far_normal_range = vec2(0.0);
+uniform vec2 mid_normal_scales = vec2(17.0, 47.0);
+uniform vec2 mid_normal_range = vec2(45.0, 420.0);
+uniform float mid_normal_strength = 0.0;
 uniform sampler2D community_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool community_tex_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
@@ -85,6 +101,7 @@ uniform vec3 dry_litter : source_color = vec3(0.44, 0.34, 0.19);
 uniform sampler2D micro_tex : hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D micro_n : hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool micro_enabled = false;
+uniform float micro_strand_mean = 0.441072;
 // Направление на светило (DayCycle): тень пучков травы друг на друга считается в пикселе по высоте текстуры.
 global uniform vec3 sun_dir;
 
@@ -109,9 +126,51 @@ varying float singletrack;
 
 #include "res://resources/terrain_road.gdshaderinc"
 
-// Разброс зёрен в мировых координатах, без короткого периода текстуры.
+// Разброс зёрен в мировых координатах: целочисленный 2D-хеш не теряет точность на дальнем конце мира (10+ км).
 vec2 grain_hash(vec2 cell) {
-	return fract(sin(vec2(dot(cell, vec2(127.1, 311.7)), dot(cell, vec2(269.5, 183.3)))) * 43758.5453);
+	ivec2 c = ivec2(round(cell));
+	uint h1 = (uint(c.x) * 374761393u + uint(c.y) * 668265263u) ^ 0x9e3779b9u;
+	h1 = (h1 ^ (h1 >> 13u)) * 1274126177u;
+	h1 = h1 ^ (h1 >> 16u);
+	uint h2 = (uint(c.x) * 668265263u - uint(c.y) * 374761393u) ^ 0x85ebca6bu;
+	h2 = (h2 ^ (h2 >> 13u)) * 1274126177u;
+	h2 = h2 ^ (h2 >> 16u);
+	return vec2(float(h1), float(h2)) * (1.0 / 4294967296.0);
+}
+
+// Перевод текстурной нормали (Image.bump_map_to_normal_map: R = -dh/dx, G = +dh/dy_img) в мировой наклон -∇h.
+vec2 normal_map_tilt(vec3 n_rgb) {
+	vec2 xy = n_rgb.xy * 2.0 - 1.0;
+	float z = max(n_rgb.z * 2.0 - 1.0, 0.25);
+	return vec2(xy.x, -xy.y) / z;
+}
+
+vec2 micro_normal_tilt(vec2 n_rg) {
+	vec2 xy = n_rg * 2.0 - 1.0;
+	float z = sqrt(max(1.0 - dot(xy, xy), 0.16));
+	return vec2(xy.x, -xy.y) / z;
+}
+
+vec3 apply_surface_gradient(vec3 wn, vec3 tilt_w) {
+	vec3 proj = tilt_w - wn * dot(tilt_w, wn);
+	float len = length(proj);
+	if (len > 1.6) {
+		proj *= 1.6 / len;
+	}
+	return normalize(wn + proj);
+}
+
+float height_blend_w(float h_a, float h_b, float blend, float depth) {
+	float t = clamp(blend, 0.0, 1.0);
+	if (depth <= 0.001 || t <= 0.001 || t >= 0.999) {
+		return t;
+	}
+	float a = h_a + (1.0 - t);
+	float b = h_b + t;
+	float ma = max(a, b) - depth;
+	float wa = max(a - ma, 0.0);
+	float wb = max(b - ma, 0.0);
+	return wb / max(wa + wb, 1e-4);
 }
 
 // 12.11.2026: тон растительных сообществ открытых мест. Тот же хеш (WGRandom.hash2) и плавный шум
@@ -212,7 +271,7 @@ float micro_mid(vec2 p, vec2 gdx, vec2 gdy, float dist_m) {
 	vec2 db_y = vec2(dot(gdy, vec2(0.80, 0.60)), dot(gdy, vec2(-0.60, 0.80))) * (1.0 / 23.0);
 	float a = textureGrad(micro_tex, p * (1.0 / 9.0), gdx * (1.0 / 9.0), gdy * (1.0 / 9.0)).r;
 	float b = textureGrad(micro_tex, q_b, db_x, db_y).r;
-	return (mix(a, b, t_far) - textureLod(micro_tex, vec2(0.5), 9.0).r) * w;
+	return (mix(a, b, t_far) - micro_strand_mean) * w;
 }
 
 void fragment() {	vec2 p = wpos.xz + world_offset;
@@ -220,6 +279,16 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float micro_shadow = 1.0;
 	float gloss_v = 0.0;
 	float near = 1.0 - smoothstep(DETAIL_FAR * 0.35, DETAIL_FAR, length(wpos - CAMERA_POSITION_WORLD));
+	float cam_dist = length(wpos - CAMERA_POSITION_WORLD);
+	vec3 wn_base = normalize(wnormal);
+	if (relief_normal_enabled && !use_vertex_color && far_normal_range.y > far_normal_range.x) {
+		float far_nw = smoothstep(far_normal_range.x, far_normal_range.y, cam_dist);
+		if (far_nw > 0.001) {
+			vec2 far_xz = texture(relief_normal_tex, UV).rg * 2.0 - 1.0;
+			vec3 far_wn = normalize(vec3(far_xz.x, sqrt(max(1.0 - dot(far_xz, far_xz), 0.01)), far_xz.y));
+			wn_base = normalize(mix(wn_base, far_wn, far_nw));
+		}
+	}
 	float n_big = texture(detail_tex, p * (1.0 / 37.0)).r;
 	float n_mid = texture(detail_tex, p * (1.0 / 7.3)).r;
 	float n_fine = 0.5;
@@ -238,30 +307,45 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float flow_ridge = clamp(relief_maps.a * 2.0 - 1.0, 0.0, 1.0);
 	float flow_bed = relief_maps.g * flow_bed_stones;
 	vec2 ydxy = vec2(dFdx(wpos.y), dFdy(wpos.y));
+	float slope = 1.0 - wn_base.y;
+	float rock_slope = smoothstep(ROCK_FROM, ROCK_TO, slope + (n_mid - 0.5) * 0.12);
 	vec4 mh = vec4(0.5, 0.5, 0.5, 0.0);
-	vec4 mn = vec4(0.5);
-	float micro_occ = 0.0;
-	if (micro_enabled && near > 0.0) {
-		vec2 q1 = p * (1.0 / 1.6);
+	vec2 mn_grass_tilt = vec2(0.0);
+	vec2 mn_stone_tilt = vec2(0.0);
+	vec2 micro_q1 = vec2(0.0);
+	vec2 micro_d1x = vec2(0.0);
+	vec2 micro_d1y = vec2(0.0);
+	float micro_h1_r = 0.5;
+	float hb_d = height_blend_depth * near;
+	float bare_v = 0.0;
+	float swash_v = 0.0;
+	if (micro_enabled && near > 0.0 && (rock_slope < 0.99 || road_bump_weight > 0.0)) {
+		vec2 q1 = vec2(dot(p, vec2(0.9230769, 0.3846154)), dot(p, vec2(-0.3846154, 0.9230769))) * (1.0 / 1.6);
 		vec2 q2 = vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 0.73) + vec2(0.37, 0.19);
-		vec2 d1x = gdx * (1.0 / 1.6);
-		vec2 d1y = gdy * (1.0 / 1.6);
+		vec2 d1x = vec2(dot(gdx, vec2(0.9230769, 0.3846154)), dot(gdx, vec2(-0.3846154, 0.9230769))) * (1.0 / 1.6);
+		vec2 d1y = vec2(dot(gdy, vec2(0.9230769, 0.3846154)), dot(gdy, vec2(-0.3846154, 0.9230769))) * (1.0 / 1.6);
 		vec2 d2x = vec2(dot(gdx, vec2(0.80, 0.60)), dot(gdx, vec2(-0.60, 0.80))) * (1.0 / 0.73);
 		vec2 d2y = vec2(dot(gdy, vec2(0.80, 0.60)), dot(gdy, vec2(-0.60, 0.80))) * (1.0 / 0.73);
 		vec4 h1 = textureGrad(micro_tex, q1, d1x, d1y);
 		vec4 h2 = textureGrad(micro_tex, q2, d2x, d2y);
 		mh = mix(h1, h2, 0.4);
+		micro_q1 = q1;
+		micro_d1x = d1x;
+		micro_d1y = d1y;
+		micro_h1_r = h1.r;
 		vec4 n1 = textureGrad(micro_n, q1, d1x, d1y);
 		vec4 n2 = textureGrad(micro_n, q2, d2x, d2y);
-		// нормаль второго масштаба повёрнута вместе с текстурой: возвращаем в мировые оси
-		vec4 n2w = vec4(0.8 * (n2.x - 0.5) - 0.6 * (n2.y - 0.5), 0.6 * (n2.x - 0.5) + 0.8 * (n2.y - 0.5),
-			0.8 * (n2.z - 0.5) - 0.6 * (n2.w - 0.5), 0.6 * (n2.z - 0.5) + 0.8 * (n2.w - 0.5)) + vec4(0.5);
-		mn = mix(n1, n2w, 0.4);
-		// Тень пучков: если со стороны солнца в паре сантиметров трава выше — здесь тень (днём; ночью луна слабая, не считаем)
-		if (sun_dir.y > 0.02) {
-			float h_sun = textureGrad(micro_tex, q1 + sun_dir.xz * (0.04 / (1.6 * max(sun_dir.y, 0.2))), d1x, d1y).r;
-			micro_occ = clamp((h_sun - h1.r) * 2.6, 0.0, 1.0) * near;
-		}
+		vec2 g1_gl = micro_normal_tilt(n1.xy);
+		vec2 g1_sl = micro_normal_tilt(n1.zw);
+		vec2 g1_g = vec2(0.9230769 * g1_gl.x - 0.3846154 * g1_gl.y, 0.3846154 * g1_gl.x + 0.9230769 * g1_gl.y);
+		vec2 g1_s = vec2(0.9230769 * g1_sl.x - 0.3846154 * g1_sl.y, 0.3846154 * g1_sl.x + 0.9230769 * g1_sl.y);
+		vec2 g2_gl = micro_normal_tilt(n2.xy);
+		vec2 g2_sl = micro_normal_tilt(n2.zw);
+		// обратный поворот наклона второго масштаба в мировые оси (M^T)
+		vec2 g2_g = vec2(0.8 * g2_gl.x - 0.6 * g2_gl.y, 0.6 * g2_gl.x + 0.8 * g2_gl.y);
+		vec2 g2_s = vec2(0.8 * g2_sl.x - 0.6 * g2_sl.y, 0.6 * g2_sl.x + 0.8 * g2_sl.y);
+		mn_grass_tilt = mix(g1_g, g2_g, 0.4);
+		mn_stone_tilt = mix(g1_s, g2_s, 0.4);
 	}	vec3 col;
 	if (use_vertex_color) {
 		col = COLOR.rgb;
@@ -271,8 +355,48 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		col = texture(base_tex, UV + jitter).rgb;
 	}
 	// скала там, где склон круче; граница рваная от шума
-	float slope = 1.0 - normalize(wnormal).y;
-	float rock = smoothstep(ROCK_FROM, ROCK_TO, slope + (n_mid - 0.5) * 0.12);
+	vec3 mid_tilt = vec3(0.0);
+	if (mid_normal_strength > 0.001) {
+		float mid_env = smoothstep(mid_normal_range.x, mid_normal_range.x + 65.0, cam_dist)
+			* (1.0 - smoothstep(mid_normal_range.y, mid_normal_range.y * 2.0, cam_dist));
+		float px_mid = max(length(gdx), length(gdy));
+		float mid_px = 1.0 - smoothstep(1.2, 4.5, px_mid);
+		float mid_w = mid_normal_strength * mid_env * mid_px;
+		if (mid_w > 0.001) {
+			float inv_m1 = 1.0 / max(mid_normal_scales.x, 1.0);
+			float inv_m2 = 1.0 / max(mid_normal_scales.y, 1.0);
+			float mid_side_w = smoothstep(0.22, 0.38, slope);
+			vec3 mt_top = vec3(0.0);
+			if (mid_side_w < 0.999) {
+				vec2 mn1 = normal_map_tilt(textureGrad(detail_normal, p * inv_m1 + vec2(0.19, 0.73), gdx * inv_m1, gdy * inv_m1).rgb);
+				vec2 q_m2 = vec2(p.y, -p.x) * inv_m2 + vec2(0.41, 0.17);
+				vec2 dx_m2 = vec2(gdx.y, -gdx.x) * inv_m2;
+				vec2 dy_m2 = vec2(gdy.y, -gdy.x) * inv_m2;
+				vec2 mn2_l = normal_map_tilt(textureGrad(detail_normal, q_m2, dx_m2, dy_m2).rgb);
+				vec2 mn2 = vec2(-mn2_l.y, mn2_l.x);
+				mt_top = vec3((mn1.x + mn2.x) * 0.5, 0.0, (mn1.y + mn2.y) * 0.5);
+			}
+			vec3 mt_side = vec3(0.0);
+			if (mid_side_w > 0.001) {
+				float ax_m = abs(wn_base.x);
+				float az_m = abs(wn_base.z);
+				float bx_m = smoothstep(0.45, 0.55, ax_m / max(ax_m + az_m, 1e-4));
+				vec3 mt_xy = vec3(0.0);
+				if (bx_m < 0.999) {
+					vec2 nt = normal_map_tilt(textureGrad(detail_normal, vec2(p.x, wpos.y) * inv_m1 + vec2(0.13, 0.57), vec2(gdx.x, ydxy.x) * inv_m1, vec2(gdy.x, ydxy.y) * inv_m1).rgb);
+					mt_xy = vec3(nt.x, nt.y, 0.0);
+				}
+				vec3 mt_zy = vec3(0.0);
+				if (bx_m > 0.001) {
+					vec2 nt = normal_map_tilt(textureGrad(detail_normal, vec2(p.y, wpos.y) * inv_m1 + vec2(0.29, 0.37), vec2(gdx.y, ydxy.x) * inv_m1, vec2(gdy.y, ydxy.y) * inv_m1).rgb);
+					mt_zy = vec3(0.0, nt.y, nt.x);
+				}
+				mt_side = mix(mt_xy, mt_zy, bx_m);
+			}
+			mid_tilt = mix(mt_top, mt_side, mid_side_w) * mid_w;
+		}
+	}
+	float rock = rock_slope;
 	float exposure = use_vertex_color ? COLOR.a : 0.0;
 	// Snow rests on shoulders and ledges. A white biome texel stretched down
 	// a cliff must not paint a vertical snow streak over the bedrock face.
@@ -300,17 +424,20 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			damp_duff *= mix(1.20, 0.68, wet) * mix(0.76, 1.25, n_mid);
 			vec3 olive = mix(vec3(0.19, 0.23, 0.082), vec3(0.29, 0.34, 0.13), n_mid);
 			olive = mix(olive, olive * vec3(0.82, 0.78, 0.62), autumn_ground.z * has_autumn);
-			soil = mix(damp_duff, olive, moss * (0.66 + 0.48 * patch));
+			float moss_w = height_blend_w(mh.g * 0.7 + n_fine * 0.3, mh.r * 0.6 + n_mid * 0.4, moss * (0.66 + 0.48 * patch), hb_d);
+			soil = mix(damp_duff, olive, moss_w);
 		} else {
 			soil = mix(leaf_soil, needle_soil, forest.g);
 			soil *= mix(1.12, 0.72, wet);
 			vec3 moss_c = mix(floor_moss, floor_moss * vec3(0.76, 0.73, 0.56), autumn_ground.z * has_autumn);
-			soil = mix(soil, moss_c, moss * 0.7);
+			float moss_w = height_blend_w(mh.g * 0.7 + n_fine * 0.3, mh.r * 0.6 + n_mid * 0.4, moss, hb_d) * 0.7;
+			soil = mix(soil, moss_c, moss_w);
 		}
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
 		// Промытое дно лощины — галька и щебень сквозь подстилку.
 		float stones = max(forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6), flow_bed);
-		soil = mix(soil, rock_color * 0.72, stones * 0.75);
+		float stones_w = height_blend_w(mh.r * 0.4 + n_fine * 0.3, mh.g * 0.8 + mh.b * 0.2, stones, hb_d) * 0.75;
+		soil = mix(soil, rock_color * 0.72, stones_w);
 		if (near > 0.0) {
 			// Листья/иголки читаются вблизи, с производными для гашения мерцания.
 			vec2 cells = p * 5.7;
@@ -430,7 +557,13 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 					float tuft = smoothstep(0.08, 0.72, mh.r);
 					turf *= mix(1.0, mix(0.74, 1.12, tuft), near);
 					turf = mix(turf, turf * vec3(0.92, 1.0, 0.84), (1.0 - tuft) * 0.35 * near);
-					micro_shadow = 1.0 - micro_occ * 0.55 * veg * ground_w;
+					// Тень пучков: если со стороны солнца в паре сантиметров трава выше — здесь тень (только на траве днём).
+					if (sun_dir.y > 0.02) {
+						vec2 sun_q1 = vec2(dot(sun_dir.xz, vec2(0.9230769, 0.3846154)), dot(sun_dir.xz, vec2(-0.3846154, 0.9230769)));
+						float h_sun = textureGrad(micro_tex, micro_q1 + sun_q1 * (0.04 / (1.6 * max(sun_dir.y, 0.2))), micro_d1x, micro_d1y).r;
+						float micro_occ = clamp((h_sun - micro_h1_r) * 2.6, 0.0, 1.0) * near;
+						micro_shadow = 1.0 - micro_occ * 0.55 * veg * ground_w;
+					}
 					gloss_v = max(gloss_v, damp * veg * 0.22 * near);
 				}
 				turf = mix(turf, turf * vec3(1.30, 1.20, 0.82), smoothstep(0.60, 0.78, blades) * dryness * 0.55 * near);
@@ -450,11 +583,13 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 					earth *= mix(0.78, 1.18, mh.g * 0.6 + mh.b * 0.4);
 					earth = mix(earth, rock_color * (0.55 + 0.4 * mh.b), smoothstep(0.55, 0.9, mh.g) * stony * 0.5);
 					earth *= 1.0 - mh.a * 0.5 * dryness;
-					ground_tilt += (mn.zw - vec2(0.5)) * 1.1 * bare * near;
+					ground_tilt += mn_stone_tilt * 0.55 * bare * near;
 					ground_relief = max(ground_relief, bare * near * 0.85);
 				}
 				earth = mix(earth, rock_color * mix(0.6, 0.95, ph.x), pebble * 0.8);
-				turf = mix(turf, earth, bare * 0.72 * near);
+				float bare_blend = height_blend_w(mh.r * 0.75 + n_fine * 0.25, mh.g * 0.65 + mh.b * 0.35, bare, hb_d);
+				turf = mix(turf, earth, bare_blend * 0.72 * near);
+				bare_v = bare_blend * near;
 				carpet_bare = bare;
 				// на каменистом участке камни лежат и в траве
 				float loose = pebble * max(bare, stony * 0.7);
@@ -618,13 +753,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 						// песчинки и мелкая галька каменистых участков
 						dune *= 1.0 + (mh.b - 0.5) * 0.16 * near;
 						dune = mix(dune, rock_color * (0.62 + 0.3 * mh.b), smoothstep(0.6, 0.9, mh.g) * stony * 0.45 * near);
-						ground_tilt += (mn.zw - vec2(0.5)) * 0.8 * stony * near;
+						ground_tilt += mn_stone_tilt * 0.4 * stony * near;
 						ground_relief = max(ground_relief, stony * near * sand * 0.7);
 					}
 			}
 			gloss_v = max(gloss_v, (damp * 0.35 + swash * 0.5) * sand * near);
+			swash_v = max(swash_v, swash * sand * ground_w);
 			col = mix(col, dune, sand * ground_w);
-			ground_tilt += vec2(0.83, 0.56) * cos(phase) * 0.55 * ripple_vis * sand;
+			ground_tilt -= vec2(0.83, 0.56) * cos(phase) * 0.55 * ripple_vis * sand;
 			ground_relief = max(ground_relief, ripple_vis * sand);
 		}
 		if (snow > 0.01) {
@@ -645,18 +781,19 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				// наст: мелкая зернистая рябь светом, трещины корки на каменистых местах, едва заметная пятнистость
 				drift_c *= 1.0 + (mh.b - 0.5) * 0.06 * near;
 				drift_c *= 1.0 - mh.a * 0.10 * stony * near;
-				ground_tilt += (mn.zw - vec2(0.5)) * 0.85 * snow * near;
+				ground_tilt += mn_stone_tilt * 0.425 * snow * near;
 				ground_relief = max(ground_relief, snow * near * 0.55);
 			}
 			gloss_v = max(gloss_v, snow * (1.0 - stony) * 0.4 * near);
 			col = mix(col, drift_c, snow * ground_w);
-			ground_tilt += vec2(0.56, -0.83) * cos(sphase) * 0.35 * sas_vis * snow;
+			ground_tilt -= vec2(0.56, -0.83) * cos(sphase) * 0.35 * sas_vis * snow;
 			ground_relief = max(ground_relief, sas_vis * snow * 0.8);
 		}
 		ground_relief *= ground_w;
 	}
 	// Промытое дно лощины: тон промытого грунта, читается и вдали; на скале дальше своя порода.
 	col = mix(col, flow_bed_color, relief_maps.g * flow_bed_tone * (1.0 - snow));
+	vec3 rock_tilt_w = vec3(0.0);
 	if (rock > 0.01) {
 		float cliff =smoothstep(0.20, 0.40, slope + (n_big - 0.5) * 0.10);
 		// Осыпи — на склонах угла естественного откоса и пятнами по крупному шуму, не сплошным поясом.
@@ -723,20 +860,52 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			talus *= 1.0 + stone * (dome * 0.45 - 0.22) * near;
 			talus = mix(talus, lith * mix(0.85, 1.12, sh.x), stone * 0.5 * near);
 		}
-		// 13.11: микроструктура породы. Один набор текстуры, координаты — в плоскости склона (на круче — вдоль горизонтали и по высоте):
-		// зерно и галька дают пятнистость породы, трещины — сеть мелких разломов, нормали — шершавость света.
+		// 27.11: выборочный Biplanar по мировым осям (без dot(p, tang), ломавшегося на 8-12 км).
 		vec4 mr = vec4(0.5, 0.5, 0.5, 0.0);
-		vec4 mrn = vec4(0.5);
+		vec3 rock_micro_tilt = vec3(0.0);
 		if (micro_enabled && near > 0.0) {
-			vec3 wn_r = normalize(wnormal);
-			vec2 tang = normalize(vec2(-wn_r.z, wn_r.x) + vec2(1e-4));
-			vec2 qc = vec2(dot(p, tang), wpos.y) * (1.0 / 1.3);
-			vec2 qf = p * (1.0 / 1.3) + vec2(0.23, 0.61);
-			vec2 qr = mix(qf, qc, smoothstep(0.18, 0.34, slope));
-			vec2 rdx = mix(gdx, vec2(dot(gdx, tang), ydxy.x), smoothstep(0.18, 0.34, slope)) * (1.0 / 1.3);
-			vec2 rdy = mix(gdy, vec2(dot(gdy, tang), ydxy.y), smoothstep(0.18, 0.34, slope)) * (1.0 / 1.3);
-			mr = textureGrad(micro_tex, qr, rdx, rdy);
-			mrn = textureGrad(micro_n, qr, rdx, rdy);
+			float inv_s = 1.0 / 1.3;
+			float side_w = smoothstep(0.18, 0.34, slope);
+			vec4 mr_top = vec4(0.5, 0.5, 0.5, 0.0);
+			vec3 t_top = vec3(0.0);
+			if (side_w < 0.999) {
+				vec2 q_top = p * inv_s + vec2(0.23, 0.61);
+				mr_top = textureGrad(micro_tex, q_top, gdx * inv_s, gdy * inv_s);
+				vec2 nt_top = micro_normal_tilt(textureGrad(micro_n, q_top, gdx * inv_s, gdy * inv_s).zw);
+				t_top = vec3(nt_top.x, 0.0, nt_top.y);
+			}
+			vec4 mr_side = vec4(0.5, 0.5, 0.5, 0.0);
+			vec3 t_side = vec3(0.0);
+			if (side_w > 0.001) {
+				vec3 wn_r = wn_base;
+				float ax_r = abs(wn_r.x);
+				float az_r = abs(wn_r.z);
+				float bx = smoothstep(0.45, 0.55, ax_r / max(ax_r + az_r, 1e-4));
+				vec4 mr_xy = vec4(0.5, 0.5, 0.5, 0.0);
+				vec3 t_xy = vec3(0.0);
+				if (bx < 0.999) {
+					vec2 q_xy = vec2(p.x, wpos.y) * inv_s + vec2(0.17, 0.43);
+					vec2 dx_xy = vec2(gdx.x, ydxy.x) * inv_s;
+					vec2 dy_xy = vec2(gdy.x, ydxy.y) * inv_s;
+					mr_xy = textureGrad(micro_tex, q_xy, dx_xy, dy_xy);
+					vec2 nt_xy = micro_normal_tilt(textureGrad(micro_n, q_xy, dx_xy, dy_xy).zw);
+					t_xy = vec3(nt_xy.x, nt_xy.y, 0.0);
+				}
+				vec4 mr_zy = vec4(0.5, 0.5, 0.5, 0.0);
+				vec3 t_zy = vec3(0.0);
+				if (bx > 0.001) {
+					vec2 q_zy = vec2(p.y, wpos.y) * inv_s + vec2(0.31, 0.19);
+					vec2 dx_zy = vec2(gdx.y, ydxy.x) * inv_s;
+					vec2 dy_zy = vec2(gdy.y, ydxy.y) * inv_s;
+					mr_zy = textureGrad(micro_tex, q_zy, dx_zy, dy_zy);
+					vec2 nt_zy = micro_normal_tilt(textureGrad(micro_n, q_zy, dx_zy, dy_zy).zw);
+					t_zy = vec3(0.0, nt_zy.y, nt_zy.x);
+				}
+				mr_side = mix(mr_xy, mr_zy, bx);
+				t_side = mix(t_xy, t_zy, bx);
+			}
+			mr = mix(mr_top, mr_side, side_w);
+			rock_micro_tilt = mix(t_top, t_side, side_w);
 			float tone = mix(0.68, 1.22, mr.b * 0.5 + mr.g * 0.5);
 			bed *= mix(1.0, tone, near);
 			bed *= 1.0 - mr.a * 0.5 * near * (0.4 + 0.6 * cliff);
@@ -745,15 +914,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		vec3 turf = mix(vec3(0.115, 0.095, 0.065), vec3(0.13, 0.16, 0.065), smoothstep(0.5, 0.8, wet + (n_mid - 0.5) * 0.4));
 		turf = mix(turf, talus * 0.8, smoothstep(0.55, 0.75, n_fine) * 0.35 * near);
 		vec3 geo = mix(mix(bed, talus, scree), turf, soil);
-		col = mix(col, geo, rock * (0.92 - 0.7 * snow));
+		float rock_blend = height_blend_w(mh.r * 0.5 + n_fine * 0.5, mr.g * 0.65 + (1.0 - mr.a) * 0.35, rock, hb_d);
+		col = mix(col, geo, rock_blend * (0.92 - 0.7 * snow));
 		// Уступы и швы видны и светом: нормаль верха пласта к небу, подрез вниз (мировые координаты).
 		float relief_w = rock * (1.0 - scree) * (1.0 - soil) * (1.0 - snow * 0.6);
 		vec3 dn = vec3(0.0, 1.0, 0.0) * (smoothstep(0.62, 0.95, fy) * 0.30 - (1.0 - smoothstep(0.0, 0.14, fy)) * 0.25) * ledge_vis * cliff;
 		dn += vec3(blk.x - 0.5, 0.0, blk.y - 0.5) * 0.12 * block_vis * cliff;
-		// шершавость породы и щебня от микронормалей (у осыпи сильнее)
-		vec3 dn_m = vec3(mrn.z - 0.5, (mrn.x - 0.5) * 0.3, mrn.w - 0.5) * 1.7 * near;
 		float rock_w = rock * (1.0 - soil) * (1.0 - snow * 0.6) * mix(0.9, 1.7, scree);
-		NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(dn * relief_w + dn_m * rock_w, 0.0)).xyz);
+		rock_tilt_w = dn * relief_w + rock_micro_tilt * (0.85 * near * rock_w);
 	}
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;
@@ -762,6 +930,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float road_rough = road_detail.z;
 	float road_gloss = 0.0;
 	float road_shade = 1.0;
+	vec2 road_tilt = vec2(0.0);
+	float road_relief = 0.0;
 	// Производные — до ветвления: на краю маски соседние пиксели квада вне ветки, и fwidth внутри
 	// неё даёт мусор (тёмный пунктир по рёбрам сетки).
 	float mask_w = fwidth(COLOR.a);
@@ -933,14 +1103,15 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float fine_w = (1.0 - smoothstep(0.07 * road_quality.y, 0.12 * road_quality.y, pixel_m)) * step(0.4, road_quality.x);
 		float stone_occ = 0.0;
 		vec4 fh = mix(vec4(0.5, 0.5, 0.5, 0.0), mh, coarse);
-		vec4 fn = mix(vec4(0.5), mn, coarse);
+		vec2 fn_grass_tilt = mn_grass_tilt * coarse;
+		vec2 fn_stone_tilt = mn_stone_tilt * coarse;
 		if (micro_enabled && near > 0.0 && fine_w > 0.0) {
 			vec2 fdx = vec2(0.8 * gdx.x - 0.6 * gdx.y, 0.6 * gdx.x + 0.8 * gdx.y) * (1.0 / 0.7);
 			vec2 fdy = vec2(0.8 * gdy.x - 0.6 * gdy.y, 0.6 * gdy.x + 0.8 * gdy.y) * (1.0 / 0.7);
 			// без сдвига шумом (rp): на мелком масштабе он размазывает камни в разводы
 			vec2 fq = vec2(0.8 * pr.x - 0.6 * pr.y, 0.6 * pr.x + 0.8 * pr.y) * (1.0 / 0.7) + vec2(0.43, 0.17);
 			vec4 f1 = textureGrad(micro_tex, fq, fdx, fdy) - vec4(0.5, 0.5, 0.5, 0.0);
-			vec4 g1 = textureGrad(micro_n, fq, fdx, fdy) - vec4(0.5);
+			vec4 g1 = textureGrad(micro_n, fq, fdx, fdy);
 			fh += f1 * (fine_w * (1.0 - coarse));
 			// самозатенение камней и комьев: со стороны солнца в паре сантиметров выше — здесь тень (как у пучков травы)
 			if (sun_dir.y > 0.02 && road_quality.x > 0.9) {
@@ -948,10 +1119,13 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				stone_occ = clamp((textureGrad(micro_tex, fq + to_sun, fdx, fdy).g - f1.g - 0.5) * 2.4, 0.0, 1.0)
 					* fine_w * clamp(grain * (1.0 - tread * 0.5) + road_look.x * 0.6, 0.0, 1.0);
 			}
-			fn += vec4(0.8 * g1.x + 0.6 * g1.y, -0.6 * g1.x + 0.8 * g1.y, 0.8 * g1.z + 0.6 * g1.w, -0.6 * g1.z + 0.8 * g1.w) * (fine_w * (1.0 - coarse));
+			vec2 fg_loc = micro_normal_tilt(g1.xy);
+			vec2 fs_loc = micro_normal_tilt(g1.zw);
+			fn_grass_tilt += vec2(0.8 * fg_loc.x + 0.6 * fg_loc.y, -0.6 * fg_loc.x + 0.8 * fg_loc.y) * (fine_w * (1.0 - coarse));
+			fn_stone_tilt += vec2(0.8 * fs_loc.x + 0.6 * fs_loc.y, -0.6 * fs_loc.x + 0.8 * fs_loc.y) * (fine_w * (1.0 - coarse));
 		}
 		vec2 fabric_tilt;
-		soil = road_fabric(soil, fh, fn, road_look, grain, organic, crack_zone, max(tread * 0.6, tracks), compacted, pr, pixel_m,
+		soil = road_fabric_tilt(soil, fh, fn_grass_tilt, fn_stone_tilt, road_look, grain, organic, crack_zone, max(tread * 0.6, tracks), compacted, pr, pixel_m,
 			(n_mid - 0.5) * 9.0 + (n_big - 0.5) * 16.0, near, fabric_tilt);
 		float wear = exp(-pow((ax + (n_mid - 0.5) * 0.35) * 1.7, 2.0));
 		soil *= 1.0 - wear * (1.0 - grain) * (1.0 - organic) * (0.02 + fleck * 0.04) * near;
@@ -1023,7 +1197,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			soil = mix(soil, loam, core_w * trail_look.x * (0.65 + 0.35 * near));
 			stone_occ *= 1.0 - core_w * trail_look.x * 0.85;
 			fabric_tilt *= 1.0 - core_w * trail_look.x * 0.72;
-			fabric_tilt += ((fn.zw - vec2(0.5)) * (1.0 - core_w * 0.80) * 0.65 + (detail_n.xy - vec2(0.5)) * 0.45 * core_w) * core_track * trail_look.x * near;
+			fabric_tilt += (fn_stone_tilt * (1.0 - core_w * 0.80) * 0.325 + normal_map_tilt(detail_n) * 0.225 * core_w) * core_track * trail_look.x * near;
 		}
 		if (trail_look.y > 0.0 && core_track > 0.0) {
 			track_wet = core_w * trail_look.y * clamp(0.35 + wet * 0.55 + hollow * 0.45 + (n_big - 0.5) * 0.25, 0.0, 1.0);
@@ -1058,7 +1232,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				verge_col = mix(verge_col, russet, edge_litter_w * 0.85 * smoothstep(0.02, 0.25, edge_v));
 			}
 			road_gloss *= 1.0 - edge_litter_w * 0.75;
-			fabric_tilt += (mn.xy - vec2(0.5)) * 1.10 * edge_litter_w * near;
+			fabric_tilt += fn_grass_tilt * 0.55 * edge_litter_w * near;
 		}
 		// 15.11: тени форм. Склон колеи, ямы и кочки, отвёрнутый от солнца круче его высоты, в своей тени; дно впадин
 		// при низком солнце закрыто бровкой. Гасится только прямой свет (light), небо остаётся: тень не чёрная.
@@ -1080,10 +1254,9 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		if (relief * near > 0.0) {
 			// Свет следует отдельным зёрнам и камням; на середине полотна нет контуров карты нормалей биома,
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
-			vec2 tilt = fabric_tilt + form_tilt * road + rock_at / rock_r * big_rocks * 0.6
+			road_tilt = fabric_tilt + form_tilt * road + rock_at / rock_r * big_rocks * 0.6
 				- bump.yz * bump_vis * 0.95 * road; // 14.5: волны кочек слабые, иначе читаются узором; 15.11: глубина карты выросла, множитель меньше
-			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
-			detail_n = mix(detail_n, road_normal, relief);
+			road_relief = relief;
 		}
 	}
 	// 15.11 (4): канава и вал за кромкой. Вершины коридора несут UV2 до REACH за полотном, маска COLOR.a там уже 0.
@@ -1117,35 +1290,54 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	}
 	// рябь песка, заструги и камешки проплешин — своим светом (вне полотна)
 	float ground_n = ground_relief * (1.0 - road) * near;
+	// 27.11: на крутых склонах гасим верхнюю XZ-проекцию, чтобы не тянуть рисунок по вертикали.
+	float flat_mask = 1.0 - smoothstep(0.22, 0.42, slope);
+	vec2 surf_tilt = normal_map_tilt(detail_n) * flat_mask;
 	// объём: к общей карте нормалей добавляется вторая, мелкая (кочки и куртины 0,6 м) — трава лежит буграми
-	float lumps = ground_lumps * ground_w * (1.0 - road) * near;
+	float lumps = ground_lumps * ground_w * (1.0 - road) * near * flat_mask;
 	if (lumps > 0.0) {
-		vec3 n2 = texture(detail_normal, p * (1.0 / 0.61) + vec2(0.31, 0.63)).rgb;
-		detail_n.xy += (n2.xy - 0.5) * 0.9 * lumps;
-		// пряди и пучки травы: свет цепляется за них вплоть до нескольких метров
-		detail_n.xy += (mn.xy - 0.5) * 1.5 * lumps;
+		vec3 n2 = textureGrad(detail_normal, p * (1.0 / 0.61) + vec2(0.31, 0.63), gdx * (1.0 / 0.61), gdy * (1.0 / 0.61)).rgb;
+		surf_tilt += (normal_map_tilt(n2) * 0.45 + mn_grass_tilt * 0.75) * lumps;
 	}
-	float forest_bumps = canopy * (1.0 - rock) * (1.0 - snow) * (1.0 - road) * trail_look.w * near;
+	float forest_bumps = canopy * (1.0 - rock) * (1.0 - snow) * (1.0 - road) * trail_look.w * near * flat_mask;
 	if (forest_bumps > 0.0) {
 		vec3 fn2 = textureGrad(detail_normal, p * (1.0 / 0.61) + vec2(0.31, 0.63), gdx * (1.0 / 0.61), gdy * (1.0 / 0.61)).rgb;
-		detail_n.xy += ((fn2.xy - 0.5) * 1.15 + (mn.zw - 0.5) * 1.45 + (mn.xy - 0.5) * 0.75) * forest_bumps;
+		surf_tilt += (normal_map_tilt(fn2) * 0.575 + mn_stone_tilt * 0.725 + mn_grass_tilt * 0.375) * forest_bumps;
 		float hummock = smoothstep(0.24, 0.78, n_fine * 0.55 + mh.g * 0.45);
 		col *= mix(1.0, mix(0.84, 1.10, hummock), forest_bumps);
 		micro_shadow *= 1.0 - clamp((0.55 - mh.g) * 1.35, 0.0, 0.40) * forest_bumps;
 	}
 	if (ground_n > 0.0) {
-		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
+		surf_tilt = mix(surf_tilt, ground_tilt, ground_n * 0.8);
 	}
+	float surf_depth = mix(0.6 * flat_mask + 0.5 * ground_n + 0.55 * lumps + 0.55 * forest_bumps, 0.5 + road_rough * 0.5, road) * near;
+	if (road_relief > 0.0 && near > 0.0) {
+		surf_tilt = mix(surf_tilt, road_tilt, road_relief);
+	}
+	col *= 1.0 + flow_ridge * flow_ridge_brighten * (1.0 - snow);
 	ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));
 	// влажная земля, мокрый песок и наст чуть блестят: отражение неба и блик солнца (light)
 	gloss_v = mix(gloss_v, road_gloss, road);
-	ROUGHNESS = 1.0 - gloss_v * 0.12 - road_gloss * 0.15;
-	SPECULAR = 0.3 + gloss_v * 0.08;
+	if (material_roughness_enabled) {
+		float soil_w = max(canopy * (1.0 - rock), bare_v * ground_w);
+		float surf_r = mix(rough_turf, rough_soil, soil_w);
+		surf_r = mix(surf_r, rough_rock, rock * (1.0 - snow));
+		surf_r = mix(surf_r, 0.84, snow);
+		surf_r = mix(surf_r, mix(0.84, 0.96, road_rough) - road_gloss * 0.24, road);
+		float wet_gloss = clamp(max(gloss_v * 1.15, smoothstep(0.55, 0.95, wet) * (1.0 - rock * 0.4) * 0.65), 0.0, 1.0);
+		surf_r = mix(surf_r, rough_wet, wet_gloss);
+		float swash_r = mix(max(surf_r, 0.55), 0.38, swash_v);
+		ROUGHNESS = clamp(swash_r, 0.38, 1.0);
+		SPECULAR = mix(spec_dry, spec_wet, clamp(max(gloss_v, road_gloss), 0.0, 1.0));
+	} else {
+		ROUGHNESS = 1.0 - gloss_v * 0.12 - road_gloss * 0.15;
+		SPECULAR = 0.3 + gloss_v * 0.08;
+	}
 	BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);
 	AO = sky * relief_maps.r;
-	AO_LIGHT_AFFECT = 0.0;
-	NORMAL_MAP = detail_n;
-	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n + 0.55 * lumps + 0.55 * forest_bumps, 0.5 + road_rough * 0.5, road) * near;
+	AO_LIGHT_AFFECT = cavity_light_affect;
+	vec3 total_tilt = vec3(surf_tilt.x, 0.0, surf_tilt.y) * surf_depth + rock_tilt_w + mid_tilt * ((1.0 - road) * (1.0 - snow * 0.65));
+	NORMAL = normalize((VIEW_MATRIX * vec4(apply_surface_gradient(wn_base, total_tilt), 0.0)).xyz);
 }
 
 // Clouds attenuate the directional source, never sky light or bicycle lamps.

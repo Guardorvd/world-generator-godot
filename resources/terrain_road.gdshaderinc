@@ -77,11 +77,12 @@ vec3 road_field(vec2 p, vec4 b, float grade, float across, vec2 ga) {
 	return f;
 }
 
-// Фактура покрытия. mh — высоты микроструктуры (R — пряди, G — галька и комья, B — зерно, A — трещины), mn — её нормали.
+// Фактура покрытия. mh — высоты микроструктуры (R — пряди, G — галька и комья, B — зерно, A — трещины),
+// fn_grass_tilt / fn_stone_tilt — мировые наклоны (-∇h) прядей и гальки.
 // look (RoadBump.LOOK): x — комья земли, y — рябь песка, z — отклик на влагу, w — угловатость щебня.
 // tread — накатанная полоса (камень с неё выбит, грунт уплотнён), compact — плотные участки, crack — сила трещин здесь.
-// tilt — наклон нормали от фактуры (в осях мира x, z).
-vec3 road_fabric(vec3 soil, vec4 mh, vec4 mn, vec4 look, float grain, float organic, float crack, float tread,
+// tilt — наклон нормали (-∇h) от фактуры (в осях мира x, z).
+vec3 road_fabric_tilt(vec3 soil, vec4 mh, vec2 fn_grass_tilt, vec2 fn_stone_tilt, vec4 look, float grain, float organic, float crack, float tread,
 		float compact, vec2 p, float pixel_m, float warp, float near, out vec2 tilt) {
 	float st = mh.g - 0.5;
 	float loose = 1.0 - tread * 0.55;
@@ -96,13 +97,20 @@ vec3 road_fabric(vec3 soil, vec4 mh, vec4 mn, vec4 look, float grain, float orga
 	// хвоя и сухие стебли лежат по краям тропы, середина утоптана
 	float fibre = smoothstep(0.45, 0.8, mh.r) * organic * (1.0 - tread * 0.6);
 	soil = mix(soil, dry_litter * mix(0.7, 1.05, mh.b), fibre * 0.32 * near);
-	tilt = (mn.zw - vec2(0.5)) * (1.9 * stones * (1.0 + look.w * 0.6) + 1.1 * clods) + (mn.xy - vec2(0.5)) * 0.7 * fibre;
+	tilt = fn_stone_tilt * (0.95 * stones * (1.0 + look.w * 0.6) + 0.55 * clods) + fn_grass_tilt * (0.35 * fibre);
 	if (look.y > 0.01) {
 		// ветровая рябь песка; на накатанной полосе её нет
 		float vis = (1.0 - smoothstep(0.05, 0.16, pixel_m / 0.34)) * look.y * (1.0 - tread * 0.75);
 		float phase = dot(p, vec2(0.83, 0.56)) * (6.2831853 / 0.34) + warp;
 		soil *= 1.0 + sin(phase) * 0.07 * vis;
-		tilt += vec2(0.83, 0.56) * cos(phase) * 0.5 * vis;
+		tilt -= vec2(0.83, 0.56) * cos(phase) * 0.5 * vis;
 	}
 	return soil;
+}
+
+// Совместимость со старыми версиями terrain.gdshader в стендах (--base).
+vec3 road_fabric(vec3 soil, vec4 mh, vec4 mn, vec4 look, float grain, float organic, float crack, float tread,
+		float compact, vec2 p, float pixel_m, float warp, float near, out vec2 tilt) {
+	return road_fabric_tilt(soil, mh, (mn.xy - vec2(0.5)) * 2.0, (mn.zw - vec2(0.5)) * 2.0,
+		look, grain, organic, crack, tread, compact, p, pixel_m, warp, near, tilt);
 }

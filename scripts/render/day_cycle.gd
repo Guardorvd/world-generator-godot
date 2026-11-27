@@ -296,6 +296,7 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	if atm != null:
 		ambient_col = ambient_col.lerp(atm.overcast_ambient, atm_blend * 0.70)
 	env.ambient_light_color = ambient_col
+	env.ambient_light_sky_contribution = lerpf(0.6, atm.ambient_sky_contribution, day_mask) if atm != null else 0.6
 	env.fog_density = FOG * float(s[12]) * lerpf(1.0, 1.45, overcast) * (lerpf(1.0, atm.fog_density_mul, 0.45 + 0.55 * day_mask) if atm != null else 1.0)
 	# Seconds of game time: pause freezes the atmosphere; time skips ease over 12 s.
 	var fog_blend := 1.0 if is_nan(_fog_time) else 1.0 - exp(-clampf(time - _fog_time, 0.0, 1.0) / 12.0)
@@ -352,6 +353,8 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	sky_mat.set_shader_parameter("cloud_time", time)
 	sky_mat.set_shader_parameter("cloud_cover", cover)
 	sky_mat.set_shader_parameter("overcast_deck", atm.overcast_deck * day_mask if atm != null else 0.0)
+	sky_mat.set_shader_parameter("cubemap_ground_darken", atm.cubemap_ground_darken * day_mask if atm != null else 0.0)
+	sky_mat.set_shader_parameter("cubemap_overcast_cie", atm.cubemap_overcast_cie * day_mask if atm != null else 0.0)
 	sky_mat.set_shader_parameter("cloud_seed", seed_phase)
 	# редкие ночные явления, звёзды и фаза луны передаются только в сумерках и ночью
 	var dark := smoothstep(0.25, 0.85, s[9])

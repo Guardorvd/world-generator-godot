@@ -85,10 +85,41 @@ public static class ReliefMaterial
 		});
 		return bytes;
 	}
+
+	/// <summary>Карта нормалей макро-рельефа (RG8: nx, nz в 0..1) по сетке высот для плавного перехода на дальних LOD.</summary>
+	internal static byte[] BuildNormals(float[] hv, int width, int height, double tile)
+	{
+		int n = width * height;
+		if (width < 2 || height < 2 || hv.Length != n || tile <= 0.0)
+			return Array.Empty<byte>();
+		var bytes = new byte[n * 2];
+		Parallel.For(0, height, j =>
+		{
+			int u = Math.Max(0, j - 1);
+			int d = Math.Min(height - 1, j + 1);
+			double dz = (j == 0 || j == height - 1) ? tile : 2.0 * tile;
+			for (int i = 0; i < width; i++)
+			{
+				int l = Math.Max(0, i - 1);
+				int r = Math.Min(width - 1, i + 1);
+				double dx = (i == 0 || i == width - 1) ? tile : 2.0 * tile;
+				double vx = (hv[j * width + l] - hv[j * width + r]) / dx;
+				double vz = (hv[u * width + i] - hv[d * width + i]) / dz;
+				double invLen = 1.0 / Math.Sqrt(vx * vx + 1.0 + vz * vz);
+				int k = (j * width + i) * 2;
+				bytes[k] = Unit(vx * invLen * 0.5 + 0.5);
+				bytes[k + 1] = Unit(vz * invLen * 0.5 + 0.5);
+			}
+		});
+		return bytes;
+	}
 }
 
 public partial class FastGrid
 {
+	/// <summary>Карта макро-нормалей рельефа (RG8) для дальних LOD.</summary>
+	public byte[] ReliefNormalMap(float[] hv, int width, int height, double tile)
+		=> ReliefMaterial.BuildNormals(hv, width, height, tile);
 	/// <summary>Карты поверхности (TerrainBuilder.surface_maps): R8 затенения впадин или RGBA8 с каналами стока.
 	/// near/far — высоты, усреднённые в окрестности (TerrainBuilder._blurred); area/deposit пустые — без стока.</summary>
 	public byte[] ReliefSurfaceMaps(float[] hv, float[] near, float[] far, int width, int height, byte[] area, byte[] deposit, double[] parameters)

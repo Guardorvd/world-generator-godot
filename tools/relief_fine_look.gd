@@ -17,6 +17,7 @@ const Source := preload("res://scripts/render/chunk_source.gd")
 const FrameBudget := preload("res://scripts/render/stream_frame_budget.gd")
 const FarForest := preload("res://scripts/render/distant_forest.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const LightingQuality := preload("res://scripts/render/lighting_quality.gd")
 const RIDE_SPEED := 22.0
 const RIDE_SECONDS := 60.0
 const SHOT_SIZE := Vector2i(640, 360)
@@ -33,7 +34,7 @@ const CLAY_LINES := {
 	"ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));": "ALBEDO = vec3(%s);",
 	"AO = sky * relief_maps.r;": "AO = 1.0;",
 	"BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);": "BACKLIGHT = vec3(1.0, 0.0, 0.0);",
-	"NORMAL_MAP = detail_n;": "NORMAL_MAP = vec3(0.5, 0.5, 1.0);",
+	"NORMAL = normalize((VIEW_MATRIX * vec4(apply_surface_gradient(wn_base, total_tilt), 0.0)).xyz);": "NORMAL = normalize((VIEW_MATRIX * vec4(wn_base, 0.0)).xyz);",
 }
 
 var _scene: Node3D
@@ -47,6 +48,12 @@ var _failures := 0
 var _env: Environment
 var _clay_shaders := {}
 var _clay_materials := {}
+var _settings: GameSettings
+var _game_light := false
+var _hour := 12.0
+var _world_offset := Vector2.ZERO
+var _shader_path := ""
+var _day: DayCycle
 
 
 func _initialize() -> void:
@@ -87,12 +94,18 @@ func _run() -> void:
 		return
 	var measure := args.has("--measure")
 	var parity := args.has("--parity")
+	_game_light = args.has("--game-light")
+	_hour = float(Dev.arg("hour", "12.0"))
+	_shader_path = Dev.arg("shader", "")
+	var offset_parts := Dev.arg("offset", "0,0").split(",", false)
+	_world_offset = Vector2(float(offset_parts[0]), float(offset_parts[1])) if offset_parts.size() >= 2 else Vector2.ZERO
 	root.size = Vector2i(1920, 1080) if measure else Vector2i(960, 540)
 	var settings := GameSettings.new()
 	var settings_path := Dev.arg("settings", "")
 	if not settings_path.is_empty():
 		settings.settings_path = settings_path
 		settings.load_settings()
+	_settings = settings
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	var viewport := root.get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(viewport, measure)
@@ -171,9 +184,10 @@ func _run() -> void:
 				row.repeat_identical = repeated
 			if measure:
 				root.msaa_3d = settings.msaa as Viewport.MSAA
+				var prev_shadow := _sun.shadow_enabled
 				_sun.shadow_enabled = settings.shadows
 				row.merge(await _measure(viewport))
-				_sun.shadow_enabled = false
+				_sun.shadow_enabled = prev_shadow
 				root.msaa_3d = Viewport.MSAA_DISABLED
 			if parity:
 				_expect(row.parity_samples > 0 and row.parity_failed == 0, "паритет %s %s: %d / %d, max %.4f мм" %
@@ -224,6 +238,9 @@ func _run() -> void:
 				custom0_and_instance_uniform = probe, fixture_and_views_ms = setup_ms, prepare_ms = prepare_ms, views = rows, ride = ride}, "\t"))
 		_source.close()
 		_scene.free()
+	if _game_light:
+		VisualStyle.release()
+		_day = null
 	print("RELIEF_RESULT failures=", _failures)
 	quit(int(_failures > 0))
 
@@ -235,22 +252,39 @@ func _build_scene(w: WorldData, h: Heightfield) -> void:
 	root.add_child(_scene)
 	_clay_shaders.clear()
 	_clay_materials.clear()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("b3c4d4")
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("e0e9f0")
-	env.ambient_light_energy = 0.38
+	var env: Environment
+	_sun = DirectionalLight3D.new()
+	if _game_light:
+		var base_env := ResourceLoader.load("res://resources/game_environment.tres") as Environment
+		env = base_env.duplicate() as Environment if base_env != null else Environment.new()
+		_scene.add_child(_sun)
+		_day = DayCycle.new(env, _sun)
+		_day.atmosphere = WorldTemplate.atmosphere_config(w.template_id)
+		_day.world_seed = w.seed_num
+		_day.cloud_cover_override = 0.85 if _day.atmosphere != null else 0.25
+		if env.sky != null:
+			env.sky.process_mode = Sky.PROCESS_MODE_REALTIME
+		LightingQuality.apply(env, _sun, _settings.lighting, _settings.shadows, _settings.fog_quality)
+		VisualStyle.set_profile(_day.atmosphere)
+		VisualStyle.bind(env)
+		VisualStyle.configure(_settings.style_on, _settings.style_amount)
+		_day.apply(_hour, 0.0, true)
+	else:
+		env = Environment.new()
+		env.background_mode = Environment.BG_COLOR
+		env.background_color = Color("b3c4d4")
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color = Color("e0e9f0")
+		env.ambient_light_energy = 0.38
+		_sun.rotation_degrees = Vector3(-33.0, -56.0, 0.0)
+		# Мягкие динамические тени включаются в замере, снимкам нужен фиксированный свет.
+		_sun.directional_shadow_max_distance = 180.0
+		_scene.add_child(_sun)
+		RenderingServer.global_shader_parameter_set("sun_dir", _sun.basis.z)
 	var weather := WorldEnvironment.new()
 	weather.environment = env
 	_env = env
 	_scene.add_child(weather)
-	_sun = DirectionalLight3D.new()
-	_sun.rotation_degrees = Vector3(-33.0, -56.0, 0.0)
-	# Мягкие динамические тени включаются в замере, снимкам нужен фиксированный свет.
-	_sun.directional_shadow_max_distance = 180.0
-	_scene.add_child(_sun)
-	RenderingServer.global_shader_parameter_set("sun_dir", _sun.basis.z)
 	var chunks := TerrainBuilder.build_chunks(w, h)
 	_source = Source.new()
 	_source.setup(WorldCache.new(), w, h, w.W, [chunks, {}, {}], null)
@@ -262,8 +296,26 @@ func _build_scene(w: WorldData, h: Heightfield) -> void:
 	var mat := builder.material(MapBaker.bake(w, WorldLoader.px_for(maxi(w.W, w.H)), true), Floor.surface_image(w, h.ground_moisture()), w.template_id)
 	TerrainBuilder.set_cavity(mat, h)
 	TerrainBuilder.set_community_noise(mat, w)
+	if _world_offset != Vector2.ZERO:
+		mat.set_shader_parameter("world_offset", _world_offset)
+	if not _shader_path.is_empty():
+		var sh := Shader.new()
+		sh.code = FileAccess.get_file_as_string(_shader_path)
+		mat.shader = sh
 	_terrain.setup(chunks, mat, null, w, h, _source)
-	_terrain.far_material = builder.far_material(mat)
+	if not _shader_path.is_empty():
+		if mat.shader.code.count(TerrainBuilder.NEAR_LINE) == 1:
+			var far_sh := Shader.new()
+			far_sh.code = mat.shader.code.replace(TerrainBuilder.NEAR_LINE, "const float near = 0.0; // custom far shader")
+			var far_mat := ShaderMaterial.new()
+			far_mat.shader = far_sh
+			for u: Dictionary in mat.shader.get_shader_uniform_list():
+				far_mat.set_shader_parameter(u.name, mat.get_shader_parameter(u.name))
+			_terrain.far_material = far_mat
+		else:
+			_terrain.far_material = mat
+	else:
+		_terrain.far_material = builder.far_material(mat)
 	# Вода остаётся на том же меше; останавливаем только движение бликов для повторяемой съёмки.
 	var water_shader := Shader.new()
 	water_shader.code = WaterBuilder.SHADER.code.replace("TIME * speed", "0.0 * speed")

@@ -194,6 +194,30 @@ enum {
 ## Убавка влажности грунта на полном ребре, доля: светлее и суше. Ребро — выше среднего ближней окрестности
 ## затенения впадин на cavity_near_full_m (та же величина, что ложбина затенения, с другим знаком).
 @export var ridge_dry := 0.0
+## Лёгкое высветление выпуклых рёбер по карте положения в рельефе (relief_maps.a), доля.
+@export_range(0.0, 0.25, 0.01) var ridge_brighten := 0.0
+## Доля влияния затенения впадин (cavity_tex.r) на прямой свет солнца (AO_LIGHT_AFFECT).
+@export_range(0.0, 0.5, 0.01) var cavity_light_affect := 0.0
+
+@export_group("Материал поверхности")
+## Дифференцированная шероховатость и смешивание слоёв по высоте (Тип 2); false — прежняя формула.
+@export var material_roughness_enabled := false
+@export_range(0.55, 1.0, 0.01) var rough_turf := 0.94
+@export_range(0.55, 1.0, 0.01) var rough_soil := 0.86
+@export_range(0.55, 1.0, 0.01) var rough_rock := 0.78
+@export_range(0.55, 1.0, 0.01) var rough_wet := 0.58
+@export_range(0.0, 0.8, 0.01) var spec_dry := 0.28
+@export_range(0.0, 0.8, 0.01) var spec_wet := 0.48
+## Глубина окна height blending на границах мха, камней, проплешин и скалы (0 — линейное смешивание).
+@export_range(0.0, 0.6, 0.01) var height_blend_depth := 0.0
+## Дальняя карта нормалей (м): от начала до конца перехода; нули — выкл (Тип 1).
+@export var far_normal_range := Vector2.ZERO
+## Масштабы процедурных средне-дальних нормалей (м), основной и повёрнутый на 90°.
+@export var mid_normal_scales := Vector2(17.0, 47.0)
+## Диапазон проявления средне-дальних нормалей (м): вход и затухание.
+@export var mid_normal_range := Vector2(45.0, 420.0)
+## Сила средне-дальних нормалей рельефа (0 — выкл, Тип 1).
+@export_range(0.0, 1.0, 0.01) var mid_normal_strength := 0.0
 
 @export_group("Бюджет")
 ## Лимит Миб для плиток, карт стока и маски высот.
@@ -236,7 +260,7 @@ func surface_map_params(generation: Resource = null) -> PackedFloat64Array:
 func valid_flow_material() -> bool:
 	return bed_area_m2.y > bed_area_m2.x and bed_area_m2.x > 0.0 and deposit_m.y > deposit_m.x and deposit_m.x >= 0.0 \
 		and bed_stones >= 0.0 and bed_stones <= 1.0 and bed_tone >= 0.0 and bed_tone <= 1.0 \
-		and deposit_wet >= 0.0 and ridge_dry >= 0.0
+		and deposit_wet >= 0.0 and ridge_dry >= 0.0 and ridge_brighten >= 0.0 and cavity_light_affect >= 0.0
 
 
 ## Числа материала по стоку в шейдер рельефа (uniform-ами); выключено — нули, картинка прежняя.
@@ -247,6 +271,20 @@ func apply_flow_material(mat: ShaderMaterial) -> void:
 	mat.set_shader_parameter("flow_bed_color", bed_color)
 	mat.set_shader_parameter("flow_deposit_wet", deposit_wet if on else 0.0)
 	mat.set_shader_parameter("flow_ridge_dry", ridge_dry if on else 0.0)
+	mat.set_shader_parameter("flow_ridge_brighten", ridge_brighten if on else 0.0)
+	mat.set_shader_parameter("cavity_light_affect", cavity_light_affect if on else 0.0)
+	mat.set_shader_parameter("material_roughness_enabled", material_roughness_enabled)
+	mat.set_shader_parameter("rough_turf", rough_turf)
+	mat.set_shader_parameter("rough_soil", rough_soil)
+	mat.set_shader_parameter("rough_rock", rough_rock)
+	mat.set_shader_parameter("rough_wet", rough_wet)
+	mat.set_shader_parameter("spec_dry", spec_dry)
+	mat.set_shader_parameter("spec_wet", spec_wet)
+	mat.set_shader_parameter("height_blend_depth", height_blend_depth)
+	mat.set_shader_parameter("far_normal_range", far_normal_range)
+	mat.set_shader_parameter("mid_normal_scales", mid_normal_scales)
+	mat.set_shader_parameter("mid_normal_range", mid_normal_range)
+	mat.set_shader_parameter("mid_normal_strength", mid_normal_strength)
 
 
 func activation_distance_m() -> float:

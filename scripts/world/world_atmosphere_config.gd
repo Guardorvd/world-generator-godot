@@ -36,6 +36,12 @@ extends Resource
 @export_range(0.0, 3.0, 0.05) var shadow_blur_add: float = 1.35
 ## Множитель общей насыщенности сцены DayCycle в светлое время суток.
 @export_range(0.5, 1.2, 0.01) var day_saturation_mul: float = 0.84
+## Доля затемнения нижней полусферы карты отражений неба (0 — как в Типе 1, ближе к 1 — тёмное отражение земли).
+@export_range(0.0, 1.0, 0.01) var cubemap_ground_darken: float = 0.0
+## Сила градиента пасмурного неба CIE в карте отражений (горизонт темнее, зенит ярче; 0 — как в Типе 1).
+@export_range(0.0, 1.0, 0.01) var cubemap_overcast_cie: float = 0.0
+## Доля направленного кубмапа неба в рассеянном свете (ambient_light_sky_contribution; 0.6 — базовое значение).
+@export_range(0.0, 1.0, 0.01) var ambient_sky_contribution: float = 0.6
 
 @export_group("Горный туман и долинная дымка")
 ## Множитель плотности дальнего экспоненциального тумана долины.

@@ -83,6 +83,8 @@ varying float v_fade;    // 9.9+: 1 — видно целиком, 0 — рас�
 varying vec2 v_lod;      // 9.9+: порог пикселя должен быть в [x, y), иначе этот уровень его не рисует
 #ifdef ROCK_DETAIL
 varying vec3 rock_local;
+varying vec3 rock_world_normal;
+varying float rock_contact_v;
 #endif
 #ifdef BARK
 // 11.11.2026: кора. 0 — нет (кусты, кактусы, тростник), 1 — пластины с бороздами (дуб, сосна, ель, пальма),
@@ -216,7 +218,9 @@ void vertex() {
 		float h_rock = clamp(height, 0.16, 1.0);
 		float up_m = VERTEX.y * axis_m - (0.1 * h_rock) * axis_m;
 		float band = clamp(axis_m * 0.35 * h_rock, 0.06, 0.45);
-		v_ao *= 1.0 - rock_contact * (1.0 - smoothstep(0.0, band, up_m));
+		rock_contact_v = (1.0 - smoothstep(0.0, band, up_m)) * rock_contact;
+		v_ao *= 1.0 - rock_contact_v;
+		rock_world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 #endif
 		if (use_vertex_color && !OUTPUT_IS_SRGB) {
 			// как vertex_color_is_srgb у StandardMaterial3D
@@ -291,7 +295,26 @@ void fragment() {
 	float micro_f = 1.0 - smoothstep(0.0025, 0.014, footprint);
 	ALBEDO *= 0.94 + (grain * 0.055 + speck * 0.04 * (1.0 - moss_rock * 0.6)) * micro_f;
 	ALBEDO = mix(ALBEDO, ALBEDO * 1.2, vein * 0.13);
-	ROUGHNESS = mix(0.90, 0.98, moss_rock);
+	float up_face = smoothstep(0.62, 0.88, normalize(rock_world_normal).y);
+	float moss_blotch = smoothstep(-0.15, 0.45, sin(rock_local.x * 4.3 + sin(rock_local.z * 3.1) * 1.4) * cos(rock_local.z * 3.7 + rock_local.y * 2.2));
+	float top_moss = up_face * moss_blotch * (1.0 - smoothstep(0.02, 0.08, footprint)) * 0.36;
+	ALBEDO = mix(ALBEDO, ALBEDO * vec3(0.58, 0.78, 0.44), top_moss);
+	ALBEDO = mix(ALBEDO, vec3(0.16, 0.14, 0.10), clamp(rock_contact_v * 0.42, 0.0, 0.5));
+	float rock_vis = 1.0 - smoothstep(0.012, 0.065, footprint);
+	float facet_n = sin(dot(rock_local, vec3(7.3, 4.1, 6.2)) + sin(rock_local.y * 11.0) * 0.6) * 0.35;
+	float strata_h = (smoothstep(-0.25, 0.25, strata) - 0.5) * (1.0 - moss_rock * 0.7);
+	float hh = (grain * 0.22 * micro_f + speck * 0.28 * micro_f + strata_h * 0.45 + facet_n * 0.35) * rock_vis * 0.018;
+	vec3 dpx = dFdx(VERTEX);
+	vec3 dpy = dFdy(VERTEX);
+	vec3 r1 = cross(dpy, NORMAL);
+	vec3 r2 = cross(NORMAL, dpx);
+	float det = dot(dpx, r1);
+	float dhx = clamp(dFdx(hh), -0.02, 0.02);
+	float dhy = clamp(dFdy(hh), -0.02, 0.02);
+	if (abs(det) > 1e-10) {
+		NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dhx * r1 + dhy * r2));
+	}
+	ROUGHNESS = mix(0.80, 0.96, max(max(moss_rock, top_moss), rock_contact_v * 0.7));
 #endif
 #ifdef BARK
 	if (bark_detail > 2.5) {
