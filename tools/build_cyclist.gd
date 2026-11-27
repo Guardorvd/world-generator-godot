@@ -26,6 +26,8 @@ var navy := Vector2i(P.NAVY, P.FABRIC)
 var teal := Vector2i(P.JERSEY, P.FABRIC)
 var panel := Vector2i(P.JERSEY_PANEL, P.FABRIC)
 var skin := Vector2i(P.SKIN, P.SKIN_KIND)
+var arm_skin := Vector2i(P.ARM, P.SKIN_KIND) # 27.11: своё место — особая отделка надевает длинные рукава
+var mask := Vector2i(P.MASK, P.FABRIC) # 27.11: своё место — особая отделка рисует на маске
 var cream := Vector2i(P.CREAM, P.FABRIC)
 var shoe := Vector2i(P.BLACK, P.MATTE)
 var helmet := Vector2i(P.HELMET, P.SHELL)
@@ -408,15 +410,16 @@ func _mask() -> void:
 			var size := head_size(y)
 			var local := Vector3(cos(angle) * (size.x + 0.008), y,
 				head_z(y) + sin(angle) * (size.y + 0.012) - pow(front, 6.0) * smoothstep(-0.09, -0.035, y) * 0.025)
-			grid.append({position = at * local, bones = skinning.bones, weights = skinning.weights})
+			# 27.11: координаты рисунка (поперёк лица, снизу вверх) — для особой отделки маски (шейдер, finish_pattern)
+			grid.append({position = at * local, bones = skinning.bones, weights = skinning.weights, pattern = Vector2(col / 8.0, row / 4.0)})
 	for row in 4:
 		for col in 8:
 			var a := grid[row * 9 + col]
 			var b := grid[(row + 1) * 9 + col]
 			var c := grid[row * 9 + col + 1]
 			var d := grid[(row + 1) * 9 + col + 1]
-			triangle(a, b, c, navy)
-			triangle(c, b, d, navy)
+			triangle(a, b, c, mask)
+			triangle(c, b, d, mask)
 	for side in [-1.0, 1.0]:
 		bar("Head", Vector3(side * 0.087, -0.04, -0.025), Vector3(side * 0.105, 0.005, 0.025), 0.005, navy)
 		bar("Head", Vector3(side * 0.055, -0.115, -0.025), Vector3(side * 0.105, -0.025, 0.028), 0.005, navy)
@@ -775,7 +778,7 @@ func _arm(side: float) -> void:
 	mats.append_array([panel, panel])
 	# кожа до запястья, затем манжета перчатки от своей кромки до кулака
 	for i in rings.size() - 1 - mats.size() - 2:
-		mats.append(skin)
+		mats.append(arm_skin)
 	mats.append_array([navy, navy])
 	# рукав у края свободнее и треплется на ветру
 	for i in rings.size():
@@ -1058,7 +1061,9 @@ func triangle(a: Dictionary, b: Dictionary, c: Dictionary, mat: Vector2i) -> voi
 		if facing < 0.15:
 			vertex_normal = (vertex_normal + normal * (0.15 - facing)).normalized()
 		tool.set_uv(Vector2(mat.x, mat.y))
-		tool.set_color(Color(1.0, float(vertex.get("flutter", 0.0)), 0.0, 1.0))
+		# B и A — координаты рисунка маски (у остальных вершин 0 и 1, как раньше)
+		var pattern: Vector2 = vertex.get("pattern", Vector2(0.0, 1.0))
+		tool.set_color(Color(1.0, float(vertex.get("flutter", 0.0)), pattern.x, pattern.y))
 		tool.set_normal(vertex_normal)
 		tool.set_bones(vertex.bones)
 		tool.set_weights(vertex.weights)

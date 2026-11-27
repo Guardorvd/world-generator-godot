@@ -2,7 +2,9 @@ extends RefCounted
 ## Палитра общего материала велосипеда и седока (resources/bike_rider.gdshader).
 ## Вершины хранят место (UV.x), а не цвет, поэтому расцветка меняется одним массивом без пересборки.
 
-enum { FRAME, FRAME_ACCENT, RUBBER, ALLOY, BLACK, TAIL, JERSEY, JERSEY_PANEL, NAVY, SKIN, CREAM, HELMET, DARK, LENS, COATING, SIDEWALL, FRAME_SECONDARY }
+## 27.11: MASK — маска на лице (по умолчанию цвета NAVY), ARM — кожа рук от рукава до перчатки (по умолчанию SKIN);
+## свои места, чтобы особая отделка (FINISHES: pattern, sleeves) меняла их, не трогая шорты, перчатки и лицо.
+enum { FRAME, FRAME_ACCENT, RUBBER, ALLOY, BLACK, TAIL, JERSEY, JERSEY_PANEL, NAVY, SKIN, CREAM, HELMET, DARK, LENS, COATING, SIDEWALL, FRAME_SECONDARY, MASK, ARM }
 
 ## Вид поверхности (UV.y) — как KIND_* в шейдере
 enum { PAINT, RUBBER_KIND, ALLOY_KIND, HARD, FABRIC, SKIN_KIND, SHELL, LENS_KIND, GLOW, MATTE, COATING_KIND, GRIP_KIND, PEDAL_KIND }
@@ -50,16 +52,19 @@ const SCHEME_DESCRIPTIONS := {
 	"salt": "Песочный низ рамы, синий верх и форма в цветах раллийной ливреи.",
 	"tide": "Глубокий цвет морской волны, коралловое джерси и графика в тон.",
 	"ivory": "Молочно-кремовые рама, джерси и шлем с бронзовой графикой и кофейными вставками.",
-	"aurora": "Особая серия. Чернильно-фиолетовые рама и шлем на изгибах переливаются зелёным, как сияние над тайгой; в лаке — искры металлика, мятная графика и манжеты светятся в сумерках, линзы очков — фиолетовые.",
+	"aurora": "Особая серия. Чернильно-фиолетовые рама и шлем на изгибах переливаются зелёным, как сияние над тайгой; в лаке — искры, как звёзды, мятная графика и манжеты светятся в сумерках. Длинные рукава, маска с лентами сияния, фиолетовые линзы и лиловый анодированный металл.",
 }
 
 ## Особая отделка расцветки (шейдер bike_rider: finish_*): перелив краски рамы и шлема к цвету flip под скользящим
 ## углом (alpha — сила, flip_power — резкость), искры металлика в лаке (flake — доля, flake_scale — на метр),
-## свечение графики и светлых деталей формы (glow). У расцветок без записи — FINISH_NONE, обычная краска.
+## свечение графики и светлых деталей формы (glow), рисунок сияния на маске цветами flip и pattern_tint (pattern — сила),
+## длинные рукава: кожа рук (место ARM) — ткань (sleeves). У расцветок без записи — FINISH_NONE, обычная краска.
 const FINISHES := {
-	"aurora": {flip = Color("1fe89a", 0.9), flip_power = 2.0, flake = 1.0, flake_scale = 260.0, glow = 0.45},
+	"aurora": {flip = Color("1fe89a", 0.9), flip_power = 2.0, flake = 0.6, flake_scale = 420.0, glow = 0.45,
+		pattern = 1.0, pattern_tint = Color("a46bff"), sleeves = 1.0},
 }
-const FINISH_NONE := {flip = Color(0, 0, 0, 0), flip_power = 1.0, flake = 0.0, flake_scale = 1.0, glow = 0.0}
+const FINISH_NONE := {flip = Color(0, 0, 0, 0), flip_power = 1.0, flake = 0.0, flake_scale = 1.0, glow = 0.0,
+	pattern = 0.0, pattern_tint = Color(0, 0, 0, 0), sleeves = 0.0}
 
 const SIDEWALLS := {
 	"glacier": "859aa5", "moss": "8b794b", "night": "444351", "lingon": "8b6767",
@@ -71,7 +76,8 @@ const STOCK_SIDEWALL := "8a6a4a"
 ## Общие места палитры, которые расцветка заменяет целиком (тональный чёрный: резина, металл, обувь, линзы)
 const SLOT_OVERRIDES := {
 	"obsidian": {RUBBER: "141618", ALLOY: "4b5156", BLACK: "1b1e20", DARK: "101214", LENS: "1d2226"},
-	"aurora": {ALLOY: "aab6d0", LENS: "6b4fd0"},
+	# 27.11: лиловый анодированный металл, тёмная маска под рисунок сияния, длинные рукава цвета ночного неба
+	"aurora": {ALLOY: "9a8ee0", LENS: "6b4fd0", MASK: "0a0e20", ARM: "272f66"},
 }
 
 const STOCK_TIRES := "tires_stock"
@@ -96,7 +102,7 @@ const TIRE_COLORS := {
 static func colors(scheme := "ember") -> PackedColorArray:
 	var s: Array = SCHEMES.get(scheme, SCHEMES.ember)
 	var c := PackedColorArray()
-	c.resize(FRAME_SECONDARY + 1)
+	c.resize(ARM + 1)
 	c[FRAME] = Color(s[0])
 	c[FRAME_ACCENT] = Color(s[1])
 	c[RUBBER] = Color("20272b")
@@ -114,6 +120,8 @@ static func colors(scheme := "ember") -> PackedColorArray:
 	c[COATING] = Color(s[6])
 	c[SIDEWALL] = Color(SIDEWALLS.get(scheme, STOCK_SIDEWALL))
 	c[FRAME_SECONDARY] = Color(s[7])
+	c[MASK] = c[NAVY]
+	c[ARM] = c[SKIN]
 	var overrides: Dictionary = SLOT_OVERRIDES.get(scheme, {})
 	for slot: int in overrides:
 		c[slot] = Color(overrides[slot])

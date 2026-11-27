@@ -8,7 +8,7 @@ shader_type spatial;
 // Работает одинаково в Forward+ и Compatibility: свет движка, без своих light().
 render_mode cull_back, depth_draw_opaque;
 
-uniform vec4 palette[17] : source_color;
+uniform vec4 palette[19] : source_color; // места — BikePalette (17 — маска, 18 — кожа рук)
 uniform vec4 tire_tread : source_color = vec4(0.0);
 uniform vec4 tire_sidewall : source_color = vec4(0.0);
 uniform vec4 grip_body : source_color = vec4(0.0);
@@ -24,6 +24,11 @@ uniform float finish_flip_power = 1.0;
 uniform float finish_flake = 0.0;
 uniform float finish_flake_scale = 1.0;
 uniform float finish_glow = 0.0;
+//   finish_pattern — ленты сияния на маске (место 17; координаты рисунка — COLOR.ba у её вершин), цвета finish_flip → finish_pattern_tint;
+//   finish_sleeves — длинные рукава: кожа рук (место 18) рисуется тканью своего цвета.
+uniform float finish_pattern = 0.0;
+uniform vec4 finish_pattern_tint : source_color = vec4(0.0);
+uniform float finish_sleeves = 0.0;
 uniform float fixed_slot = -1.0;
 uniform float fixed_kind = -1.0;
 uniform float wind = 0.0;           // 0..1: скорость езды для трепета ткани (BikeView)
@@ -50,9 +55,11 @@ varying float v_slot;
 varying float v_tire;
 varying vec3 v_up; // мировое «вверх» в осях вида: для отражения неба в стекле
 varying vec3 v_local; // точка в осях меша: искры металлика держатся за поверхность
+varying vec2 v_pattern; // координаты рисунка маски (поперёк лица, снизу вверх), запечены сборщиком
 
 void vertex() {
 	v_local = VERTEX;
+	v_pattern = COLOR.ba;
 	v_ao = COLOR.r;
 	v_slot = fixed_slot >= 0.0 ? fixed_slot : UV.x;
 	v_kind = fixed_kind >= 0.0 ? fixed_kind : UV.y;
@@ -88,8 +95,11 @@ void vertex() {
 }
 
 void fragment() {
-	int slot = clamp(int(v_slot + 0.5), 0, 16);
+	int slot = clamp(int(v_slot + 0.5), 0, 18);
 	int kind = int(v_kind + 0.5);
+	if (slot == 18 && finish_sleeves > 0.0) {
+		kind = KIND_FABRIC;
+	}
 	vec3 base = palette[slot].rgb;
 	if (v_tire > 0.5 && tire_tread.a > 0.0) {
 		base = slot == 15 ? tire_sidewall.rgb : tire_tread.rgb;
@@ -151,13 +161,26 @@ void fragment() {
 		// искры мельче пикселя гаснут, иначе вдали лак рябит
 		float visible = 1.0 - smoothstep(0.6, 1.4, length(fwidth(cell_pos)));
 		float sparkle = step(1.0 - finish_flake * 0.14, pick) * visible;
-		rough = mix(rough, 0.06, sparkle);
+		// искра — светлая крупинка с бликом; без металла: зеркальная крупинка отражает тёмное окружение и чернеет
+		rough = mix(rough, 0.12, sparkle);
 		spec = mix(spec, 1.0, sparkle);
-		metal = mix(metal, 0.9, sparkle);
-		base += sparkle * 0.06;
+		base = mix(base, mix(base, finish_flip.rgb, 0.5) + 0.12, sparkle);
 	}
 	if (finish_glow > 0.0 && (slot == 1 || slot == 10)) {
 		emit += base * finish_glow;
+	}
+	// Ленты сияния на маске: волнистая светлая кромка внизу и лучи, гаснущие вверх; цвет уходит от flip к tint
+	if (slot == 17 && finish_pattern > 0.0) {
+		vec2 p = v_pattern;
+		float edge = 0.24 + 0.10 * sin(p.x * 11.0 + 0.8) + 0.05 * sin(p.x * 27.0 + 2.1);
+		float above = p.y - edge;
+		float rays = 0.55 + 0.45 * sin(p.x * 70.0 + sin(p.x * 13.0) * 2.0);
+		float curtain = step(0.0, above) * exp(-above * 3.2) * rays;
+		float line = 1.0 - smoothstep(0.0, 0.035, abs(above));
+		float light = clamp(max(curtain * 0.75, line), 0.0, 1.0) * finish_pattern;
+		vec3 aurora = mix(finish_flip.rgb, finish_pattern_tint.rgb, clamp(above * 1.8, 0.0, 1.0));
+		base = mix(base, aurora, light);
+		emit += aurora * light * finish_glow;
 	}
 	// Затенение в углублениях: и рассеянный свет (AO), и немного прямой — иначе на солнце стыки плоские
 	ALBEDO = base * mix(0.55, 1.0, ao);
