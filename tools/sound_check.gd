@@ -90,7 +90,8 @@ func _isolated(ok: bool) -> void:
 	for speed: float in [0.0, 6.0, 11.0, 23.0]:
 		for frame in 120:
 			a.update(Vector3(16, 0, 16), speed, true, 1.0 / 60.0)
-		var valid := a._roll.volume_db <= -21.9
+		# _roll — петля покрытия «грунт»: потолок — её уровень в GameAudioConfig с запасом на торможение
+		var valid := a._roll.volume_db <= float(a.config.db_surface_texture) + 2.0
 		if speed == 0.0:
 			valid = valid and a._roll.volume_db <= -79.0 and a._water.volume_db <= -79.0 and a._surf.volume_db <= -79.0
 		print("speed %.0f: roll %.1f dB, water %.1f, surf %.1f" % [speed, a._roll.volume_db, a._water.volume_db, a._surf.volume_db])

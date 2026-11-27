@@ -50,10 +50,7 @@ const SURFACES := [
 @export var db_bird := -7.5
 @export var db_owl := -17.0
 @export var db_canopy_gust := -19.5
-@export var db_roll := -23.0
 @export var db_surface_texture := -17.0
-@export var db_freewheel := -28.0
-@export var db_chain := -27.0
 @export var db_brake_pad := -25.0
 @export var db_brake_skid := -17.0
 @export var db_suspension := -22.0
@@ -93,19 +90,9 @@ const SURFACES := [
 @export var expedition_rapids_boost := 1.28
 @export var expedition_mist_wind_base := 0.45
 @export var expedition_bird_density := 0.72
-## Ход педалей и колёс (27.11.2026). Петли записаны при опорном темпе (tools/make_ride_sounds.gd), поэтому
-## pitch_scale = темп / опорный темп меняет частоту щелчков вместе с высотой, как у настоящей цепи и втулки.
-@export var freewheel_ref_speed := 6.0          # м/с, при которой щелчки свободного хода идут с частотой петли
-@export var freewheel_pitch_range := Vector2(0.6, 1.5)
-@export var chain_ref_crank := 7.854            # рад/с педалей (75 об/мин), опорный темп петли цепи
-@export var chain_pitch_range := Vector2(0.55, 1.35)
-@export var chain_crank_range := Vector2(0.8, 4.0)   # рад/с: цепь проявляется от первых оборотов до полной
-@export var chain_attack_rate := 5.0            # мягкое появление цепи на старте, 1/с
 @export var pedal_hold_s := 0.28
-## Качение и покрытия от скорости: громкость с нуля без «пола» (прежний пол 0,42 и давал гул на старте),
-## высота меняется в узких пределах, плотность зёрен растёт сама, так как они идут по пройденному пути.
-@export var roll_speed_range := Vector2(0.5, 9.0)
-@export var roll_pitch_range := Vector2(0.97, 1.08)
+## Покрытия от скорости: громкость с нуля без «пола», высота меняется в узких пределах,
+## плотность зёрен растёт сама, так как они идут по пройденному пути.
 @export var texture_speed_range := Vector2(0.4, 4.5)
 @export var texture_pitch_range := Vector2(0.97, 1.07)
 @export var wet_moisture_threshold := 0.62
@@ -123,7 +110,6 @@ const SURFACES := [
 @export var land_med_max := 8.5
 
 ## Per-surface tactile acoustic profile.
-## - roll_gain: weight of the shared rubber roll layer on this surface
 ## - texture_file: seamless loop under surfaces/ (made by tools/make_ride_sounds.gd)
 ## - texture_db: relative texture level offset (dB)
 ## - brake_scrub_gain / brake_skid_gain / brake_pitch: braking & slip character
@@ -133,7 +119,6 @@ const SURFACES := [
 ## - step_db: footstep dB offset
 @export var surface_profiles: Dictionary = {
 	&"packed": {
-		"roll_gain": 0.85,
 		"texture_file": "surfaces/tex_packed.wav",
 		"texture_db": -3.5,
 		"brake_scrub_gain": 0.75,
@@ -145,7 +130,6 @@ const SURFACES := [
 		"step_db": -0.5,
 	},
 	&"dirt": {
-		"roll_gain": 0.92,
 		"texture_file": "surfaces/tex_dirt.wav",
 		"texture_db": -1.0,
 		"brake_scrub_gain": 0.90,
@@ -157,7 +141,6 @@ const SURFACES := [
 		"step_db": 0.0,
 	},
 	&"forest": {
-		"roll_gain": 0.82,
 		"texture_file": "surfaces/tex_forest.wav",
 		"texture_db": -0.5,
 		"brake_scrub_gain": 0.80,
@@ -169,7 +152,6 @@ const SURFACES := [
 		"step_db": -0.5,
 	},
 	&"gravel": {
-		"roll_gain": 1.00,
 		"texture_file": "surfaces/tex_gravel.wav",
 		"texture_db": 1.5,
 		"brake_scrub_gain": 1.00,
@@ -181,7 +163,6 @@ const SURFACES := [
 		"step_db": 0.5,
 	},
 	&"grass": {
-		"roll_gain": 0.68,
 		"texture_file": "surfaces/tex_grass.wav",
 		"texture_db": -0.5,
 		"brake_scrub_gain": 0.65,
@@ -193,7 +174,6 @@ const SURFACES := [
 		"step_db": -1.5,
 	},
 	&"sand": {
-		"roll_gain": 0.75,
 		"texture_file": "surfaces/tex_sand.wav",
 		"texture_db": 0.5,
 		"brake_scrub_gain": 0.95,
@@ -205,7 +185,6 @@ const SURFACES := [
 		"step_db": -0.5,
 	},
 	&"stone": {
-		"roll_gain": 1.05,
 		"texture_file": "surfaces/tex_stone.wav",
 		"texture_db": -0.5,
 		"brake_scrub_gain": 0.85,
@@ -217,7 +196,6 @@ const SURFACES := [
 		"step_db": 0.0,
 	},
 	&"wet": {
-		"roll_gain": 0.78,
 		"texture_file": "surfaces/tex_wet.wav",
 		"texture_db": 0.0,
 		"brake_scrub_gain": 0.85,
@@ -229,7 +207,6 @@ const SURFACES := [
 		"step_db": 0.0,
 	},
 	&"wood": {
-		"roll_gain": 0.72,
 		"texture_file": "surfaces/tex_wood.wav",
 		"texture_db": -2.5,
 		"brake_scrub_gain": 0.70,
@@ -241,7 +218,6 @@ const SURFACES := [
 		"step_db": 0.5,
 	},
 	&"snow": {
-		"roll_gain": 0.62,
 		"texture_file": "surfaces/tex_snow.wav",
 		"texture_db": 1.0,
 		"brake_scrub_gain": 0.90,
@@ -253,7 +229,6 @@ const SURFACES := [
 		"step_db": -0.5,
 	},
 	&"water": {
-		"roll_gain": 0.50,
 		"texture_file": "surfaces/tex_water.wav",
 		"texture_db": 2.0,
 		"brake_scrub_gain": 0.75,

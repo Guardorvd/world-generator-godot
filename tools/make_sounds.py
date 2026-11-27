@@ -270,10 +270,12 @@ def prepare_audio(x, peak=0.60, target_rms=None):
 # Ветер езды (bike/air_wind) и шипение шины (bike/tire_rush) убраны из игры.
 # Их генераторы здесь по-прежнему вызываются, чтобы общий rng шёл как раньше и остальные звуки
 # (приземления, шаги, окружение) при перезапуске получались байт в байт прежними; файлы не пишутся.
+# 27.11.2026 (later): roll, chain, freewheel, land.wav and step_soft_*/step_gravel_* were deleted at the
+# user's request (did not sound good); the game no longer uses them, so they are not written either.
 SKIP_FILES = {
-    "roll.wav", "freewheel.wav", "chain.wav", "bike/tire_rush.wav", "bike/air_wind.wav",
+    "roll.wav", "freewheel.wav", "chain.wav", "bike/tire_rush.wav", "bike/air_wind.wav", "land.wav",
 } | {f"surfaces/tex_{s}.wav" for s in (
-    "packed", "dirt", "forest", "gravel", "grass", "sand", "stone", "wet", "wood", "snow", "water")}
+    "packed", "dirt", "forest", "gravel", "grass", "sand", "stone", "wet", "wood", "snow", "water")} | {f"step_{k}_{i}.wav" for k in ("soft", "gravel") for i in range(1, 5)}
 
 
 def write_wav(rel_path, x, looped=False, peak=0.60, target_rms=None):

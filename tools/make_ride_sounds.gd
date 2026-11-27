@@ -1,11 +1,11 @@
 extends SceneTree
-## Генератор звуков езды (27.11.2026): качение шины, цепь с педалями, свободный ход, петли покрытий,
-## зёрна грунта и снега. Остальные звуки по-прежнему делает tools/make_sounds.py (numpy).
+## Ride sound generator (27.11.2026): surface loops and dirt/snow grains. Other sounds come from tools/make_sounds.py.
+## Roll, chain and freewheel loops were removed the same day at the user's request (did not sound good);
+## until new recordings exist, rolling is carried by the surface loops and pedaling is silent.
 ## Всё детерминировано (свои сиды), петли бесшовные: фильтры прогоняются по кругу дважды.
 ##
 ## Принципы этой версии:
 ## - ни одна петля езды не несёт гула: всё ниже ~150–200 Гц срезано, тело грунта — в средней полосе;
-## - цепь — мягкие щелчки звеньев с пульсом двух рабочих ходов педалей за оборот, без «гудящей» основы;
 ## - характер покрытия — в зерне и полосе, а не в низах; скорость меняет плотность зёрен (дистанция в игре).
 ##
 ## Запуск (из папки проекта):
@@ -15,13 +15,8 @@ extends SceneTree
 
 const RATE := 44100
 const ROOT := "res://resources/sounds/"
-## Опорная каденция цепи: 75 об/мин = 7.854 рад/с. При ней pitch_scale = 1 (GameAudioConfig.chain_ref_crank).
-const CHAIN_REF_RPM := 75.0
-## Опорная частота щелчков свободного хода при pitch_scale = 1 (GameAudioConfig.freewheel_ref_speed).
-const FREEWHEEL_CLICKS_PER_S := 48.0
 
 const LOOPS := [
-	"roll.wav", "chain.wav", "freewheel.wav",
 	"surfaces/tex_packed.wav", "surfaces/tex_dirt.wav", "surfaces/tex_forest.wav", "surfaces/tex_gravel.wav",
 	"surfaces/tex_grass.wav", "surfaces/tex_sand.wav", "surfaces/tex_stone.wav", "surfaces/tex_wet.wav",
 	"surfaces/tex_wood.wav", "surfaces/tex_snow.wav", "surfaces/tex_water.wav",
@@ -42,9 +37,6 @@ func _run() -> void:
 		quit(0)
 		return
 	var t0 := Time.get_ticks_msec()
-	_make("roll.wav", 11, func() -> PackedFloat32Array: return _roll(6.0), 0.15)
-	_make("chain.wav", 12, func() -> PackedFloat32Array: return _chain(4.0), 0.10)
-	_make("freewheel.wav", 13, func() -> PackedFloat32Array: return _freewheel(2.0), 0.11)
 	_make("surfaces/tex_packed.wav", 21, func() -> PackedFloat32Array: return _tex_packed(4.0), 0.13)
 	_make("surfaces/tex_dirt.wav", 22, func() -> PackedFloat32Array: return _tex_dirt(4.0), 0.13)
 	_make("surfaces/tex_forest.wav", 23, func() -> PackedFloat32Array: return _tex_forest(5.0), 0.12)
@@ -70,79 +62,6 @@ func _make(rel: String, seed_v: int, gen: Callable, target_rms: float) -> void:
 	var x: PackedFloat32Array = gen.call()
 	x = _write(rel, x, true, target_rms, 0.6)
 	print(_stats_line(rel, x))
-
-
-# ---------- Звуки езды ----------
-
-## Качение шины: мягкий шорох резины в средней полосе, лёгкая «шершавость» выступов протектора.
-## Низов нет: прежняя петля 75–420 Гц, опущенная по высоте, и давала гул на старте.
-func _roll(sec: float) -> PackedFloat32Array:
-	var n := int(sec * RATE)
-	var x := _pink(n)
-	x = _hp(x, 190.0, 0.7)
-	x = _hp(x, 190.0, 0.7)
-	x = _lp(x, 1500.0, 0.7)
-	x = _peak(x, 520.0, 1.0, 2.0)
-	var knob := _mod(n, 22.0)
-	var breath := _mod(n, 0.6)
-	for i in n:
-		x[i] *= (0.86 + 0.14 * knob[i]) * (0.9 + 0.1 * breath[i])
-	# редкие мельчайшие частицы под протектором
-	var crumbs := _scatter(n, 70.0, func() -> PackedFloat32Array:
-		return _grain(rng.randf_range(3.0, 7.0), rng.randf_range(900.0, 1500.0), rng.randf_range(2200.0, 3200.0), 0.5, rng.randf_range(1.0, 2.2)),
-		0.10, 0.30)
-	_add(x, crumbs, 0.35 * _rms(x) / maxf(_rms(crumbs), 1e-6))
-	return x
-
-
-## Цепь под нагрузкой: звенья по звезде 32T при 75 об/мин (40 щелчков в секунду) и два рабочих хода
-## педалей за оборот (2,5 Гц) — громче, когда ход давит. В петле 4 с — ровно 10 ходов и 160 звеньев.
-func _chain(sec: float) -> PackedFloat32Array:
-	var n := int(sec * RATE)
-	var x := PackedFloat32Array()
-	x.resize(n)
-	var stroke_hz := CHAIN_REF_RPM / 60.0 * 2.0
-	var links := int(round(sec * CHAIN_REF_RPM / 60.0 * 32.0))
-	var step := float(n) / links
-	for k in links:
-		var at := int(round((k + 0.5) * step + rng.randf_range(-0.0003, 0.0003) * RATE))
-		var t := float(at) / RATE
-		var press := 0.5 + 0.5 * cos(TAU * stroke_hz * t)
-		var g := rng.randf_range(0.8, 1.05) * (0.45 + 0.55 * press * press)
-		var fc := rng.randf_range(1350.0, 2000.0)
-		var tick := _grain(rng.randf_range(2.2, 3.4), fc * 0.7, fc * 1.5, 0.25, rng.randf_range(0.55, 0.9))
-		_add_circular(x, tick, at, g)
-	# смазанный шелест роликов по зубьям, тоже с пульсом хода
-	var swish := _pink(n)
-	swish = _hp(swish, 800.0, 0.7)
-	swish = _lp(swish, 2600.0, 0.7)
-	for i in n:
-		var press2 := 0.5 + 0.5 * cos(TAU * stroke_hz * float(i) / RATE)
-		swish[i] *= 0.55 + 0.45 * press2
-	_add(x, swish, 0.32 * _rms(x) / maxf(_rms(swish), 1e-6))
-	x = _hp(x, 420.0, 0.7)
-	x = _lp(x, 4200.0, 0.7)
-	return x
-
-
-## Свободный ход: мягкие короткие щелчки собачек в приглушённом корпусе втулки, без звонких тонов.
-func _freewheel(sec: float) -> PackedFloat32Array:
-	var n := int(sec * RATE)
-	var x := PackedFloat32Array()
-	x.resize(n)
-	var clicks := int(round(sec * FREEWHEEL_CLICKS_PER_S))
-	var step := float(n) / clicks
-	for k in clicks:
-		var at := int(round((k + 0.5) * step + rng.randf_range(-0.0002, 0.0002) * RATE))
-		var c := _modal(0.008, [[rng.randf_range(1500.0, 1700.0), 1.3, 0.5], [rng.randf_range(2500.0, 2800.0), 0.9, 0.25]], 0.5, 1200.0, 3400.0)
-		_add_circular(x, c, at, rng.randf_range(0.82, 1.0))
-	var bed := _pink(n)
-	bed = _hp(bed, 500.0, 0.7)
-	bed = _lp(bed, 1800.0, 0.7)
-	_add(x, bed, 0.06 * _rms(x) / maxf(_rms(bed), 1e-6))
-	x = _hp(x, 600.0, 0.7)
-	x = _lp(x, 4500.0, 0.7)
-	return x
 
 
 # ---------- Покрытия: характер в полосе и зерне, без низов ----------

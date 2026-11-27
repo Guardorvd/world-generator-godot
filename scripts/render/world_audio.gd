@@ -90,7 +90,8 @@ func _ready() -> void:
 	_surf = ambience_layer.surf_player
 	_fire = ambience_layer.fire_player
 	_bird = ambience_layer.bird_player
-	_roll = bike_layer.roll_player
+	# с 27.11.2026 отдельной петли качения нет: звук качения — петля покрытия (по умолчанию грунт)
+	_roll = bike_layer._tex_players[&"dirt"]
 	_bottom = bike_layer._fork_bottom_player
 	_knock = bike_layer._rim_knock_player
 	_crash = bike_layer._crash_player
