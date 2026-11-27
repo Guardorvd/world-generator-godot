@@ -2,7 +2,7 @@ extends SceneTree
 ## Isolated check of the soundtrack director (MusicDirector) and the music volume setting, no world, seconds.
 ## Uses three short generated test tracks in user:// with shortened timings, so the whole cycle fits in seconds:
 ## silence -> load (worker thread) -> fade in -> play -> fade out -> silence -> next track (shuffled, no repeat),
-## level never above db_music, smooth fades, pause duck, Music bus = music_volume (50 % by default),
+## level never above db_music, smooth fades, pause duck, Music bus = music_volume (30 % by default),
 ## and the real folder resources/sounds/soundtrack is scanned (prints how many tracks it holds).
 ## Run: godot --headless --path . --script res://tools/music_check.gd
 
@@ -33,6 +33,9 @@ func _run() -> void:
 
 	var real := MusicDirector.scan(String(cfg.music_dir))
 	print("папка %s: треков %d" % [cfg.music_dir, real.size()])
+	if not real.is_empty():
+		var first := MusicDirector.load_track(real[0])
+		ok = _check(ok, first != null and first.get_length() > 10.0, "настоящий трек грузится: %s, %.0f с" % [real[0].get_file(), first.get_length() if first != null else 0.0])
 
 	var m := MusicDirector.new()
 	root.add_child(m)
@@ -91,15 +94,15 @@ func _run() -> void:
 
 	# настройка громкости музыки
 	var s := GameSettings.new()
-	ok = _check(ok, is_equal_approx(s.music_volume, 0.5), "громкость музыки по умолчанию 50 %")
+	ok = _check(ok, is_equal_approx(s.music_volume, 0.3), "громкость музыки по умолчанию 30 %")
 	s.apply_volume()
 	var idx := AudioServer.get_bus_index(cfg.music_bus)
-	ok = _check(ok, idx != -1 and absf(AudioServer.get_bus_volume_db(idx) - linear_to_db(0.5)) < 0.05,
-		"шина Music: %.1f дБ при 50 %%" % (AudioServer.get_bus_volume_db(idx) if idx != -1 else 0.0))
+	ok = _check(ok, idx != -1 and absf(AudioServer.get_bus_volume_db(idx) - linear_to_db(0.3)) < 0.05,
+		"шина Music: %.1f дБ при 30 %%" % (AudioServer.get_bus_volume_db(idx) if idx != -1 else 0.0))
 	s.music_volume = 0.0
 	s.apply_volume()
 	ok = _check(ok, AudioServer.is_bus_mute(idx), "0 % выключает музыку")
-	s.music_volume = 0.5
+	s.music_volume = 0.3
 	s.apply_volume()
 
 	m.queue_free()

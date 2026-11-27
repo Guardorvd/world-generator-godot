@@ -35,7 +35,8 @@ const CLOUD_QUALITY_LEVELS := ["Низкие", "Средние", "Высокие
 const DEFAULT_CLOUD_QUALITY := 1
 const AudioBuses := preload("res://scripts/audio/game_audio_buses.gd")
 const DEFAULT_VOLUME := 0.8
-const DEFAULT_MUSIC_VOLUME := 0.5   # 27.11.2026: саундтрек; 100 % уже тише самих файлов (GameAudioConfig.db_music)
+const DEFAULT_MUSIC_VOLUME := 0.3   # 27.11.2026: саундтрек, 30 % по просьбе пользователя; 100 % уже тише самих файлов (GameAudioConfig.db_music)
+const OLD_MUSIC_VOLUME := 0.5       # первое значение по умолчанию: в файлах без метки music_default заменяется новым
 const DEFAULT_DAY_MINUTES := 7.0   # с 12.9 сутки за 7 минут; 0 — время стоит
 const OLD_DAY_MINUTES := 24.0      # прежнее значение по умолчанию: в файлах до 10.1 заменяется новым
 const DEFAULT_START_HOUR := 9.0
@@ -202,6 +203,8 @@ func _apply_config(cfg: ConfigFile) -> void:
 		style_amount[id] = _number(cfg, "style", id + "_amount", style_amount[id], 0.0, 1.0)
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	music_volume = _number(cfg, "sound", "music_volume", music_volume, 0.0, 1.0)
+	if not cfg.has_section_key("sound", "music_default") and is_equal_approx(music_volume, OLD_MUSIC_VOLUME):
+		music_volume = DEFAULT_MUSIC_VOLUME
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
 	# в файлах до 10.1 флага нет: час, отличный от прежнего значения по умолчанию, игрок выбирал сам;
@@ -383,6 +386,7 @@ func save_settings() -> Error:
 		cfg.set_value("style", id + "_amount", style_amount[id])
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("sound", "music_volume", music_volume)
+	cfg.set_value("sound", "music_default", DEFAULT_MUSIC_VOLUME)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
 	cfg.set_value("time", "start_hour_set", start_hour_set)

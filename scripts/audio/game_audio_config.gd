@@ -89,10 +89,10 @@ const SURFACES := [
 @export var music_dir := "res://resources/sounds/soundtrack"
 ## Level of a piece at 100 % music volume, under the file's own level (the "100 %" is already softer).
 @export var db_music := -7.0
-## Seconds of nature-only silence before the first piece after loading a world.
-@export var music_first_delay_range := Vector2(25.0, 55.0)
-## Seconds of silence between pieces.
-@export var music_gap_range := Vector2(90.0, 210.0)
+## Seconds of nature-only silence before the first piece after loading a world (27.11: 5–10 s, by the user).
+@export var music_first_delay_range := Vector2(5.0, 10.0)
+## Seconds of silence between pieces: one fades out, a short breath, the next fades in.
+@export var music_gap_range := Vector2(3.0, 8.0)
 @export var music_fade_in_s := 7.0
 @export var music_fade_out_s := 9.0
 ## Longer pieces fade out after this many seconds instead of playing to the end.
