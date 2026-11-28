@@ -636,6 +636,12 @@ func prepare_render_pipelines() -> Node3D:
 		probes.add_child(_beacon_layer.make_pipeline_probe())
 	if _paint_layer != null:
 		probes.add_child(_paint_layer.make_pipeline_probe())
+	# 28.11: призрак размещения велосипеда (Y) — свой узел игры, строится скрытым и потом переиспользуется
+	if not is_instance_valid(bike_placement):
+		bike_placement = BikePlacement.new()
+		bike_placement.visible = false
+		add_child(bike_placement)
+	bike_placement.prepare()
 	add_child(probes)
 	return probes
 

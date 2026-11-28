@@ -210,13 +210,14 @@ func refresh(reload_feed := true) -> void:
 		return
 	var selected_id := str(_selected.get("id", ""))
 	var selected_visible := false
+	# 28.11: Presentation.make (копия записи с треком и профилем, ~0,5 мс) — только для карточек, которые
+	# действительно строятся (_append_cards); фильтр — по тем же полям сохранённой записи.
 	for saved: Dictionary in feed.entries:
-		var entry: Dictionary = Presentation.make(saved)
-		if (_only_world and not same_world(entry)) or (bool(entry.get("walk", false)) and not settings.show_walks):
+		if (_only_world and not same_world(saved)) or (saved.get("walk") is bool and saved.walk and not settings.show_walks):
 			continue
-		_pending_entries.append(entry)
-		if str(entry.id) == selected_id:
-			_selected = entry
+		_pending_entries.append(saved)
+		if str(saved.get("id", "")) == selected_id:
+			_selected = Presentation.make(saved)
 			selected_visible = true
 	_count_label.text = ("Показано %d из %d" if _wide_cards else "%d / %d") % [_pending_entries.size(), feed.entries.size()] if not feed.entries.is_empty() else ""
 	_count_label.accessibility_name = "Показано %d из %d записей" % [_pending_entries.size(), feed.entries.size()]
@@ -280,7 +281,7 @@ func refresh(reload_feed := true) -> void:
 func _append_cards() -> void:
 	var count := mini(maxi(1, Config.feed_cards_per_frame), _pending_entries.size())
 	for i in count:
-		var entry: Dictionary = _pending_entries.pop_front()
+		var entry: Dictionary = Presentation.make(_pending_entries.pop_front())
 		_insert_card(entry)
 		if not str(entry.get("thumb", "")).is_empty():
 			var thumb_path: String = feed.thumb_path(str(entry.id))

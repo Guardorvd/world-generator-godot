@@ -16,6 +16,16 @@ var _feed_box: VBoxContainer
 var _feed_preview_box: PanelContainer
 var _feed_metrics: GridContainer
 var _compact_preview_box: PanelContainer
+## 28.11: PNG превью (320×200, ~3 мс) декодируется в рабочем потоке, а не в кадре открытия планшета; готовые текстуры
+## общие для карточек меню и планшета и живут в маленьком кэше по пути и версии файла.
+const PREVIEW_CACHE_LIMIT := 24
+static var _preview_cache := {} # путь -> [версия, текстура]
+static var _preview_order: Array[String] = []
+var _decode_task := -1
+var _decode_result := {}
+var _decode_path := ""
+var _decode_revision := -2
+var _decode_show := true
 
 
 func setup(entry: Dictionary, feed, wide := false, failed_previews := {}) -> void:
@@ -155,15 +165,67 @@ func update_preview(path: String) -> void:
 	var revision := Feed.thumb_revision(path)
 	if int(_failed_previews.get(path, -2)) == revision:
 		return
-	var image := Image.load_from_file(path)
-	if image == null or image.is_empty():
+	var cached: Variant = _preview_cache.get(path)
+	if cached != null and int(cached[0]) == revision:
+		_show_preview(cached[1], revision)
+		return
+	_decode_show = true
+	if _decode_task != -1 and _decode_path == path and _decode_revision == revision:
+		return
+	_finish_decode(false)
+	var result := {}
+	_decode_result = result
+	_decode_path = path
+	_decode_revision = revision
+	_decode_task = WorkerThreadPool.add_task(func() -> void: result.image = Image.load_from_file(path), false, "Превью заезда")
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	if _decode_task == -1:
+		set_process(false)
+	elif WorkerThreadPool.is_task_completed(_decode_task):
+		_finish_decode(true)
+
+
+func _finish_decode(apply: bool) -> void:
+	if _decode_task == -1:
+		return
+	WorkerThreadPool.wait_for_task_completion(_decode_task)
+	_decode_task = -1
+	set_process(false)
+	var image: Variant = _decode_result.get("image")
+	_decode_result = {}
+	if not apply:
+		return
+	var path := _decode_path
+	var revision := _decode_revision
+	if image == null or not image is Image or (image as Image).is_empty():
 		_failed_previews[path] = revision
 		return
 	_failed_previews.erase(path)
-	_preview.texture = ImageTexture.create_from_image(image)
+	var texture := ImageTexture.create_from_image(image)
+	_preview_cache[path] = [revision, texture]
+	_preview_order.erase(path)
+	_preview_order.append(path)
+	while _preview_order.size() > PREVIEW_CACHE_LIMIT:
+		_preview_cache.erase(_preview_order.pop_front())
+	if revision != Feed.thumb_revision(path):
+		update_preview(path) # пока шло чтение, файл заменили
+	elif _decode_show:
+		_show_preview(texture, revision)
+
+
+func _show_preview(texture: Texture2D, revision: int) -> void:
+	_preview.texture = texture
 	preview_revision = revision
 	if is_instance_valid(_missing):
 		_missing.hide()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and _decode_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_decode_task)
 
 
 func update_preview_status() -> void:
@@ -173,6 +235,7 @@ func update_preview_status() -> void:
 
 
 func unload_preview() -> void:
+	_decode_show = false # идущее чтение только пополнит кэш
 	if is_instance_valid(_preview):
 		_preview.texture = null
 		if is_instance_valid(_missing):

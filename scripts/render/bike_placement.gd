@@ -24,19 +24,26 @@ func begin(w: WorldData, h: Heightfield, origin: Vector3, yaw: float) -> void:
 	heading = wrapf(yaw + PI * 0.5, -PI, PI)
 	distance = MAX_DISTANCE
 	_distance_override = false
-	if not is_instance_valid(_ghost):
-		_ghost = load("res://scenes/bike.tscn").instantiate()
-		_ghost.set_script(null)
-		_ghost.get_node("Rider").free()
-		_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-		add_child(_ghost)
-		_tint(_ghost)
+	prepare()
 	active = true
 	visible = true
 	valid = false
 	candidate = {}
+
+## 28.11: призрак велосипеда строится заранее (GameWorld.prepare_render_pipelines, под заставкой): его прозрачный
+## материал — новые конвейеры, запись сессии показала 5 компиляций разом при первом нажатии Y посреди игры.
+func prepare() -> void:
+	if is_instance_valid(_ghost):
+		return
+	_ghost = load("res://scenes/bike.tscn").instantiate()
+	_ghost.set_script(null)
+	_ghost.get_node("Rider").free()
+	_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	add_child(_ghost)
+	_tint(_ghost)
+
 
 func _tint(node: Node) -> void:
 	if node is MeshInstance3D:

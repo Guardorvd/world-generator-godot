@@ -201,6 +201,7 @@ common/physics_jitter_fix=0.0
 [rendering]
 
 anti_aliasing/quality/msaa_3d=2
+limits/global_shader_variables/buffer_size=131072
 
 [shader_globals]
 
