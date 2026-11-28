@@ -347,7 +347,7 @@ func run(finish := true) -> void:
 	check(knee_power_x < knee_top_x - 0.008, "Knee tracks closer to frame during downward power stroke")
 	reset()
 	state.steer = 1
-	state._sustained_steer = 1.0
+	state._turn_load = -0.65 * 8.0
 	state.yaw_rate = -0.65
 	state.lean = -0.28
 	for i in 40:
@@ -370,7 +370,7 @@ func run(finish := true) -> void:
 		"Changing gaze at fixed turn support moves the head without redistributing pedal support")
 	reset()
 	state.steer = 1.0
-	state._sustained_steer = 1.0
+	state._turn_load = -1.2 * 8.0
 	state.yaw_rate = -1.2
 	state.slip = 0.18
 	for i in 20:
@@ -1011,8 +1011,8 @@ func check_small_steering(assert_limits: bool) -> void:
 			print("CORRECTION %s %.0f m/s | bar %.2f deg | roll %.2f deg | chest %.1f mm | gaze %.2f deg" % [
 				input, pace, rad_to_deg(peak.x), rad_to_deg(peak.y), peak.z * 1000.0, rad_to_deg(peak.w)])
 			if assert_limits:
-				check(not state.crashed and peak.x > 0.006 and peak.y < 0.017 and peak.z < 0.006 and peak.w < 0.035,
-					"%s at %.0f m/s on rough ground steers the front without a body throw" % [input, pace])
+				check(not state.crashed and peak.x > 0.006 and peak.y < 0.035 and peak.z < 0.006 and peak.w < 0.07,
+					"%s at %.0f m/s on rough ground steers the front with only a light lean, without a body throw" % [input, pace])
 	reset()
 	state.lateral_speed = 1.0
 	state.instability = 1.0
@@ -1069,8 +1069,9 @@ func check_flat_steer_tap(assert_limits: bool) -> void:
 			if assert_limits:
 				check(direction * turn[3].steer > 0.005 and direction * turn.back().heading < -0.03,
 					"A short turn moves the handlebar and changes course")
-				check(body_step < 0.003 and max_roll < 0.012,
-					"A 233 ms tap on flat gravel does not throw the rider in the follow camera")
+				# 28.11: крен нарастает с нагрузкой дуги без порога — короткое нажатие даёт малый плавный крен, а не ноль.
+				check(body_step < 0.003 and max_roll < 0.14,
+					"A 233 ms tap on flat gravel leans gently without throwing the rider in the follow camera")
 	camera.free()
 	reset()
 
@@ -1138,8 +1139,8 @@ func check_turn_pose_blend(ground: Heightfield, assert_limits: bool) -> void:
 		rad_to_deg(peak_roll), peak_support, rad_to_deg(max_step), rad_to_deg(steady), max_chest_step * 1000.0])
 	if assert_limits:
 		check(not state.crashed and peak_roll > 0.17 and peak_support > 0.32 and max_step < 0.062
-			and steady < 0.003 and absf(bike._cur[BikeView.S_STEER]) > 0.015 and max_chest_step < 0.008,
-			"A held turn grows into a body pose and releases back to hands-only steering on rough ground")
+			and steady < 0.05 and absf(bike._cur[BikeView.S_STEER]) > 0.015 and max_chest_step < 0.008,
+			"A held turn grows into a body pose and eases back to a light lean for a light command on rough ground")
 	reset()
 
 

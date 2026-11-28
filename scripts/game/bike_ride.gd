@@ -155,7 +155,8 @@ var _hop_buf := 0.0
 var _coyote := 0.0
 var _hop_from := 0.0
 var _stop_timer := 0.0
-var _sustained_steer := 0.0
+## 28.11: накопленная нагрузка дуги — сглаженное боковое ускорение поворота (м/с², знак как у крена).
+var _turn_load := 0.0
 var _ground_cross := 0.0
 var _support_grade := 0.0
 var _support_y := 0.0
@@ -192,9 +193,19 @@ func steer_shown() -> float:
 	return steer_visual()
 
 
+## Насколько дуга вовлекает корпус (0..1). Растёт непрерывно с накопленной нагрузкой дуги: лёгкая поправка
+## почти не трогает седока, удержание плавно доводит до полной позы — без порога по силе руля.
 func turn_pose_weight() -> float:
-	var transition := config.turn_pose_steer
-	return smoothstep(transition.x, transition.y, minf(_sustained_steer, absf(steer)))
+	var load := absf(_turn_load)
+	var knee2 := maxf(config.turn_pose_knee, 0.01) ** 2
+	var full2 := maxf(config.max_lat_accel, 0.1) ** 2
+	# Нормировано так, что на предельной дуге вовлечение полное.
+	return minf(load * load / (load * load + knee2) * (full2 + knee2) / full2, 1.0)
+
+
+## Сглаженная нагрузка дуги (м/с²): знак как у крена, по ней же седок кренится и смотрит в поворот.
+func turn_load() -> float:
+	return _turn_load
 
 
 func horizontal_velocity() -> Vector2:
@@ -306,7 +317,7 @@ func reset_motion() -> void:
 	feel_acceleration = 0.0
 	steer = 0.0
 	steer_angle = 0.0
-	_sustained_steer = 0.0
+	_turn_load = 0.0
 	yaw_rate = 0.0
 	slip = 0.0
 	lean = 0.0
@@ -701,9 +712,6 @@ func _step_horizontal(turn: float, grip: float, dt: float, w: WorldData, heights
 	elif steer * turn_clamped < 0.0:
 		rate = cfg.steer_reverse_response
 	steer = lerpf(steer, turn_clamped, Util.damp(rate, dt))
-	# Короткое подруливание сразу меняет курс и положение вилки. Вес переносится в удерживаемом повороте.
-	var pose_steer := absf(steer) if not airborne and turn_clamped != 0.0 else 0.0
-	_sustained_steer = lerpf(_sustained_steer, pose_steer, Util.damp(cfg.turn_pose_response, dt))
 
 	var fwd := Vector2(-sin(heading), -cos(heading))
 	var right := Vector2(cos(heading), -sin(heading))
@@ -733,6 +741,7 @@ func _step_horizontal(turn: float, grip: float, dt: float, w: WorldData, heights
 			return
 		x = next_pos.x
 		z = next_pos.y
+		_turn_load = lerpf(_turn_load, 0.0, Util.damp(cfg.turn_pose_response, dt))
 		_update_lean(0.0, cfg.lean_response * 0.5 * dt)
 		slip = move_toward(slip, 0.0, 4.0 * dt)
 		return
@@ -804,8 +813,11 @@ func _step_horizontal(turn: float, grip: float, dt: float, w: WorldData, heights
 	# Задевание края не превращает поправку рулём в глубокий крен.
 	var turn_side := -signf(steer)
 	var turn_accel := clampf(lat_a * turn_side, 0.0, absf(speed * wanted_yaw))
+	# 28.11: крен следует за накопленной нагрузкой дуги, а не за порогом руля. Короткое нажатие даёт малый
+	# крен, удержание доводит его до равновесного без ступеньки; на отпускании нагрузка спадает так же плавно.
+	_turn_load = lerpf(_turn_load, turn_side * turn_accel, Util.damp(cfg.turn_pose_response, dt))
 	var lean_share := cfg.lean_share * smoothstep(3.2, 8.5, absf(speed)) * turn_pose_weight()
-	var lean_goal := turn_side * minf(atan(turn_accel / cfg.gravity) * lean_share, cfg.lean_max)
+	var lean_goal := signf(_turn_load) * minf(atan(absf(_turn_load) / cfg.gravity) * lean_share, cfg.lean_max)
 	_update_lean(lean_goal, cfg.lean_response * dt)
 
 

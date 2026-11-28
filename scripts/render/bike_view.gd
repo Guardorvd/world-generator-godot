@@ -639,7 +639,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var fall_side := clampf(b.lateral_speed * 2.0, -1.0, 1.0)
 	var catch_goal := distress * fall_side * (1.0 - _stop) if not b.airborne else 0.0
 	_cur[S_BALANCE] = lerpf(_prev[S_BALANCE], catch_goal, Util.damp(9.0, dt)) if continuous else 0.0
-	var turn_lean := -b.rider_lean * smoothstep(0.08, 0.26, absf(b.rider_lean))
+	var turn_lean := -b.rider_lean * smoothstep(0.02, 0.26, absf(b.rider_lean))
 	_cur[S_TURN_SUPPORT] = clampf(turn_lean * TURN_SUPPORT_PER_RAD, -1.0, 1.0)
 	var side := -b.rider_lean * 0.13 + sin(_cur[S_CRANK]) * active_effort * (0.012 + up * 0.02)
 	_cur[S_SIDE] = clampf(side, -0.068, 0.068) - _cur[S_BALANCE] * 0.10
@@ -661,8 +661,12 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var effort_crouch := pedal_bob + active_effort * smoothstep(0.0, 0.12, slope) * 0.02
 	var crouch := air_crouch + jump_crouch + effort_crouch
 	crouch += b.instability * 0.032 * air_keep
-	# Седок переводит взгляд в дугу при большой команде, а скольжение читает по траектории.
-	var turn_look := (b.yaw_rate * GAZE_AHEAD_TIME - b.steer * GAZE_STEER_LEAD) * b.turn_pose_weight()
+	# 28.11: взгляд вдоль дуги — по накопленной нагрузке (сглаженная угловая скорость курса) и с упреждением руля.
+	# Доля растёт с нагрузкой линейно (раньше корпуса, у которого она квадратичная), без порога по силе руля:
+	# короткая поправка почти не крутит голову, удержание поворачивает её плавно и раньше плеч.
+	var arc_load := b.turn_load()
+	var gaze_share := clampf(absf(arc_load) / maxf(cfg.turn_pose_knee, 0.01), 0.0, 1.0)
+	var turn_look := (arc_load / maxf(absf(b.speed), 3.0) * GAZE_AHEAD_TIME - b.steer * GAZE_STEER_LEAD) * gaze_share
 	var look := clampf((turn_look - b.slip * 0.22) * smoothstep(0.2, 3.0, absf(b.speed)) + reverse_look * 0.58, -0.60, 0.60)
 	# 11.11: взгляд. После нескольких секунд спокойной езды голова время от времени поворачивается к обочине и
 	# возвращается; на стоянке седок осматривается шире. Поворот, тормоз, удар и тяжёлая работа сразу возвращают взгляд.
@@ -700,7 +704,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 		_sway_vel = 0.0
 	# Физика уже ограничивает ход и скорость Q/E. Пружина выше отвечает за внешнюю нагрузку.
 	_cur[S_SHIFT] = clampf(_reaction_shift + body * BODY_SHIFT_RANGE, -0.17, 0.2)
-	var look_blend := Util.damp(16.0, dt)
+	var look_blend := Util.damp(10.0, dt)
 	_cur[S_LOOK] = lerpf(_prev[S_LOOK], look, look_blend) if continuous else look
 	_cur[S_BREATH] = breath
 	# назад — таз ниже седла сзади («атака»), вперёд — привстал над рамой
