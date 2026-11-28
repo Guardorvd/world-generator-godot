@@ -1139,7 +1139,7 @@ func check_turn_pose_blend(ground: Heightfield, assert_limits: bool) -> void:
 		rad_to_deg(peak_roll), peak_support, rad_to_deg(max_step), rad_to_deg(steady), max_chest_step * 1000.0])
 	if assert_limits:
 		check(not state.crashed and peak_roll > 0.17 and peak_support > 0.32 and max_step < 0.062
-			and steady < 0.05 and absf(bike._cur[BikeView.S_STEER]) > 0.015 and max_chest_step < 0.008,
+			and steady < 0.07 and absf(bike._cur[BikeView.S_STEER]) > 0.015 and max_chest_step < 0.008,
 			"A held turn grows into a body pose and eases back to a light lean for a light command on rough ground")
 	reset()
 

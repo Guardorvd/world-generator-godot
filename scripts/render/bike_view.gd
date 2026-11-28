@@ -92,8 +92,7 @@ const LOAD_EFFORT := 0.95 # усилие на медленном подъёме
 const SPEED_TUCK := 0.08 # группировка на крейсерской скорости
 const BODY_SHIFT_RANGE := 0.17 # ход корпуса по Q/E, м
 const TURN_SUPPORT_PER_RAD := 2.65
-const GAZE_AHEAD_TIME := 0.24 # упреждение взгляда вдоль дуги, с
-const GAZE_STEER_LEAD := 0.09 # вклад руля в опережение взгляда, рад
+const GAZE_AHEAD_TIME := 0.30 # упреждение взгляда вдоль дуги, с (28.11: 0,24 + прежний вклад руля)
 const STOP_LEAN := 0.085
 const ROCK := 0.045 # крен рамы при педалировании стоя
 const BRAKE_WEIGHT_SHIFT := 0.105 # перенос корпуса назад при полном торможении
@@ -661,12 +660,12 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var effort_crouch := pedal_bob + active_effort * smoothstep(0.0, 0.12, slope) * 0.02
 	var crouch := air_crouch + jump_crouch + effort_crouch
 	crouch += b.instability * 0.032 * air_keep
-	# 28.11: взгляд вдоль дуги — по накопленной нагрузке (сглаженная угловая скорость курса) и с упреждением руля.
-	# Доля растёт с нагрузкой линейно (раньше корпуса, у которого она квадратичная), без порога по силе руля:
-	# короткая поправка почти не крутит голову, удержание поворачивает её плавно и раньше плеч.
+	# 28.11: взгляд вдоль дуги — по накопленной нагрузке (сглаженная угловая скорость курса), без мгновенного руля:
+	# лёгкая поправка — только руки и руль, голова почти не двигается; в удерживаемой дуге взгляд выходит
+	# на полную долю раньше корпуса (при половине нагрузки, у корпуса — к пределу) и ведёт плечи.
 	var arc_load := b.turn_load()
-	var gaze_share := clampf(absf(arc_load) / maxf(cfg.turn_pose_knee, 0.01), 0.0, 1.0)
-	var turn_look := (arc_load / maxf(absf(b.speed), 3.0) * GAZE_AHEAD_TIME - b.steer * GAZE_STEER_LEAD) * gaze_share
+	var gaze_share := minf(1.0, absf(arc_load) / maxf(cfg.turn_pose_knee, 0.01))
+	var turn_look := arc_load / maxf(absf(b.speed), 3.0) * GAZE_AHEAD_TIME * gaze_share
 	var look := clampf((turn_look - b.slip * 0.22) * smoothstep(0.2, 3.0, absf(b.speed)) + reverse_look * 0.58, -0.60, 0.60)
 	# 11.11: взгляд. После нескольких секунд спокойной езды голова время от времени поворачивается к обочине и
 	# возвращается; на стоянке седок осматривается шире. Поворот, тормоз, удар и тяжёлая работа сразу возвращают взгляд.
