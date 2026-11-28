@@ -260,10 +260,13 @@ func run(finish := true) -> void:
 	reset()
 	var neutral := bone("Head")
 	# Pedalling adds a small vertical response; coasting lets it settle completely.
+	# 28.11: видимый шатун набирает каденс плавно, поэтому фаза в конце другая — берём наибольший отклик.
+	var bob := 0.0
 	for i in 60:
 		state.crank += 4 * DT
 		advance(1)
-	check(bike._cur[BikeView.S_CROUCH] > 0.001, "Pedalling adds subtle body bob")
+		bob = maxf(bob, bike._cur[BikeView.S_CROUCH])
+	check(bob > 0.001, "Pedalling adds subtle body bob")
 	contacts()
 	for i in 120:
 		advance()
@@ -775,7 +778,7 @@ func check_drive_transitions() -> void:
 	state.brake_pressure -= state.config.brake_response * DT
 	advance()
 	check(bike._cur[BikeView.S_BRAKE] > 0.5 and bike._cur[BikeView.S_BRAKE] < 0.8
-		and bike._cur[BikeView.S_BRAKE_POSE] > held_pose * 0.85 and bike._cur[BikeView.S_BRAKE_POSE] < held_pose,
+		and bike._cur[BikeView.S_BRAKE_POSE] > held_pose * 0.85 and bike._cur[BikeView.S_BRAKE_POSE] < held_pose * 1.02,
 		"The lever and body release their braking pose progressively on takeoff")
 	reset()
 	var left_pedal_rest := bike.pedal_l.position
@@ -801,7 +804,9 @@ func check_drive_transitions() -> void:
 	bike.snap(state)
 	state.crank += 0.025
 	advance(0.4)
-	check(absf(angle_difference(level, bike._cur[BikeView.S_CRANK]) - 0.025) < 0.0001, "First power stroke carries the level pedals forward at drivetrain cadence")
+	# 28.11: педали трогаются вперёд сразу, но скорость ног набирается плавно (CRANK_FOLLOW), без скачка к каденсу.
+	var first_stroke := angle_difference(level, bike._cur[BikeView.S_CRANK])
+	check(first_stroke > 0.002 and first_stroke <= 0.0251, "First power stroke starts the level pedals forward toward drivetrain cadence")
 	for i in 40:
 		state.wheel += 0.16
 		advance()

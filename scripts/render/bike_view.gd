@@ -110,6 +110,7 @@ const WHEEL_HIT_DECAY := 9.0
 const LANDING_DECAY := 5.5
 const BRAKE_POSE_ENGAGE := 9.0
 const BRAKE_POSE_RELEASE := 4.5
+const CRANK_FOLLOW := 15.0 # 28.11: как быстро видимый шатун набирает и теряет скорость (1/с)
 
 # состояние на двух последних тактах (индексы S_*)
 var _prev := PackedFloat64Array()
@@ -165,6 +166,10 @@ var _stop_side := -1.0
 var _still_time := 0.0
 var _coast_time := 0.0
 var _coast_level := false
+## 28.11: скорость видимого шатуна (рад/с) — педали разгоняются и останавливаются плавно, без скачка скорости ног.
+var _crank_vel := 0.0
+## 28.11: скорости плавных переходов позы (_ease): переход начинается и заканчивается с нулевой скоростью.
+var _ease_vel := {}
 var _calm_time := 0.0
 var _gaze_amp := 0.0
 var _gaze_phase := 0.0
@@ -399,7 +404,8 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	var cfg := b.config if b.config != null else BikePhysicsConfig.current()
 	_steer_limit = cfg.max_steer_angle
 	var braking := clampf(b.brake_applied / cfg.brake_decel, 0.0, 1.0) if not b.airborne else 0.0
-	_cur[S_BRAKE] = b.brake_pressure
+	# Ручки жмутся сразу; отпускание — коротким плавным ходом, без щелчка за один такт.
+	_cur[S_BRAKE] = b.brake_pressure if not continuous or b.brake_pressure >= _prev[S_BRAKE] 		else _ease("lever", _prev[S_BRAKE], b.brake_pressure, 30.0, dt)
 	# Pitch about the front contact point while the rear wheel unloads.
 	var lift := b.nose_lift if not b.airborne else 0.0
 	_cur[S_TILT] -= lift
@@ -423,7 +429,9 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_SQUASH_R] = sq_r
 	_update_wheel_spin(b, dt)
 	_last_wheel = b.wheel
-	_cur[S_STEER] = b.steer_visual()
+	# 28.11: руль на виде — пружина с быстрым откликом поверх физики: курс тот же, но руль и кисти не получают
+	# скачка скорости, когда на малой скорости отпускают большой угол (возврат руля в физике — первого порядка).
+	_cur[S_STEER] = _ease("steer", _prev[S_STEER], b.steer_visual(), 45.0, dt) if continuous else b.steer_visual()
 	_update_foot_support(b, dt, continuous, cfg.stop_settle_time)
 	_cur[S_CRANK] = wrapf(_pedal_angle(b, dt), -PI, PI) if _has_state else b.crank
 	_last_crank = b.crank
@@ -496,15 +504,21 @@ func _pedal_angle(b: BikeRide, dt: float) -> float:
 	var angle := _prev[S_CRANK]
 	var step := angle_difference(_last_crank, b.crank)
 	if not b.riding:
+		_crank_vel = step / dt if dt > 0.0 else 0.0
 		return angle + step
 	var driving := not b.airborne and (absf(step) > 0.00001 or b.effort > 0.08)
 	_coast_time = _coast_time + dt if idle_life and not driving and not b.airborne else 0.0
+	# 28.11: шатун ведётся по скорости, а не по углу: при переходе педали ↔ накат, в полёте и при остановке
+	# скорость ног меняется плавно (за ~0,07 с), а не скачком от каденса к нулю и обратно.
+	var follow := Util.damp(CRANK_FOLLOW, dt)
 	if b.reversing and not b.airborne:
 		_coast_level = sin(angle) < 0.0
-		return angle + minf(0.0, b.speed) * dt / (BikeRide.WHEEL_R * maxf(1.0, b.gear))
+		_crank_vel = lerpf(_crank_vel, minf(0.0, b.speed) / (BikeRide.WHEEL_R * maxf(1.0, b.gear)), follow)
+		return angle + _crank_vel * dt
 	if driving:
 		_coast_level = sin(angle) < 0.0
-		return angle + step
+		_crank_vel = lerpf(_crank_vel, step / dt if dt > 0.0 else 0.0, follow)
+		return angle + _crank_vel * dt
 	if _coast_level and sin(angle) > 0.18:
 		_coast_level = false
 	elif not _coast_level and sin(angle) < -0.18:
@@ -518,14 +532,15 @@ func _pedal_angle(b: BikeRide, dt: float) -> float:
 		target = lerp_angle(target, PI if b.rider_lean < 0.0 else 0.0, corner)
 		var ready := -0.9 if _stop_side < 0.0 else PI - 0.9
 		target = lerp_angle(target, ready, smoothstep(0.0, 1.0, _stop))
-	var response := Util.damp(12.0 if b.airborne else 8.0, dt)
-	return rotate_toward(angle, target, minf(5.5 * dt, absf(angle_difference(angle, target)) * response))
+	var want := clampf(angle_difference(angle, target) * (12.0 if b.airborne else 8.0), -5.5, 5.5)
+	_crank_vel = lerpf(_crank_vel, want, follow)
+	return angle + _crank_vel * dt
 
 
 ## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
 func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, brake_amount: float) -> void:
 	var continuous := _has_state and _riding and b.riding
-	_air_pose = lerpf(_air_pose, 1.0 if b.airborne else 0.0, Util.damp(14.0 if b.airborne else 18.0, dt)) if continuous else (1.0 if b.airborne else 0.0)
+	_air_pose = _ease("air", _air_pose, 1.0 if b.airborne else 0.0, 22.0 if b.airborne else 28.0, dt) if continuous else (1.0 if b.airborne else 0.0)
 	var air_keep := 1.0 - _air_pose
 	# продольное ускорение по мировой скорости за тот же такт, что и у камеры (BikeRide.feel_acceleration)
 	var acceleration := clampf(b.feel_acceleration, -9.0, 7.0) if continuous else 0.0
@@ -541,7 +556,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var effort := _effort
 	# Рычаги следуют давлению, корпус — реализованному тормозному усилию в пятнах контакта.
 	var brake_response := BRAKE_POSE_ENGAGE if brake_amount > _prev[S_BRAKE_POSE] else BRAKE_POSE_RELEASE
-	var braking := lerpf(_prev[S_BRAKE_POSE], brake_amount, Util.damp(brake_response, dt)) if continuous else brake_amount
+	var braking := _ease("brake_pose", _prev[S_BRAKE_POSE], brake_amount, brake_response * 1.6, dt) if continuous else brake_amount
 	_cur[S_BRAKE_POSE] = braking
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
 	# на быстром спуске без педалей и на тряске — приподнимается и принимает удары ногами.
@@ -561,7 +576,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var stand_target := lerpf(ground_stand, -0.65, _air_pose) if continuous else 0.0
 	var brake_risk := b.brake_risk if not b.airborne else 0.0
 	var track := float(b.stance_driven and b.stance == BikeRide.Stance.TRACKSTAND and not b.airborne)
-	_cur[S_TRACK] = lerpf(_prev[S_TRACK], track, Util.damp(8.0, dt)) if continuous else 0.0
+	_cur[S_TRACK] = _ease("track", _prev[S_TRACK], track, 12.0, dt) if continuous else 0.0
 	stand_target = lerpf(stand_target, 0.32, _cur[S_TRACK])
 	if brake_risk > 0.0:
 		stand_target = lerpf(stand_target, -1.0, brake_risk)
@@ -757,7 +772,7 @@ func _update_foot_support(b: BikeRide, dt: float, continuous: bool, settle_time:
 			_prev[S_STOP] = 0.0
 		foot_down = _still_time > settle_time
 	var stop_goal := 1.0 if foot_down else 0.0
-	_stop = lerpf(_stop, stop_goal, Util.damp(5.0 if stop_goal > _stop else 9.0, dt)) if continuous else 0.0
+	_stop = clampf(_ease("stop", _stop, stop_goal, 8.0 if stop_goal > _stop else 13.0, dt), 0.0, 1.0) if continuous else 0.0
 	_cur[S_STOP] = _stop * _stop_side
 	# При смене ноги или старте удерживаем прежнюю опору, пока стопа уходит с земли.
 	if foot_down or _stop < 0.02:
@@ -803,10 +818,20 @@ static func _spring_step(pos: float, vel: float, goal: float, omega: float, dt: 
 	return Vector2(goal + (err + b * dt) * d, (vel - omega * b * dt) * d)
 
 
+## 28.11: плавный переход позы к цели — критически задемпфированная пружина (omega, 1/с) вместо сглаживания
+## первого порядка: у того скорость скачком прыгает с нуля при смене цели, и поза «дёргается» в начале перехода.
+func _ease(key: String, pos: float, goal: float, omega: float, dt: float) -> float:
+	var step := _spring_step(pos, float(_ease_vel.get(key, 0.0)), goal, omega, dt)
+	_ease_vel[key] = step.y
+	return step.x
+
+
 ## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)
 func snap(b: BikeRide) -> void:
 	if not _view_ready:
 		return
+	_ease_vel.clear()
+	_crank_vel = 0.0
 	_prev[S_PLACEMENT] = 0.0
 	_cur[S_PLACEMENT] = 0.0
 	_set_placement_appearance(1.0)
