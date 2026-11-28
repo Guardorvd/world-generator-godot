@@ -27,8 +27,8 @@ const LIST := [
 	{name = "укатанная земля", grain = 0.08, organic = 0.0, speed = 1.4, rough = 0.12, grip = 1.0, hard = false, color = [150, 126, 96]},
 	{name = "камень", grain = 1.0, organic = 0.0, speed = 1.2, rough = 0.45, grip = 0.9, hard = true, color = [157, 144, 121]},
 	{name = "песок", grain = 0.12, organic = 0.0, speed = 1.1, rough = 0.2, grip = 0.75, hard = false, color = [212, 194, 148]},
-	{name = "лесная тропа", grain = 0.18, organic = 0.65, speed = 1.22, rough = 0.32, grip = 0.95, hard = false, color = [124, 98, 68]},
-	{name = "травяная колея", grain = 0.05, organic = 1.0, speed = 1.15, rough = 0.28, grip = 0.95, hard = false, color = [150, 146, 96]},
+	{name = "лесная тропа", grain = 0.18, organic = 0.65, speed = 1.22, rough = 0.32, grip = 0.9, hard = false, color = [124, 98, 68]},
+	{name = "травяная колея", grain = 0.05, organic = 1.0, speed = 1.15, rough = 0.28, grip = 0.9, hard = false, color = [150, 146, 96]},
 ]
 
 const VILLAGE_R := 7.0    # ближе этого к костру (клеток) дорога укатана

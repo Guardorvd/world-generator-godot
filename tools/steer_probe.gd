@@ -178,7 +178,8 @@ func sync_ride(mode: String, pace: float, profile: String, grade: float, bank: f
 		var mid := heading + yaw * 0.5
 		var side := (Vector2(b.x, b.z) - at).dot(Vector2(cos(mid), -sin(mid)))
 		if steer_in != 0.0 and i >= 10 and absf(b.steer) >= 0.28:
-			wrong_side += int(not was_air and yaw * b.steer < -0.0005 and side * b.steer < -0.0005)
+			# 28.11: снос наружу при нехватке сцепления (тормоз в повороте) — нарочно; «против» считаем без сноса.
+			wrong_side += int(not was_air and absf(b.slip) < 0.01 and yaw * b.steer < -0.0005 and side * b.steer < -0.0005)
 			yaw_gaps += int(absf(yaw) < 0.0005 and b.speed > 4.0)
 		peak_accel = maxf(peak_accel, absf(yaw * b.speed / dt))
 		peak_roll = maxf(peak_roll, absf(b.lean))

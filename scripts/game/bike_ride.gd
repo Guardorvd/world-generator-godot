@@ -718,10 +718,21 @@ func _step_horizontal(turn: float, grip: float, dt: float, w: WorldData, heights
 	var prev_heading := heading
 	# Команда задаёт долю доступного угла. Тот же угол задаёт кривизну и положение колеса.
 	var base_cap := cfg.max_lat_accel * clampf(grip, 0.55, 1.15)
+	# 28.11: общий запас сцепления — тормоз и поворот берут из одного круга; в повороте остаётся не меньше доли.
+	var brake_use := brake_applied if not airborne else 0.0
+	var turn_cap := maxf(sqrt(maxf(base_cap * base_cap - brake_use * brake_use, 0.0)), base_cap * cfg.brake_turn_floor)
 	var bank_accel := bank_slope * cfg.gravity / sqrt(1.0 + bank_slope * bank_slope)
-	var lat_cap := maxf(base_cap * cfg.bank_grip_floor, base_cap - signf(speed * steer) * bank_accel)
+	var lat_cap := _bank_cap(turn_cap, bank_accel)
 	var angle_limit := minf(cfg.max_steer_angle, atan(WHEELBASE * lat_cap / maxf(speed * speed, 0.5)))
 	steer_angle = steer * angle_limit
+	# Запрошенная дуга — как на плотном грунте без тормоза. Чего не хватило сцеплению, уходит в снос наружу:
+	# линия расширяется, рама едет чуть боком (slip), а пыль, звук и реакции седока читают это как обычно.
+	var intent_cap := _bank_cap(cfg.max_lat_accel, bank_accel)
+	var intent_angle := steer * minf(cfg.max_steer_angle, atan(WHEELBASE * intent_cap / maxf(speed * speed, 0.5)))
+	var intent_lat := absf(tan(intent_angle)) * speed * speed / WHEELBASE
+	var shortfall := maxf(intent_lat - absf(tan(steer_angle)) * speed * speed / WHEELBASE, 0.0)
+	# Угол сноса — доля нехватки от запрошенной дуги: не зависит от скорости и не растёт при остановке.
+	var slide_angle := cfg.slide_angle * shortfall / maxf(intent_lat, 0.5)
 
 	if airborne:
 		yaw_rate = 0.0
@@ -746,9 +757,13 @@ func _step_horizontal(turn: float, grip: float, dt: float, w: WorldData, heights
 		slip = move_toward(slip, 0.0, 4.0 * dt)
 		return
 
-	# На земле только гасятся остатки боковой скорости после полёта или сдвига.
-	lateral_speed = move_toward(lateral_speed, 0.0, cfg.drift_recover * dt)
 	var wanted_yaw := -speed * tan(steer_angle) / WHEELBASE
+	# Снос нарастает и спадает плавно; остатки боковой скорости после полёта или сдвига гасятся как раньше.
+	var slide_goal := -signf(steer) * speed * tan(slide_angle)
+	if absf(slide_goal) > absf(lateral_speed) and slide_goal * lateral_speed >= 0.0:
+		lateral_speed = lerpf(lateral_speed, slide_goal, Util.damp(cfg.slide_response, dt))
+	else:
+		lateral_speed = move_toward(lateral_speed, slide_goal, cfg.drift_recover * dt)
 
 	if absf(speed) > 0.002 or absf(lateral_speed) > 0.002:
 		var center := Vector2(x, z)
@@ -816,9 +831,15 @@ func _step_horizontal(turn: float, grip: float, dt: float, w: WorldData, heights
 	# 28.11: крен следует за накопленной нагрузкой дуги, а не за порогом руля. Короткое нажатие даёт малый
 	# крен, удержание доводит его до равновесного без ступеньки; на отпускании нагрузка спадает так же плавно.
 	_turn_load = lerpf(_turn_load, turn_side * turn_accel, Util.damp(cfg.turn_pose_response, dt))
-	var lean_share := cfg.lean_share * smoothstep(3.2, 8.5, absf(speed)) * turn_pose_weight()
+	var lean_share := cfg.lean_share * smoothstep(1.5, 5.0, absf(speed)) * turn_pose_weight()
 	var lean_goal := signf(_turn_load) * minf(atan(absf(_turn_load) / cfg.gravity) * lean_share, cfg.lean_max)
 	_update_lean(lean_goal, cfg.lean_response * dt)
+
+
+## Предел бокового ускорения с учётом поперечного уклона (вираж помогает, обратный уклон отнимает до доли).
+func _bank_cap(cap: float, bank_accel: float) -> float:
+	var cfg := config if config != null else BikePhysicsConfig.current()
+	return maxf(cap * cfg.bank_grip_floor, cap - signf(speed * steer) * bank_accel)
 
 
 ## Два последовательных перехода с одной скоростью: седок к целевому крену, рама за седоком.

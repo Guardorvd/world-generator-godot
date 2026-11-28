@@ -78,6 +78,7 @@ enum {
 	S_BRAKE_POSE, # 12.11: поза торможения корпуса — входит и выходит плавно, ручки (S_BRAKE) жмутся сразу
 	S_WATCH,
 	S_BALANCE, # signed side of the catch leg
+	S_ISO, # 28.11: вертикальная развязка корпуса от тряски рамы в стойке над седлом (м, к приседу)
 
 	STATE_SIZE,
 }
@@ -92,7 +93,7 @@ const LOAD_EFFORT := 0.95 # усилие на медленном подъёме
 const SPEED_TUCK := 0.08 # группировка на крейсерской скорости
 const BODY_SHIFT_RANGE := 0.17 # ход корпуса по Q/E, м
 const TURN_SUPPORT_PER_RAD := 2.65
-const GAZE_AHEAD_TIME := 0.30 # упреждение взгляда вдоль дуги, с (28.11: 0,24 + прежний вклад руля)
+const GAZE_AHEAD_TIME := 0.34 # упреждение взгляда вдоль дуги, с (28.11: прежний вклад руля и больший крен)
 const STOP_LEAN := 0.085
 const ROCK := 0.045 # крен рамы при педалировании стоя
 const BRAKE_WEIGHT_SHIFT := 0.105 # перенос корпуса назад при полном торможении
@@ -110,6 +111,11 @@ const WHEEL_HIT_DECAY := 9.0
 const LANDING_DECAY := 5.5
 const BRAKE_POSE_ENGAGE := 9.0
 const BRAKE_POSE_RELEASE := 4.5
+const SHAKE_TRACK_LEVEL := 0.22 # 28.11: доля отклонения, на которую гладкая высота рамы подтягивается за такт
+const SHAKE_TRACK_RATE := 0.025 # то же для её скорости (вместе — около 4 Гц: тряска выше, рельеф ниже)
+const SHAKE_ISO_MAX := 0.04 # м
+const SHAKE_ISO_GAIN := 0.85 # доля тряски, которую гасят ноги и руки в стойке
+const SHAKE_STAND := Vector2(6.0, 18.0) # средняя тряска (вертикальное ускорение рамы, м/с²), при которой седок встаёт над седлом
 const CRANK_FOLLOW := 15.0 # 28.11: как быстро видимый шатун набирает и теряет скорость (1/с)
 
 # состояние на двух последних тактах (индексы S_*)
@@ -131,6 +137,12 @@ var _effort := 0.0
 var _hit_f := 0.0 # отклик седока на удар переднего и заднего колеса, затухает
 var _hit_r := 0.0
 var _rough_stance := 0.0 # off-saddle support held across closely spaced wheel strokes
+## 28.11: высота рамы без тряски (сглаживание с учётом наклона пути, ошибка на ровном подъёме — ноль),
+## её скорость и средняя величина тряски — по ним седок встаёт над седлом, а ноги и руки гасят тряску.
+var _frame_smooth := 0.0
+var _frame_rate := 0.0
+var _shake := 0.0
+var _body_y_before := 0.0 # высота рамы два такта назад — для её вертикального ускорения
 var _bar_kick := Vector2.ZERO # steering deflection and angular velocity
 var _landing_bias := 0.0 # positive for a nose-first touchdown
 var _stand := 0.0
@@ -560,7 +572,7 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	_cur[S_BRAKE_POSE] = braking
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
 	# на быстром спуске без педалей и на тряске — приподнимается и принимает удары ногами.
-	var climb := smoothstep(0.07, 0.16, slope) * smoothstep(0.45, 0.85, effort) * (1.0 - smoothstep(7.0, 11.0, absf(b.speed)))
+	var climb := smoothstep(0.09, 0.22, slope) * smoothstep(0.45, 0.85, effort) * (1.0 - smoothstep(10.0, 15.0, absf(b.speed)))
 	var sprint := smoothstep(1.5, 3.5, acceleration) * (1.0 - smoothstep(6.0, 10.0, absf(b.speed))) if boost else 0.0
 	# 12.11: рывок на Shift (BikeRide.surge) — седок встаёт на педали и раскачивает велосипед на любой скорости,
 	# пока длится прилив и он давит на педали; раньше стойка была только при разгоне до 10 м/с
@@ -586,11 +598,29 @@ func _update_rider(b: BikeRide, dt: float, boost: bool, cfg: BikePhysicsConfig, 
 	var fork_rate := fv if b.contact_f() else 0.0
 	var rear_rate := rv if b.contact_r() else 0.0
 	var stroke_rate := maxf(fork_rate, rear_rate)
-	var activity := maxf(smoothstep(1.3, 3.0, stroke_rate), maxf(_hit_f, _hit_r))
+	# 28.11: тряска рамы — отклонение высоты от её гладкого хода (альфа-бета: уровень и скорость, без отставания на уклоне).
+	var shake_now := 0.0
+	# Седок встаёт от частой тряски (вертикальное ускорение рамы), а не от перегибов рельефа и подъёмов.
+	var frame_accel := absf(_cur[S_BODY_Y] - 2.0 * _prev[S_BODY_Y] + _body_y_before) / maxf(dt * dt, 0.000001) 		if continuous and not b.airborne else 0.0
+	_body_y_before = _prev[S_BODY_Y]
+	if continuous and not b.airborne:
+		_frame_smooth += _frame_rate * dt
+		var residual := _cur[S_BODY_Y] - _frame_smooth
+		_frame_smooth += residual * SHAKE_TRACK_LEVEL
+		_frame_rate += residual * SHAKE_TRACK_RATE / maxf(dt, 0.001)
+		shake_now = clampf(residual, -SHAKE_ISO_MAX, SHAKE_ISO_MAX)
+	else:
+		_frame_smooth = _cur[S_BODY_Y]
+		_frame_rate = 0.0
+	_shake = lerpf(_shake, minf(frame_accel, 60.0), Util.damp(3.0, dt)) if continuous else 0.0
+	var activity := maxf(maxf(smoothstep(1.3, 3.0, stroke_rate), smoothstep(SHAKE_STAND.x, SHAKE_STAND.y, _shake)), maxf(_hit_f, _hit_r))
 	activity *= smoothstep(0.6, 3.2, absf(b.speed)) if not b.airborne else 0.0
 	_rough_stance = lerpf(_rough_stance, activity, Util.damp(5.0 if activity > _rough_stance else 3.0, dt)) if continuous else 0.0
 	stand_target = lerpf(stand_target, -0.72, _rough_stance)
-	_stand = lerpf(_stand, stand_target, 1.0 - exp(-dt * (4.0 if absf(stand_target) > absf(_stand) else 2.5))) if continuous else 0.0
+	_stand = _ease("stand", _stand, stand_target, 6.0 if absf(stand_target) > absf(_stand) else 4.0, dt) if continuous else 0.0
+	# Стоя над седлом, ноги и руки принимают тряску: корпус уходит вниз, когда рама подскакивает, и наоборот.
+	# Сидя тряска идёт через седло в тело, как в жизни.
+	_cur[S_ISO] = shake_now * smoothstep(0.15, 0.6, absf(_stand)) * SHAKE_ISO_GAIN if continuous else 0.0
 	var up := maxf(_stand, 0.0)
 	# Перенос от тяги уступает переносу назад по мере роста фактического тормозного усилия.
 	var drive_shift := clampf(-b.drive_force * 0.009, -0.06, 0.0) if continuous and not b.airborne else 0.0
@@ -849,6 +879,10 @@ func snap(b: BikeRide) -> void:
 	_bar_kick = Vector2.ZERO
 	_landing_bias = 0.0
 	_rough_stance = 0.0
+	_frame_smooth = b.y
+	_frame_rate = 0.0
+	_shake = 0.0
+	_body_y_before = b.y
 	_stand = 0.0
 	_takeoff = 0.0
 	_jump_prep = 0.0
@@ -1003,6 +1037,7 @@ func _draw_rider(allow_watch: bool, stop_side: float, pedal_rock := 0.0) -> void
 	pose.crank_angle = _mix[S_CRANK]
 	pose.tuck = _mix[S_TUCK]
 	pose.motion = Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
+	pose.iso = _mix[S_ISO]
 	pose.pitch = _mix[S_TILT]
 	pose.roll = _mix[S_ROLL] + pedal_rock
 	pose.sway = _mix[S_SWAY]

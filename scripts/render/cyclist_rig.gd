@@ -37,7 +37,7 @@ const BASE_POSES := {
 		chest = Vector3(0.0, -0.018, -0.145), elbow = Vector2(0.56, -0.24), wrist = 0.08,
 	},
 	BaseStance.DESCENT: {
-		hip = Vector3(0.0, 0.028, 0.063), pelvis_pitch = 0.045,
+		hip = Vector3(0.0, 0.016, 0.063), pelvis_pitch = 0.045, # 28.11: ниже на 12 мм — колени согнуты, ноги не упираются в длину при педалировании стоя
 		chest = Vector3(0.0, -0.058, 0.018), elbow = Vector2(0.80, -0.10), wrist = -0.11,
 	},
 	BaseStance.BRAKE: {
@@ -58,6 +58,7 @@ class PoseInput extends RefCounted:
 	var crank_angle := 0.0
 	var tuck := 0.0
 	var stand := 0.0 # +1 подъём стоя, -1 стойка на спуске, 0 сидя
+	var iso := 0.0 # 28.11: вертикальный сдвиг всего корпуса (м) — ноги и руки гасят тряску рамы в стойке над седлом
 	var effort := 0.0 # усилие на педалях с учётом приоритетов позы
 	var brake := 0.0
 	var front_load := 0.0
@@ -249,6 +250,7 @@ func pose(input: PoseInput) -> void:
 		hip_shift_z
 	)
 	hip += Vector3(fd_side * 0.045, -0.02, -0.185) * fd
+	hip.y -= input.iso
 	var pelvis_pitch := clampf(_base_pelvis_pitch - 0.08 * tuck - 0.03 * heavy * seated - 0.04 * rear_load, -0.15, 0.09)
 	var pelvis_yaw := -sway * (0.28 + 0.12 * heavy) + body_look * 0.12
 	var pelvis_roll := fd_side * 0.06 * fd + clampf(-drive_side * (0.016 * spin + 0.042 * heavy + 0.055 * pedal_up) - motion.y * 0.18 - roll * (0.26 + 0.14 * standing), -0.14, 0.14)
@@ -261,7 +263,7 @@ func pose(input: PoseInput) -> void:
 		var horizontal := Vector2(hip.x + hip_offset.x - ankle.x, hip.z + hip_offset.z - ankle.z).length_squared()
 		var leg_reach := LEG_LENGTH * 2.0 - 0.004 - (0.012 * fd if side == fd_side else 0.0)
 		var max_hip_y := ankle.y - hip_offset.y + sqrt(maxf(0.0, leg_reach * leg_reach - horizontal))
-		hip.y = _soft_min(hip.y, max_hip_y, 0.004)
+		hip.y = _soft_min(hip.y, max_hip_y, 0.012)
 	# 3. Положение корпуса и плеч: базовая поза + реакции, где передний удар (front_load) сначала сжимает руки и подаёт плечи,
 	# а в повороте корпус остаётся собранным над пятном контакта отдельно от наклона рамы.
 	var effort_brace := heavy * seated * 0.012 + up * 0.008
@@ -271,6 +273,7 @@ func pose(input: PoseInput) -> void:
 		-tuck * 0.45 - motion.z * 0.45 + motion.x - effort_brace * 0.70 + front_load * 0.024 - maxf(0.0, breath) * 0.35
 	)
 	chest += Vector3(fd_side * 0.02, 0.035, 0.07) * fd
+	chest.y -= input.iso
 	chest += Vector3(rest_side * 0.012, 0.02, 0.06) * rest
 	chest += Vector3(0.009, 0.018, 0.016) * wrist_view
 	# плечо свободной руки уходит назад: корпус чуть разворачивается в её сторону
