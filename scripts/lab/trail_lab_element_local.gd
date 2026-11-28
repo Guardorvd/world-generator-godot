@@ -137,8 +137,7 @@ static func check(input, route: TrailDefinition, e: TrailElement, base: Dictiona
 		if not flight.flew and not rolls_off: report.reasons.append("нет отрыва")
 		if flight.flew and (land > float(w.land_to) + 0.5 or (land < float(w.land_from) - 0.5 and not rolls_off) or float(flight.impact) > float(S.LEVELS[level].impact)): report.reasons.append("приземление вне допустимой зоны/удара")
 		var recovery := maxf(land, float(w.get("land_to", to))) + S.recovery_distance(v, true)
-		var looks := BikePhysicsConfig.current().look_times
-		var approach := S.tightest(route, maxf(0, from - S.HUB - v * float(looks[looks.size() - 1])), float(w.get("lip", from)))
+		var approach := S.tightest(route, maxf(0, from - S.HUB - v * float(S.LOOK_TIMES[S.LOOK_TIMES.size() - 1])), float(w.get("lip", from)))
 		var landing := S.tightest(route, float(w.get("land_from", from)), minf(route.route_length(), recovery))
 		if recovery > route.route_length() or minf(approach, landing) < v * v / (S.LAT_MAX * float(S.LEVELS[level].lat)): report.reasons.append("нет места для подхода, приземления и восстановления на этой скорости")
 	report.accepted = report.reasons.is_empty()

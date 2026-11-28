@@ -142,8 +142,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне", "safety", {actual = float(flight.impact), limit = float(S.LEVELS[_level(d, e.station)].impact), deviation = float(flight.impact) - float(S.LEVELS[_level(d, e.station)].impact)})
 					land_to = maxf(land_to, float(flight.land))
 				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rolls_off else "safety")
-				var looks := BikePhysicsConfig.current().look_times
-				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(looks[looks.size() - 1])), float(w.get("lip", from)))
+				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(S.LOOK_TIMES[S.LOOK_TIMES.size() - 1])), float(w.get("lip", from)))
 				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + S.recovery_distance(v, true)))
 				var required_radius := v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))
 				if minf(approach, landing) < required_radius:
@@ -202,7 +201,7 @@ static func _contact(y: PackedFloat32Array, s: float) -> float:
 static func fly_surface(y: PackedFloat32Array, start: float, entry: float, end: float) -> Dictionary:
 	var s := start
 	var v := entry
-	var dt := 1.0 / BikeRide.SUB_HZ
+	var dt := 1.0 / BikeRide.HZ
 	var airborne := false
 	var height := _contact(y, s)
 	var vy := 0.0
@@ -214,8 +213,8 @@ static func fly_surface(y: PackedFloat32Array, start: float, entry: float, end: 
 			vy = grade * v
 			height = _contact(y, s)
 			var cfg := BikePhysicsConfig.current()
-			for look: float in cfg.look_times:
-				if height + vy * look - S.G * look * look * 0.5 - _contact(y, s + v * look) > cfg.lift_threshold:
+			for look: float in S.LOOK_TIMES:
+				if height + vy * look - S.G * look * look * 0.5 - _contact(y, s + v * look) > cfg.micro_step_absorb:
 					airborne = true
 					break
 			if not airborne:

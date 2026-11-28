@@ -162,7 +162,7 @@ static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> Pla
 
 
 ## Множитель скорости по местности
-static func terrain_speed(w: WorldData, x: float, z: float, heights: Heightfield = null) -> float:
+static func terrain_speed(w: WorldData, x: float, z: float, heights: Heightfield = null, path_sample: Variant = null) -> float:
 	var info := w.tile_info(x / TILE, z / TILE)
 	if info.is_empty():
 		return 0.0
@@ -170,7 +170,7 @@ static func terrain_speed(w: WorldData, x: float, z: float, heights: Heightfield
 	if sp == 0.0:
 		sp = 0.4
 	if heights != null and heights.road_refinement != null:
-		var contact := heights.path_contact(x, z)
+		var contact: Dictionary = heights.path_contact(x, z) if path_sample == null else path_sample
 		if not contact.is_empty() and contact.surface != RoadSurface.NONE:
 			var path_speed: float = maxf(sp, 1.0 if contact.road else 0.9) * RoadSurface.LIST[contact.surface].speed
 			return lerpf(sp, path_speed, smoothstep(0.05, 0.9, contact.weight))

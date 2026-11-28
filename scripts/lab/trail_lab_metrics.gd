@@ -137,8 +137,8 @@ func _track_element(dt: float, bike: BikeRide, route: TrailDefinition, ms: float
 ## Падение в этот такт: записать до сброса (сбор метрик на время падения останавливается)
 func crash(bike: BikeRide) -> void:
 	crash_at = time
-	crash_info = "%s · %.0f км/ч · нагрузка %.2f / %.2f · снято с переднего %.2f" % [BikeRide.CrashCause.keys()[bike.crash_cause],
-		absf(float(bike.crash_info.get("speed", bike.speed))) * 3.6, bike.crash_info.get("load_f", bike.load_f), bike.crash_info.get("load_r", bike.load_r), bike.crash_info.get("unweight", bike.unweight)]
+	crash_info = "%s · %.0f км/ч · нагрузка %.2f / %.2f · ошибка угла %.2f" % [BikeRide.CrashCause.keys()[bike.crash_cause],
+		absf(float(bike.crash_info.get("speed", bike.speed))) * 3.6, bike.crash_info.get("load_f", bike.load_f), bike.crash_info.get("load_r", bike.load_r), float(bike.crash_info.get("pitch_error", 0.0))]
 
 ## Speeds are stored in m/s and shown in km/h.
 func report(route: TrailDefinition) -> String:

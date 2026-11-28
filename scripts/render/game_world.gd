@@ -142,7 +142,6 @@ const REPAIR_TICK_SECONDS := 0.45
 const REPAIR_TIME_EPSILON := 0.000001
 var _fix_target := ""
 var _fix_elapsed := 0.0
-var _pump_feedback_latched := false
 var paused := false
 var show_map := false
 var _hints_key := []  # от чего зависели последние подсказки (_update_hints)
@@ -182,12 +181,6 @@ var _prev: Vector3:
 var _prev_time: float:
 	get: return camera_controller._prev_time
 	set(value): camera_controller._prev_time = value
-var _tick_yaw: float:
-	get: return camera_controller._tick_yaw
-	set(value): camera_controller._tick_yaw = value
-var _tick_pitch: float:
-	get: return camera_controller._tick_pitch
-	set(value): camera_controller._tick_pitch = value
 
 var _defs: Dictionary
 var _grass_mesh: Mesh
@@ -1812,14 +1805,10 @@ func _physics_process(dt: float) -> void:
 			_shake_on_landing(player.land_impact, 10.0)
 			audio.land(player.x, player.z, player.feet, player.land_impact, false)
 			player.land_impact = 0.0
-	if bike.pump_pressed or _pump_feedback_latched:
-		_tick_pump_feedback(not _opening and not input_lock and not crash.active())
-	_tick_yaw = yaw - yaw0
 	t0 = _tick_mark("bike", t0)
 	water_effects.tick(dt, player, bike, _prev, heights)
 	if brake_effects != null:
 		brake_effects.tick(dt, bike, world, heights)
-	_tick_pitch = pitch - pitch0
 	# пружина проседания и затухающая тряска камеры
 	camera_controller.tick_effects(dt)
 	if not crash.active():
@@ -1888,8 +1877,6 @@ func _snap() -> void:
 		water_effects.clear()
 	if brake_effects != null:
 		brake_effects.clear()
-	_tick_yaw = 0.0
-	_tick_pitch = 0.0
 	if not crash.active():
 		bike_view.snap(bike)
 
@@ -1957,11 +1944,11 @@ func _process(delta: float) -> void:
 	hud.set_brakes(bike)
 	if _physics_debug_on and _physics_debug_label != null:
 		var stance_name := "НОГА" if bike.stance == BikeRide.Stance.FOOT_DOWN else ("БАЛАНС" if bike.stance == BikeRide.Stance.TRACKSTAND else "ЕЗДА")
-		_physics_debug_label.text = "%.1f км/ч (%.1f м/с) · %s · %s\nуклон %.1f%% / крен %.1f%%\nF %.2f (%.0f%%) · R %.2f (%.0f%%)\nнестаб. %.0f%% · тангаж %+.2f · g %.0f/%.0f" % [
+		_physics_debug_label.text = "%.1f км/ч (%.1f м/с) · %s · %s\nуклон %.1f%% / крен %.1f%%\nF %.2f (%.0f%%) · R %.2f (%.0f%%)\nнестаб. %.0f%% · тангаж %+.2f · g %.1f" % [
 			absf(bike.speed) * 3.6, bike.speed, stance_name, "ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ",
 			bike.grade_now * 100.0, bike.bank_slope * 100.0,
 			bike.load_f, bike.use_f * 100.0, bike.load_r, bike.use_r * 100.0,
-			bike.instability * 100.0, bike.pitch_vel, bike.config.ground_gravity, bike.config.air_gravity]
+			bike.instability * 100.0, bike.pitch_vel, bike.config.gravity]
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := 1.0 if _placing_bike() or _settlement_open() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
@@ -2027,7 +2014,7 @@ func _process(delta: float) -> void:
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta,
 		bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0,
 		_bike_skid_sound() if bike.riding else 0.0, bike.riding, bike.airborne,
-		bike.brakes.skid if bike.riding else 0.0, bike.slip if bike.riding else 0.0, bike.effort if bike.riding else 0.0,
+		bike.brake_skid if bike.riding else 0.0, bike.slip if bike.riding else 0.0, bike.effort if bike.riding else 0.0,
 		day.sunlight)
 
 	info_timer -= delta
@@ -2742,24 +2729,13 @@ func _update_camera(alpha: float, dt: float) -> void:
 	camera_controller.update(alpha, dt, player, bike, camera, time, _opening, _moving,
 		crash.active(), photo != null and photo.active,
 		photo.fov(services.settings.fov) if photo != null else services.settings.fov, bike_view.view_squash(),
-		bike_view.position.y if bike.riding else NAN)
+		bike_view.position.y if bike.riding else NAN, bike_view.view_roll())
 
 
 ## Хруст покрытия под тормозом: уверенное торможение в пределах сцепления слышно мягко, насыщение шин (тормоз
 ## просит больше, чем держат колёса) и снос — как юз. Нажатая кнопка сама по себе блокировку не изображает.
 func _bike_skid_sound() -> float:
-	return maxf(bike.braking * (0.3 + 0.7 * bike.brakes.skid), smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65)
-
-
-func _tick_pump_feedback(allowed: bool) -> void:
-	if not allowed or not bike.riding or bike.crashed or bike.airborne or not bike.pump_pressed \
-			or bike.pump_active <= 0.0 or bike.pump_wave >= 0.0 or bike.pump_accel < 0.25:
-		_pump_feedback_latched = false
-		return
-	if not _pump_feedback_latched and bike.pump_accel > 0.6:
-		_pump_feedback_latched = true
-		audio.pump_compression(bike.pump_accel)
-		hud.pulse_pump()
+	return maxf(bike.braking * (0.3 + 0.7 * bike.brake_skid), smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65)
 
 
 ## Удары велосипеда за такт — три отдельных события, ни одно не подавляет другое:

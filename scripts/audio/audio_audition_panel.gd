@@ -181,7 +181,7 @@ func _step_simulation(dt: float) -> void:
 		sim_bike.airborne = sim_airborne
 		sim_bike.crank = sim_crank
 		sim_bike.braking = sim_brake
-		sim_bike.brakes.skid = sim_skid
+		sim_bike.brake_skid = sim_skid
 		sim_bike.lean = sim_lean
 		audio.tick_bike(sim_bike, dt)
 		audio.update(pos, sim_speed, rolling, dt,
@@ -248,13 +248,13 @@ func _step_scenario(dt: float) -> void:
 				sim_airborne = false
 			elif cyc < 0.75:
 				sim_bike.hop_preparing = false
-				sim_bike._hop_used = true
+				sim_bike.hop_used = true
 				sim_airborne = true
 			else:
 				if sim_airborne:
 					audio.land(16.0, 16.0, 0.0, 4.8, true)
 				sim_airborne = false
-				sim_bike._hop_used = false
+				sim_bike.hop_used = false
 		"long_brake":
 			set_surface(&"gravel")
 			var phase := fmod(scenario_t, 4.0)
@@ -549,7 +549,7 @@ func run_headless_suite() -> bool:
 
 	# 5. Series of hops: no wind or ground loop in the air
 	set_surface(&"water")
-	sim_bike._hop_used = true
+	sim_bike.hop_used = true
 	for i in 45:
 		_step_frame_headless(11.0, false, true, 0.0, 0.0, 0.0, 1.0 / 60.0)
 	var air_loud := -80.0
@@ -557,7 +557,7 @@ func run_headless_suite() -> bool:
 		air_loud = maxf(air_loud, p.volume_db)
 	check.call(air_loud <= -60.0,
 		"Scenario 5 (Hop air phase): no wind or ground loop in the air (loudest %.1f dB)" % air_loud)
-	sim_bike._hop_used = false
+	sim_bike.hop_used = false
 	set_surface(&"dirt")
 	_step_frame_headless(11.0, false, false, 0.0, 0.0, 0.0, 1.0 / 60.0)
 
@@ -683,7 +683,7 @@ func _step_frame_headless(speed: float, pedaling: bool, airborne: bool, brake: f
 	sim_bike.airborne = airborne
 	sim_bike.crank = sim_crank
 	sim_bike.braking = brake
-	sim_bike.brakes.skid = skid
+	sim_bike.brake_skid = skid
 	sim_bike.lean = lean
 	mock_heights.test_current = Vector2(sim_river_flow, 0.0)
 	mock_heights.test_ceiling = 3.5 if sim_tunnel else INF

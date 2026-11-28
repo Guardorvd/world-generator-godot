@@ -73,9 +73,9 @@ func set_ride(bike: BikeRide, allowed: bool) -> void:
 	var dt := get_process_delta_time()
 	riding = bike.riding
 	speed = bike.speed
-	pressure = clampf(bike.brakes.pressure, 0.0, 1.0)
-	risk = bike.brakes.risk
-	skid = bike.brakes.skid
+	pressure = clampf(bike.brake_pressure, 0.0, 1.0)
+	risk = bike.brake_risk
+	skid = bike.brake_skid
 	var braking := allowed and riding and not bike.airborne and speed > MIN_SPEED and pressure > 0.02
 	# смена обстановки (слез, полёт, карта) прячет тормоз сразу; отпущенный тормоз гаснет плавно
 	if not allowed or not riding or bike.airborne:

@@ -1,7 +1,7 @@
 extends SceneTree
 const Friendly = preload("res://tools/bike_friendly_test.gd")
 class LabUI extends "res://scripts/lab/trail_lab.gd":
-	func rebuild(_candidate: Array[TrailDefinition], _compose_ms := -1.0, _ready := {}) -> bool:
+	func rebuild(_candidate: Array[TrailDefinition], _compose_ms := -1.0, _ready := {}, _input_source = null) -> bool:
 		return true
 var fails := 0
 func check(ok: bool, message: String) -> void:
@@ -38,7 +38,7 @@ func run() -> void:
 	lab.bike.airborne = true
 	lab.bike.air_time = 0.5
 	lab.bike.vy = -6.0
-	lab.bike._land(100.0, lab.heights)
+	lab.bike._land(100.0, 0.0, 1.0 / 60.0, lab.heights, lab.bike.config)
 	check(lab.bike.landing_info.air == 0.5 and lab.bike.landing_info.vy == -6.0, "landing captures flight before reset")
 	rec.tick(lab, 1.0 / 60, 0.0, 0.0, false, false)
 	lab.bike.landing_info = {}
@@ -57,7 +57,7 @@ func run() -> void:
 	var row := file.get_csv_line()
 	check(row.size() == columns.size() and row[columns.find("on_route")] == "0" and row[columns.find("nearest_valid")] == "1", "CSV distinguishes outside track from missing route")
 	var header = JSON.parse_string(FileAccess.get_file_as_string(path + ".header.json"))
-	check(header.format == 2 and header.route_snapshots.size() == 1, "versioned metadata")
+	check(header.format == 2 and header.route_snapshots.size() == 1 and header.bike_physics_version == BikePhysicsConfig.VERSION, "versioned metadata")
 	file.close()
 	var stamp = rec._stamp.duplicate()
 	lab.bike.reset_motion()

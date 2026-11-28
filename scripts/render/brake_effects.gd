@@ -321,10 +321,10 @@ func clear() -> void:
 static func step_rotor_heat(b: BikeRide, dt: float, prev_f: float, prev_r: float) -> Vector2:
 	var spd := absf(b.speed)
 	var cool := (0.22 + 0.032 * spd) * dt
-	var wf := maxf(b.brake_force.x, b.brakes.front_force) * spd if (b.riding and not b.airborne and b.contact_f()) else 0.0
-	var wr := maxf(b.brake_force.y, b.brakes.rear_force) * spd if (b.riding and not b.airborne and b.contact_r()) else 0.0
-	var hf := clampf(prev_f + (wf * 0.0085 + b.brakes.risk * 0.16) * dt - cool * (0.40 + 0.60 * prev_f), 0.0, 1.0)
-	var hr := clampf(prev_r + (wr * 0.0075 + b.brakes.risk * 0.12) * dt - cool * (0.40 + 0.60 * prev_r), 0.0, 1.0)
+	var wf := b.brake_force.x * spd if (b.riding and not b.airborne and b.contact_f()) else 0.0
+	var wr := b.brake_force.y * spd if (b.riding and not b.airborne and b.contact_r()) else 0.0
+	var hf := clampf(prev_f + (wf * 0.0085 + b.brake_risk * 0.16) * dt - cool * (0.40 + 0.60 * prev_f), 0.0, 1.0)
+	var hr := clampf(prev_r + (wr * 0.0075 + b.brake_risk * 0.12) * dt - cool * (0.40 + 0.60 * prev_r), 0.0, 1.0)
 	return Vector2(hf, hr)
 
 
@@ -387,14 +387,13 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 		var pal: Dictionary = PALETTES.get(surf_kind, PALETTES[SURF_GRAVEL])
 
 		# Продольное тормозное усилие, насыщение сцепления, боковой снос и скольжение на корнях/мокром
-		var b_force := maxf(b.brake_force.x if is_front else b.brake_force.y,
-			b.brakes.front_force if is_front else b.brakes.rear_force)
+		var b_force := b.brake_force.x if is_front else b.brake_force.y
 		var grip_use := b.use_f if is_front else b.use_r
 		var slick := b.slick_f if is_front else b.slick_r
 		var lat_force := absf(b.force_f.y if is_front else b.force_r.y)
 
 		var brake_ratio := clampf(b_force / (BikePhysicsConfig.current().brake_decel * (0.62 if is_front else 0.42)), 0.0, 1.4)
-		var skid_ratio := clampf(b.brakes.skid * (0.85 if is_front else 1.15) + maxf(0.0, grip_use - 0.72) * 2.2, 0.0, 1.2)
+		var skid_ratio := clampf(b.brake_skid * (0.85 if is_front else 1.15) + maxf(0.0, grip_use - 0.72) * 2.2, 0.0, 1.2)
 		var drift_ratio := clampf(smoothstep(0.04, 0.24, absf(b.slip)) * (0.75 if is_front else 1.15) + lat_force / 7.5, 0.0, 1.2)
 		var root_slip := clampf((1.0 - slick) * 1.8, 0.0, 1.0) * clampf(brake_ratio + drift_ratio, 0.0, 1.0)
 
@@ -410,7 +409,7 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 			continue
 
 		# Направление колеса (переднее повёрнуто на угол руля)
-		var wheel_yaw := b.heading - (b.steer_shown() * BikeView.STEER_VIEW if is_front else 0.0)
+		var wheel_yaw := b.heading - (b.steer_angle if is_front else 0.0)
 		var w_fwd := Vector3(-sin(wheel_yaw), 0.0, -cos(wheel_yaw))
 		var w_right := Vector3(cos(wheel_yaw), 0.0, -sin(wheel_yaw))
 
@@ -765,8 +764,12 @@ func _step_tracks(dt: float) -> void:
 			_t_count[w] -= 1
 			if _t_count[w] > 0:
 				_t_link[w][_t_head[w]] = 0
-		if _t_count[w] >= 2:
-			has_segments = true
+		if not has_segments and _t_count[w] >= 2:
+			var cur_head: int = _t_head[w]
+			for k in range(1, _t_count[w]):
+				if _t_link[w][(cur_head + k) % TRACK_POINTS] != 0:
+					has_segments = true
+					break
 
 	if not has_segments:
 		if _track_mesh.get_surface_count() > 0:

@@ -42,7 +42,7 @@ func _bake() -> void:
 		state.wheel += state.speed / 0.34 * DT
 		state._step_effort(1.0, DT)
 		var cfg := BikePhysicsConfig.current()
-		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
+		state.drive_force = cfg.pedal_accel * cfg.start_push_mult * state.effort * 0.5
 		bike.tick(state, DT, 1.0, false)
 	bike.draw(1.0)
 	var skeleton := bike.rider.skeleton

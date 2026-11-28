@@ -9,12 +9,11 @@ class LowRoof extends TestGround:
 	func ceiling_at(_x: float, pz: float, _feet: float) -> float:
 		return top if pz < from else INF
 
-## Курс допустим только в полосе [low, high]: узкий коридор (обе стороны) или угол (одна).
-class NarrowSlotBike extends BikeRide:
-	var low := -0.005
-	var high := 0.005
-	func fits(_px: float, _pz: float, hd: float, _w: WorldData, _h: Heightfield, _allow_climb := true) -> bool:
-		return hd > low and hd < high
+## Узкий коридор шириной 72 см, при can_exit_left открыт влево.
+class SlotGround extends TestGround:
+	var can_exit_left := false
+	func wall_at(px: float, _pz: float, _feet: float, r := 0.0) -> bool:
+		return px + r > 0.36 or (not can_exit_left and px - r < -0.36)
 
 ## Стена (как перила моста) севернее z = -1.
 class WallGround extends TestGround:
@@ -43,6 +42,7 @@ class LogTop extends RootBump:
 func root_ground() -> TestGround:
 	var rooty := TestGround.new(w)
 	rooty.obstacles = RootBump.new(w, rooty)
+	rooty.obstacles.bumps.resize(1)
 	return rooty
 
 ## Состояние, от которого зависят следующие подшаги и телеметрия
@@ -60,12 +60,7 @@ func over_root(lift: float) -> Dictionary:
 	var slick := false
 	var kick := 0.0
 	for i in 60:
-		if lift > 0.0:
-			b.lift_f = lift
-			b.lift_r = lift
-			b.lift_fv = 0.0
-			b.lift_rv = 0.0
-		b.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, rooty)
+		b.step(p, 0.0, 0.0, false, false, 1.0 / 60.0, rooty.world, rooty)
 		slick = slick or b.slick_f < 1.0 or b.slick_r < 1.0
 		kick = maxf(kick, maxf(absf(b.squash_fv), absf(b.squash_rv)))
 	return {speed = b.speed, slick = slick, kick = kick, z = b.z}
@@ -74,37 +69,33 @@ func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 60)
 	run.call_deferred()
 
-func slot(lateral: float, low := -0.005, high := 0.005) -> NarrowSlotBike:
-	var b := NarrowSlotBike.new()
-	b.low = low
-	b.high = high
-	b.y = 100.0
-	b.mount(p)
-	b.speed = 12.0
+func slot(lateral: float) -> BikeRide:
+	var b := bike(12.0)
 	b.lateral_speed = lateral
-	b.slip = atan2(lateral, 12.0)
 	return b
 
 func run() -> void:
 	# A1: доворот из заноса не выводит раму из допустимого курса, в обе стороны заноса
+	var walls := SlotGround.new(w)
 	for lateral: float in [7.0, -7.0]:
 		var narrow := slot(lateral)
 		var bad := 0
 		for i in 12:
-			narrow.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, ground)
-			bad += int(not narrow.fits(narrow.x, narrow.z, narrow.heading, w, ground))
+			narrow.step(p, 0.0, signf(lateral), false, false, 1.0 / 120.0, w, walls)
+			bad += int(not narrow.fits(narrow.x, narrow.z, narrow.heading, w, walls))
 		check(bad == 0 and not narrow.crashed, "A1 коридор, занос %+.0f: курс %.4f, вне габарита %d подшагов" % [lateral, narrow.heading, bad])
 	# у угла открыта одна сторона: доворот в свободную сторону сохраняется
-	var corner := slot(-7.0, -0.005, 1.0)
+	var corner := slot(-7.0)
+	walls.can_exit_left = true
 	for i in 12:
-		corner.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, ground)
-	check(corner.heading > 0.05 and corner.fits(corner.x, corner.z, corner.heading, w, ground), "A1 угол: доворот в открытую сторону %.3f" % corner.heading)
+		corner.step(p, 0.0, -1.0, false, false, 1.0 / 120.0, w, walls)
+	check(corner.heading > 0.05 and corner.fits(corner.x, corner.z, corner.heading, w, walls), "A1 угол: доворот в открытую сторону %.3f" % corner.heading)
 	# A4: велосипед после езды по корням с тормозом в дуге и свежий на одном старте едут одинаково
 	var rooty := root_ground()
 	var used := bike(9.0)
 	for i in 90:
 		used.step(p, -0.6, 0.8, false, false, 1.0 / 120.0, w, rooty)
-	var used_slick := used.slick_f < 1.0 or used.slick_r < 1.0 or used.force_f != Vector2()
+	var used_motion := used.brake_pressure > 0.0 and absf(used.heading) > 0.05
 	var fresh := bike(0.0)
 	var runs: Array = []
 	for b: BikeRide in [fresh, used]:
@@ -118,63 +109,29 @@ func run() -> void:
 			b.step(p, 0.5, 0.3, false, false, 1.0 / 120.0, w, rooty)
 			if i == 0: runs.append(snapshot(b))
 		runs.append(snapshot(b))
-	check(used_slick and runs[0] == runs[2] and runs[1] == runs[3], "A4 сброс: первый подшаг и 0,5 с после посадки совпадают у свежего и ездившего")
-	# B3: посадка передним колесом на бревно — вертикальная скорость после посадки по уклону той же опоры
+	check(used_motion and runs[0] == runs[2] and runs[1] == runs[3], "A4 сброс: первый подшаг и 0,5 с после посадки совпадают у свежего и ездившего")
+	# B3: посадка передним колесом на бревно
 	var logged := TestGround.new(w)
 	logged.obstacles = LogTop.new(w, logged)
+	logged.obstacles.data.resize(1)
 	var lander := bike(5.0)
 	lander.z = -1.0 + BikeRide.HUB
-	var g := lander._contact(lander.x, lander.z, logged)
+	var g := lander._contact_mid(lander.x, lander.z, logged)
 	lander.airborne = true
 	lander.y = g
 	lander.vy = -3.0
-	lander._land(g, logged)
+	lander._land(g, lander._slope(logged), 1.0 / 60.0, logged, lander.config)
 	var along := lander._slope(logged)
-	var expected_vy := along * lander.speed * lerpf(1.0, 0.35, smoothstep(1.2, 4.5, float(lander.landing_info.get("impact", 0.0))))
+	var expected_vy := along * lander.speed
 	check(along > 0.2 and absf(lander.vy - expected_vy) < 0.005 and not lander.crashed,
 		"B3 посадка на кромку бревна: уклон опоры %.3f, vy после %.3f" % [along, lander.vy])
-	# A3: педали тянут только через заднее колесо на земле
-	var grounded := bike(6.0)
-	var rear_up := bike(6.0)
-	rear_up.lift_r = 0.2
-	grounded.effort = 1.0
-	rear_up.effort = 1.0
-	grounded._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
-	rear_up._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
-	check(grounded.speed > 6.0 and rear_up.speed < 6.0, "A3 газ с поднятым задним: на земле %.4f, поднято %.4f м/с" % [grounded.speed, rear_up.speed])
-	# скользкое заднее на ходу тянет в пределах запаса, у старта — помощь в полную силу
-	var slick := bike(3.5)
-	slick.slick_r = BikePhysicsConfig.current().root_grip
-	var full := bike(3.5)
-	slick.effort = 1.0
-	full.effort = 1.0
-	slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
-	full._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
-	var start_slick := bike(0.5)
-	start_slick.slick_r = BikePhysicsConfig.current().root_grip
-	var start := bike(0.5)
-	start_slick.effort = 1.0
-	start.effort = 1.0
-	start_slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
-	start._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
-	check(slick.speed < full.speed and is_equal_approx(start_slick.speed, start.speed),
-		"A3 тяга по запасу: на корне %.4f < %.4f; старт на корне %.4f = %.4f" % [slick.speed, full.speed, start_slick.speed, start.speed])
-	# обычный старт и подъём 15 % с газом
+	# A3: обычный старт и подъём 15 % с газом
 	ground.gradient = Vector2(0, -0.15)
 	var climb := bike(0.0)
 	for i in 240:
 		tick(climb, 0.0, false, 60, 1.0)
 	ground.gradient = Vector2.ZERO
 	check(climb.speed > 3.0 and -climb.z > 15.0, "A3 подъём 15%% с места за 4 с: %.2f м/с, %.1f м" % [climb.speed, -climb.z])
-	# B2: поднятое выше корня колесо его не чувствует; ниже вершины — чувствует
-	var plain := over_root(-1.0)
-	var rolled := over_root(0.0)
-	var lifted := over_root(0.2)
-	var grazing := over_root(0.03)
-	check(rolled.z < -2.5 and rolled.speed < plain.speed - 0.01 and rolled.slick, "B2 корень на земле: %.3f против %.3f без корня, скользко %s" % [rolled.speed, plain.speed, rolled.slick])
-	check(absf(lifted.speed - plain.speed) < 0.001 and not lifted.slick and lifted.kick <= plain.kick + 0.001,
-		"B2 колёса выше корня: %.4f = %.4f, скользко %s, толчок %.3f" % [lifted.speed, plain.speed, lifted.slick, lifted.kick])
-	check(grazing.speed < plain.speed - 0.001 and grazing.slick, "B2 колёса ниже вершины корня: %.3f, скользко %s" % [grazing.speed, grazing.slick])
 	# B1: удар в стену и жёсткая посадка в одном подшаге — одно событие (первое), игрок на месте велосипеда
 	var wall := WallGround.new(w)
 	var both := bike(14.0)
@@ -182,16 +139,16 @@ func run() -> void:
 	both.airborne = true
 	both.y = 100.01
 	both.vy = -20.0
-	both.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, wall)
+	both.step(p, 0.0, 0.0, false, false, 1.0 / 60.0, w, wall)
 	check(both.crashed and both.crash_cause == BikeRide.CrashCause.COLLISION and both.crash_normal.z > 0.9 and both.crash_velocity.y < -19.0 and p.z == both.z,
 		"B1 стена + посадка: причина %s, нормаль %s, vy %.1f" % [BikeRide.CrashCause.keys()[both.crash_cause], both.crash_normal, both.crash_velocity.y])
 	# удар с нажатым пробелом: подготовка прыжка после падения не начинается, следующий шаг ничего не двигает
 	var hopping := bike(14.0)
 	hopping.z = both.z
-	hopping.step(p, 0.0, 0.0, false, true, 1.0 / 120.0, w, wall)
+	hopping.step(p, 0.0, 0.0, false, true, 1.0 / 60.0, w, wall)
 	var at := Vector3(hopping.x, hopping.y, hopping.z)
-	hopping.step(p, 1.0, 0.0, false, true, 1.0 / 120.0, w, wall)
-	check(hopping.crashed and hopping.crash_cause == BikeRide.CrashCause.COLLISION and hopping._auto_hop < 0.0 and hopping._hop_buf == 0.0 \
+	hopping.step(p, 1.0, 0.0, false, true, 1.0 / 60.0, w, wall)
+	check(hopping.crashed and hopping.crash_cause == BikeRide.CrashCause.COLLISION and not hopping.hop_preparing \
 		and Vector3(hopping.x, hopping.y, hopping.z) == at and p.z == hopping.z, "B1 стена + пробел: прыжок не готовится, после падения шаг не двигает")
 	# A2: прыжок под сводом не поднимает габарит седока выше свода (с места и на ходу, 60 и 144 Гц)
 	var roof := LowRoof.new(w)

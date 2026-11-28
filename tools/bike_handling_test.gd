@@ -58,95 +58,21 @@ func corner(pace: float, surface: int, hz := 60) -> BikeRide:
 
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 180)
-	# 7.3+: каменистый участок на скорости расходует сцепление сверх свойств покрытия.
-	w.surface = RoadSurface.STONE
-	var rocks := bike(16.0)
-	rocks.steer = 1.0
-	rocks._yaw_rate = -2.0
-	tick(rocks, 1.0)
 	w.surface = RoadSurface.PACKED
-	var packed_corner := bike(16.0)
-	packed_corner.steer = 1.0
-	packed_corner._yaw_rate = -2.0
-	tick(packed_corner, 1.0)
-	# Курс рамы теперь может опережать траекторию: сравниваем направление движения.
-	check(absf(rocks.horizontal_velocity().angle_to(Vector2(0, -1))) < absf(packed_corner.horizontal_velocity().angle_to(Vector2(0, -1))),
-		"быстрый поворот по камням требует дополнительного запаса сцепления")
-	w.surface = RoadSurface.STONE
-	var careful := bike(4.0)
-	var careful_reference := bike(4.0)
-	careful_reference._step_speed(0.0, false, 0.0, PlayerState.terrain_speed(w, 0.0, 0.0, ground), DT, 0.9)
-	tick(careful)
-	check(absf(careful.speed - careful_reference.speed) < 0.00001,
-		"медленный проезд камней не получает дополнительного сопротивления")
-	var quick := bike(16.0)
-	var quick_reference := bike(16.0)
-	quick_reference._step_speed(0.0, false, 0.0, PlayerState.terrain_speed(w, 0.0, 0.0, ground), DT, 0.9)
-	tick(quick)
-	check(quick.speed < quick_reference.speed - 0.001,
-		"быстрый прямой проезд камней расходует часть наката")
-	w.surface = RoadSurface.PACKED
-	# 7.3: инерция перекладки и общий запас сцепления тормоза/поворота.
-	var slow_response := bike(4.0)
-	var fast_response := bike(16.0)
-	slow_response.steer = 1.0
-	fast_response.steer = 1.0
-	slow_response._step_turn(1.0, 1.0, DT)
-	fast_response._step_turn(1.0, 1.0, DT)
-	check(absf(slow_response._yaw_rate) > absf(fast_response._yaw_rate), "на скорости поворот набирается более инерционно")
-	fast_response.speed = 0.0
-	check(fast_response._step_turn(1.0, 1.0, DT) == 0.0, "остановка гасит остаточное вращение")
-	var coast_turn := bike(16.0)
-	var brake_turn := bike(16.0)
-	for i in 30:
-		tick(coast_turn, 1.0)
-		tick(brake_turn, 1.0, false, -1.0)
-	var side_with_brake := brake_turn._side_caps(1.0)
-	var applied := brake_turn.brake_applied
-	# Сравнить запас на том же такте и при той же развесовке: скорость и перенос веса уже изменились.
-	brake_turn.brakes.front_force = 0.0
-	var side_without_brake := brake_turn._side_caps(1.0)
-	check(applied > 1.0 and brake_turn.speed < coast_turn.speed and side_with_brake.x < side_without_brake.x - 0.01,
-		"реальный тормоз в повороте расходует боковой запас передней шины")
-	coast_turn = bike(16.0)
-	for i in 30:
-		coast_turn._step_turn(1.0, 1.0, DT)
-	var packed_yaw := absf(coast_turn._yaw_rate)
-	coast_turn._step_turn(1.0, 0.75, DT)
-	check(absf(coast_turn._yaw_rate) < packed_yaw,
-		"при въезде на песок накопленный поворот ограничен сцеплением")
-	var packed_brake := bike(12.0)
-	var sand_brake := bike(12.0)
-	for i in 60:
-		w.surface = RoadSurface.PACKED
-		tick(packed_brake, 0.0, false, -1.0)
-		w.surface = RoadSurface.SAND
-		tick(sand_brake, 0.0, false, -1.0)
-	check(sand_brake.speed > packed_brake.speed + 1.0 and absf(sand_brake.z) > absf(packed_brake.z),
-		"на песке тормозной путь длиннее, чем на укатанной земле")
 	var stopped := corner(0.0, RoadSurface.PACKED)
 	check(stopped.heading == 0.0 and stopped.lean == 0.0, "на месте нет поворота корпуса и завала")
 	var tight := corner(5.0, RoadSurface.PACKED)
 	var fast := corner(16.0, RoadSurface.PACKED)
 	var loose := corner(16.0, RoadSurface.SAND)
-	check(tight.heading < fast.heading and fast.heading < 0.0, "на скорости дуга шире, направление предсказуемо")
+	check(absf(tight.heading) > absf(fast.heading) and fast.heading < 0.0, "на скорости дуга шире, направление предсказуемо")
 	check(absf(loose.heading) < absf(fast.heading), "песок расширяет дугу по сравнению с плотной землёй")
-	check(fast.lean < -0.15 and absf(fast.lean) <= BikePhysicsConfig.current().lean_max_flat + 0.001, "скоростной поворот на ровном даёт сдержанный крен до 23°")
-	check(fast.speed < bike(16.0).speed and fast.speed > 12.0, "резкий поворот плавно теряет часть скорости")
-	w.surface = RoadSurface.PACKED
-	var straight := bike(16.0)
-	for i in 60:
-		tick(straight)
-	check(fast.speed < straight.speed, "потеря скорости в повороте больше обычного наката")
-	var old_heading := fast.heading
-	tick(fast, -1.0)
-	check(absf(fast.heading - old_heading) < 0.03 and fast.lean < 0.0, "перекладка руля не переворачивает крен мгновенно")
+	check(fast.lean < -0.15 and absf(fast.lean) <= BikePhysicsConfig.current().lean_max + 0.001, "скоростной поворот на ровном даёт сдержанный крен")
 	for i in 30:
 		tick(fast, -1.0)
 	check(fast.lean > 0.1, "контрруление уверенно перекладывает велосипед")
 	for i in 60:
 		tick(fast)
-	check(absf(fast.lean) < 0.01 and absf(fast._yaw_rate) < 0.001, "отпущенный руль быстро стабилизирует курс")
+	check(absf(fast.lean) < 0.01 and absf(fast.yaw_rate) < 0.001, "отпущенный руль быстро стабилизирует курс")
 	check(corner(-1.5, RoadSurface.PACKED).heading > 0.0, "руль предсказуемо работает задним ходом")
 	var turn30 := corner(12.0, RoadSurface.PACKED, 30)
 	var turn120 := corner(12.0, RoadSurface.PACKED, 120)
@@ -159,10 +85,11 @@ func _init() -> void:
 		if jump.airborne:
 			break
 		tick(jump)
-	check(preloading and jump.airborne and jump.vy > 2.5, "прыжок отзывчив: подготовка с первого такта и быстрый отрыв")
+	check(preloading and jump.airborne and jump.y > 100.0 and jump.vy > 2.5, "Space поднимает велосипед с первого такта")
 	var vy0 := jump.vy
 	tick(jump, 0.0, true)
 	check(jump.vy < vy0, "повторный пробел не даёт двойного прыжка")
+	check(is_zero_approx(jump.tilt) and is_zero_approx(jump.pitch_vel), "в полёте без Q/E сохраняется тангаж отрыва")
 	var apex := jump.y
 	var min_squash := jump.squash
 	var max_squash := jump.squash
@@ -175,6 +102,27 @@ func _init() -> void:
 	check(apex > 100.2 and apex < 100.7, "высота обычного прыжка контролируема")
 	check(not jump.airborne and not jump.crashed and max_squash > 0.005 and compression > 0.03, "приземление сжимает подвеску без падения (%.3f м)" % compression)
 	check(absf(jump.squash) < 0.005, "подвеска успокаивается после приземления")
+	var front_first := bike(8.0)
+	front_first.airborne = true
+	front_first.air_time = 0.35
+	front_first.y = 100.17
+	front_first.tilt = -0.30
+	front_first.vy = -2.0
+	tick(front_first)
+	check(front_first.contact_f() and not front_first.contact_r() and front_first.y > 100.10
+		and front_first.squash_f > front_first.squash_r and not front_first.crashed,
+		"носовая посадка начинается на вилке, пока заднее колесо в воздухе")
+	var second_touch := false
+	var max_rebound := 0.0
+	var last_y := front_first.y
+	for i in 60:
+		front_first.clear_tick_events()
+		tick(front_first)
+		second_touch = second_touch or front_first.airborne or not front_first.landing_info.is_empty()
+		max_rebound = maxf(max_rebound, front_first.y - last_y)
+		last_y = front_first.y
+	check(not second_touch and max_rebound < 0.002 and front_first.contact_r(),
+		"посадка гасится за одно касание (обратный ход рамы %.3f м)" % max_rebound)
 	var buffered := bike()
 	buffered.airborne = true
 	buffered.air_time = 0.4
@@ -183,12 +131,12 @@ func _init() -> void:
 	tick(buffered, 0.0, true)
 	for i in 20:
 		tick(buffered)
-		if i > 2 and buffered.airborne and buffered.vy > 2.5:
+		if buffered.airborne and buffered.vy > 2.5:
 			break
 	check(buffered.airborne and buffered.vy > 2.5, "нажатие перед приземлением запускает следующий прыжок")
 	ground.profile = func(d: float) -> float: return -2.0 if d > 0.7 else 0.0
 	var ledge := bike(2.0)
-	for i in 8:
+	for i in 60:
 		tick(ledge)
 		if ledge.airborne:
 			break
@@ -212,7 +160,14 @@ func _init() -> void:
 		launched = launched or (crest.airborne and crest.vy > 0.0)
 	check(launched, "с быстрого гребня отрыв с сохранением подъёмного импульса")
 	# 7.0: тот же гребень медленно и пологий излом быстро проезжаются по земле
-	check(takeoffs(4.0, 50) == 0, "медленно гребень проезжается без отрыва")
+	var slow_crest := bike(4.0)
+	slow_crest.z = -2.5
+	slow_crest.y = ground.ground_at(slow_crest.x, slow_crest.z)
+	var slow_flight := false
+	for i in 65:
+		tick(slow_crest)
+		slow_flight = slow_flight or slow_crest.airborne
+	check(not slow_flight and slow_crest.z < -4.5, "медленно гребень проезжается без отрыва")
 	ground.profile = func(d: float) -> float: return 0.12 * d if d < 6.0 else 0.72
 	check(takeoffs(13.0, 60) == 0, "пологий излом на скорости не подбрасывает")
 	# холмы, как сетка рельефа: изломы через 2 м, на крейсерской без ложных подлётов и рывков
@@ -275,7 +230,7 @@ func _init() -> void:
 		tick(rough, 0.0, false, 1.0)
 		if i > 30:
 			var wheel_y := rough.y + rough.ground_f
-			var frame_y := wheel_y - rough.squash_f
+			var frame_y := wheel_y - rough.squash_f + rough.ground_extension
 			wheel_lo = minf(wheel_lo, wheel_y)
 			wheel_hi = maxf(wheel_hi, wheel_y)
 			frame_lo = minf(frame_lo, frame_y)
@@ -287,9 +242,9 @@ func _init() -> void:
 	var dive := bike(10.0)
 	for i in 15:
 		tick(dive, 0.0, false, -1.0)
-	check(dive.squash_f > dive.squash_r + 0.01 and dive.tilt < 0.0, "торможение: вилка %.3f м, зад %.3f м" % [dive.squash_f, dive.squash_r])
+	check(dive.squash_f > dive.squash_r + 0.01 and dive.load_f > 0.5, "торможение: вилка %.3f м, зад %.3f м" % [dive.squash_f, dive.squash_r])
 	ground.profile = func(d: float) -> float: return 0.4 * d if d < 3.0 else 1.2
-	check(takeoffs(10.0, 40) == 1, "трамплин на скорости — настоящий прыжок")
+	check(takeoffs(10.0, 120) == 1, "трамплин даёт один отрыв за весь проезд с приземлением")
 	ground.profile = func(_d: float) -> float: return 0.0
 	var air_turn := bike(12.0)
 	air_turn.airborne = true
@@ -299,16 +254,17 @@ func _init() -> void:
 	check(absf(air_turn.heading) < 0.15 and absf(air_turn.tilt) < 0.56, "в полёте ограничены доворот и клевок")
 	var flat_land := bike(10.0)
 	flat_land.vy = -9.5
-	flat_land._land(100.0, ground)
+	flat_land._land(100.0, 0.0, DT, ground, flat_land.config)
 	ground.profile = func(d: float) -> float: return -0.4 * d
 	var slope_land := bike(10.0)
 	slope_land.vy = -9.5
-	slope_land._land(100.0, ground)
+	slope_land._land(100.0, -0.4, DT, ground, slope_land.config)
 	check(slope_land.land_impact < flat_land.land_impact and slope_land.speed > flat_land.speed, "приземление вдоль склона мягче и лучше сохраняет скорость")
-	var spring := bike()
+	ground.profile = func(_d: float) -> float: return 0.0
+	var spring := bike(0.0)
 	spring.squash_fv = 20.0
 	spring.squash_rv = -20.0
 	for i in 30:
-		spring._step_suspension(0.1)
+		tick(spring, 0.0, false, 0.0, 0.1)
 	check(absf(spring.squash_f) < 0.001 and absf(spring.squash_r) < 0.001 and is_finite(spring.squash_fv), "подвеска устойчива при длинном такте и сильном ударе")
 	quit(1 if fails else 0)

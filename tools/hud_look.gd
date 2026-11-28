@@ -822,13 +822,13 @@ func _run() -> void:
 	var bike := BikeRide.new()
 	bike.riding = true
 	bike.speed = 12.0
-	bike.brakes.pressure = 0.75
+	bike.brake_pressure = 0.75
 	for frame in 30:
 		hud.set_brakes(bike)
 		await process_frame
 	_check(hud._ride.visible and hud._ride.brake_alpha > 0.9 and hud._ride.pressure > 0.7 and hud._ride.riding, "дуга тормоза и скорость на приборе при движении вперёд")
 	await _shot("hud_brake")
-	bike.brakes.risk = 0.8
+	bike.brake_risk = 0.8
 	hud.set_brakes(bike)
 	await _shot("hud_brake_warning")
 	bike.airborne = true

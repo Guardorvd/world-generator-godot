@@ -434,7 +434,7 @@ func _opening_test() -> void:
 	loaded.world = WorldGenerator._generate_plan("Север-1234", 384)
 	loaded.world.expand_territory(384)
 	print("План проверки: ", loaded.world.settlements.size(), " поселений, ", loaded.world.trails.size(), " путей, ", loaded.world.peaks.size(), " вершин")
-	var painted := loaded._prepare(loaded.world, 2)
+	var painted := loaded._prepare(loaded.world, 2, 2)
 	loaded.heights.finish_paths()
 	loaded.terrain_arrays = TerrainBuilder.build_arrays(loaded.world, loaded.heights)
 	loaded.water_arrays = WaterBuilder.prepare(loaded.world, loaded.heights)
@@ -593,6 +593,7 @@ func _downhill_test() -> void:
 	game.set_physics_process(false)
 	game.world = w
 	game.heights = h
+	game.camera_controller.heights = h
 	game.player = PlayerState.new()
 	game.player.feet = 100.0
 	game._prev = Vector3(0, 100, 0)

@@ -74,7 +74,8 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 		var t := d.tangent_at(ahead)
 		aim += Vector2(t.y, -t.x) * offset
 	var delta := aim - here
-	var turn := clampf(-wrapf(atan2(-delta.x, -delta.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
+	var turn_gain := lerpf(2.0, 4.2, smoothstep(7.0, 15.0, speed))
+	var turn := clampf(-wrapf(atan2(-delta.x, -delta.y) - bike.heading, -PI, PI) * turn_gain, -1.0, 1.0)
 	var want: float = spec.top
 	var commit := false
 	for g in gaps:
@@ -98,7 +99,7 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 			var here_y := _heights.surface_at(here.x, here.y, INF)
 			var ahead_at := d.point_at(fposmod(station + 12.0, length) if d.closed else minf(station + 12.0, length))
 			var fall := (here_y - _heights.surface_at(ahead_at.x, ahead_at.y, INF)) / 12.0
-			brake = maxf(1.5, BRAKE - BikePhysicsConfig.current().ground_gravity * maxf(0.0, fall) * 0.8)
+			brake = maxf(1.5, BRAKE - BikePhysicsConfig.current().gravity * maxf(0.0, fall) * 0.8)
 		var k_at := 0.0
 		while k_at <= LOOK:
 			var s := fposmod(station + k_at, length) if d.closed else minf(station + k_at, length)

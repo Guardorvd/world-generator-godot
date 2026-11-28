@@ -43,7 +43,7 @@ func ride(ticks: int, speed: float, throttle: float, crank_rate: float, steer :=
 		state.wheel += speed / 0.34 * DT
 		state._step_effort(throttle, DT)
 		var cfg := BikePhysicsConfig.current()
-		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
+		state.drive_force = cfg.pedal_accel * cfg.start_push_mult * state.effort * 0.5
 		bike.tick(state, DT, throttle, false)
 	bike.draw(1.0)
 

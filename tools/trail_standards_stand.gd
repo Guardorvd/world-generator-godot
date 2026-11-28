@@ -114,11 +114,15 @@ func ride(b: Dictionary, v: float, hold_to := INF, line := 0.0, look := 6.0, fre
 				r.hits += 1
 				r.max_hit = maxf(r.max_hit, hit)
 			if bike.bottom_out > 0.0: r.bottoms += 1
-			if bike._o_f > bike.config.slick_bump or bike._o_r > bike.config.slick_bump: r.on_rock += 1
-			r.rock_top = maxf(r.rock_top, maxf(bike._o_f, bike._o_r))
+			if h.obstacles != null:
+				var fx := -sin(bike.heading) * BikeRide.HUB
+				var fz := -cos(bike.heading) * BikeRide.HUB
+				var ob := maxf(h.obstacles.bump_at(bike.x + fx, bike.z + fz), h.obstacles.bump_at(bike.x - fx, bike.z - fz))
+				if ob > 0.015: r.on_rock += 1
+				r.rock_top = maxf(r.rock_top, ob)
 			r.max_slip = maxf(r.max_slip, absf(rad_to_deg(bike.slip)))
 			if not bike.airborne and absf(bike.speed) > 2.0:
-				r.max_lateral_g = maxf(r.max_lateral_g, absf(bike.speed * bike._yaw_rate) / bike.config.ground_gravity)
+				r.max_lateral_g = maxf(r.max_lateral_g, absf(bike.speed * bike.yaw_rate) / bike.config.gravity)
 		if station <= finish + 8.0:
 			r.exit = bike.speed
 			r.exit_off = off

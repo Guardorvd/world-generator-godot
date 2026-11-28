@@ -40,19 +40,23 @@ func ride(grade: float, cross: float, hz: int, script: Script = null) -> Diction
 		speed = b.speed, crashed = b.crashed, front = b.load_f}
 
 func check_steering() -> void:
-	# Front is lightly loaded on a crest; adverse bank used to subtract all steering.
+	# Adverse bank does not lock front-wheel steering in the simplified model.
+	var w := World.new()
+	var h := Ground.new()
+	h.world = w
+	h.cross = 0.8
 	var b := BikeRide.new()
+	b.y = h.surface_at(0.0, 0.0, 100.0)
+	var p := PlayerState.new()
+	b.mount(p)
 	b.speed = 18.0
-	b.load_f = 0.1
-	b.load_r = 0.4
-	b.side_f = 0.1
-	b.side_r = 0.4
-	b.bank_slope = 0.8
-	for i in 120: b._step_turn(1.0, 1.0, 1.0 / 120.0)
-	check(b._yaw_rate < -0.03, "adverse slope does not lock a loaded front wheel")
-	b.lift_f = 0.1
-	for i in 120: b._step_turn(1.0, 1.0, 1.0 / 120.0)
-	check(absf(b._yaw_rate) < 0.001, "raised front wheel cannot steer through rear traction")
+	for i in 60: b.step(p, 0.0, 1.0, false, false, 1.0 / 60.0, w, h)
+	check(b.yaw_rate < -0.03, "adverse slope does not lock a loaded front wheel")
+	var flat := ride(0.0, 0.0, 60)
+	var favorable := ride(0.0, -0.35, 60)
+	var adverse := ride(0.0, 0.35, 60)
+	check(favorable.heading < flat.heading and flat.heading < adverse.heading,
+		"banking tightens the arc and adverse camber widens it (%.3f / %.3f / %.3f)" % [favorable.heading, flat.heading, adverse.heading])
 	var args := OS.get_cmdline_user_args()
 	var at := args.find("--before")
 	var old: Script = load(args[at + 1]) if at >= 0 else null

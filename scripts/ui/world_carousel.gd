@@ -755,7 +755,7 @@ func _set_zoom(value: float) -> void:
 	_zoom.tween_property(_map, "scale", Vector2.ONE * value, 0.12)
 
 func _hover_link(button: Button, active: bool) -> void:
-	var tween: Tween = button.get_meta("menu_hover", null)
+	var tween: Tween = button.get_meta("menu_hover") if button.has_meta("menu_hover") else null
 	if tween != null and tween.is_valid(): tween.kill()
 	tween = create_tween().set_parallel(true)
 	button.set_meta("menu_hover", tween)

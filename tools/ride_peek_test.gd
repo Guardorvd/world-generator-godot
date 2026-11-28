@@ -25,8 +25,8 @@ func _run() -> void:
 	var bike := BikeRide.new()
 	bike.riding = true
 	bike.speed = 7.5
-	bike.brakes.pressure = 0.8
-	bike.brakes.risk = 0.95
+	bike.brake_pressure = 0.8
+	bike.brake_risk = 0.95
 	hud.set_brakes(bike)
 	hud.set_stamina(Stamina.DASH_COST, false, Stamina.State.DRAIN)
 	hud.pulse_pump()

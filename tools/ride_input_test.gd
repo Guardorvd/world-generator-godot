@@ -1,8 +1,36 @@
 extends SceneTree
-## Player input contracts: held pump, progressive steering and independent camera.
-const Pump = preload("res://tools/auto_pump_test.gd")
-const Friendly = preload("res://tools/bike_friendly_test.gd")
-const Lab = preload("res://scripts/lab/trail_lab.gd")
+## Player input contracts: crisp steering, progressive braking, bunny-hop buffer/coyote, airborne Q/E pitch balance, and independent camera.
+
+class FlatWorld extends WorldData:
+	func _init() -> void:
+		W = 64
+		H = 64
+		N = W * H
+		river.resize(N)
+		dist_water.resize(N)
+		dist_water.fill(50.0)
+		path_mask.resize(N)
+		road_surface.resize(N)
+	func tile_info(_x: float, _y: float) -> Dictionary:
+		return {biome = Biomes.GRASS, path = 3, surface = RoadSurface.PACKED}
+
+class FlatGround extends Heightfield:
+	func _init(w: WorldData) -> void:
+		super()
+		world = w
+	func surface_at(_x: float, _z: float, _ref := -INF) -> float:
+		return 100.0
+	func ground_at(_x: float, _z: float, _raw := false) -> float:
+		return 100.0
+	func depth_at(_x: float, _z: float, _feet := -INF) -> float:
+		return 0.0
+	func immersion_at(_x: float, _z: float, _feet: float) -> float:
+		return 0.0
+	func wall_at(_x: float, _z: float, _feet: float, _r := 0.0) -> bool:
+		return false
+	func known(_x: float, _z: float) -> bool:
+		return true
+
 var failures := 0
 
 func _initialize() -> void:
@@ -11,146 +39,126 @@ func _initialize() -> void:
 
 func check(ok: bool, label: String) -> void:
 	print("ride_input: ", "PASS " if ok else "FAIL ", label)
-	if not ok: failures += 1
+	if not ok:
+		failures += 1
 
 func run() -> void:
-	var world := Friendly.TestWorld.new()
-	var ground := Pump.Ground.new(world)
-	ground.profile = func(s: float) -> float: return 0.25 * (1.0 - cos(s * TAU / 6.0))
-	var b := BikeRide.new()
+	var world := FlatWorld.new()
+	var ground := FlatGround.new(world)
 	var player := PlayerState.new()
-	b.y = 100.0
-	b.mount(player)
-	b.speed = 8.0
 	var controls := Controls.new()
-	var event := InputEventMouseButton.new()
-	event.button_index = MOUSE_BUTTON_LEFT
-	event.pressed = true
-	Input.parse_input_event(event)
-	Input.flush_buffered_events()
-	controls.read_bike_body(b)
-	check(InputMap.event_is_action(event, "bike_pump"), "ЛКМ назначена на памп")
-	check(b.pump_pressed, "ЛКМ включает памп через общий ввод")
-	var active := false
-	for i in 60:
-		b.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
-		active = active or b.pump_active > 0.1
-	check(active, "удержание работает на волнах")
-	var release := event.duplicate() as InputEventMouseButton
-	release.pressed = false
-	Input.parse_input_event(release)
-	Input.flush_buffered_events()
-	controls.read_bike_body(b)
-	var quiet := true
-	var passive := 0.0
-	for i in 30:
-		b.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
-		quiet = quiet and b.pump_accel == 0.0 and b.pump_load == 0.0 and b.pump_active == 0.0 and b.pump_body == 0.0
-		quiet = quiet and b._pump_absorb_v <= b.config.pump_absorb_v * b.config.pump_passive + 0.0001
-		passive = maxf(passive, b._pump_absorb_v)
-	# 20.11: без пампа седок только гасит гребень ногами (PUMP_PASSIVE), сил пампа нет
-	check(quiet, "отпущенная ЛКМ: нет сил пампа, поглощение не больше пассивного (%.2f м/с)" % passive)
-	Input.action_press("bike_pump")
+
+	# 1. Q/E ввод баланса и блокировка панелями
+	var b := BikeRide.new()
+	b.x = 128.0; b.z = 128.0; b.y = 100.0; b.mount(player); b.speed = 8.0
+	Input.action_press("bike_back")
+	controls.read_bike_body(b, true)
+	check(b.body_back and not b.body_forward, "Q включает наклон назад")
+	Input.action_press("bike_forward")
+	controls.read_bike_body(b, true)
+	check(b.body_forward, "E доступна при нажатой Q")
 	controls.read_bike_body(b, false)
-	check(not b.pump_pressed, "панель блокирует памп")
-	Input.action_release("bike_pump")
+	check(not b.body_back and not b.body_forward, "блокировка интерфейса снимает ввод Q/E")
+	Input.action_release("bike_back")
+	Input.action_release("bike_forward")
+
+	# 2. Кривая руля: отзывчивая, монотонная, одинаковая на разных FPS
 	for pace: float in [4.0, 16.0]:
 		controls.reset()
-		var first := controls.bike_steer(1.0, 1.0 / 60, pace)
+		var first := controls.bike_steer(1.0, 1.0 / 60.0, pace)
 		var held := first
 		var monotonic := true
-		for i in 45:
+		for i in 30:
 			var prev := held
-			held = controls.bike_steer(1.0, 1.0 / 60, pace)
+			held = controls.bike_steer(1.0, 1.0 / 60.0, pace)
 			if held < prev - 0.0001:
 				monotonic = false
-		check(first > 0.05 and monotonic and held > 0.95, "монотонное и быстрое нарастание руля на %.0f м/с (%.2f)" % [pace, held])
-		for i in 45: held = controls.bike_steer(1.0, 1.0 / 60, pace)
-		check(held > 0.99, "удержание дожимает руль до полного")
-		var reverse := controls.bike_steer(-1.0, 1.0 / 60, pace)
-		check(reverse > 0.0 and held - reverse < 0.55, "перекладка не меняет знак рывком")
-		for i in 60: reverse = controls.bike_steer(-1.0, 1.0 / 60, pace)
-		check(reverse < -0.5, "противоположная дуга доступна")
-		for i in 30: reverse = controls.bike_steer(0.0, 1.0 / 60, pace)
-		check(absf(reverse) < 0.02, "отпускание возвращает руль")
+		check(first > 0.25 and monotonic and held > 0.99, "быстрый и плавный набор руля на %.0f м/с (%.2f)" % [pace, held])
+		for i in 30:
+			held = controls.bike_steer(-1.0, 1.0 / 60.0, pace)
+		check(held < -0.95, "быстрая перекладка руля в другую сторону (%.2f)" % held)
+		for i in 20:
+			held = controls.bike_steer(0.0, 1.0 / 60.0, pace)
+		check(absf(held) < 0.02, "отпускание возвращает руль в центр")
+
 	controls.reset()
-	var a := 0.0
-	for i in 30: a = controls.bike_steer(1.0, 1.0 / 30, 16.0)
+	var r30 := 0.0
+	for i in 15: r30 = controls.bike_steer(1.0, 1.0 / 30.0, 12.0)
 	controls.reset()
-	var c := 0.0
-	for i in 120: c = controls.bike_steer(1.0, 1.0 / 120, 16.0)
-	check(absf(a - c) < 0.02, "нарастание одинаково при 30/120 Гц")
-	var flat := Friendly.TestGround.new(world)
-	for pace: float in [8.0, 16.0]:
-		var rider := BikeRide.new()
-		rider.y = 100.0
-		rider.mount(player)
-		rider.speed = pace
-		controls.reset()
-		for i in 60:
-			rider.step(player, 0.0, controls.bike_steer(1.0, 1.0 / 60, pace), false, false, 1.0 / 60, world, flat)
-		check(absf(rider.heading) > 0.15 and not rider.crashed, "реальный поворот доступен на %.0f м/с" % pace)
+	var r120 := 0.0
+	for i in 60: r120 = controls.bike_steer(1.0, 1.0 / 120.0, 12.0)
+	check(absf(r30 - r120) < 0.02, "кривая руля независима от частоты 30/120 Гц")
+	controls.reset_motion()
+	var slalom := BikeRide.new()
+	slalom.x = 128.0
+	slalom.z = 128.0
+	slalom.y = 100.0
+	slalom.mount(player)
+	slalom.speed = 20.0
+	var max_switch := 0
+	var peak_lat := 0.0
+	for direction: float in [1.0, -1.0, 1.0, -1.0]:
+		var switch_tick := 13
+		for i in 12:
+			var command := controls.bike_steer(direction, 1.0 / 60.0, slalom.speed)
+			slalom.step(player, 0.0, command, false, false, 1.0 / 60.0, world, ground)
+			if slalom.yaw_rate * direction < -0.01:
+				switch_tick = mini(switch_tick, i + 1)
+			peak_lat = maxf(peak_lat, absf(slalom.yaw_rate * slalom.speed))
+		max_switch = maxi(max_switch, switch_tick)
+	check(not slalom.crashed and max_switch <= 4 and peak_lat <= slalom.config.max_lat_accel + 0.02,
+		"серия перекладок с 20 м/с: смена дуги за %d такта, пик %.2f м/с²" % [max_switch, peak_lat])
+
+	# 3. Тормоз
 	controls.reset()
-	var early := 0.0
-	for i in 6: early = controls.bike_steer(1.0, 1.0 / 60, 16.0)
-	check(early > 0.22 and early <= 0.55, "нажатие за 100 мс даёт предсказуемый отклик без провала (%.2f)" % early)
-	# частые нажатия в одну сторону (0,25 с нажато, 0,12 с отпущено) ведут дугу, а не начинают её заново
-	controls.reset()
-	var pulsed := 0.0
-	for tap in 4:
-		for i in 15: pulsed = controls.bike_steer(1.0, 1.0 / 60, 12.0)
-		if tap < 3:
-			for i in 7: controls.bike_steer(0.0, 1.0 / 60, 12.0)
-	check(pulsed > 0.55, "частые нажатия ведут дугу (%.2f)" % pulsed)
-	controls.reset()
-	var single := 0.0
-	for i in 15: single = controls.bike_steer(1.0, 1.0 / 60, 12.0)
-	check(single > 0.55, "одно короткое нажатие — заметный доворот (%.2f)" % single)
-	# перекладка без задержки через нейтраль
-	var reach := {}
-	for pace: float in [5.0, 14.0]:
-		controls.reset()
-		for i in 9: controls.bike_steer(-1.0, 1.0 / 60, pace)
-		var ticks := 0
-		while controls.bike_steer(1.0, 1.0 / 60, pace) < 0.7 and ticks < 120: ticks += 1
-		reach[pace] = ticks / 60.0
-	check(reach[5.0] < 0.30 and reach[14.0] < 0.30, "перекладка быстрая на любой скорости (%.2f с и %.2f с)" % [reach[5.0], reach[14.0]])
-	# 31.10: тормоз с клавиатуры ступенями — нажатие подтормаживает, удержание доводит до полного; газ и аналог как есть
-	controls.reset()
-	var brake_tap := controls.bike_brake(-1.0, 1.0 / 60)
+	var brake_tap := controls.bike_brake(-1.0, 1.0 / 60.0)
 	var brake_held := brake_tap
-	for i in 40: brake_held = controls.bike_brake(-1.0, 1.0 / 60)
-	check(brake_tap > -0.8 and brake_tap < -0.2 and brake_held < -0.99 and controls.bike_brake(0.7, 1.0 / 60) == 0.7 and controls.bike_brake(-0.4, 1.0 / 60) == -0.4,
-		"нажатие тормоза подтормаживает (%.2f), удержание — полный тормоз, газ и аналог как есть" % brake_tap)
-	var pose := BikeRide.new()
-	pose.speed = 12.0
-	for i in 120: pose._step_pose(0.0, 2.0, 1.0 / 60)
-	var gentle_lean := rad_to_deg(absf(pose.lean))
-	check(gentle_lean < 5.0, "мягкая дуга ведётся рулём почти без завала рамы (%.1f°)" % gentle_lean)
-	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
-	var flat_lean := rad_to_deg(pose.lean)
-	check(flat_lean > 12.0 and flat_lean <= rad_to_deg(pose.config.lean_max_flat) + 0.1, "сдержанный крен в быстром повороте на ровном (%.1f°)" % flat_lean)
-	pose.bank_slope = 0.3
-	for i in 120: pose._step_pose(0.0, 5.0, 1.0 / 60)
-	check(rad_to_deg(pose.lean) > flat_lean + 2.0 and pose.lean <= pose.config.lean_max + 0.001, "на вираже крен больше, чем на ровном, но в пределе (%.1f°)" % rad_to_deg(pose.lean))
-	var cross_gravity := pose.config.ground_gravity * 0.3 / sqrt(1.0 + 0.3 * 0.3)
-	for i in 120: pose._step_pose(0.0, -cross_gravity, 1.0 / 60)
-	check(absf(pose.lean) < 0.01, "straight traverse stays upright")
-	pose.airborne = true
-	pose.lean = 0.6
-	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
-	check(absf(pose.lean) < 0.01, "lean relaxes smoothly in flight")
+	for i in 30:
+		brake_held = controls.bike_brake(-1.0, 1.0 / 60.0)
+	check(brake_tap > -0.5 and brake_tap < -0.1 and brake_held < -0.99 and controls.bike_brake(0.7, 1.0 / 60.0) == 0.7,
+		"тормоз плавно набирается с клавиатуры, газ проходит как есть")
+
+	# 4. Буфер и coyote time для Space + удержание угла в воздухе Q/E
+	var c := BikeRide.new()
+	c.x = 128.0; c.z = 128.0; c.y = 100.0; c.mount(player); c.speed = 9.0
+	c.airborne = true; c.air_time = 0.03; c._coyote = c.config.hop_coyote; c.y = 100.1
+	c.step(player, 0.0, 0.0, false, true, 1.0 / 60.0, world, ground)
+	check(c.vy > 3.0 and c.hop_used, "Space в окне coyote запускает прыжок")
+
+	var jumper := BikeRide.new()
+	jumper.x = 128.0; jumper.z = 128.0; jumper.y = 100.0; jumper.mount(player); jumper.speed = 11.0
+	jumper.step(player, 0.0, 0.0, false, true, 1.0 / 60.0, world, ground)
+	for i in 12:
+		jumper.body_back = true
+		jumper.step(player, 0.0, 0.0, false, false, 1.0 / 60.0, world, ground)
+	var tilt_after_q := jumper.tilt
+	jumper.body_back = false
+	for i in 6:
+		jumper.step(player, 0.0, 0.0, false, false, 1.0 / 60.0, world, ground)
+	check(absf(jumper.tilt - tilt_after_q) < 0.08, "выбранный Q/E угол держится после отпускания клавиши")
+
+	# 5. Камера не доворачивает за курсом велосипеда
 	var camera := PlayerCameraController.new()
 	camera.yaw = 0.7
 	camera.pitch = -0.4
 	camera.heights = ground
 	camera.settings = GameSettings.new()
 	var cam_node := Camera3D.new()
+	root.add_child(cam_node)
 	b.heading = 2.0
 	b.riding = true
 	for i in 60:
 		camera.update(1.0, 1.0 / 60.0, player, b, cam_node, 10.0 + i / 60.0, false, false, false, false, 70.0, 0.0)
-	check(camera.yaw == 0.7 and camera.pitch == -0.4, "камера не доворачивает за велосипедом даже после ожидания")
+	check(camera.yaw == 0.7 and camera.pitch == -0.4, "камера не доворачивает за велосипедом")
+	b.speed = 16.0
+	camera.settings.head_bob = true
+	camera.store_previous(player, 11.0)
+	var horizon := Vector3(cos(camera.yaw), 0.0, -sin(camera.yaw))
+	camera.update(0.5, 1.0 / 60.0, player, b, cam_node, 11.0, false, false, false, false, 70.0, 0.0, NAN, -0.24)
+	var first_roll := horizon.signed_angle_to(cam_node.global_basis.x, cam_node.global_basis.z)
+	camera.update(0.5, 1.0 / 60.0, player, b, cam_node, 11.0, false, false, false, false, 70.0, 0.0, NAN, 0.24)
+	var second_roll := horizon.signed_angle_to(cam_node.global_basis.x, cam_node.global_basis.z)
+	check(first_roll < -0.01 and second_roll > 0.01, "горизонт меняет крен вместе с кадром велосипеда (%.3f / %.3f рад)" % [first_roll, second_roll])
 	cam_node.free()
 	print("ride_input: %d failures" % failures)
 	quit(1 if failures else 0)

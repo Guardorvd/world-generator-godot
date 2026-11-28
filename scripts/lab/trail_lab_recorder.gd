@@ -200,7 +200,7 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 	var feature := analysis.feature_at(near.x) if nearest_valid else -1
 	var target := analysis.line_target(near.x) if nearest_valid else 0.0
 	var route_k := absf(route.curvature_at(near.x)) if nearest_valid else 0.0
-	var path_k := absf(bike._yaw_rate) / maxf(absf(bike.speed), 0.5)
+	var path_k := absf(bike.yaw_rate) / maxf(absf(bike.speed), 0.5)
 	var values := [
 		_t, _ride, _ride_t, _ticks, wall_ms, Engine.get_frames_per_second(),
 		bike.x, bike.y, bike.z, rad_to_deg(bike.heading), near.x if nearest_valid else -1.0, near.y if nearest_valid else 0.0, line_err,
@@ -210,15 +210,15 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 		throttle, turn, int(run), int(jump), autopilot,
 		int(lab.diagnostics_visible), int(lab.editor.visible), int(lab.overview), rad_to_deg(yaw) if yaw != null else 0.0, rad_to_deg(pitch) if pitch != null else 0.0,
 		bike.speed, bike.lateral_speed, bike.acceleration, bike.feel_acceleration, bike.vy, bike.air_time,
-		bike.steer, bike._yaw_rate, rad_to_deg(bike.slip), rad_to_deg(bike.lean), rad_to_deg(bike.tilt), bike.bank_slope, bike.vertical_g,
+		bike.steer, bike.yaw_rate, rad_to_deg(bike.slip), rad_to_deg(bike.lean), rad_to_deg(bike.tilt), bike.bank_slope, bike.vertical_g,
 		bike.effort, bike.drive_request, bike.drive_force, bike.brake_pressure, bike.brake_deceleration, bike.brake_force.x, bike.brake_force.y,
 		bike.roll_loss, bike.air_loss, bike.rough_loss, bike.slope_force, bike.pump_force, bike.grade_now, bike.grade(lab.heights),
-		bike.brakes.front_load, bike.brakes.skid, bike.brakes.risk, bike.brakes.lift, bike.brakes.brace,
-		int(pumped) if pumped != null else 0, bike.pump_active, bike.pump_wave, bike.pump_body, bike.pump_accel, bike.pump_motion, bike._pump_reach,
-		bike.body_x, bike.body_v, bike.unweight, bike.lift_f, bike.lift_r, int(bike._hop_used), bike.hop_height,
+		bike.load_f, bike.brake_skid, bike.brake_risk, bike.nose_lift, bike.brake_pressure,
+		int(pumped) if pumped != null else 0, bike.pump_active, bike.pump_wave, bike.pump_body, bike.pump_accel, bike.pump_motion, 0.0,
+		bike.body_x, bike.body_v, bike.unweight, bike.lift_f, bike.lift_r, int(bike.hop_used), bike.hop_height,
 		bike.load_f, bike.load_r, bike.tire_f, bike.tire_r, bike.side_f, bike.side_r, bike.slick_f, bike.slick_r,
 		bike.use_f, bike.use_r, bike.grip_usage, bike.force_f.x, bike.force_f.y, bike.force_r.x, bike.force_r.y,
-		int(bike.contact_f()), int(bike.contact_r()), int(bike._on_f >= 0), int(bike._on_r >= 0),
+		int(bike.contact_f()), int(bike.contact_r()), int(bike.obstacle_f >= 0), int(bike.obstacle_r >= 0),
 		bike.squash_f, bike.squash_r, bike.squash_fv, bike.squash_rv, bike.bottom_out, bike.land_impact,
 		bike.wheel_impact.x, bike.wheel_impact.y, bike.hit_dv.x, bike.hit_dv.y, bike.impacts.x, bike.impacts.y,
 		surface, contact.weight, contact.across, lab.controller.stamina.value, int(lab.controller.stamina.exhausted),
@@ -291,7 +291,7 @@ func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route
 		return was != null and was != value
 	if changed.call("riding", bike.riding): _event("посадка" if bike.riding else "сход с велосипеда", _where(bike, station))
 	if changed.call("air", bike.airborne):
-		if bike.airborne: _event("отрыв", _where(bike, station).merged({vy = bike.vy, speed = bike.speed, hop = bike._hop_used}))
+		if bike.airborne: _event("отрыв", _where(bike, station).merged({vy = bike.vy, speed = bike.speed, hop = bike.hop_used}))
 		elif bike.landing_info.is_empty(): _event("ground contact", _where(bike, station))
 	if not bike.landing_info.is_empty():
 		_event("приземление", _where(bike, station).merged(bike.landing_info))
@@ -328,7 +328,7 @@ func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route
 				seconds = _stuck, effort = bike.effort, drive = bike.drive_force, brake = bike.brake_pressure, slope = bike.grade_now,
 				fits = bike.fits(bike.x, bike.z, bike.heading, lab.heights.world, lab.heights), contact_r = bike.contact_r(),
 				tire_r = bike.tire_r, load_r = bike.load_r, stamina = lab.controller.stamina.value, fallen = bike.fallen,
-				roll = bike.roll_loss, slope_force = bike.slope_force, obstacle_f = bike._on_f, obstacle_r = bike._on_r}))
+				roll = bike.roll_loss, slope_force = bike.slope_force, obstacle_f = bike.obstacle_f, obstacle_r = bike.obstacle_r}))
 	else:
 		if _stuck_reported: _event("поехал после остановки", _where(bike, station).merged({stood = _stuck, speed = bike.speed}))
 		_stuck = 0.0
@@ -477,7 +477,8 @@ func _header(lab) -> Dictionary:
 		godot = Engine.get_version_info().string,
 		route = {preset = lab.preset + 1, lane = lab.lane, id = route.id, title = route.title, length = snappedf(route.route_length(), 0.1),
 			width = route.width, ground = lab.ground_kind, elements = elements, generator = _generator(lab)},
-		bike_physics = BikePhysicsConfig.current().to_dict(),
+		bike_physics_version = BikePhysicsConfig.VERSION,
+		bike_physics = lab.bike.config.to_dict(),
 		settings = {fov = settings.fov, mouse = settings.mouse, invert_y = settings.invert_y, head_bob = settings.head_bob},
 		rate_hz = Engine.physics_ticks_per_second,
 		columns = Array(_columns),
@@ -485,7 +486,6 @@ func _header(lab) -> Dictionary:
 		features = analysis.features,
 		features_note = "Ожидания по участкам (TrailStandards: модель точки на профиле по физике BikeRide, стенд tools/trail_standards_stand.gd): lip — кромка, land_from/land_to — зона приземления, ideal_land — лучшее место, speed_lo/hi — скорость входа, radius/turn_speed — тугой радиус оси и рабочая скорость, lines — чистые линии техники (отступ от оси, + вправо), deck_half — полуширина настила",
 		bike_constants = _constants(BikeRide),
-		brake_constants = _constants(preload("res://scripts/game/bike_brakes.gd")),
 		game_config = _constants(GameConfig),
 		controls_constants = _constants(Controls),
 	}

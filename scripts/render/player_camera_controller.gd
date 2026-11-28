@@ -56,9 +56,6 @@ var _prev := Vector3()  # игрок (x, ноги, z) на предпослед�
 var _prev_bob := 0.0
 var _prev_dip := 0.0    # проседание и время на предпоследнем такте: кадр показывает их между тактами
 var _prev_time := 0.0
-var _tick_yaw := 0.0    # насколько последний такт повернул камеру сам (вслед за велосипедом);
-var _tick_pitch := 0.0  # кадр доворачивает этот поворот плавно, а мышь — сразу
-var _cam_roll := 0.0    # лёгкий наклон горизонта в скоростных поворотах
 
 func _cam_blocked(p: Vector3, feet: float) -> bool:
 	if p.y < heights.surface_at(p.x, p.z, p.y) + CAM_PROBE_GAP:
@@ -84,12 +81,11 @@ func _obstruction_distance(target: Vector3, dir: Vector3, desired: float, feet: 
 func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		camera: Camera3D, time: float, _opening: bool, _moving: bool,
 		crash_active: bool, photo_active: bool, photo_fov: float, view_squash: float,
-		bike_frame_y := NAN) -> void:
+		bike_frame_y := NAN, bike_frame_roll := NAN) -> void:
 	var riding := bike != null and bike.riding
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
-	# поворот, который сделал сам такт, доворачивается плавно; мышь уже учтена в yaw и pitch
-	var view_yaw := yaw - _tick_yaw * (1.0 - alpha)
-	var view_pitch := pitch - _tick_pitch * (1.0 - alpha)
+	var view_yaw := yaw
+	var view_pitch := pitch
 	var rush_goal := 0.0
 	if riding and not crash_active and not _opening:
 		rush_goal = smoothstep(7.0, 20.0, absf(bike.speed))
@@ -98,7 +94,8 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	var brake_goal := clampf(bike.brake_applied / 7.0, 0.0, 1.0) * smoothstep(1.0, 4.0, absf(bike.speed)) if riding and not crash_active and not _opening else 0.0
 	_brake_feel = lerpf(_brake_feel, brake_goal, _smooth(BRAKE_RESPONSE, dt))
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
-	var fov_goal := settings.fov
+	var s := settings if settings != null else GameContext.scope.settings
+	var fov_goal := s.fov
 	if riding:
 		var cruise := BikePhysicsConfig.current().cruise_speed
 		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (cruise - 2.0), 0.0, 1.3) - BRAKE_FOV * _brake_feel
@@ -108,17 +105,17 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		fov_goal = photo_fov
 	if _fov_kick != 0.0:
 		_fov_kick = _fov_kick * exp(-FOV_KICK_DECAY * dt) if _fov_kick > 0.02 else 0.0
-	var kick := _fov_kick if settings.head_bob and not photo_active else 0.0
+	var kick := _fov_kick if s.head_bob and not photo_active else 0.0
 	camera.fov = lerpf(camera.fov - _fov_kick_shown, fov_goal, _smooth(FOV_RESPONSE_PHOTO if photo_active else FOV_RESPONSE, dt)) + kick
 	_fov_kick_shown = kick
-	var shake := _trauma * _trauma if settings.head_bob else 0.0
+	var shake := _trauma * _trauma if s.head_bob else 0.0
 	var t := lerpf(_prev_time, time, alpha)
 	var jolt := Vector3(sin(t * 41.0), sin(t * 37.0 + 1.7), sin(t * 29.0 + 3.1)) * shake
-	var dip := lerpf(_prev_dip, _dip, alpha) if settings.head_bob else 0.0
+	var dip := lerpf(_prev_dip, _dip, alpha) if s.head_bob else 0.0
 	if riding:
 		# от третьего лица: камера сзади на луче взгляда; если между ней и седоком склон — подходит ближе
 		var base_y := bike_frame_y if is_finite(bike_frame_y) else pos.y
-		var suspension := (view_squash * (1.0 - RIDE_SQUASH) if settings.head_bob else view_squash) if is_finite(bike_frame_y) else (-view_squash * RIDE_SQUASH if settings.head_bob else 0.0)
+		var suspension := (view_squash * (1.0 - RIDE_SQUASH) if s.head_bob else view_squash) if is_finite(bike_frame_y) else (-view_squash * RIDE_SQUASH if s.head_bob else 0.0)
 		_cam_y = lerpf(_cam_y, base_y + RIDE_HEIGHT + suspension, _smooth(RIDE_HEIGHT_RESPONSE, dt))
 		if absf(_cam_y - base_y - RIDE_HEIGHT) > RIDE_HEIGHT_LAG:
 			_cam_y = base_y + RIDE_HEIGHT + clampf(_cam_y - base_y - RIDE_HEIGHT, -RIDE_HEIGHT_LAG, RIDE_HEIGHT_LAG)
@@ -139,14 +136,13 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + CAM_GROUND_GAP)
 		# в туннеле — не выше свода
 		cam.y = minf(cam.y, heights.ceiling_at(cam.x, cam.z, pos.y) - CAM_CEILING_GAP)
-		var roll_goal := clampf(bike.lean * 0.12, -0.045, 0.045) * smoothstep(4.0, 12.0, absf(bike.speed)) if settings.head_bob and not crash_active and not photo_active and not _opening else 0.0
-		_cam_roll = lerpf(_cam_roll, roll_goal, _smooth(8.0, dt))
 		camera.look_at_from_position(cam, target, Vector3.UP)
-		if absf(_cam_roll) > 0.0002:
-			camera.rotate_object_local(Vector3.BACK, _cam_roll)
+		if s.head_bob and not crash_active and not photo_active and not _opening:
+			var bike_roll := bike_frame_roll if is_finite(bike_frame_roll) else bike.lean
+			var roll := clampf(bike_roll * 0.12, -0.045, 0.045) * smoothstep(4.0, 12.0, absf(bike.speed))
+			camera.rotate_object_local(Vector3.BACK, roll)
 		return
-	_cam_roll = 0.0
-	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and settings.head_bob else 0.0, _smooth(BOB_RESPONSE, dt))
+	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and s.head_bob else 0.0, _smooth(BOB_RESPONSE, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
 	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * BOB_AMP * stride * _bob_amp * (BOB_PHOTO if photo_active else 1.0)
 	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + dip - _seat_drop, pos.z)

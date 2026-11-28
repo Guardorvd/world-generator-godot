@@ -1283,11 +1283,11 @@ func save_ride_log() -> void:
 ## Колёса по отдельности: нагрузка (доли веса), использованный запас сцепления и параметры устойчивости
 func _contact_report() -> String:
 	var stance_name := "НОГА" if bike.stance == BikeRide.Stance.FOOT_DOWN else ("БАЛАНС" if bike.stance == BikeRide.Stance.TRACKSTAND else "ЕЗДА")
-	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s\nСтойка %s · нестаб. %.0f%% · тангаж %+.2f рад/с · крен-склон %.0f%% · g %.0f/%.0f" % [
+	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s\nСтойка %s · нестаб. %.0f%% · тангаж %+.2f рад/с · крен-склон %.0f%% · g %.1f" % [
 		bike.load_f, bike.tire_f, bike.use_f * 100, "" if bike.contact_f() else " · НЕТ КОНТАКТА",
 		bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА",
 		stance_name, bike.instability * 100.0, bike.pitch_vel, bike.bank_slope * 100.0,
-		bike.config.ground_gravity, bike.config.air_gravity]
+		bike.config.gravity]
 
 func _sync_mouse() -> void:
 	# 30.10: движение мыши вращает камеру; зажатый Alt (и панель F2, вид сверху) отпускает курсор для интерфейса,
@@ -1476,8 +1476,8 @@ func _process(dt: float) -> void:
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
-	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп  ·  Alt курсор"
-	route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
+	route_hint.text = "Space прыжок  ·  Q/E наклон в воздухе  ·  Shift рывок  ·  Alt курсор"
+	route_hint.tooltip_text = "Space — прыжок. В воздухе Q поднимает нос, E опускает для мягкого приземления по склону."
 	speed_label.text = "%.0f км/ч  " % (absf(bike.speed) * 3.6)
 	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)

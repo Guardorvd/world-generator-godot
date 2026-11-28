@@ -51,7 +51,7 @@ func advance(ticks: int, throttle := 0.0, crank_rate := 0.0, boost := false) -> 
 		state.grade_now = state.tilt
 		state._step_effort(maxf(throttle, 0.0) if not state.airborne else 0.0, DT)
 		var cfg := BikePhysicsConfig.current()
-		state.drive_force = cfg.pedal_accel * cfg.pedal_push_mult * state.effort * 0.5
+		state.drive_force = cfg.pedal_accel * cfg.start_push_mult * state.effort * 0.5
 		bike.tick(state, DT, throttle, boost)
 		state.land_impact = 0
 	bike.draw(1.0)
@@ -107,6 +107,7 @@ func look() -> void:
 	reset(8.0)
 	state.steer = 0.5
 	state.lean = -0.3
+	state.rider_lean = state.lean
 	advance(60)
 	anim.append(await shot(Vector3(0.6, 1.3, -2.7), Vector3(0, 1.0, 0.0)))
 	reset(8.0)
@@ -135,18 +136,6 @@ func look() -> void:
 	advance(26, 0.65, 4.0)
 	save([await shot(Vector3(-2.0, 1.65, -1.65), Vector3(0.0, 1.05, -0.12))], "rider_watch", 1)
 	bike.watch_requested = false
-	# 20.11: пассивное поглощение гребня без зажатого пампа — слева обычная езда накатом, справа гребень
-	var absorb: Array[Image] = []
-	reset(11.0)
-	advance(40)
-	absorb.append(await shot(side, mid))
-	reset(11.0)
-	advance(20)
-	state._pump_absorb_v = state.config.pump_absorb_v * state.config.pump_passive
-	advance(12)
-	absorb.append(await shot(side, mid))
-	state._pump_absorb_v = 0.0
-	save(absorb, "rider_absorb", 2)
 	# 12.11: рывок на Shift на скорости (стоя, велосипед раскачивается) и резкий доворот руля
 	reset(12.0)
 	state.surge = 1.0
@@ -158,6 +147,7 @@ func look() -> void:
 	for i in 8:
 		state.steer = minf(1.0, state.steer + 5.0 * DT)
 		state.lean = -state.steer * 0.25
+		state.rider_lean = state.lean
 		advance(1)
 	anim.append(await shot(Vector3(0.6, 1.3, -2.7), Vector3(0, 1.0, 0.0)))
 	save(anim, "rider_anim_sheet", 5)
@@ -166,7 +156,7 @@ func look() -> void:
 	var rear := Vector3(0.65, 1.65, 3.3)
 	var frame_center := Vector3(0, 0.82, 0)
 	reset(0.0)
-	state._stance_driven = true
+	state.stance_driven = true
 	state.stance = BikeRide.Stance.TRACKSTAND
 	advance(35)
 	balance.append(await shot(rear, frame_center, 44.0))
@@ -188,10 +178,10 @@ func look() -> void:
 	reset(10.0)
 	state.tilt = -0.24
 	ground.rotation = Vector3(state.tilt, 0, 0)
-	state.brakes.pressure = 1.0
+	state.brake_pressure = 1.0
 	state.brake_force = Vector2(6.0, 2.0)
-	state.brakes.risk = 0.65
-	state.brakes.lift = 0.16
+	state.brake_risk = 0.65
+	state.nose_lift = 0.16
 	advance(35)
 	balance.append(await shot(Vector3(3.1, 1.2, 0.0), frame_center, 44.0))
 	save(balance, "rider_balance", 4)

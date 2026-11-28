@@ -40,9 +40,9 @@ func ride(pace: float, steer_for: float, total: float, brake := false) -> Dictio
 		var throttle := brake_input(c, -1.0) if brake and key != 0.0 else clampf((pace - b.speed) * 0.6, 0.0, 1.0)
 		b.step(p, throttle, turn, false, false, DT, w, ground)
 		t += DT
-		if key != 0.0 and absf(b._yaw_rate) > 0.01:
-			radius = absf(b.speed) / absf(b._yaw_rate)
-			lateral = absf(b.speed * b._yaw_rate) / GameConfig.GRAVITY
+		if key != 0.0 and absf(b.yaw_rate) > 0.01:
+			radius = absf(b.speed) / absf(b.yaw_rate)
+			lateral = absf(b.speed * b.yaw_rate) / GameConfig.GRAVITY
 	return {turn = rad_to_deg(absf(wrapf(b.heading - h0, -PI, PI))), radius = radius, g = lateral, speed = b.speed}
 
 func brake_ride(pace: float, hold: float) -> float:

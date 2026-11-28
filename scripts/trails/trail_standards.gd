@@ -14,10 +14,11 @@ extends RefCounted
 ## по стандарту на своей скорости приземляют в зону, памп не отрывает колёса, техника не бьёт жёстче уровня.
 
 const T := TrailElement.Profile
+const LOOK_TIMES := [0.06, 0.14, 0.25]
 static var G: float:
-	get: return BikePhysicsConfig.current().air_gravity
+	get: return BikePhysicsConfig.current().gravity
 static var G_GROUND: float:
-	get: return BikePhysicsConfig.current().ground_gravity
+	get: return BikePhysicsConfig.current().gravity
 ## Скорости входа, под которые считаются стандарты (стенд проверяет каждую), м/с.
 const DESIGN_SPEEDS := [8.0, 11.0, 14.0, 17.0]
 ## Удар приземления, с которого BikeRide гасит скорость (soft_impact), м/с: выше — уже «жёстко».
@@ -41,42 +42,37 @@ const TABLE_LOW := 0.4
 const HEIGHTS := {T.TABLETOP: Vector2(0.6, 1.8), T.GAP: Vector2(1.1, 1.8), T.ROLLER: Vector2(0.3, 0.9), T.PUMP: Vector2(0.3, 0.55)}
 
 ## — Физика (из BikeRide / GameConfig) —
-## Предельная боковая перегрузка с полным рулём на ровной плотной земле, м/с²: стенд tools/steer_stand.gd
-## (31.10, 10–16 м/с: 0,67–0,69 g при GRAVITY 16). Выше доля LEVELS.lat — запас на неточный руль.
-const LAT_MAX := 9.2
-## Наклон полотна прибавляет боковой тяжести ground_gravity · s / √(1 + s²) (BikeRide._step_turn), учитывается до этого.
-static var BANK_MAX: float:
-	get: return BikePhysicsConfig.current().bank_slope_max
+## Предельная боковая перегрузка с полным рулём на ровной плотной земле, м/с².
+static var LAT_MAX: float:
+	get: return BikePhysicsConfig.current().max_lat_accel
+const BANK_MAX := 0.45
 ## Качение и скорость потерь на плотной земле (BikePhysicsConfig), м/с² и 1/м.
 static var ROLL: float:
 	get: return BikePhysicsConfig.current().roll_resistance
 static var DRAG: float:
-	get: return BikePhysicsConfig.current().air_drag + BikePhysicsConfig.current().speed_loss
+	get: return BikePhysicsConfig.current().air_drag
 ## «Средний седок» в профиле скорости: педали до крейсерской на ровном, комфортное торможение (не полный тормоз 9).
-## Крейсерская — между обычной (11) и с Shift (14,3): в заездах 31.10 Shift держали 40–76 % времени, медиана скорости
-## отрыва на прыжках ~14 м/с (разбор Хайку). Уточнять по новым записям.
-const CRUISE := 14.5 # 01.11 v4: было 13 — на сгенерированных трассах приезжали на 12,6–15,6 там, где ждали 10–11 (Shift ~50 % времени)
+const CRUISE := 14.5
 static var PEDAL: float:
 	get: return BikePhysicsConfig.current().pedal_accel
-## Разгон с Shift: тяга BikeRide._step_speed (push / (1 + taper · (v / top)²), без усталости), предел — cruise_speed × boost_mult.
+## Разгон с Shift: тяга BikeRide._step_speed (без усталости), предел — cruise_speed × boost_mult.
 static var BOOST_TOP: float:
 	get:
 		var cfg := BikePhysicsConfig.current()
 		return cfg.cruise_speed * cfg.boost_mult
 static func boost_drive(v: float) -> float:
 	var cfg := BikePhysicsConfig.current()
-	var push := cfg.pedal_accel * cfg.pedal_push_mult
 	var top := cfg.cruise_speed * cfg.boost_mult
-	var taper := maxf(0.1, push / (cfg.roll_resistance + (cfg.air_drag + cfg.speed_loss) * top * top) - 1.0)
-	var ratio := maxf(v, 0.0) / top
-	return push / (1.0 + taper * ratio * ratio)
+	var eq_resist := cfg.roll_resistance + cfg.air_drag * top * top
+	if v > top:
+		return eq_resist * maxf(0.0, 1.0 - (v - top) / 2.5)
+	var u := clampf(maxf(v, 0.0) / maxf(top, 0.1), 0.0, 1.0)
+	return lerpf(cfg.pedal_accel * cfg.start_push_mult, eq_resist, pow(u, cfg.pedal_taper))
 const BRAKE := 5.0
 ## Модель прыжка повторяет BikeRide: шаг сетки рельефа (м) и база колёс (оси впереди и позади середины, м).
 const GRID_STEP := 1.0
 const HUB := BikeRide.HUB
-## Тело гасит гребень пампа: столько хода (pump_reach), м.
-static var ABSORB_REACH: float:
-	get: return BikePhysicsConfig.current().pump_reach
+const ABSORB_REACH := 0.0
 ## Высоты камней и корней по уровню (от зелёной к чёрной), м.
 const TECH_HEIGHTS := {T.ROCK_GARDEN: Vector2(0.08, 0.18), T.ROOTS: Vector2(0.06, 0.15), T.ROUGH: Vector2(0.05, 0.14), T.RUTS: Vector2(0.08, 0.22)}
 
@@ -127,7 +123,7 @@ static func lip(e: TrailElement) -> float:
 ## глубже LIFT; в полёте — тяжесть до касания опоры. Возвращает takeoff, land (м от начала), air (с), apex (м над
 ## точкой отрыва), takeoff_speed, impact (удар по нормали к земле касания, м/с); flew = false — не оторвался.
 static func fly(e: TrailElement, v: float, grade := 0.0) -> Dictionary:
-	var dt := 1.0 / BikeRide.SUB_HZ
+	var dt := 1.0 / BikeRide.HZ
 	var n := nodes(e) # один поиск на полёт: тысячи выборок профиля в нём идут по этому массиву
 	var s := -4.0
 	var y := _contact(n, s) + grade * s
@@ -144,16 +140,12 @@ static func fly(e: TrailElement, v: float, grade := 0.0) -> Dictionary:
 		var slope := minf(own, maxf(0.0, hub)) if own > 0.0 else own
 		var vy := slope * speed
 		var lifted := false
-		for look: float in cfg.look_times:
+		for look: float in LOOK_TIMES:
 			var up := y + vy * look - G * look * look * 0.5
 			var ahead := s + speed * look
-			if up - (_contact(n, ahead) + grade * ahead) > cfg.lift_threshold:
+			if up - (_contact(n, ahead) + grade * ahead) > cfg.micro_step_absorb:
 				lifted = true
 				break
-		if not lifted and speed >= cfg.detach_min_speed:
-			var curve := (_contact(n, s + HUB) + _contact(n, s - HUB) - 2.0 * _contact(n, s)) / (HUB * HUB)
-			if 1.0 / sqrt(1.0 + slope * slope) + speed * speed * curve / G_GROUND < cfg.detach_normal_min:
-				lifted = true
 		if lifted:
 			var f := _flight(n, s, y, speed, vy, grade, dt)
 			if f.flew or f.land >= end: return f
@@ -295,20 +287,19 @@ static func roller_lift_speed(e: TrailElement) -> float:
 ## стендом (памп 4,8×0,30: отрыв с 12–13 м/с; 5,5×0,55: с 9–11; 7,0×0,55: с 11–13).
 const PUMP_HOLD := 0.95
 static func _passive_reach() -> float:
-	var cfg := BikePhysicsConfig.current()
-	return cfg.pump_reach * cfg.pump_passive
+	return 0.0
 
 static func pump_speed(e: TrailElement) -> float:
 	var crests := maxi(1, e.count)
 	var step := e.length / crests if e.profile != T.RIPPLES else e.period
-	var h := maxf(0.02, e.height - _passive_reach()) if e.profile != T.RIPPLES else e.height
+	var h := maxf(0.02, e.height)
 	return PUMP_HOLD * sqrt(G / (2.0 * h * pow(PI / step, 2.0)))
 
 ## Шаг гребней пампа под скорость v и высоту h: колёса держатся до v · PUMP_MARGIN (запас на разгон в пампе).
 const PUMP_MARGIN := 1.15
 const PUMP_STEP_MAX := 9.0
 static func pump_step(v: float, h: float) -> float:
-	var held := maxf(0.02, h - _passive_reach())
+	var held := maxf(0.02, h)
 	return PI * v * PUMP_MARGIN / PUMP_HOLD * sqrt(2.0 * held / G)
 
 
@@ -324,7 +315,7 @@ static func turn_speed(radius: float, bank := 0.0, lat := 0.8) -> float:
 static func bank_of(e: TrailElement, d: TrailDefinition) -> float:
 	var own := 0.0
 	if e.profile in [T.BERM, T.S_BERM, T.OFF_CAMBER]:
-		var span := BikePhysicsConfig.current().bank_span
+		var span := 0.5
 		var hw := d.width * 0.5
 		var hi := e.displacement(e.station, span * 0.5 * e.bank, hw)
 		var low := e.displacement(e.station, -span * 0.5 * e.bank, hw)
@@ -367,16 +358,12 @@ static func berm_height(v: float, radius: float, level: int, width := 4.0) -> fl
 
 ## — Техника —
 
-## Скорость, на которую рассчитан технический участок, м/с. Камни и корни до TrailTechnical.BUMP_LIMIT на прямой
-## физически проходимы на любой скорости (стенд: ни ударов, ни пробоев до 17 м/с; с 01.11 они сбивают колесо вбок
-## и выбивают руль, линию нужно держать), поэтому предел прямой — стандарт уровня TECH_SPEED (скорость, на которой
-## седок этого уровня успевает выбирать линию между камнями), а в повороте — сцепление на скользком камне
-## (BikeRide.ROOT_GRIP). Слалом — по кривизне линии между воротами на том же сцеплении.
+## Скорость, на которую рассчитан технический участок, м/с.
 const TECH_SPEED := [7.0, 9.0, 11.5, 14.0]
 static func tech_speed(e: TrailElement, d: TrailDefinition = null, level := 1) -> float:
 	var limit: float = TECH_SPEED[clampi(level, 0, TECH_SPEED.size() - 1)]
 	if d == null: return limit
-	var root_grip := BikePhysicsConfig.current().root_grip
+	var root_grip := 0.55
 	if e.profile == T.SLALOM:
 		var count := clampi(mini(e.count, int(e.length / 6.0)), 2, 8)
 		var spacing := e.length / count

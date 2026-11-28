@@ -198,8 +198,8 @@ func ride(spec: Dictionary) -> Dictionary:
 		r.coast_time += dt if absf(input.throttle) <= 0.1 and not b.airborne else 0.0
 		r.hits += hits
 		r.jump_presses += int(input.jump)
-		r.pop_count += int(b._hop_used and not popped_previous)
-		popped_previous = b._hop_used
+		r.pop_count += int(b.hop_used and not popped_previous)
+		popped_previous = b.hop_used
 		r.land_max = maxf(r.land_max, b.land_impact)
 		r.bottom_outs += int(b.bottom_out > 0.0)
 		r.stamina_min = minf(r.stamina_min, controller.stamina.value)

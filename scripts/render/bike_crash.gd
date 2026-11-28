@@ -330,7 +330,7 @@ func _begin_ragdoll() -> void:
 	_bike_body.collision_layer = LAYER_BODY
 	_bike_body.collision_mask = LAYER_GROUND
 	_bike_body.mass = 14.0
-	_bike_body.gravity_scale = BikePhysicsConfig.current().air_gravity / 9.8
+	_bike_body.gravity_scale = BikePhysicsConfig.current().gravity / 9.8
 	_bike_body.angular_damp = 1.5
 	_bike_body.linear_damp = 0.7
 	_bike_body.continuous_cd = true
@@ -372,7 +372,7 @@ func _build_ragdoll() -> void:
 		bone.collision_mask = LAYER_GROUND
 		bone.mass = spec.mass
 		bone.friction = 0.45
-		bone.gravity_scale = BikePhysicsConfig.current().air_gravity / 9.8
+		bone.gravity_scale = BikePhysicsConfig.current().gravity / 9.8
 		bone.linear_damp = 0.7
 		bone.angular_damp = 3.0
 		bone.body_offset = Transform3D(Basis(), Vector3(0, spec.offset, 0))

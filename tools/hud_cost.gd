@@ -58,8 +58,8 @@ func _cost() -> void:
 		hud._summary_held = scene.ends_with("Tab")
 		bike.riding = riding
 		bike.speed = 9.0 if riding else 0.0
-		bike.brakes.pressure = 0.8 if scene.begins_with("езда с торможением") else 0.0
-		bike.brakes.skid = 0.4 if scene.begins_with("езда с торможением") else 0.0
+		bike.brake_pressure = 0.8 if scene.begins_with("езда с торможением") else 0.0
+		bike.brake_skid = 0.4 if scene.begins_with("езда с торможением") else 0.0
 		var x := 512.0
 		var z := 512.0
 		var heading := 0.3
