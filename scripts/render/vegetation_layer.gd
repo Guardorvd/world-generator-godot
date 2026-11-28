@@ -1786,7 +1786,12 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0, immediate :
 				# 15.1: тень кроны среднего уровня (от ~76 м) — дальним мешом: чем дальше, тем проще тень, дальность теней та же
 				var crown_proxy: bool = part == "crown" and level == 1 and not small and levels.size() > 2 \
 					and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK
-				var node_count := 2 if shadow_proxy or crown_proxy else 1
+				# 28.11: эту тень (дальний меш на всём среднем уровне) у силуэтов, сведённых в запись FAR_KEY, рисует она одна:
+				# один узел тени на вид чанка вместо узла на каждый силуэт. В смешанном лесу Типа 2 это сотни draw call
+				# в каждом каскаде; силуэт тени за 50 м не различим, как и силуэт самой кроны за 160 м.
+				var merged_shadow: bool = crown_proxy and entry.get("merged_far", false)
+				var far_caster: bool = part == "crown" and entry.get("far_only", false) and level == levels.size() - 1 and levels.size() > 2
+				var node_count := 2 if shadow_proxy or (crown_proxy and not merged_shadow) or far_caster else 1
 				if limit > 0 and (uploaded + node_count > TREE_NODES_PER_SLICE or deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec):
 					built.cursor = i
 					built.node_cursor = node_index
@@ -1800,6 +1805,9 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0, immediate :
 				if level >= FAR_LOD_NO_SHADOW:
 					# Дальний LOD лежит за плавным краем теней солнца: теневой проход его не рисует.
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+					if far_caster:
+						# тень среднего уровня за все силуэты вида (см. merged_shadow): материал первого силуэта этого уровня
+						entry.nodes.append(_crown_caster(levels[level], _shared_tree_material(def, part, 1, false), entry, 1, limit > 0 and not immediate))
 				elif part == "trunk" and level >= 1:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF # тень тонкого ствола за 60 м не видна
 				elif shadow_proxy:
@@ -1821,19 +1829,8 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0, immediate :
 				elif crown_proxy:
 					# Материал — этого уровня (тот же шейдер, полоса LOD1 по расстоянию), меш — дальнего; шейдер двусторонний.
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-					var crown_caster := _multimesh(levels[levels.size() - 1], mat, entry.count, true, true, true, true)
-					crown_caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
-					crown_caster.set_meta("level", level)
-					if limit > 0 and not immediate:
-						_reveal_node(crown_caster, mat)
-					crown_caster.multimesh.buffer = _tree_buffer(entry.cbuf, true, crown_caster.get_meta("stream_birth", 0.0))
-					crown_caster.multimesh.custom_aabb = entry.bounds
-					crown_caster.multimesh.visible_instance_count = entry.count
-					crown_caster.visibility_range_begin = maxf(0.0, LOD_STEPS[0][0] - LOD_STEPS[0][1] * 0.5 - _half_chunk())
-					crown_caster.visibility_range_end = LOD_STEPS[1][0] + LOD_STEPS[1][1] * 0.5 + _half_chunk()
-					crown_caster.visibility_range_end_margin = 0.0
-					crown_caster.set_meta("last_level", false)
-					entry.nodes.append(crown_caster)
+					if not merged_shadow:
+						entry.nodes.append(_crown_caster(levels[levels.size() - 1], mat, entry, level, limit > 0 and not immediate))
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
@@ -2169,6 +2166,23 @@ func _shared_tree_material(def: Dictionary, part: String, level: int, small: boo
 		_fade(mat, minf(tree_r, 70.0), 0.0)
 		def[key] = mat
 	return def[key]
+
+
+## 15.1: узел только тени кроны среднего уровня (дальний меш, полоса уровня 1 по расстоянию)
+func _crown_caster(mesh: Mesh, mat: ShaderMaterial, entry: Dictionary, level: int, reveal: bool) -> MultiMeshInstance3D:
+	var crown_caster := _multimesh(mesh, mat, entry.count, true, true, true, true)
+	crown_caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	crown_caster.set_meta("level", level)
+	if reveal:
+		_reveal_node(crown_caster, mat)
+	crown_caster.multimesh.buffer = _tree_buffer(entry.cbuf, true, crown_caster.get_meta("stream_birth", 0.0))
+	crown_caster.multimesh.custom_aabb = entry.bounds
+	crown_caster.multimesh.visible_instance_count = entry.count
+	crown_caster.visibility_range_begin = maxf(0.0, LOD_STEPS[0][0] - LOD_STEPS[0][1] * 0.5 - _half_chunk())
+	crown_caster.visibility_range_end = LOD_STEPS[1][0] + LOD_STEPS[1][1] * 0.5 + _half_chunk()
+	crown_caster.visibility_range_end_margin = 0.0
+	crown_caster.set_meta("last_level", false)
+	return crown_caster
 
 
 func _reveal_node(node: MultiMeshInstance3D, shared: ShaderMaterial) -> void:

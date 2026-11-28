@@ -6,6 +6,8 @@ const VERSION := 1
 const FORMAT_VERSION := 2
 const DEFAULT_DIR := "user://ride_journal"
 static var _thumb_lock := Mutex.new()
+## 28.11: чтение и запись ленты в фоне (RideFeedWriter) не должны перемешаться с удалением заезда из интерфейса
+static var _file_lock := Mutex.new()
 static var _thumb_revisions := {}
 static var _thumb_generation := 0
 static var _thumb_jobs := {}
@@ -133,6 +135,13 @@ func upsert(entry: Dictionary) -> Error:
 
 
 func erase(id: String) -> Error:
+	_file_lock.lock()
+	var err := _erase(id)
+	_file_lock.unlock()
+	return err
+
+
+func _erase(id: String) -> Error:
 	if not _loaded:
 		var load_error := load_feed()
 		if load_error != OK:

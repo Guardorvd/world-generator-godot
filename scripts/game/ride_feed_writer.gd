@@ -105,13 +105,16 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 	if not Feed.accepts(snapshot, development):
 		return OK
 	if force:
-		if not _pending_thumb.is_empty():
+		if not _pending_thumb.is_empty() and _pending_thumb.get("thumb", true):
 			Feed.end_thumb(str(_pending_thumb.path))
 		_pending_thumb.clear() # финальный снимок новее ожидающего
 		finish()
 	elif _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		poll()
 	var entry := make_entry(snapshot, template_id, seed, names, photo_paths)
+	if not force:
+		_submit_background(entry, snapshot, map_image, world_size)
+		return OK
 	var load_err: Error = feed.load_feed()
 	if load_err != OK:
 		return load_err
@@ -139,7 +142,64 @@ func submit(snapshot: Dictionary, template_id: String, seed: String, names: Arra
 	return OK
 
 
+## 28.11: снимок заезда при автосохранении — чтение ленты, запись и превью в рабочем потоке, как байты сохранения
+## (на главном потоке JSON ленты в 270 КБ стоил ~30 мс раз в минуту). Пока прошлая задача идёт, снимок ждёт её
+## в _pending_thumb (более новый заменяет ожидающий); финальный снимок (force) по-прежнему пишется синхронно.
+## Лентой этого объекта, пока идёт задача, пользуется только она; finish() и migrate() её дожидаются.
+func _submit_background(entry: Dictionary, snapshot: Dictionary, map_image: Image, world_size: Vector2) -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	var path: String = feed.thumb_path(entry.id)
+	var job := {entry = entry, thumb = map_image != null and now - _last_thumb >= Config.thumb_interval,
+		snapshot = snapshot.duplicate(true), image = map_image, world_size = world_size, id = str(entry.id), path = path}
+	if job.thumb:
+		Feed.begin_thumb(path)
+	if _task == -1:
+		_start_job(job)
+		return
+	if not _pending_thumb.is_empty() and _pending_thumb.get("thumb", true):
+		Feed.end_thumb(str(_pending_thumb.path))
+	_pending_thumb = job
+
+
+func _start_job(job: Dictionary) -> void:
+	var wants_thumb: bool = job.thumb
+	if wants_thumb:
+		_last_thumb = Time.get_ticks_msec() / 1000.0
+	var entry: Dictionary = job.entry
+	var path: String = job.path
+	var result := {error = OK}
+	var target = feed
+	var folder: String = feed.directory
+	_result = result
+	_task_id = job.id
+	_task = WorkerThreadPool.add_task(func() -> void:
+		Feed._file_lock.lock()
+		var err: Error = target.load_feed()
+		var deleted: bool = err == OK and entry.id in target.deleted
+		if err == OK and not deleted:
+			if wants_thumb or FileAccess.file_exists(path):
+				entry.thumb = Feed.thumb_name(entry.id)
+			err = target.upsert(entry)
+		Feed._file_lock.unlock()
+		if err == OK and not deleted:
+			if wants_thumb and target.entries.any(func(saved: Dictionary) -> bool: return saved.id == entry.id):
+				var image: Image = Thumb.render(job.image, job.world_size, job.snapshot)
+				if image == null:
+					err = ERR_INVALID_DATA
+				else:
+					var temporary: String = path + ".tmp"
+					err = image.save_png(temporary)
+					if err == OK:
+						err = Feed.publish_thumb(folder, job.id, temporary, path)
+		if wants_thumb:
+			Feed.end_thumb(path)
+		result.error = err, false, "Журнал заездов")
+
+
 func _start_thumb(job: Dictionary, already_marked := false) -> void:
+	if job.has("entry"):
+		_start_job(job)
+		return
 	_last_thumb = Time.get_ticks_msec() / 1000.0
 	if not already_marked:
 		Feed.begin_thumb(str(job.path))
@@ -185,5 +245,5 @@ func _wait_task() -> void:
 	_task = -1
 	_task_id = ""
 	if _result.error != OK:
-		push_warning("Не удалось записать превью заезда: " + error_string(_result.error))
+		push_warning("Не удалось записать журнал или превью заезда: " + error_string(_result.error))
 	_result = {}
