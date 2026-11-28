@@ -89,6 +89,14 @@ func reserve(bytes: int) -> void:
 	_trim()
 	_lock.unlock()
 
+## 28.11: своя доля новой системы мира (детальный рельеф Типа 2) добавляется к общему пределу, а не вычитается
+## из доли кэшей Типа 1; отрицательное значение возвращает предел и вытесняет лишнее.
+func grow(bytes: int) -> void:
+	_lock.lock()
+	limit = maxi(0, limit + bytes)
+	_trim()
+	_lock.unlock()
+
 func release(bytes: int) -> void:
 	_lock.lock()
 	_reserved = maxi(0, _reserved - bytes)

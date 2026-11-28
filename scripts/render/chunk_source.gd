@@ -10,6 +10,7 @@ const DETAIL_LAYER := -2
 var _far_cpu := LRU.new()
 var _fine_cpu := LRU.new()
 var _fine_reserved := 0
+var _fine_grown := 0 # на столько общий предел бюджета поднят ради детального рельефа (возвращается в close)
 var _far_lock := Mutex.new()
 var _far_tasks := {}
 var cache: WorldCache
@@ -47,6 +48,10 @@ func setup(owner: WorldCache, w: WorldData, h: Heightfield, start_size: int, pre
 		if budget != null:
 			budget.register_owner(_fine_cpu._owner_id, "terrain_detail")
 			_fine_reserved = h.fine_profile.tile_mib * h.fine_profile.MIB
+			# 28.11: тайлы и меши детального рельефа платят за себя сами: без этого Тип 2 занимал ~189 МБ из 192
+			# уже после короткой езды, и кэши чанков и ковра (те же, что в Типе 1) начинали бы вытесняться
+			_fine_grown = _fine_reserved + _fine_cpu.limit
+			budget.grow(_fine_grown)
 			budget.reserve(_fine_reserved)
 	for group: Dictionary in groups:
 		for ref: Variant in group.values():
@@ -345,8 +350,11 @@ func close() -> void:
 	_startup_bytes = 0
 	_cpu.clear()
 	_fine_cpu.clear()
-	if _cpu.budget != null: _cpu.budget.release(_fine_reserved)
+	if _cpu.budget != null:
+		_cpu.budget.release(_fine_reserved)
+		_cpu.budget.grow(-_fine_grown)
 	_fine_reserved = 0
+	_fine_grown = 0
 	_far_cpu.clear()
 	_release_pins()
 
@@ -359,7 +367,9 @@ func _release_pins() -> void:
 func _notification(what: int) -> void:
 	# A RefCounted script cannot call an instance method on itself at zero references.
 	if what != NOTIFICATION_PREDELETE: return
-	if not closed and _cpu.budget != null: _cpu.budget.release(_startup_bytes + _handoff_bytes + _fine_reserved)
+	if not closed and _cpu.budget != null:
+		_cpu.budget.release(_startup_bytes + _handoff_bytes + _fine_reserved)
+		_cpu.budget.grow(-_fine_grown)
 	if not _pins.is_empty():
 		WorldCache.unpin_files(_pins)
 		cache.request_collection(world.seed_text, size)

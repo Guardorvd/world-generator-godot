@@ -996,6 +996,9 @@ func _group_world() -> void:
 		await _travel(views.forest)
 
 	_memory("played", "После замеров в мире")
+	# 28.11: общий бюджет кэшей в RAM (CpuCacheBudget) и очередь чтения чанков после езды — вытеснения и попадания
+	report.cpu_cache = {budget = GameContext.scope.cpu_budget.snapshot(), chunks = game.chunk_source.snapshot() if game.chunk_source != null else {}}
+	print("CPU_CACHE ", JSON.stringify(report.cpu_cache))
 	main._free_game()
 	game = null
 	await _frames(30)
