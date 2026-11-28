@@ -124,6 +124,11 @@ func _run() -> void:
 	_check(chosen_map.entry.is_empty(), "открытие подробностей не меняет карту мира")
 	var photo_buttons := compact._dialog.find_children("*", "TextureButton", true, false)
 	_check(photo_buttons.size() == 6, "снимки загружаются первой порцией")
+	if not photo_buttons.is_empty():
+		var deadline := Time.get_ticks_msec() + 5000
+		while (photo_buttons[0] as TextureButton).texture_normal == null and Time.get_ticks_msec() < deadline:
+			await process_frame
+		_check((photo_buttons[0] as TextureButton).texture_normal != null, "миниатюра снимка готовится в фоне")
 	var more := compact._dialog.find_children("*", "Button", true, false).filter(func(node: Node) -> bool: return (node as Button).text == "Показать ещё снимки")
 	if not more.is_empty():
 		(more[0] as Button).pressed.emit()
@@ -135,6 +140,12 @@ func _run() -> void:
 		var viewers := compact._dialog.find_children("*", "AcceptDialog", true, false)
 		_check(viewers.size() == 1, "снимок открывается крупно")
 		if not viewers.is_empty():
+			var pictures := (viewers[0] as AcceptDialog).find_children("*", "TextureRect", true, false)
+			var picture := pictures[0] as TextureRect if not pictures.is_empty() else null
+			var deadline := Time.get_ticks_msec() + 5000
+			while is_instance_valid(picture) and picture.texture == null and Time.get_ticks_msec() < deadline:
+				await process_frame
+			_check(is_instance_valid(picture) and picture.texture != null, "крупный снимок загружается в фоне")
 			var close_photo := InputEventAction.new()
 			close_photo.action = &"ui_cancel"
 			close_photo.pressed = true
@@ -249,19 +260,22 @@ func _run() -> void:
 	var card = menu._cards[str(later.id)]
 	var before: int = card.get_instance_id()
 	Feed.begin_thumb(feed.thumb_path(later.id))
-	menu._process(2.0)
+	await process_frame
+	await process_frame
 	_check(card._missing.text == "Подготавливаем карту…", "показывается подготовка отсутствующего превью")
 	_check(menu._detail_missing.text == "Подготавливаем карту…", "подготовка видна в открытых подробностях")
 	Thumb.render(map, Vector2(1024, 1024), delayed).save_png(feed.thumb_path(later.id))
 	Feed.end_thumb(feed.thumb_path(later.id))
-	menu._process(2.0)
+	await process_frame
+	await process_frame
 	_check(is_instance_valid(card._preview.texture) and card.get_instance_id() == before and card.button_pressed, "готовое превью появляется без потери выбора")
 	var replacement := Image.create(320, 200, false, Image.FORMAT_RGB8)
 	replacement.fill(Color(0.8, 0.1, 0.1))
 	var temporary: String = feed.thumb_path(later.id) + ".tmp"
 	replacement.save_png(temporary)
 	_check(Feed.publish_thumb(folder, str(later.id), temporary, feed.thumb_path(later.id)) == OK, "новая карта атомарно заменяет старую")
-	menu._process(2.0)
+	await process_frame
+	await process_frame
 	_check(card._preview.texture.get_image().get_pixel(0, 0).r > 0.7 and card.get_instance_id() == before, "обновлённая карта появляется без перестроения карточки")
 	_check(menu._detail_preview.texture != null and menu._detail_preview.texture.get_image().get_pixel(0, 0).r > 0.7, "открытые подробности получают обновлённую карту")
 	if is_instance_valid(menu._dialog):
@@ -280,6 +294,16 @@ func _run() -> void:
 	menu.refresh()
 	await _shot("empty")
 	_check(empty_feed.entries.is_empty() and menu._list.get_child_count() == 1, "пустой журнал объясняет порог записи")
+	var idle_deadline := Time.get_ticks_msec() + 2000
+	while menu.is_processing() and Time.get_ticks_msec() < idle_deadline:
+		await process_frame
+	_check(not menu.is_processing(), "пустая лента не работает каждый кадр")
+	var wake_path := folder.path_join("wake-test.png")
+	Feed.begin_thumb(wake_path)
+	await process_frame
+	await process_frame
+	_check(menu._thumb_generation == Feed.thumb_generation(), "фоновая задача будит ленту без постоянного опроса")
+	Feed.end_thumb(wake_path)
 	var walks_feed = Feed.new(folder.path_join("walk_only"))
 	var walk_only := {id = "walk-only", version = Feed.VERSION, start = 42, world_title = "Мир", seed = "Мир", template_id = WorldTemplate.DEFAULT_ID, walk = true, foot = 500}
 	_check(walks_feed.upsert(walk_only) == OK, "подготовлена скрытая прогулка")

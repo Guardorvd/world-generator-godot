@@ -198,9 +198,20 @@ func _writer(folder: String) -> void:
 	snapshot.start = 124.0
 	check(second.submit(snapshot, "test", "seed", [], [], map, Vector2(128, 128)) == OK, "фоновый снимок начат")
 	var removed_id := Feed.ride_id("test", "seed", 124.0)
-	check(feed.load_feed() == OK and feed.erase(removed_id) == OK, "удаление во время построения")
+	# Запись теперь тоже публикуется в фоне: удалять можно после её появления в ленте.
+	var published := false
+	var deadline := Time.get_ticks_msec() + 3000
+	while not published and Time.get_ticks_msec() < deadline:
+		published = feed.load_feed() == OK and feed.entries.any(func(entry: Dictionary) -> bool: return entry.id == removed_id)
+		if not published:
+			OS.delay_msec(1)
+	check(published and feed.erase(removed_id) == OK, "удаление опубликованной записи при фоновой работе")
 	second.finish()
 	check(not FileAccess.file_exists(feed.thumb_path(removed_id)), "удалённое превью не возвращается из потока")
+	var late := feed.thumb_path(removed_id) + ".late.tmp"
+	check(map.save_png(late) == OK and Feed.publish_thumb(folder, removed_id, late, feed.thumb_path(removed_id)) == OK \
+		and not FileAccess.file_exists(late) and not FileAccess.file_exists(feed.thumb_path(removed_id)),
+		"запоздавшая публикация не восстанавливает удалённое превью")
 
 
 func _migration(folder: String) -> void:

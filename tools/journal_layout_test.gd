@@ -24,6 +24,9 @@ func _run() -> void:
 	_check(panel._path_center.is_visible_in_tree() and not panel._map_page.visible, "лента отдельно от карты")
 	_check(panel._feed_view._wide_cards, "в игре используются полные карточки ленты")
 	_check(panel._path_page.size.x > 600 and absf(panel._path_page.get_global_rect().get_center().x - 640.0) < 2.0, "лента находится по центру")
+	panel._summary_button.button_pressed = true
+	_check(not panel._feed_view.visible and panel._summary_button.text.contains("К поездкам"), "итоги заменяют ленту, а не сжимают её")
+	_check(panel.dismiss_subpanel() and panel._feed_view.visible and panel._summary_button.has_focus(), "назад возвращает к поездкам и сохраняет фокус")
 	var folder := "user://journal_layout_test/" + str(Time.get_ticks_usec())
 	DirAccess.make_dir_recursive_absolute(folder)
 	var fixture = preload("res://scripts/game/ride_feed.gd").new(folder)
@@ -53,11 +56,25 @@ func _run() -> void:
 	_check(panel._feed_view == feed and panel._path_center.visible and not panel._map_page.visible, "возврат сохраняет экземпляр ленты")
 	panel._select_feed_ride({})
 	_check(panel.active_tab == panel.Tab.PATH, "сброс выбранной записи не открывает карту")
+	panel._data["groups"] = ["Биомы", "Места"]
+	panel._data["pages"] = [
+		{group = 0, key = "biome:forest", title = "Лес", hint = "Снимите лес", shot = {}},
+		{group = 1, key = "place:lake", title = "Озеро", hint = "Снимите озеро", shot = {}},
+	]
 	panel._select(panel.Tab.ALBUM)
 	await process_frame
 	_check(panel._album_personal and panel._album_modes[1].button_pressed, "альбом сначала показывает личные снимки")
 	panel._album_modes[0].pressed.emit()
 	_check(not panel._album_personal and panel._album_modes[0].button_pressed, "коллекция доступна отдельным выбором")
+	var collection_filter := panel._album_page.find_child("CollectionFilter", true, false) as OptionButton
+	_check(collection_filter != null and collection_filter.item_count == 3, "разделы коллекции собраны в одном фильтре")
+	if collection_filter != null and collection_filter.item_count == 3:
+		collection_filter.select(2)
+		collection_filter.item_selected.emit(2)
+		_check(panel._album_filter == 1, "выбор раздела фильтрует коллекцию")
+		collection_filter.select(0)
+		collection_filter.item_selected.emit(0)
+		_check(panel._album_filter == -1, "можно снова показать все разделы")
 	panel.clear()
 	panel.open_tab(panel.Tab.ALBUM, "test")
 	_check(not panel._album_personal and panel._album_modes[0].button_pressed, "последний режим альбома сохраняется при повторном открытии")

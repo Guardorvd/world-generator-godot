@@ -455,7 +455,20 @@ func _journal_checks() -> void:
 	await _await_cards()
 	var filters := hud.journal_panel._album_page.get_child(1).get_children()
 	_check(hud.journal_panel._album_page.visible and filters.any(func(node: Node) -> bool:
-		return node is Button and node.text.begins_with("Ночь")), "вкладка «Альбом»: группы страниц")
+		if not node is OptionButton: return false
+		var filter := node as OptionButton
+		for index in filter.item_count:
+			if filter.get_item_text(index).begins_with("Ночь"): return true
+		return false), "вкладка «Альбом»: группы страниц")
+	var collection_filter := hud.journal_panel._album_page.find_child("CollectionFilter", true, false) as OptionButton
+	if collection_filter != null and collection_filter.item_count > 1:
+		collection_filter.select(1)
+		collection_filter.item_selected.emit(1)
+		_check(hud.journal_panel._album_filter == int(collection_filter.get_item_metadata(1)), "выбор раздела фильтрует коллекцию")
+		collection_filter.select(0)
+		collection_filter.item_selected.emit(0)
+		await _await_cards()
+		_check(hud.journal_panel._album_filter == -1, "все разделы снова доступны")
 	await _shot("hud_journal_album")
 	var card_buttons: Array[Node] = hud.journal_panel._album_content.find_children("*", "Button", true, false)
 	_check(card_buttons.size() >= 2, "открытые страницы альбома интерактивны")

@@ -113,12 +113,14 @@ func _clear_saves() -> void:
 	_main._show("menu")
 	_main._open_all_worlds()
 	var button: Button = _main.get_node("%ClearAllSaves")
-	_check(button.is_visible_in_tree() and not button.disabled, "очистка доступна рядом с хранилищем")
-	button.pressed.emit()
+	_check(not button.is_visible_in_tree() and not button.disabled, "очистка доступна через хранилище")
+	_main._open_storage()
+	_main._confirm.custom_action.emit(&"archive_saves")
 	_check(_main._confirm != null and not Saves.active_files().is_empty(), "открытие диалога не меняет файлы")
 	_main._confirm.canceled.emit()
 	_check(FileAccess.file_exists(orphan), "отмена сохраняет слоты")
-	button.pressed.emit()
+	_main._open_storage()
+	_main._confirm.custom_action.emit(&"archive_saves")
 	_main._confirm.confirmed.emit()
 	var files := DirAccess.get_files_at(_test_saves)
 	_check(Saves.active_files().is_empty() and Saves.seeds().is_empty(), "активные слоты исчезли, включая нечитаемые")
@@ -216,6 +218,53 @@ func _navigation() -> void:
 	_main._return_to_menu_screen()
 	_main._open_settings()
 	_check(_main.get_node("%Done").has_focus(), "настройки доступны")
+	var graphics := _main.get_node("%SettingsTabs") as TabContainer
+	graphics.current_tab = 1
+	var page := graphics.get_node("Графика/Page") as Control
+	var advanced := page.get_node("AdvancedGraphics") as Button
+	root.size = Vector2i(1280, 720)
+	await process_frame
+	await process_frame
+	_check(not page.get_node("CarpetRow").visible and page.get_node("ScaleRow").visible, "показываются основные параметры графики")
+	advanced.button_pressed = true
+	_check(page.get_node("CarpetRow").visible and page.get_node("StyleGradeRow").visible, "дополнительные параметры доступны")
+	var graphics_scroll := graphics.get_tab_control(1) as ScrollContainer
+	var atmosphere := _main.get_node("%StyleGradeAmount") as HSlider
+	await process_frame
+	await process_frame
+	graphics_scroll.ensure_control_visible(atmosphere)
+	await process_frame
+	await process_frame
+	var before_value := atmosphere.value
+	var before_scroll := graphics_scroll.scroll_vertical
+	var mouse := InputEventMouseMotion.new()
+	mouse.position = atmosphere.get_global_rect().get_center()
+	root.push_input(mouse)
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.position = mouse.position
+	wheel.pressed = true
+	root.push_input(wheel)
+	await process_frame
+	_check(is_equal_approx(atmosphere.value, before_value) and graphics_scroll.scroll_vertical < before_scroll,
+		"колесо над ползунком прокручивает страницу, не меняя атмосферу (%.2f → %.2f, %d → %d)" % [before_value, atmosphere.value, before_scroll, graphics_scroll.scroll_vertical])
+	atmosphere.grab_focus()
+	var key := InputEventAction.new()
+	key.action = &"ui_right"
+	key.pressed = true
+	root.push_input(key)
+	_check(atmosphere.value > before_value, "ползунок по-прежнему работает с клавиатуры и геймпада")
+	advanced.button_pressed = false
+	graphics_scroll.scroll_vertical = 0
+	await process_frame
+	await process_frame
+	var visible := graphics_scroll.get_global_rect()
+	var more_rect := advanced.get_global_rect()
+	_check(more_rect.position.y >= visible.position.y - 1.0 and more_rect.end.y <= visible.end.y + 1.0,
+		"дополнительные настройки видны без вертикальной прокрутки на 1280×720 (%s, %s)" % [visible, more_rect])
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(OUT.path_join("settings_graphics.png"))
 	_main._show("menu")
 
 

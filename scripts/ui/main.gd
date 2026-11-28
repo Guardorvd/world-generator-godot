@@ -144,6 +144,9 @@ var _draft_active := false
 var _draft_type := ""
 var _draft_selected_seed := ""
 var _launch_from_draft := false
+var _hub_create_toggle: Button
+var _hub_map_toggle: Button
+var _hub_actions_toggle: Button
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -352,6 +355,7 @@ func _ready() -> void:
 	%AllWorlds.get_node("Panel/Box").add_child(hub_type)
 	%AllWorlds.get_node("Panel/Box").move_child(hub_type, 1)
 	hub_type.pressed.connect(func() -> void: _open_type_catalog(hub_type))
+	_setup_world_hub()
 	_ui_stack.setup(self, {menu = %Menu, world_hub = %AllWorlds,
 		loading = %Loading, pause = %Pause, settings = %Settings, shop = shop_screen, ride_feed = ride_screen,
 		type_catalog = _type_catalog}, get_node_or_null("%Dimmer") as ColorRect, _ui_audio)
@@ -443,7 +447,11 @@ func _focus_screen_default(screen: String) -> void:
 			_grab_focus_quiet(_draft_seed if _draft_active else %Start)
 		"world_hub":
 			_update_selection()
-			_grab_focus_quiet(seed_edit)
+			if _selected_seed.is_empty():
+				_hub_create_toggle.button_pressed = true
+				_grab_focus_quiet(seed_edit)
+			else:
+				_grab_focus_quiet(%PlaySelected if not %PlaySelected.disabled else _hub_actions_toggle)
 		"loading":
 			if not cancel_load_button.disabled:
 				_grab_focus_quiet(cancel_load_button)
@@ -472,8 +480,12 @@ func _input(event: InputEvent) -> void:
 		_cancel_loading(false)
 		get_viewport().set_input_as_handled()
 		return
-	if _is_screen("settings") and game == null:
+	if _is_screen("settings"):
 		GameContext.scope.controls.note(event)
+		if event is InputEventKey or event is InputEventMouseButton or event is InputEventJoypadButton \
+				or (event is InputEventJoypadMotion and absf(event.axis_value) > 0.5) \
+				or (event is InputEventMouseMotion and event.relative.length() > 2.0):
+			_update_control_hint()
 	if _confirm != null or event.is_echo():
 		return
 	if _is_screen("settings") and (display_options == null or not display_options.pending()):
@@ -562,6 +574,82 @@ func _cancel_new_world() -> void:
 	_set_draft_visible(false)
 	_play_ui(&"panel_close")
 	_grab_focus_quiet(%NewWorld)
+
+
+## Библиотека миров сначала отвечает на вопрос «куда продолжить»;
+## создание, карта и обслуживание открываются отдельно.
+func _setup_world_hub() -> void:
+	var box := %AllWorlds.get_node("Panel/Box") as VBoxContainer
+	var create_row := box.get_node("SeedRow") as Control
+	_hub_create_toggle = Button.new()
+	_hub_create_toggle.text = "+ Новый мир"
+	_hub_create_toggle.toggle_mode = true
+	_hub_create_toggle.theme_type_variation = &"MenuLink"
+	_hub_create_toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_hub_create_toggle.custom_minimum_size.y = 40
+	box.add_child(_hub_create_toggle)
+	box.move_child(_hub_create_toggle, create_row.get_index())
+	create_row.hide()
+	seed_edit.placeholder_text = "Название или зерно нового мира"
+	_hub_create_toggle.toggled.connect(func(open: bool) -> void:
+		var focus := get_viewport().gui_get_focus_owner()
+		if not open and focus != null and create_row.is_ancestor_of(focus):
+			_grab_focus_quiet(_hub_create_toggle)
+		create_row.visible = open
+		_hub_create_toggle.text = "− Новый мир" if open else "+ Новый мир"
+		if open and _is_screen("world_hub"):
+			_grab_focus_quiet(seed_edit)
+		_fit_hub.call_deferred())
+	var side := box.get_node("Columns/Side") as VBoxContainer
+	var map_modes := side.get_node("MapModes") as Control
+	var map_square := side.get_node("MapSquare") as Control
+	var choice := side.get_node("ChoiceRow") as Control
+	var status := %WorldStatus as Control
+	var play := %PlaySelected as Control
+	# Название и продолжение важнее технического предпросмотра.
+	side.move_child(choice, 1)
+	side.move_child(status, 2)
+	side.move_child(play, 3)
+	_hub_map_toggle = Button.new()
+	_hub_map_toggle.text = "Показать карту"
+	_hub_map_toggle.toggle_mode = true
+	_hub_map_toggle.custom_minimum_size.y = 40
+	side.add_child(_hub_map_toggle)
+	side.move_child(_hub_map_toggle, 4)
+	map_modes.hide()
+	map_square.hide()
+	_hub_map_toggle.toggled.connect(func(open: bool) -> void:
+		var focus := get_viewport().gui_get_focus_owner()
+		if not open and focus != null and (map_modes.is_ancestor_of(focus) or map_square.is_ancestor_of(focus)):
+			_grab_focus_quiet(_hub_map_toggle)
+		map_modes.visible = open
+		map_square.visible = open
+		_hub_map_toggle.text = "Скрыть карту" if open else "Показать карту"
+		_fit_hub.call_deferred())
+	var actions := side.get_node("WorldActions") as Control
+	var advanced := VBoxContainer.new()
+	advanced.name = "MoreWorldActions"
+	side.add_child(advanced)
+	advanced.owner = self
+	_load_manual.reparent(advanced)
+	actions.reparent(advanced)
+	advanced.hide()
+	_hub_actions_toggle = Button.new()
+	_hub_actions_toggle.text = "Действия с миром ▾"
+	_hub_actions_toggle.toggle_mode = true
+	_hub_actions_toggle.theme_type_variation = &"MenuLink"
+	_hub_actions_toggle.custom_minimum_size.y = 40
+	side.add_child(_hub_actions_toggle)
+	side.move_child(_hub_actions_toggle, advanced.get_index())
+	_hub_actions_toggle.toggled.connect(func(open: bool) -> void:
+		var focus := get_viewport().gui_get_focus_owner()
+		if not open and focus != null and advanced.is_ancestor_of(focus):
+			_grab_focus_quiet(_hub_actions_toggle)
+		advanced.visible = open
+		_hub_actions_toggle.text = "Действия с миром ▴" if open else "Действия с миром ▾"
+		_fit_hub.call_deferred())
+	# Массовая очистка доступна из хранилища, где объясняются её последствия.
+	%ClearAllSaves.hide()
 
 
 func _setup_menu_layout() -> void:
@@ -699,6 +787,9 @@ func _open_all_worlds(return_to: Control = null) -> void:
 		if _hub_needs_sync:
 			_show_seed_tab(_seed_tab)
 		return
+	_hub_create_toggle.button_pressed = false
+	_hub_map_toggle.button_pressed = false
+	_hub_actions_toggle.button_pressed = false
 	if _hub_needs_sync:
 		_show_seed_tab(_seed_tab)
 	_hub_preview_scan = true
@@ -934,6 +1025,7 @@ func _open_settings() -> void:
 	_settings_from = "pause" if _is_screen("pause") else "menu"
 	var opener := _opener_focus(_pause_settings_btn if _settings_from == "pause" else %MenuSettings)
 	_sync_settings_controls()
+	_update_control_hint()
 	if _ui_stack != null and _is_screen(_settings_from):
 		_active_screen = "settings"
 		_ui_stack.push("settings", {
@@ -1787,6 +1879,9 @@ func _update_selection() -> void:
 	_update_menu_selection()
 	%PlaySelected.text = label
 	%PlaySelected.disabled = corrupt or seed_text.is_empty()
+	if _hub_map_toggle != null:
+		_hub_map_toggle.disabled = seed_text.is_empty()
+		_hub_actions_toggle.disabled = seed_text.is_empty()
 	for row in %SeedList.get_children():
 		var row_seed := str(row.get_meta("seed")) if row.has_meta("seed") else ""
 		var select_btn := row.get_meta("select_button") as Button if row.has_meta("select_button") else null
@@ -1800,6 +1895,8 @@ func _update_selection() -> void:
 	_update_favorite_button(%Star, seed_text)
 	if corrupt:
 		%WorldStatus.text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
+		if _hub_actions_toggle != null:
+			_hub_actions_toggle.button_pressed = true
 	_load_manual.visible = state.get("manual", false)
 	_load_manual.disabled = not state.get("manual", false)
 	if _is_screen("world_hub"):
@@ -1950,9 +2047,17 @@ func _open_storage() -> void:
 	_confirm.cancel_button_text = "Закрыть"
 	_confirm.add_button("Отчёты FPS", true, "session_reports")
 	_confirm.custom_action.connect(_open_session_reports)
+	if not %ClearAllSaves.disabled:
+		_confirm.add_button("Архивировать все сохранения…", true, "archive_saves")
 
 
-func _open_session_reports(_action: StringName) -> void:
+func _open_session_reports(action: StringName) -> void:
+	if action == &"archive_saves":
+		_close_confirm()
+		_clear_all_saves()
+		return
+	if action != &"session_reports":
+		return
 	var folder := ProjectSettings.globalize_path(SessionPerformance.dir)
 	var err := DirAccess.make_dir_recursive_absolute(folder)
 	if err == OK:
@@ -1973,7 +2078,7 @@ func _clear_all_saves() -> void:
 	if busy or game != null or not _is_screen("world_hub") or %ClearAllSaves.disabled:
 		return
 	_ask("Очистить все сохранения?", "Автоматические, ручные и резервные сохранения будут перенесены в архив. Все миры исчезнут из меню, а списки недавних и избранных очистятся.",
-		"Очистить", true, _do_clear_all_saves, %ClearAllSaves)
+		"Очистить", true, _do_clear_all_saves, %Storage)
 
 
 func _do_clear_all_saves() -> void:
@@ -2087,8 +2192,6 @@ func _process(delta: float) -> void:
 		_ui_stack.tick()
 	if display_options != null:
 		display_options.tick()
-	if _is_screen("settings"):
-		_update_control_hint()
 	_flush_settings()
 	if _backdrop_mode == "live" and not _is_screen("shop") and get_window().mode != Window.MODE_MINIMIZED:
 		_animate_menu(delta)

@@ -230,7 +230,7 @@ func _setup_feed_card(entry: Dictionary) -> void:
 	_add_label(box, "%s · %s" % [world, type_title], 18, HudStyle.CREAM)
 	var preview_box := PanelContainer.new()
 	_feed_preview_box = preview_box
-	preview_box.custom_minimum_size.y = 150
+	preview_box.custom_minimum_size.y = 110
 	preview_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	preview_box.add_theme_stylebox_override("panel", HudStyle.panel(Color(0.14, 0.19, 0.22, 0.9), Color(0.70, 0.74, 0.73, 0.18), 6, Vector2.ZERO, false))
 	preview_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -271,7 +271,7 @@ func _setup_feed_card(entry: Dictionary) -> void:
 	_add_metric(stats, "Длительность", duration)
 	_add_metric(stats, "Падения", falls)
 	_add_label(box, "Подробнее о поездке  ›", 15, HudStyle.AMBER)
-	custom_minimum_size.y = 345
+	custom_minimum_size.y = 300
 	resized.connect(_fit_feed_card)
 	_fit_feed_card.call_deferred()
 	accessibility_name = "%s, %s, %s, %s. %s: %s, длительность: %s, падения: %s. Подробнее о поездке" % [kind, date, world, type_title, distance_caption, distance, duration, falls]
@@ -282,7 +282,7 @@ func _fit_feed_card() -> void:
 	if size.x <= 0.0 or not is_instance_valid(_feed_box):
 		return
 	_feed_metrics.columns = 1 if size.x < 400.0 else 3
-	var map_height := clampf((size.x - 36.0) * 0.34, 100.0, minf(160.0, maxf(100.0, Config.feed_preview_max_height)))
+	var map_height := clampf((size.x - 36.0) * 0.22, 80.0, minf(110.0, maxf(80.0, Config.feed_preview_max_height)))
 	_feed_preview_box.custom_minimum_size = Vector2(0, map_height)
 	custom_minimum_size.y = _feed_box.get_combined_minimum_size().y + 32.0
 

@@ -67,7 +67,8 @@ func setup(host: Node) -> void:
 	road_quality = host.get_node("%RoadQualityOption")
 	road_range = host.get_node("%RoadRangeOption")
 	if scale.item_count == AUTO_SCALE:
-		scale.add_item("Авто — 100 %, при нагрузке до 80 %")
+		scale.add_item("Авто")
+	scale.tooltip_text = "Авто: 100 % с уменьшением до 80 % при нагрузке. Меньший масштаб повышает скорость, но снижает чёткость 3D."
 	if road_quality.item_count == 0:
 		for level: Dictionary in GameSettings.ROAD_QUALITY:
 			road_quality.add_item(level.title.capitalize())
@@ -135,6 +136,12 @@ func setup(host: Node) -> void:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics(&"vegetation"))
 	for box: CheckBox in [vsync, shadows, tree_garlands]:
 		box.toggled.connect(func(_on: bool) -> void: apply_graphics(&"graphics"))
+	_setup_graphics_sections()
+	# Колесо прокручивает страницу; значение меняется только явным действием.
+	# Музыкальный ползунок создаётся позже копированием VolumeSlider и наследует это свойство.
+	for slider: Node in tabs.find_children("*", "HSlider", true, false):
+		(slider as HSlider).scrollable = false
+		(slider as HSlider).mouse_force_pass_scroll_events = true
 	_last_tab = tabs.current_tab
 	tabs.tab_changed.connect(_on_tab_changed)
 	dialog = ConfirmationDialog.new()
@@ -147,6 +154,38 @@ func setup(host: Node) -> void:
 	dialog.canceled.connect(revert)
 	_window.size_changed.connect(_resize)
 	sync()
+
+
+func _setup_graphics_sections() -> void:
+	var page := tabs.get_node("Графика/Page") as VBoxContainer
+	# Частые настройки остаются на первом экране, тонкая настройка не удаляется.
+	var basic := ["ScaleRow", "AARow", "DrawRow", "FloraRow", "Shadows"]
+	for i in basic.size():
+		page.move_child(page.get_node(basic[i]), i)
+	var hint := Label.new()
+	hint.text = "Изменения применяются сразу."
+	hint.theme_type_variation = &"HintLabel"
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	page.add_child(hint)
+	page.move_child(hint, basic.size())
+	var more := Button.new()
+	more.name = "AdvancedGraphics"
+	more.text = "Дополнительные настройки ▾"
+	more.toggle_mode = true
+	more.theme_type_variation = &"MenuLink"
+	more.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	more.custom_minimum_size.y = 44
+	page.add_child(more)
+	page.move_child(more, basic.size() + 1)
+	var advanced: Array[Control] = []
+	for child: Node in page.get_children():
+		if child is Control and child != more and child != hint and str(child.name) not in basic:
+			advanced.append(child)
+			(child as Control).hide()
+	more.toggled.connect(func(open: bool) -> void:
+		more.text = "Дополнительные настройки ▴" if open else "Дополнительные настройки ▾"
+		for control: Control in advanced:
+			control.visible = open)
 
 ## Элементы — по сохранённым настройкам (без сигналов)
 func sync() -> void:

@@ -58,6 +58,7 @@ var _checklist: VBoxContainer
 var _quest_style: StyleBoxFlat
 var _shown_quest := {}
 var _map_hint: Label
+var _map_layers_toggle: Button
 var _track_layer: Button
 var _photo_layer: Button
 var _tab_map: Button
@@ -67,6 +68,7 @@ var _seed: Label
 var _goal_badge: Label # 20.11: цель покупки в шапке дневника на всех вкладках: «Цель: Ледник · 35 / 50»
 var _shop_profile: ShopPanel.Progress
 var _feed_view
+var _summary_button: Button
 const SHORT_GROUPS := ["Биомы", "Места", "Вершины и озёра", "Ночь", "Обелиски"]
 
 var _box: VBoxContainer
@@ -155,6 +157,7 @@ func clear() -> void:
 		child.queue_free()
 	_shown_quest = {}
 	_feed_view = null
+	_summary_button = null
 	map_view.show_ride([], Rect2())
 	_lightbox_return_focus = null
 	_cache.clear()
@@ -197,6 +200,10 @@ func close_lightbox() -> bool:
 func dismiss_subpanel() -> bool:
 	if active_tab == Tab.SHOP:
 		return shop_panel.dismiss_purchase()
+	if active_tab == Tab.PATH and is_instance_valid(_summary_button) and _summary_button.button_pressed:
+		_summary_button.button_pressed = false
+		_summary_button.grab_focus()
+		return true
 	return close_lightbox()
 
 
@@ -257,6 +264,7 @@ func _build_header() -> void:
 	_seed.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_close = Button.new()
 	_close.icon = UiIcons.CLOSE
+	_close.text = "Закрыть"
 	_close.tooltip_text = "Закрыть"
 	_close.accessibility_name = "Закрыть дневник"
 	_close.custom_minimum_size = Vector2(44, 44)
@@ -410,7 +418,7 @@ func _build_map() -> void:
 	var footer := HFlowContainer.new()
 	_map_footer = footer
 	footer.add_theme_constant_override("h_separation", 8)
-	footer.add_theme_constant_override("v_separation", 6)
+	footer.add_theme_constant_override("v_separation", 8)
 	_map_page.add_child(footer)
 	_map_hint = _label("", 13, footer, MUTED)
 	_map_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -420,27 +428,39 @@ func _build_map() -> void:
 	_map_info_toggle.text = "Легенда и задание"
 	_map_info_toggle.tooltip_text = "Показать обозначения карты и текущее задание"
 	_map_info_toggle.toggle_mode = true
-	_map_info_toggle.custom_minimum_size.y = 40
+	_map_info_toggle.custom_minimum_size.y = 44
 	_map_info_toggle.toggled.connect(func(on: bool) -> void:
 		_right_dock.visible = on and active_tab == Tab.MAP
-		_track_layer.visible = on
-		_photo_layer.visible = on
 		_update_narrow_docks())
 	footer.add_child(_map_info_toggle)
+	var layers := Button.new()
+	_map_layers_toggle = layers
+	layers.text = "Слои"
+	layers.tooltip_text = "Показать настройки пути и снимков на карте"
+	layers.toggle_mode = true
+	layers.custom_minimum_size.y = 44
+	layers.toggled.connect(func(on: bool) -> void:
+		var focus := get_viewport().gui_get_focus_owner()
+		if not on and (focus == _track_layer or focus == _photo_layer):
+			layers.grab_focus()
+		_track_layer.visible = on
+		_photo_layer.visible = on)
+	footer.add_child(layers)
 	var zoom_out := Button.new()
 	zoom_out.text = "−"
 	zoom_out.tooltip_text = "Отдалить карту"
-	zoom_out.custom_minimum_size = Vector2(40, 40)
+	zoom_out.custom_minimum_size = Vector2(44, 44)
 	zoom_out.pressed.connect(func() -> void: map_view._zoom_at(map_view.size * 0.5, 0.8))
 	footer.add_child(zoom_out)
 	var zoom_in := Button.new()
 	zoom_in.text = "+"
 	zoom_in.tooltip_text = "Приблизить карту"
-	zoom_in.custom_minimum_size = Vector2(40, 40)
+	zoom_in.custom_minimum_size = Vector2(44, 44)
 	zoom_in.pressed.connect(func() -> void: map_view._zoom_at(map_view.size * 0.5, 1.25))
 	footer.add_child(zoom_in)
 	_track_layer = Button.new()
 	_track_layer.text = "Путь"
+	_track_layer.custom_minimum_size.y = 44
 	_track_layer.tooltip_text = "Показать пройденный путь"
 	_track_layer.toggle_mode = true
 	_track_layer.button_pressed = true
@@ -449,6 +469,7 @@ func _build_map() -> void:
 	footer.add_child(_track_layer)
 	_photo_layer = Button.new()
 	_photo_layer.text = "Снимки"
+	_photo_layer.custom_minimum_size.y = 44
 	_photo_layer.tooltip_text = "Показать снимки на карте"
 	_photo_layer.toggle_mode = true
 	_photo_layer.button_pressed = true
@@ -458,7 +479,7 @@ func _build_map() -> void:
 	var center := Button.new()
 	center.text = "К себе"
 	center.icon = UiIcons.map_icon("goal")
-	center.custom_minimum_size.y = 40
+	center.custom_minimum_size.y = 44
 	center.pressed.connect(func() -> void:
 		map_view.center_on_player())
 	footer.add_child(center)
@@ -507,8 +528,8 @@ func _reflow() -> void:
 	var narrow := available_width < 800.0
 	var compact_tabs := available_width < 650.0
 	_update_tab_labels(compact_tabs)
-	_map_info_toggle.text = "Сведения" if compact_tabs else "Сведения и слои"
-	_map_info_toggle.tooltip_text = "Задание, обозначения и слои карты"
+	_map_info_toggle.text = "Сведения" if compact_tabs else "Задание и легенда"
+	_map_info_toggle.tooltip_text = "Текущее задание и обозначения карты"
 	for button: Button in [_tab_map, _tab_path, _tab_album, _tab_shop]:
 		button.custom_minimum_size.x = 68 if compact_tabs else 110
 		button.add_theme_font_size_override("font_size", 13 if compact_tabs else 16)
@@ -575,7 +596,7 @@ func _select(tab: Tab) -> void:
 	var move_focus := focus != null and (
 		(_album_page.is_ancestor_of(focus) and tab != Tab.ALBUM)
 		or (_path_page.is_ancestor_of(focus) and tab != Tab.PATH)
-		or (_details.is_ancestor_of(focus) and tab != Tab.MAP)
+		or (_map_page.is_ancestor_of(focus) and tab != Tab.MAP)
 		or (shop_panel.is_ancestor_of(focus) and tab != Tab.SHOP))
 	active_tab = tab
 	_tab_map.set_pressed_no_signal(tab == Tab.MAP)
@@ -738,24 +759,45 @@ func _fill_path(data: Dictionary) -> void:
 	_feed_view.ride_selected.connect(_select_feed_ride)
 	_feed_view.controls_created.connect(func(root: Node) -> void: controls_created.emit(root))
 	_feed_view.setup(GameContext.scope.settings, str(data.get("seed", "")), str(data.get("template_id", "")), true)
+	var path_header := HBoxContainer.new()
+	path_header.add_theme_constant_override("separation", 12)
+	_path_page.add_child(path_header)
+	_path_page.move_child(path_header, 0)
+	var path_title := _label("Поездки", 20, path_header, HudStyle.CREAM)
+	path_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	path_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	var summary_button := Button.new()
+	_summary_button = summary_button
 	summary_button.text = "Итоги путешествия"
 	summary_button.toggle_mode = true
-	_path_page.add_child(summary_button)
+	summary_button.theme_type_variation = &"MenuLink"
+	summary_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	summary_button.custom_minimum_size.y = 44
+	path_header.add_child(summary_button)
 	var summary_scroll := ScrollContainer.new()
 	summary_scroll.custom_minimum_size.y = 120
+	summary_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	summary_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	summary_scroll.follow_focus = true
 	summary_scroll.hide()
 	_path_page.add_child(summary_scroll)
+	var summary_panel := PanelContainer.new()
+	summary_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	summary_panel.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 12, Vector2(24, 22), false))
+	summary_scroll.add_child(summary_panel)
 	var summary := VBoxContainer.new()
 	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	summary_scroll.add_child(summary)
-	summary_button.toggled.connect(func(on: bool) -> void: summary_scroll.visible = on)
-	_label("ИТОГО ЗА ПУТЕШЕСТВИЕ", 12, summary, ACCENT)
+	summary.add_theme_constant_override("separation", 12)
+	summary_panel.add_child(summary)
+	summary_button.toggled.connect(func(on: bool) -> void:
+		_feed_view.visible = not on
+		summary_scroll.visible = on
+		summary_button.text = "← К поездкам" if on else "Итоги путешествия")
+	_label("Итоги путешествия", 22, summary, HudStyle.CREAM)
 	_label("Велосипед · %s   Пешком · %s" % [Util.distance_text(data.get("bike", 0.0)), Util.distance_text(data.get("foot", 0.0))],
-		13, summary, HudStyle.CREAM).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_label("В пути · %s   Высшая точка · %d м" % [_duration(data.get("time", 0.0)), roundi(data.get("alt", 0.0))], 13, summary, MUTED)
-	_label("Снимков · %d   Заданий · %d" % [data.get("photos", 0), data.get("quests", 0)], 13, summary, MUTED)
+		16, summary, HudStyle.CREAM).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_label("В пути · %s   Высшая точка · %d м" % [_duration(data.get("time", 0.0)), roundi(data.get("alt", 0.0))], 16, summary, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_label("Снимков · %d   Заданий · %d" % [data.get("photos", 0), data.get("quests", 0)], 16, summary, MUTED)
 	for entry: Array in data.get("places", []):
 		_label("%s · %d / %d" % entry, 13, summary, MUTED)
 	var series: Dictionary = data.get("series", {})
@@ -917,6 +959,7 @@ func _fill_album(data: Dictionary) -> void:
 		button.text = "Мои снимки" if mode else "Коллекция"
 		button.toggle_mode = true
 		button.button_group = mode_group
+		button.theme_type_variation = &"TabButton"
 		button.button_pressed = mode == _album_personal
 		button.custom_minimum_size.y = 40
 		button.pressed.connect(func() -> void:
@@ -924,30 +967,42 @@ func _fill_album(data: Dictionary) -> void:
 			for i in _album_modes.size():
 				_album_modes[i].set_pressed_no_signal(i == (1 if mode else 0))
 			_personal_visible = 24
-			nav_bar.visible = not mode
+			nav_bar.visible = not mode and not pages.is_empty()
 			_rebuild_album_grid()
 			if _album_scroll != null:
 				_album_scroll.scroll_vertical = 0)
 		modes.add_child(button)
 		_album_modes.append(button)
-	nav_bar.add_theme_constant_override("separation", 8)
-	nav_bar.visible = not _album_personal
+	nav_bar.add_theme_constant_override("h_separation", 12)
+	nav_bar.add_theme_constant_override("v_separation", 4)
+	nav_bar.visible = not _album_personal and not pages.is_empty()
 	_album_page.add_child(nav_bar)
 
 	var total_all := pages.size()
 	var done_all := pages.filter(func(p: Dictionary) -> bool: return not p.shot.is_empty()).size()
-	var pill_group := ButtonGroup.new()
-	var all_pill := _pill("Все %d/%d" % [done_all, total_all], -1, pill_group, nav_bar)
-	all_pill.set_pressed_no_signal(true)
-
+	var filter := OptionButton.new()
+	filter.name = "CollectionFilter"
+	filter.custom_minimum_size = Vector2(200, 44)
+	filter.add_item("Все разделы")
+	filter.set_item_metadata(0, -1)
+	nav_bar.add_child(filter)
 	for g in groups.size():
 		var mine := pages.filter(func(p: Dictionary) -> bool: return p.group == g)
 		if mine.is_empty():
 			continue
 		var done := mine.filter(func(p: Dictionary) -> bool: return not p.shot.is_empty()).size()
 		var short_name: String = SHORT_GROUPS[g] if g < SHORT_GROUPS.size() else str(groups[g])
-		_pill("%s %d/%d" % [short_name, done, mine.size()], g, pill_group, nav_bar)
-
+		filter.add_item("%s · %d/%d" % [short_name, done, mine.size()])
+		filter.set_item_metadata(filter.item_count - 1, g)
+		if _album_filter == g:
+			filter.select(filter.item_count - 1)
+	filter.item_selected.connect(func(index: int) -> void:
+		_album_filter = int(filter.get_item_metadata(index))
+		_rebuild_album_grid()
+		if _album_scroll != null:
+			_album_scroll.scroll_vertical = 0)
+	var progress := _label("Открыто %d из %d" % [done_all, total_all], 14, nav_bar, MUTED)
+	progress.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 	_album_scroll = ScrollContainer.new()
 	_album_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -961,26 +1016,6 @@ func _fill_album(data: Dictionary) -> void:
 	_album_scroll.resized.connect(_resize_album_grid)
 	_rebuild_album_grid()
 	controls_created.emit(_album_page)
-
-
-func _pill(text: String, group_index: int, group: ButtonGroup, parent: Container) -> Button:
-	var btn := Button.new()
-	btn.text = text
-	btn.toggle_mode = true
-	btn.button_group = group
-	btn.theme_type_variation = &"PillButton"
-	btn.add_theme_stylebox_override("normal", HudStyle.panel(SURFACE, LINE, 8, Vector2(14, 8), false))
-	btn.add_theme_stylebox_override("hover", HudStyle.panel(Color("#354651"), ACCENT, 8, Vector2(14, 8), false))
-	btn.add_theme_stylebox_override("pressed", HudStyle.panel(Color("#42535e"), ACCENT, 8, Vector2(14, 8), false))
-	btn.add_theme_stylebox_override("hover_pressed", HudStyle.panel(Color("#4c5e69"), ACCENT, 8, Vector2(14, 8), false))
-	btn.custom_minimum_size.y = 44
-	btn.pressed.connect(func() -> void:
-		_album_filter = group_index
-		_rebuild_album_grid()
-		if _album_scroll != null:
-			_album_scroll.scroll_vertical = 0)
-	parent.add_child(btn)
-	return btn
 
 
 func _rebuild_album_grid() -> void:
@@ -998,11 +1033,20 @@ func _rebuild_album_grid() -> void:
 		var personal: Array = _album_data.get("personal_photos", [])
 		for i in range(personal.size() - 1, -1, -1):
 			personal_pages.append(_personal_page(personal[i]))
-		_label("МОИ СНИМКИ  /  %d" % personal_pages.size(), 20, _album_content, HudStyle.CREAM)
-		_label("В дневнике хранятся последние 256 снимков.", 13, _album_content, MUTED)
 		if personal_pages.is_empty():
-			_label("Здесь появятся новые фотографии. Снимки из прежних сохранений остаются в коллекции.", 14, _album_content, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			var empty := PanelContainer.new()
+			empty.add_theme_stylebox_override("panel", HudStyle.panel(SURFACE, LINE, 12, Vector2(24, 22), false))
+			_album_content.add_child(empty)
+			var message := VBoxContainer.new()
+			message.add_theme_constant_override("separation", 8)
+			empty.add_child(message)
+			_label("Здесь появятся ваши снимки", 20, message, HudStyle.CREAM)
+			var controls := GameContext.scope.controls
+			var photo_key: String = controls.label(&"photo") if controls.joypad else "ПКМ"
+			_label("Слезьте с велосипеда, откройте фотоаппарат (%s) и сделайте снимок." % photo_key, 15, message, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_label("Снимки из прежних сохранений можно найти в коллекции.", 13, message, MUTED).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		else:
+			_label("Снимки · %d" % personal_pages.size(), 16, _album_content, MUTED)
 			var personal_grid := GridContainer.new()
 			_personal_grid = personal_grid
 			personal_grid.columns = _album_columns()

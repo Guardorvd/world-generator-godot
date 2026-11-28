@@ -19,10 +19,13 @@ func _run() -> void:
 	panel.open_tab(panel.Tab.MAP, "test")
 	await process_frame
 	check(not panel._dock.visible and not panel._right_dock.visible, "пустые панели не занимают карту")
-	check(not panel._track_layer.visible and not panel._photo_layer.visible, "слои скрыты до открытия сведений")
+	check(not panel._track_layer.visible and not panel._photo_layer.visible, "слои свёрнуты по умолчанию")
 	panel._map_info_toggle.button_pressed = true
-	check(panel._right_dock.visible and panel._track_layer.visible and panel._photo_layer.visible, "легенда и слои открываются по кнопке")
+	check(panel._right_dock.visible and not panel._track_layer.visible, "легенда не открывает слои")
 	panel._map_info_toggle.button_pressed = false
+	panel._map_layers_toggle.button_pressed = true
+	check(not panel._right_dock.visible and panel._track_layer.visible and panel._photo_layer.visible, "слои открываются независимо от легенды")
+	panel._map_layers_toggle.button_pressed = false
 	panel.refresh_inspector({name = "Ольховка", key = "settlement:1", x = 1, y = 1})
 	check(panel._dock.visible and panel._place_title.text == "Ольховка", "выбранное место открывает сведения")
 	state.quest = {title = "Маршрут", steps = [], index = 0}

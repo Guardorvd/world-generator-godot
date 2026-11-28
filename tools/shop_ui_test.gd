@@ -49,6 +49,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_check(panel._category_buttons[0].has_focus() and panel._preview.texture != null, "начальный комплект и фокус на категории")
+	_check(panel._layout.get_child(0) == panel._catalog_section and panel._row_grid.columns == 2
+		and panel._scroll.get_global_rect().encloses(panel._stage.get_global_rect()), "каталог и просмотр видны рядом")
 	for category in Shop.Progress.DEFAULT_ITEMS.size():
 		panel._select_category(category)
 		while panel.is_processing():
@@ -74,12 +76,17 @@ func _run() -> void:
 	_check(not panel._stage_controls.visible, "ракурсы и сравнение сначала скрыты")
 	panel._rows.moss.grab_focus()
 	_press_action("ui_up")
-	_check(panel._preview_tools_button.has_focus(), "от карточки можно открыть инструменты предпросмотра")
+	_check(panel._rows.ember.has_focus(), "стрелка вверх переходит к предыдущему ряду коллекции")
+	_press_action("ui_up")
+	_check(panel._owned_filter.has_focus(), "из коллекции можно перейти к фильтру купленного")
+	_press_action("ui_up")
+	_check(panel._category_buttons[0].has_focus(), "из фильтра можно вернуться к категориям")
+	panel._rows.moss.grab_focus()
+	panel._preview_tools_button.grab_focus()
 	_press_action("ui_accept")
 	_check(panel._stage_controls.visible, "инструменты открываются с клавиатуры")
-	panel._rows.moss.grab_focus()
-	_press_action("ui_up")
-	_check(panel._compare_button.has_focus(), "стрелка вверх ведёт к сравнению")
+	panel._compare_button.grab_focus()
+	_check(panel._compare_button.has_focus(), "сравнение доступно с клавиатуры")
 	_press_action("ui_accept")
 	_check(panel._compare_mode, "сравнение включается с клавиатуры")
 	_press_action("ui_accept")
@@ -112,13 +119,13 @@ func _run() -> void:
 	await _capture("angle")
 	panel._view_buttons[0].emit_signal("pressed")
 	_check(panel._view_index == 0 and panel._preview.texture == side, "возврат к виду сбоку")
-	_check(panel._action.disabled and panel._price_value.text == "50 очков" and panel._price_caption.text.contains("Не хватает 50") and panel._price_bar.value == 0.0, "недостаток очков виден рядом с товаром")
+	_check(panel._action.disabled and panel._price_card.visible and panel._price_value.text == "50 очков" and panel._price_caption.text.contains("Не хватает 50") and panel._price_bar.value == 0.0, "недостаток очков виден рядом с товаром")
 	panel._toggle_goal()
 	profile.award("test", ["start:home"])
 	_check(profile.purchase_goal == "moss" and panel._goal_status.text.contains("Осталось 30") and is_equal_approx(panel._price_bar.value, 0.4), "цель и прогресс после награды")
 	await _capture("goal")
 	profile.award("test", ["supplies:home>farm"])
-	_check(not panel._action.disabled and panel._price_caption.text.contains("Доступно для покупки"), "товар доступен после накопления")
+	_check(not panel._action.disabled and not panel._price_card.visible and panel._action.text.contains("50"), "доступная цена показана один раз на кнопке покупки")
 	panel._compare_button.button_pressed = true
 	panel._activate()
 	_check(panel._review_actions.visible and panel._review_card.visible and panel._review_title.text.contains("Мох") and panel._review_balance.text.contains("50 очков") and panel._review_balance.text.contains("0 очков") and panel._cancel_buy.has_focus() and profile.balance == 50, "подтверждение не списывает очки")
@@ -173,16 +180,15 @@ func _run() -> void:
 	var tablet_shop: Shop = journal.shop_panel
 	_check(tablet_shop.is_visible_in_tree() and tablet_shop._category_buttons[0].has_focus() and tablet_shop._status.text == "НАДЕТО", "планшет открывает общую коллекцию и экипировку")
 	profile.award("test", ["repair:home>farm", "fragile:home>farm"])
-	tablet_shop._rows.glacier.grab_focus()
+	tablet_shop._rows.ember.grab_focus()
 	await process_frame
-	var right := InputEventAction.new()
-	right.action = &"ui_right"
-	right.pressed = true
-	root.push_input(right)
-	_check(tablet_shop._rows.moss.has_focus(), "стрелка вправо переходит к следующей карточке")
+	_press_action("ui_right")
+	_check(tablet_shop._rows.glacier.has_focus(), "стрелка вправо переходит к следующей карточке")
 	tablet_shop._rows.night.grab_focus()
-	root.push_input(right)
-	_check(tablet_shop._action.has_focus(), "навигация вправо от края коллекции ведёт к действию")
+	_press_action("ui_right")
+	_check(tablet_shop._preview_tools_button.has_focus(), "от коллекции можно перейти к просмотру")
+	_press_action("ui_right")
+	_check(tablet_shop._action.has_focus(), "из просмотра можно перейти к действию")
 	tablet_shop._rows.glacier.grab_focus()
 	await _capture("tablet")
 	# 20.11: цель покупки видна в шапке дневника на всех вкладках

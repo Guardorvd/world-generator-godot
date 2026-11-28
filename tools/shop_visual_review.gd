@@ -81,6 +81,12 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	journal.shop_panel._rows.night.grab_focus()
+	await process_frame
+	await process_frame
+	var journal_view := journal.shop_panel._scroll.get_global_rect()
+	_check(journal_view.encloses(journal.shop_panel._stage.get_global_rect())
+		and journal_view.encloses(journal.shop_panel._action.get_global_rect())
+		and journal_view.encloses(journal.shop_panel._goal_action.get_global_rect()), "в дневнике модель и действия видны одновременно")
 	await _shot("journal")
 	_check(journal.shop_panel._selection == "night" and journal.shop_panel.is_visible_in_tree(), "витрина в дневнике")
 	profile.load_error = ERR_FILE_CORRUPT

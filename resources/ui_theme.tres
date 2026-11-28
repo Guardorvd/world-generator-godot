@@ -555,6 +555,8 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [sub_resource type="StyleBoxFlat" id="tabs_sel"]
+expand_margin_left = -4.0
+expand_margin_right = -4.0
 content_margin_left = 16.0
 content_margin_top = 8.0
 content_margin_right = 16.0
@@ -568,6 +570,8 @@ corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
 [sub_resource type="StyleBoxFlat" id="tabs_unsel"]
+expand_margin_left = -4.0
+expand_margin_right = -4.0
 content_margin_left = 16.0
 content_margin_top = 8.0
 content_margin_right = 16.0
@@ -579,6 +583,8 @@ corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
 [sub_resource type="StyleBoxFlat" id="tabs_hov"]
+expand_margin_left = -4.0
+expand_margin_right = -4.0
 content_margin_left = 16.0
 content_margin_top = 8.0
 content_margin_right = 16.0
@@ -590,6 +596,8 @@ corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
 [sub_resource type="StyleBoxFlat" id="tabs_off"]
+expand_margin_left = -4.0
+expand_margin_right = -4.0
 content_margin_left = 16.0
 content_margin_top = 8.0
 content_margin_right = 16.0

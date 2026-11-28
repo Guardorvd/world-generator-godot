@@ -11,6 +11,8 @@ static var _file_lock := Mutex.new()
 static var _thumb_revisions := {}
 static var _thumb_generation := 0
 static var _thumb_jobs := {}
+static var _thumb_listeners := {}
+static var _thumb_listeners_lock := Mutex.new()
 
 var directory: String
 var config: Resource
@@ -185,6 +187,8 @@ static func publish_thumb(folder: String, id: String, temporary: String, path: S
 	elif FileAccess.file_exists(temporary):
 		DirAccess.remove_absolute(temporary)
 	_thumb_lock.unlock()
+	if err == OK and found:
+		_notify_thumb_listeners()
 	return err
 
 
@@ -208,6 +212,7 @@ static func begin_thumb(path: String) -> void:
 	_thumb_jobs[path] = int(_thumb_jobs.get(path, 0)) + 1
 	_thumb_generation += 1
 	_thumb_lock.unlock()
+	_notify_thumb_listeners()
 
 
 static func end_thumb(path: String) -> void:
@@ -219,6 +224,29 @@ static func end_thumb(path: String) -> void:
 		_thumb_jobs[path] = remaining
 	_thumb_generation += 1
 	_thumb_lock.unlock()
+	_notify_thumb_listeners()
+
+
+## Уведомление ставится в очередь главного потока, в том числе при записи превью из worker thread.
+static func watch_thumbs(listener: Callable) -> void:
+	_thumb_listeners_lock.lock()
+	_thumb_listeners[listener] = true
+	_thumb_listeners_lock.unlock()
+
+
+static func unwatch_thumbs(listener: Callable) -> void:
+	_thumb_listeners_lock.lock()
+	_thumb_listeners.erase(listener)
+	_thumb_listeners_lock.unlock()
+
+
+static func _notify_thumb_listeners() -> void:
+	_thumb_listeners_lock.lock()
+	var listeners := _thumb_listeners.keys()
+	_thumb_listeners_lock.unlock()
+	for listener: Callable in listeners:
+		if listener.is_valid():
+			listener.call_deferred()
 
 
 static func thumb_is_preparing(path: String) -> bool:

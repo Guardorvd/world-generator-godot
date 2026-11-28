@@ -54,7 +54,11 @@ func _run() -> void:
 	if "--capture-hub" in OS.get_cmdline_user_args():
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png("res://.godot/world_hub_capture.png")
-	check(main._is_screen("world_hub") and input.has_focus(), "общий экран открывается с фокусом на поле")
+	check(main._is_screen("world_hub") and main.get_node("%PlaySelected").has_focus() and not input.is_visible_in_tree(), "библиотека открывается с основным действием, создание свёрнуто")
+	main._hub_create_toggle.button_pressed = true
+	check(input.is_visible_in_tree() and input.has_focus(), "создание открывает поле и переводит на него фокус")
+	main._hub_create_toggle.button_pressed = false
+	check(not input.is_visible_in_tree(), "создание можно свернуть")
 	check(main._hub_rows.size() == 20 and main.get_node("%SeedList").get_child_count() == 20, "каждому миру соответствует одна строка")
 	check(main.get_node("%SeedList").get_child(0).get_meta("seed") == "World-00" and main.get_node("%SeedList").get_child(1).get_meta("seed") == "World-10", "сохранения и избранные отсортированы первыми")
 	var scroll := main.get_node("%SeedList").get_parent() as ScrollContainer
@@ -133,6 +137,7 @@ func _run() -> void:
 	main._world_cards["World-01"].manual = true
 	main._update_selection()
 	check(main.get_node("%LoadManual").visible and not main.get_node("%LoadManual").disabled, "ручная загрузка доступна при наличии слота")
+	main._hub_map_toggle.button_pressed = true
 	var map_square := main.get_node("%Preview").get_parent().get_parent() as Control
 	await process_frame
 	check(absf(map_square.size.x - map_square.size.y) < 1.0, "карта инспектора квадратная")

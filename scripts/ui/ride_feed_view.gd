@@ -38,6 +38,7 @@ var _filter_notice: Label
 var _world_filter: OptionButton
 var _preview_update_queued := false
 var _thumb_generation := 0
+var _thumb_dirty := false
 var _load_error: Error = OK
 var _detail_preview: TextureRect
 var _detail_missing: Label
@@ -58,7 +59,32 @@ var _cover_path := ""
 var _cover_queue := {}
 var _cover_cache := {}
 var _cover_order: Array[String] = []
+var _photo_queue: Array[Dictionary] = []
+var _photo_thread: Thread
+var _photo_job := {}
 const COVER_CACHE_LIMIT := 12
+
+
+func _ready() -> void:
+	Feed.watch_thumbs(_on_thumbs_changed)
+	visibility_changed.connect(_on_feed_visibility_changed)
+	set_process(false)
+
+
+func _on_thumbs_changed() -> void:
+	_thumb_dirty = true
+	if is_visible_in_tree():
+		set_process(true)
+
+
+func _on_feed_visibility_changed() -> void:
+	if is_visible_in_tree():
+		_thumb_dirty = true
+		if is_instance_valid(_scroll):
+			_queue_preview_update()
+		set_process(true)
+	else:
+		set_process(false)
 
 
 func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
@@ -73,7 +99,10 @@ func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
 	var title := Label.new()
 	title.text = "Журнал поездок" if world_seed.is_empty() else "ПОЕЗДКИ"
 	title.add_theme_font_size_override("font_size", Config.feed_wide_title_font if world_seed.is_empty() else Config.feed_title_font)
-	add_child(title)
+	if world_seed.is_empty() or not wide:
+		add_child(title)
+	else:
+		title.free() # Заголовок и итоги расположены в общей шапке вкладки.
 	if world_seed.is_empty():
 		var subtitle := Label.new()
 		subtitle.text = "Все миры · до %d последних записей" % Config.entries_limit
@@ -131,6 +160,8 @@ func setup(game_settings, seed := "", template_id := "", wide := false) -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(scroll)
+	scroll.get_v_scroll_bar().value_changed.connect(func(_value: float) -> void: _queue_preview_update())
+	scroll.resized.connect(_queue_preview_update)
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 14 if world_seed.is_empty() else Config.feed_spacing)
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -316,8 +347,10 @@ func _navigate_cards(event: InputEvent, current: Button) -> void:
 
 func _process(delta: float) -> void:
 	if not is_visible_in_tree():
+		set_process(false)
 		return
 	_poll_covers()
+	_poll_detail_photos()
 	if not _pending_entries.is_empty() and _needs_more_cards():
 		_append_cards()
 	if _restore_scroll >= 0 and _restore_delay > 0:
@@ -331,31 +364,36 @@ func _process(delta: float) -> void:
 	if _last_scroll != _scroll.scroll_vertical:
 		_last_scroll = _scroll.scroll_vertical
 		_update_visible_previews()
-	_pending_elapsed += delta
+	if not _pending_paths.is_empty():
+		_pending_elapsed += delta
 	_pending_poll += delta
 	if _pending_elapsed >= Config.pending_preview_timeout:
 		_pending_paths.clear()
-	if _pending_poll < Config.pending_preview_interval:
-		return
-	_pending_poll = 0.0
-	var generation := Feed.thumb_generation()
-	if generation != _thumb_generation:
-		_thumb_generation = generation
-		for card in _cards.values():
-			if not _wide_cards or _card_near_view(card):
-				if Feed.thumb_is_preparing(card.preview_path):
-					card.unload_preview()
-				elif card._preview.texture == null or card.preview_revision != Feed.thumb_revision(card.preview_path):
-					card.update_preview(card.preview_path)
-				card.update_preview_status()
-		if is_instance_valid(_dialog) and _dialog.visible:
-			_refresh_detail_preview()
-	for id: String in _pending_paths.keys():
-		var path: String = _pending_paths[id]
-		if FileAccess.file_exists(path):
-			if _cards.has(id) and (not _wide_cards or _card_near_view(_cards[id])):
-				_cards[id].update_preview(path)
-			_pending_paths.erase(id)
+	if _thumb_dirty or _pending_poll >= Config.pending_preview_interval:
+		_thumb_dirty = false
+		_pending_poll = 0.0
+		var generation := Feed.thumb_generation()
+		if generation != _thumb_generation:
+			_thumb_generation = generation
+			for card in _cards.values():
+				if not _wide_cards or _card_near_view(card):
+					if Feed.thumb_is_preparing(card.preview_path):
+						card.unload_preview()
+					elif card._preview.texture == null or card.preview_revision != Feed.thumb_revision(card.preview_path):
+						card.update_preview(card.preview_path)
+					card.update_preview_status()
+			if is_instance_valid(_dialog) and _dialog.visible:
+				_refresh_detail_preview()
+		for id: String in _pending_paths.keys():
+			var path: String = _pending_paths[id]
+			if FileAccess.file_exists(path):
+				if _cards.has(id) and (not _wide_cards or _card_near_view(_cards[id])):
+					_cards[id].update_preview(path)
+				_pending_paths.erase(id)
+	var cards_waiting := not _pending_entries.is_empty() and _needs_more_cards()
+	if not cards_waiting and _restore_scroll < 0 and _pending_paths.is_empty() and _cover_thread == null \
+			and _cover_queue.is_empty() and _photo_thread == null and _photo_queue.is_empty() and not _preview_update_queued:
+		set_process(false)
 
 
 func _needs_more_cards() -> bool:
@@ -363,13 +401,16 @@ func _needs_more_cards() -> bool:
 
 
 func _card_near_view(card: Control) -> bool:
-	return _scroll.get_global_rect().grow_individual(0, 400, 0, 400).intersects(card.get_global_rect())
+	# Предзагрузка чуть за пределами экрана, без декодирования дальних карточек.
+	return _scroll.get_global_rect().grow_individual(0, 200, 0, 200).intersects(card.get_global_rect())
 
 
 func _queue_preview_update() -> void:
 	if not _preview_update_queued:
 		_preview_update_queued = true
 		_apply_preview_update.call_deferred()
+	if is_visible_in_tree():
+		set_process(true)
 
 
 func _apply_preview_update() -> void:
@@ -476,9 +517,13 @@ static func _load_cover(path: String) -> Image:
 
 
 func _exit_tree() -> void:
+	Feed.unwatch_thumbs(_on_thumbs_changed)
 	if _cover_thread != null:
 		_cover_thread.wait_to_finish()
 		_cover_thread = null
+	if _photo_thread != null:
+		_photo_thread.wait_to_finish()
+		_photo_thread = null
 
 
 func _choose(entry: Dictionary) -> void:
@@ -520,6 +565,7 @@ func _handle_detail_cancel(event: InputEvent, viewport: Viewport) -> void:
 func _show_detail(entry: Dictionary) -> void:
 	if entry.is_empty():
 		return
+	_photo_queue.clear()
 	if is_instance_valid(_dialog):
 		_dialog.hide()
 		_dialog.queue_free()
@@ -792,13 +838,7 @@ func _append_photos(grid: GridContainer, paths: Array[String], state: Dictionary
 	while int(state.next) < last:
 		var path := paths[int(state.next)]
 		state.next += 1
-		var image := Image.load_from_file(path)
-		if image == null or image.is_empty():
-			continue
-		if image.get_width() > Config.detail_photo_width:
-			image.resize(Config.detail_photo_width, maxi(1, roundi(float(image.get_height()) * Config.detail_photo_width / image.get_width())), Image.INTERPOLATE_BILINEAR)
 		var button := TextureButton.new()
-		button.texture_normal = ImageTexture.create_from_image(image)
 		button.ignore_texture_size = true
 		button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 		button.custom_minimum_size = Vector2(Config.detail_photo_width / 3.0, Config.detail_photo_height)
@@ -807,14 +847,20 @@ func _append_photos(grid: GridContainer, paths: Array[String], state: Dictionary
 		button.accessibility_name = "Открыть снимок " + path.get_file()
 		button.pressed.connect(_open_photo.bind(path))
 		grid.add_child(button)
+		var status := Label.new()
+		status.text = "Загрузка снимка…"
+		status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		status.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		status.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		HudStyle.label(status, 13, HudStyle.MUTED)
+		button.add_child(status)
+		_queue_detail_photo(path, button, status, _dialog, Config.detail_photo_width)
 		controls_created.emit(button)
 	more.visible = int(state.next) < paths.size()
 
 
 func _open_photo(path: String) -> void:
-	var image := Image.load_from_file(path)
-	if image == null or image.is_empty():
-		return
 	var dialog := AcceptDialog.new()
 	dialog.title = "Снимок поездки"
 	dialog.theme = MENU_THEME
@@ -824,16 +870,77 @@ func _open_photo(path: String) -> void:
 	_dialog.add_child(dialog)
 	dialog.window_input.connect(func(event: InputEvent) -> void: _handle_detail_cancel(event, dialog))
 	var view := TextureRect.new()
-	view.texture = ImageTexture.create_from_image(image)
 	view.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	view.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	var available := Vector2i(get_viewport().get_visible_rect().size) - Vector2i(80, 100)
 	view.custom_minimum_size = Vector2(available)
 	dialog.add_child(view)
+	var status := Label.new()
+	status.text = "Загрузка снимка…"
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	HudStyle.label(status, 16, HudStyle.MUTED)
+	view.add_child(status)
 	dialog.close_requested.connect(dialog.queue_free)
 	dialog.confirmed.connect(dialog.queue_free)
 	controls_created.emit(dialog)
 	dialog.popup_centered(available)
+	_queue_detail_photo(path, view, status, dialog, maxi(800, available.x), true)
+
+
+## Изображения читаются и уменьшаются вне главного потока; на нём создаётся только текстура.
+func _queue_detail_photo(path: String, target: Control, status: Label, owner: Window, width: int, priority := false) -> void:
+	var job := {path = path, target = weakref(target), status = weakref(status), owner = weakref(owner), width = width}
+	if priority:
+		_photo_queue.push_front(job)
+	else:
+		_photo_queue.append(job)
+	set_process(true)
+
+
+static func _decode_detail_photo(path: String, width: int) -> Image:
+	var image := Image.load_from_file(path)
+	if image == null or image.is_empty():
+		return null
+	if image.get_width() > width:
+		image.resize(width, maxi(1, roundi(float(width) * image.get_height() / image.get_width())), Image.INTERPOLATE_BILINEAR)
+	return image
+
+
+func _poll_detail_photos() -> void:
+	if _photo_thread != null and not _photo_thread.is_alive():
+		var image: Variant = _photo_thread.wait_to_finish()
+		_photo_thread = null
+		var target: Control = (_photo_job.target as WeakRef).get_ref()
+		var status: Label = (_photo_job.status as WeakRef).get_ref()
+		var owner: Window = (_photo_job.owner as WeakRef).get_ref()
+		if is_instance_valid(target) and is_instance_valid(status) and is_instance_valid(owner) and owner.visible and not owner.is_queued_for_deletion():
+			if image is Image and not image.is_empty():
+				var texture := ImageTexture.create_from_image(image)
+				if target is TextureButton:
+					(target as TextureButton).texture_normal = texture
+				elif target is TextureRect:
+					(target as TextureRect).texture = texture
+				status.hide()
+			else:
+				status.text = "Снимок недоступен"
+		_photo_job.clear()
+	while _photo_thread == null and not _photo_queue.is_empty():
+		var job: Dictionary = _photo_queue.pop_front()
+		var target: Control = (job.target as WeakRef).get_ref()
+		var owner: Window = (job.owner as WeakRef).get_ref()
+		if not is_instance_valid(target) or not is_instance_valid(owner) or not owner.visible or owner.is_queued_for_deletion():
+			continue
+		_photo_job = job
+		_photo_thread = Thread.new()
+		if _photo_thread.start(_decode_detail_photo.bind(str(job.path), int(job.width))) != OK:
+			_photo_thread = null
+			var status: Label = (job.status as WeakRef).get_ref()
+			if is_instance_valid(status):
+				status.text = "Снимок недоступен"
+			_photo_job.clear()
 
 
 static func _window_border() -> StyleBoxFlat:
